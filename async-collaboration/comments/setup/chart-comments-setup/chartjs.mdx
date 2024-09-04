@@ -1,0 +1,259 @@
+---
+title: "ChartJS Comments Setup" 
+---
+
+![](/gifs/velt-chartjs-barchart.gif)
+
+
+<Tabs>
+<Tab title="React / Next.js">
+
+
+<Steps titleSize="h2">
+
+<Step title="Import Components from Chart.js">
+
+```jsx
+import { Chart as ChartJS, BarElement } from 'chart.js';
+import { Bar } from 'react-chartjs-2'
+```
+
+</Step>
+
+<Step title="Import Comments Components and Hooks from Velt">
+
+- Add `VeltComments` to the root of your app. This component is required to render comments in your app.
+- Add the `VeltCommentTool` component wherever you want to show the comment tool button. Clicking on it initiates comment mode & changes your mouse cursor to a comment pin.
+![](/images/comment-tool.png)
+
+```jsx
+import { useCommentModeState, VeltCommentPin, VeltCommentTool, VeltComments } from '@veltdev/react';
+```
+
+
+</Step>
+
+<Step title="Create a ref for the ChartJS component">
+- Create a `ref` and pass it into the `ref` property of the `ChartJS` component.
+
+```jsx
+const chartRef = useRef(null);
+
+<Bar data={data} options={options} ref={chartRef} />
+```
+
+</Step>
+
+<Step title="Add a container div for the ChartJS component">
+1. Apply `position: relative` style to the div. This ensures accurate positioning of Velt Comment Pins.
+2. Set `data-velt-manual-comment-container` to `true`. This:
+  - informs Velt which div to use for positioning
+  - disables Velt's automatic comment positioning system within this div, allowing for manual positioning of comment pins
+3. Give a unique ID to the chart to scope comments to the specific chart, isolating them from other charts.
+
+```jsx
+const chartId = 'dataAnalyticsChart'; // Unique ID for the chart
+```
+
+```jsx
+return (
+  <div style={{ position: 'relative' }}
+    onClick={handleChartClick}
+    data-velt-manual-comment-container="true">
+
+    <Bar data={data} options={options} ref={chartRef} />
+  </div>
+);
+```
+
+</Step>
+
+
+<Step title="Add a Comment when the user clicks on the chart">
+1. Handle chart click to find nearest data point and add a comment. *(Check `handleChartClick() method` on the right)*
+2. Create `context` object which contains the information about the series, x-axis value, y-axis value, chartId and anything else that's relevant. This will be used when rendering the comment pin. *(Check `handleChartClick() method` on the right)*
+3. Add comment with the `context` data. *(Check `addManualComment() method` on the right)*
+  - Only add a comment if the Velt `commentModeState` is true and the Velt `client` is available.
+
+{/* TODO: Create a hook for adding manual comments */}
+
+</Step>
+
+
+<Step title="Render the Velt Comment Pins and set its position">
+1. Get all comment annotations.
+2. Loop through it and render the comment pin.
+3. Use the `context` data in `CommentAnnotation`, to set the position of the comment pin. *(Check `showCommentPin() method` on the right)*
+
+
+```jsx
+const commentAnnotations = useCommentAnnotations(); // Get Velt comment annotations
+const [chartCommentAnnotations, setChartCommentAnnotations] = React.useState([]); // Store annotations for this chart
+
+useEffect(() => {
+  // Filter and store comments for the current chart, using unique chart ID
+  const chartCommentAnnotations = commentAnnotations?.filter((comment) => comment.context?.chartId === chartId); 
+  setChartCommentAnnotations(chartCommentAnnotations as any || []);
+}, [commentAnnotations]);
+
+return (
+    ... {/* Rest of the container code. */}
+
+    {/* Loop through comment annotations and render the comment pin. */}
+    {chartCommentAnnotations.map((comment, index) => showCommentPin(comment))}
+
+    ... {/* Rest of the container code. */}
+);
+```
+
+</Step> 
+
+</Steps>
+
+
+</Tab>
+<Tab title="HTML (coming soon)">
+
+Coming Soon
+
+</Tab>
+
+</Tabs>
+
+<RequestExample>
+```js React / Next.js
+import React, { useEffect, useRef, useMemo } from 'react';
+import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, BarElement, Title, Tooltip, Legend, Filler,} from 'chart.js';
+import { Bar } from 'react-chartjs-2';
+import { useVeltClient, useCommentAnnotations, useCommentModeState, VeltCommentPin } from '@veltdev/react';
+
+// Register the necessary Chart.js components
+ChartJS.register(CategoryScale, LinearScale, PointElement, BarElement, Title, Tooltip, Legend, Filler);
+
+// Define the data for the chart
+const scores = [6, 5, 5, 5, 3, 4, 6, 4, 5];
+const labels = [100, 200, 300, 400, 500, 600, 700];
+
+// Set the options for the chart
+const options: any = {
+// your chart options
+};
+
+const BarChart = () => {
+  const chartId = 'dataAnalyticsChart'; // Unique ID for the chart
+  const chartRef = useRef(null); // Reference to the chart instance
+  const { client } = useVeltClient(); // Get Velt client
+  const commentModeState = useCommentModeState(); // Get Velt comment mode state
+  const commentAnnotations = useCommentAnnotations(); // Get Velt comment annotations
+  const [chartCommentAnnotations, setChartCommentAnnotations] = React.useState([]); // State for chart comments
+
+  // Update chart comments when annotations change
+  useEffect(() => {
+    // Filter comments for the current chart, using unique chart ID
+    const chartCommentAnnotations = commentAnnotations?.filter((comment) => comment.context?.chartId === chartId); 
+    setChartCommentAnnotations(chartCommentAnnotations as any || []);
+  }, [commentAnnotations]);
+
+  // Handle chart clicks to find nearest data point and add a comment
+  const handleChartClick = (event: any) => {
+    const chart: any = chartRef.current;
+    if (chart) {
+      // Get the nearest element to the click event
+      const elements = chart.getElementsAtEventForMode(event.nativeEvent, 'nearest', { intersect: true }, false);
+      if (elements.length > 0) {
+        const element = elements[0];
+        const datasetIndex = element.datasetIndex;
+        const index = element.index;
+        const dataset = chart.data.datasets[datasetIndex];
+        const xValue = chart.data.labels[index];
+        const yValue = dataset.data[index];
+        const context = { seriesId: dataset.label, xValue, yValue, chartId };
+        addManualComment(context); // Add a comment at the nearest data point with the context data
+      }
+    }
+  };
+
+  // Add a manual comment to the chart
+  const addManualComment = (context: any) => {
+    try {
+      if (client && commentModeState) {
+        const commentElement = client.getCommentElement();
+        commentElement.addManualComment({ context }); // Add a Velt comment
+      }
+    } catch (error) {
+      console.error('Error adding manual comment', error);
+    }
+  };
+
+  // Find the exact point on the chart to place a comment pin
+  const findPoint = (seriesId: any, xValue: any, yValue: any) => {
+    const chart: any = chartRef.current;
+    if (chart) {
+      const dataset = chart.data.datasets.find((dataset: any) => dataset.label === seriesId);
+      const index = chart.data.labels.indexOf(xValue);
+      if (dataset && index !== -1) {
+        const yValueInDataset = dataset.data[index];
+        if (yValueInDataset === yValue) {
+          return { x: chart.scales.x.getPixelForValue(index), y: chart.scales.y.getPixelForValue(yValue) }; // Set the x, y position for the comment pin
+        }
+      }
+    }
+    return null;
+  };
+
+  // Show the comment pin on the chart at the specified point
+  const showCommentPin = (commentAnnotation: any) => {
+    const context = commentAnnotation.context || {};
+    const point = findPoint(context.seriesId, context.xValue, context.yValue);
+    if (point) {
+      const { x, y } = point;
+      return (
+        <div
+          key={commentAnnotation.annotationId}
+          style={{
+            left: `${x}px`,
+            top: `${y}px`,
+            position: 'absolute',
+            transform: 'translate(0%, -100%)',
+            zIndex: 1000,
+          }}
+        >
+          <VeltCommentPin annotationId={commentAnnotation.annotationId} /> {/* Velt comment pin component */}
+        </div>
+      );
+    }
+    return null;
+  };
+
+  // Memoize the chart data
+  const data = useMemo(() => {
+    return {
+      datasets: [
+        {
+          label: 'Mis datos',
+          tension: 0.3,
+          data: scores,
+          borderColor: 'rgb(75, 192, 192)',
+          backgroundColor: 'rgba(75, 192, 192, 0.3)',
+        },
+      ],
+      labels,
+    };
+  }, []);
+
+  return (
+    <div className="dashlet-card">
+      <div className="dashlet-card-header">Bar Chart With Comments</div>
+      {/* Keep the parent div as relative, as comment pin will be placed with absolute position */}
+      {/* Set "data-velt-manual-comment-container" to true, so that comment pin will know which div to consider while positioning */}
+      <div style={{ position: 'relative' }} onClick={handleChartClick} data-velt-manual-comment-container="true"> 
+        <Bar data={data} options={options} ref={chartRef} /> {/* Render the Bar chart */}
+        {chartCommentAnnotations.map((comment, index) => showCommentPin(comment))} {/* Show all comment pins */}
+      </div>
+    </div>
+  );
+};
+
+export default BarChart;
+```
+</RequestExample>

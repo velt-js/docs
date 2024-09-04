@@ -1,0 +1,331 @@
+---
+title: "JWT Tokens"
+description: "Generate JWT Tokens for additional security"
+---
+
+
+
+## Overview
+
+`JWT Tokens` is an optional feature to add additional authentication security to our `client.identify()` method to prevent user impersonation.
+
+
+<Steps>
+
+
+<Step title="Enable JWT Tokens in your console">
+
+Go to [https://console.velt.dev](https://console.velt.dev/dashboard/config/general) and enable the toggle for `Require JWT Token`. The toggle is listed at the very bottom of the page.
+
+<Warning>JWT Tokens won't work unless you enable it in your console.</Warning>
+
+</Step>
+
+
+<Step title="Create a server endpoint for generating and sending JWT Tokens to the client">
+
+Create a server endpoint that will be used to generate and send a `JWT Token` to the client.
+
+Example server endpoint code:
+```jsx
+app.get('/generate-velt-jwt-token', async (req,res) => {
+    const veltAuthToken = await generateVeltAuthToken(req.body.userId)
+    res.json(veltAuthToken)
+})
+```
+
+</Step>
+
+
+<Step title="Generate a JWT Token using Velt's REST API">
+
+In your server endpoint, call our `https://api.velt.dev/generateveltauthtoken` endpoint to generate a `JWT Token`.
+
+Example server code:
+```jsx
+async function generateVeltAuthToken(userId: string) {
+  const url = "https://api.velt.dev/generateveltauthtoken";
+  const body = {
+    data: {
+      userId: userId, // Unique user id of your user
+      apiKey: "YOUR_VELT_API_KEY",
+      authToken: "YOUR_CLIENT_AUTH_TOKEN", // Get this token from console.velt.dev
+      userProperties: {
+        isAdmin: true, // Set to true if you want to set user as admin
+        organizationId: "YOUR_ORGANIZATION_ID", // If organizationId is provided here then we will validate it with the organizationId used in the identify call
+        email: "USER_EMAIL", // If email is provided here then we will validate it with the email used in the identify call
+      }
+    },
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data?.result?.data?.token;
+  } catch (error) {
+    console.error("Error:", error);
+  }
+}
+```
+
+
+### Request Body for `https://api.velt.dev/generateveltauthtoken`:
+
+<Info>
+To get your Auth Token that is required for your request body, [read here](/security/auth-tokens).
+</Info>
+
+| Field          | Required | Description                                   |
+|----------------|----------|-----------------------------------------------|
+| `apiKey`         |   Yes      | Velt API Key                                  |
+| `authToken  `    |  Yes        | Auth Token from the Velt console              |
+| `userId `        |  Yes        | Unique user id of the user                     |
+| `userProperties.isAdmin`        | No      | Set to `true` if you want to set user as `admin`. This is the only way to set a user as an `admin` User  |
+| `userProperties.organizationId`         |   No      | If `organizationId` is provided, it will be validated with the `organizationId` used in the identify call. Recommended if you are setting organizationId.                                |
+| `userProperties.email`         |   No      | If `email` is provided, it will be validated with the `email` used in the identify call. Recommended if you are setting email.                                |
+
+
+```jsx
+{
+  "data": {
+    "apiKey": "YOUR_API_KEY", //Velt API Key
+    "authToken": "YOUR_AUTH_TOKEN", // Auth Token from the Velt console
+    "userId": "yourUserId", // unique user id of the user you are generating a JWT Token for
+    "userProperties": {
+        isAdmin: true, // Set to true if you want to set user as admin
+        organizationId: "YOUR_ORGANIZATION_ID", // If organizationId is provided here then we will validate it with the organizationId used in the identify call
+        email: "USER_EMAIL", // If email is provided here then we will validate it with the email used in the identify call
+    }
+  }
+}
+```
+
+
+
+### Success Response for `https://api.velt.dev/generateveltauthtoken`:
+
+```jsx
+{
+  "result": {
+    "status": "success",
+    "message": "Token generated successfully.",
+    "data": {
+      "token": "YOUR_JWT_TOKEN"
+    }
+  }
+}
+```
+
+### Failure Response for `https://api.velt.dev/generateveltauthtoken`:
+
+```jsx
+{
+  "error": {
+    "message": "Auth token not found.",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+```
+
+
+<Warning>Make sure to generate the JWT Token from your server, not your client. Otherwise, your JWT Token will not be secure.</Warning>
+
+</Step>
+
+
+<Step title="Call your server endpoint from your client to pass your JWT Token to your client">
+
+Call your server endpoint from your client to pass your `JWT Token` to your client.
+
+```jsx
+  const yourJWTToken = await callToYourServerToGetJWTToken(userId)
+```
+
+
+
+</Step>
+
+
+<Step title="Pass the JWT Token to client.identify()">
+
+Once the JWT Token is generated, you can pass it into the `client.identify()` method. The `client.identify()` method has an optional second parameter that takes in a configuration object that includes the `JWT Token` as a field.
+
+
+```jsx
+  const yourJWTToken = await callToYourServerToGetJWTToken(userId)
+  client.identify(user, {
+    authToken: yourJWTToken,
+  });
+```
+
+
+
+</Step>
+
+<Step title="Your All Done!">
+
+You are all done! Now you have added an additional level of security with `JWT Tokens`.
+
+</Step>
+
+
+
+</Steps>
+
+
+<RequestExample>
+
+
+```jsx Server Code
+import express from 'express';
+
+const app = express();
+const PORT = 8080;
+
+async function generateVeltAuthToken(userId) {
+  const url = "https://api.velt.dev/generateveltauthtoken";
+  const body = {
+    data: {
+      userId: userId, // Unique user id of your user
+      apiKey: "YOUR_VELT_API_KEY",
+      authToken: "YOUR_CLIENT_AUTH_TOKEN", // Get this token from console.velt.dev
+      userProperties: {
+        isAdmin: true, // Set to true if you want to set user as admin
+        organizationId: "YOUR_ORGANIZATION_ID", // If organizationId is provided here then we will validate it with the organizationId used in the identify call
+        email: "USER_EMAIL", // If email is provided here then we will validate it with the email used in the identify call
+      }
+    },
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data?.result?.data?.token;
+  } catch (error) {
+    console.error("Error:", error);
+  }
+}
+
+app.get('/generate-velt-jwt-token', async (req,res) => {
+    const veltAuthToken = await generateVeltAuthToken(req.body.userId)
+    res.json(veltAuthToken)
+})
+
+app.listen(PORT, () => {
+  console.log(`JWT Server listening on port ${PORT}`);
+});
+
+```
+
+
+```jsx Client Code
+import { useVeltClient } from "@veltdev/react";
+import { useEffect, useState } from "react";
+
+export default function YourAuthComponent() {
+  let [user, setUser] = useState(null);
+
+  const userService = () => {
+    let randomNum = Math.floor(Math.random() * 10);
+    return {
+      uid: "user" + randomNum,
+      displayName: "User: " + randomNum,
+      email: "user" + randomNum + "@gmail.com",
+      photoURL: "https://i.pravatar.cc/30" + randomNum,
+      organizationId: "YOUR_ORGANIZATION_ID"
+    };
+  };
+
+  // Fetch user data from user service
+  let yourAuthenticatedUser = userService();
+
+  // Get the Velt Client
+  const { client } = useVeltClient();
+
+  // Call to your Server to get JWT Token
+  async function callToYourServerToGetJWTToken(userId){
+
+    let baseUrl = "your-server.com"
+
+    let result = await fetch(`${baseUrl}/generate-velt-jwt-token`, {
+      method: "POST", 
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        userId:userId
+      }),
+    })
+
+    let data = await result.json();
+    return data;
+
+  }
+
+
+  useEffect(() => {
+    const initVelt = async () => {
+      if (client && yourAuthenticatedUser) {
+        const { uid, displayName, email, photoURL } = yourAuthenticatedUser;
+
+        // Create the Velt user object
+        const user = {
+          userId: uid,
+          name: displayName,
+          email: email,
+          photoUrl: photoURL,
+          organizationId: "YOUR_ORGANIZATION_ID"
+        };
+
+
+        //Get JWT Token from your server
+        const yourJWTToken = await callToYourServerToGetJWTToken(user.userId)
+
+        // Identify the user with the Velt client, with JWT Token
+        await client.identify(user, {
+            authToken: yourJWTToken,
+        });
+
+        setUser(user);
+      }
+    };
+    initVelt().catch(console.error);
+  }, [client]);
+
+  return <div>User: {user?.userId}</div>;
+}
+
+
+```
+</RequestExample>
+
+
+
+
+
+
+
+

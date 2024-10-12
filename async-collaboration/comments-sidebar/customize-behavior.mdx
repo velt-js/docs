@@ -1,29 +1,22 @@
 ---
 title: "Customize Behavior"
 ---
-{/* <script>var SUPERFLOW_TOOLBAR_API_KEY="aU1MxKP0rca2UXwKi8bl"; var SUPERFLOW_TOOLBAR_PROJECT_ID="8447060215973283";</script> */}
-<script id="setWindowVariableScript" src="https://snippyly-demo-html-dev.web.app/set-window-variable.js?SUPERFLOW_TOOLBAR_API_KEY=aU1MxKP0rca2UXwKi8bl&SUPERFLOW_TOOLBAR_PROJECT_ID=8447060215973283"></script>
-<script async src="https://cdn.jsdelivr.net/npm/@usesuperflow/toolbar/superflow.min.js"></script>
 
+## 1. Comment click event
 
+- Listen for click events on comments in the sidebar to trigger actions like navigation.
+- The event callback provides access to the clicked comment's annotation object, which includes `location` and `context` data.
+- Use this data to update your app's state and navigate to the comment's location.
 
-## 1. Take action when a comment is clicked (such as Navigation)
+The event handler receives an object with the following properties:
 
-- Listen to the click events on the comments in the sidebar and take actions such as navigation.
-- In the event callback, you can access the comment annotation object that was clicked. It contains the `location` and `context` data for the comment.
-- You can use this data to make the necessary app state changes and navigate to the comment.
-
-<Info>You would choose to use addContext() over Location if you do not want to segregate your comments by Location</Info>
-
-**Here is the object that is passed to the event handler:**
-
-| property | type | description|
-|---|---|---|
-| `documentId` | string | The document ID where the comment was added |
-| `location` | string | The location where the comment was added |
-| `targetElementId` | string | The DOM ID of the target element on which the comment was added |
-| `context` | Object | Any context data passed when the comment was added |
-| `annotation` | CommentAnnotation | The comment annotation object that was clicked |
+| Property | Type | Description |
+|----------|------|-------------|
+| `documentId` | string | ID of the document containing the comment |
+| `location` | Object | Location details of the comment |
+| `targetElementId` | string | DOM ID of the element the comment is attached to |
+| `context` | Object | Custom context data associated with the comment |
+| `annotation` | CommentAnnotation | The full comment annotation object |
 
 
 <Tabs>
@@ -45,9 +38,6 @@ const onCommentClick = (event) => {
 <Tab title="HTML / Other Frameworks">
 
 ```js
-const commentElement = document.querySelector('velt-comments-sidebar');
-commentElement.addEventListener('onCommentClick', onCommentClick);
-
 
 // event handler for when a comment is clicked on 
 const onCommentClick = (event) => {
@@ -57,26 +47,322 @@ const onCommentClick = (event) => {
   const { pageId } = event.context;
   yourNavigateToPageMethod(pageId);
 };
+
+const commentElement = document.querySelector('velt-comments-sidebar');
+commentElement.addEventListener('onCommentClick', onCommentClick);
 ```
 </Tab>
 </Tabs>
 
 
+## 2. Custom filtering, sorting and grouping
+  - Here is the overview on how it works:
+    - Enable custom actions in the comments sidebar.
+    - Add action buttons to the sidebar wireframe.
+    - Implement callback and event handlers to handle custom filtering, sorting, and grouping logic.
+    - Set custom filtered data in the comments sidebar.
+  - Here are the steps to implement it:
 
-## 2. Enable/Disable Sidebar URL Navigation
+<Steps titleSize="h2">
+  <Step title="Enable Custom Actions">
+    <Tabs>
+      <Tab title="React / Next.js">
+        Using Props:
+        ```jsx
+        <VeltCommentsSidebar customActions={true} />
+        ```
+
+        Using API:
+        ```javascript
+        commentElement.enableSidebarCustomActions();
+        commentElement.disableSidebarCustomActions();
+        ```
+      </Tab>
+      <Tab title="HTML / Other Frameworks">
+        Using Props:
+        ```html
+        <velt-comments-sidebar custom-actions="true"></velt-comments-sidebar>
+        ```
+        Using API:
+        ```javascript
+        commentElement.enableSidebarCustomActions();
+        commentElement.disableSidebarCustomActions();
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Add action buttons to the sidebar wireframe">
+    - Specify an `id` to the action button. This can be used to identify which button was clicked/toggled in the callback or lifecycle events.
+    - There are two types of action buttons available:
+      - `toggle`: This button has on and off states. This can be used to enable `AND` logic.
+      - `default`: This button has only one state. This can be used to take action on click eg: sort, filter or group by a field.
+    <Tabs>
+      <Tab title="React / Next.js">
+        ```jsx
+        <VeltCommentsSidebarWireframe.ActionButton id="all" type="toggle" />
+        ```
+      </Tab>
+      <Tab title="HTML / Other Frameworks">
+        ```html
+        <velt-comments-sidebar-action-button-wireframe id="unread" type="toggle">
+        </velt-comments-sidebar-action-button-wireframe>
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Set default actions">
+    - Set default custom sorting and filtering options in the comments sidebar.
+    - When the sidebar is initialized, the default actions will be applied.
+    - The keys of the object are the IDs of the action buttons you defined in the wireframe.
+    ```javascript
+    commentElement.setCommentSidebarDefaultCustomActions({
+      'all': true,
+      'unread': false,
+      'mentions': false,
+      'current-clip': false
+    });
+    ```
+  </Step>
+
+  <Step title="Implement custom filtering, sorting, and grouping logic">
+  - Handle lifecycle and click events to implement custom filtering, sorting, and grouping logic:
+    - `onCommentSidebarActionButtonClick`: Triggered when an action button is clicked.
+    - `onCommentSidebarInit`: Triggered when the comments sidebar is initialized.
+    - `onCommentSidebarData`: Triggered when the comments sidebar data is updated.
+
+
+  - Data type returned in the above events/lifecycle methods:
+    ```javascript
+    CommentSidebarCustomActionsState {
+      [key: string]: boolean; // Custom Action Button ID you defined in the wireframe
+    }
+    CommentSidebarCustomActionEventData {
+      actions: CommentSidebarCustomActionsState; // Map of custom action button IDs and their states
+      data: CommentAnnotation[]; // List of all unfiltered CommentAnnotations available in the comments sidebar
+      unreadDataMap: { [commentAnnotationId: string]: number }; // Map of comment annotation id and the number of unread comments it has
+      systemFilteredData: CommentAnnotation[]; // List of filtered CommentAnnotations based on system filters
+    }
+    ```
+
+    <Tabs>
+      <Tab title="React / Next.js">
+        ```jsx
+        import { useCommentSidebarActionButtonClick, useCommentSidebarInit, useCommentSidebarData } from '@veltdev/react';
+
+        const commentSidebarActionButtonClickData: CommentSidebarCustomActionEventData = useCommentSidebarActionButtonClick();
+        const commentSidebarInitData: CommentSidebarCustomActionEventData = useCommentSidebarInit();
+        const commentSidebarData: CommentSidebarCustomActionEventData = useCommentSidebarData();
+
+        useEffect(() => {
+          if (commentSidebarActionButtonClick) {
+            // Custom Filtering | Sorting | Grouping Logic
+          }
+        }, [commentSidebarActionButtonClickData]);
+
+        useEffect(() => {
+          if (commentSidebarInit) {
+            // Custom Filtering | Sorting | Grouping Logic
+          }
+        }, [commentSidebarInitData]);
+
+        useEffect(() => {
+          if (commentSidebarData) {
+            // Custom Filtering | Sorting | Grouping Logic
+          }
+        }, [commentSidebarData]);
+        ```
+      </Tab>
+      <Tab title="HTML / Other Frameworks">
+        ```javascript
+        commentElement.onCommentSidebarActionButtonClick().subscribe((data) => {
+          // Custom Filtering | Sorting | Grouping Logic
+        });
+
+        commentElement.onCommentSidebarInit().subscribe((data) => {
+          // Custom Filtering | Sorting | Grouping Logic
+        });
+
+        commentElement.onCommentSidebarData().subscribe((data) => {
+          // Custom Filtering | Sorting | Grouping Logic
+        });
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Set custom filtered data">
+  - Once you have applied your custom filtering, sorting, and grouping logic, create the data as `CommentSidebarData[]` type
+  - Use `setCommentSidebarData` to set custom filtered data in the comments sidebar:
+    ```javascript
+    CommentSidebarData {
+      groupId?: string = 'others';
+      groupName?: string = 'Others'; // Name of the group
+      isExpanded?: boolean = true; // Whether the group is expanded
+      annotations: CommentAnnotation[] = []; // List of CommentAnnotations in the group
+    }
+
+    Options:{
+      grouping?: boolean = true; // Whether to group the data
+    }
+
+    ```
+    <Tabs>
+      <Tab title="React / Next.js">
+        ```jsx
+        commentUtils?.setCommentSidebarData(customFilterData, options);
+        ```
+      </Tab>
+      <Tab title="HTML / Other Frameworks">
+        ```javascript
+        commentElement.setCommentSidebarData(customFilterData, options);
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+</Steps>
+
+
+## 3. Add composer to sidebar with Page mode
+- This adds a composer in the sidebar where users can add comments without attaching them to any specific element.
+
 `Default: false`
-
-By default, `Comment Sidebar` URL navigation is disabled. So when user clicks on any comment in the sidebar, we will not redirect the user to a different page url if the comment was located on a different page. You would need to listen to `onCommentClick` events and then handle the event to change the URL.
-
-To enable Sidebar URL Navigation, you can set the `urlNavigation` attribute to `true`. When this is enabled, clicking on Sidebar comments will change the page URL to wherever the comment was added.
 <Tabs>
 <Tab title="React / Next.js">
 
 ```jsx
-{/* `true` to enable sidebar url navigation, `false` to disable sidebar url navigation */}
+<VeltCommentsSidebar pageMode={true} />
+```
+</Tab>
+
+<Tab title="HTML / Other Frameworks">
+
+```jsx
+<velt-comments-sidebar page-mode="true"></velt-comments-sidebar>
+```
+</Tab>
+
+
+</Tabs>
+
+## 4. Embed Sidebar in your component
+
+- By default, the sidebar will open up from the right corner of the page.
+- With embed mode, you can add the sidebar in your component and it will take up the full width and height of its container.
+- When in embed mode, the sidebar will not have the close button. You need to implement your own open and close functionality on the host component.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<div className="sidebar-container">
+  <VeltCommentsSidebar embedMode={true} />
+</div>
+```
+</Tab>
+
+<Tab title="HTML / Other Frameworks">
+```jsx
+<div className="sidebar-container">
+  <velt-comments-sidebar embed-mode="true"></velt-comments-sidebar>
+</div>
+```
+</Tab>
+
+</Tabs>
+
+## 5. Exclude comments from certain locations
+- Use this to filter out comments from certain locations. These comments will not be displayed in the sidebar.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+Using Props:
+```jsx
+<VeltCommentsSidebar excludeLocationIds={['location1', 'location2']} />
+```
+
+Using API:
+```jsx
+const commentElement = client.getCommentElement();
+commentElement.excludeLocationIdsFromSidebar(['location1', 'location2']);
+```
+</Tab>
+
+<Tab title="HTML / Other Frameworks">
+Using Props:
+```jsx
+<velt-comments-sidebar exclude-location-ids='["location1", "location2"]'></velt-comments-sidebar>
+```
+
+Using API:
+```jsx
+const commentElement = Velt.getCommentElement();
+commentElement.excludeLocationIdsFromSidebar(['location1', 'location2']);
+```
+</Tab>
+
+</Tabs>
+
+## 6. Floating mode
+- This makes the sidebar open in an overlay panel over the sidebar button float over the page content.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```jsx
+<VeltSidebarButton floatingMode={true} />
+```
+</Tab>
+
+<Tab title="HTML / Other Frameworks">
+```jsx
+<velt-sidebar-button floating-mode="true"></velt-sidebar-button>
+```
+</Tab>
+
+</Tabs>
+
+## 7. Change sidebar open position
+- Change the default direction where the sidebar opens from.
+- Options: `left` or `right`
+- Default: `right`
+
+
+<Tabs>
+<Tab title="React / Next.js">
+
+
+```jsx
+<VeltCommentsSidebar position="left"/>
+```
+</Tab>
+
+<Tab title="HTML / Other Frameworks">
+ 
+```jsx
+<velt-comments-sidebar position="left"/>
+```
+</Tab>
+
+</Tabs>
+
+## 8. Enable/Disable Sidebar URL Navigation
+
+- By default, clicking a comment in the sidebar doesn't automatically update the page URL where the comment was added.
+- Use this to enable automatic URL navigation when clicking comments in the sidebar.
+- If your app's state is more complex, you might need to listen for `onCommentClick` events and implement custom navigation logic.
+
+Default: `false`
+
+<Tabs>
+<Tab title="React / Next.js">
+
+Using Props:
+```jsx
 <VeltCommentsSidebar urlNavigation={true} />
 ```
-You can also use API methods:
+Using API method:
 
 ```js
 const commentElement = client.getCommentElement();
@@ -88,19 +374,16 @@ commentElement.disableSidebarUrlNavigation();
 </Tab>
 
 <Tab title="HTML / Other Frameworks">
-
+Using Props:
 ```js
-<!-- `true` to enable sidebar url navigation, `false` to disable sidebar url navigation -->
 <velt-comments-sidebar url-navigation="false"></velt-comments-sidebar>
 ```
 
-You can also use API methods:
+Using API method:
 
 ```js
 const commentElement = Velt.getCommentElement();
-// to enable sidebar url navigation
 commentElement.enableSidebarUrlNavigation();
-// to disable sidebar url navigation
 commentElement.disableSidebarUrlNavigation();
 ```
 </Tab>
@@ -109,8 +392,8 @@ commentElement.disableSidebarUrlNavigation();
 </Tabs>
 
 
-## 3. Toggling the Comments Sidebar
-To toggle the sidebar, you can use the following methods:
+## 9. Open/close the Comments Sidebar
+
 <Tabs>
 <Tab title="React / Next.js">
 
@@ -137,9 +420,10 @@ commentElement.toggleCommentSidebar(); // toggles the comments side bar
 
 
 
-## 4. Show the current URL path in the sidebar
-Shows the current URL path in the sidebar by adding "(this page)" next to the current URL path.
-`Default: false`
+## 10. Enable/disable "this page" suffix
+- Adds "(this page)" suffix to the group name when the current location matches the group's location.
+
+Default: `false`
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -161,67 +445,43 @@ Shows the current URL path in the sidebar by adding "(this page)" next to the cu
 
 
 
-## 5. Enable Page Comment Mode
-Enables page level comments in the sidebar.
 
-`Default: false`
-<Tabs>
-<Tab title="React / Next.js">
-
-```jsx
-<VeltCommentsSidebar pageMode={true} />
-```
-</Tab>
-
-<Tab title="HTML / Other Frameworks">
-
-```jsx
-<velt-comments-sidebar page-mode="true"></velt-comments-sidebar>
-```
-</Tab>
-
-
-</Tabs>
-
-
-
-## 6. Filter Customization
-You can pass a filter config object to customize options for specific filters. 
-
-Currently you can customize these types of filters:
- - location
- - people
- - priority
- - category
+## 11. System Filters Customization
+- Customize the available system filters:
+ - `location`
+ - `people`
+ - `priority`
+ - `category`
+- You can rename, disable, configure grouping, and multi-select behavior of the filters as needed.
 
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
 const filterConfig = {
   location: {
-    enable: true, // enable/disable location filter
-    name: "Pages", // customize location filter heading
-    enableGrouping: true, // to enable/disable grouping based on location filter
-    multiSelection: true, // to enable/disable multiple selection
-    order: ['locationId1', 'locationId2', 'locationId3'] // pass array of location ids here
+    enable: true,
+    name: "Pages", // change the display name of the filter
+    enableGrouping: true, // whether to enable grouping based on location filter
+    multiSelection: true, // whether to enable multiselection for the filter
+    order: ['locationId1', 'locationId2', 'locationId3'] // change the order of the filter options
   },
   people: {
-    enable: true, // enable/disable people filter
-    name: "People", // customize people filter heading
-    enableGrouping: true, // to enable/disable grouping based on people filter
-    multiSelection: true, // to enable/disable multiple selection
+    enable: true,
+    name: "People", // change the display name of the filter
+    enableGrouping: true, // whether to enable grouping based on people filter
+    multiSelection: true, // whether to enable multiselection for the filter
   },
   priority: {
-    enable: true, // enable/disable priority filter
-    name: "Priority", // customize priority filter heading
-    enableGrouping: false, // to enable/disable grouping based on priority filter
-    multiSelection: true, // to enable/disable multiple selection
+    enable: true,
+    name: "Priority", // change the display name of the filter
+    enableGrouping: false, // whether to enable grouping based on priority filter
+    multiSelection: true, // whether to enable multiselection for the filter
   },
   category: {
-    enable: true, // enable/disable category filter
-    name: "Category", // customize category filter heading
-    enableGrouping: true, // to enable/disable grouping based on category filter
-    multiSelection: true, // to enable/disable multiple selection
+    enable: true,
+    name: "Category", // change the display name of the filter
+    enableGrouping: true, // whether to enable grouping based on category filter
+    multiSelection: true, // whether to enable multiselection for the filter
   }
 }
 
@@ -269,18 +529,16 @@ commentsSidebar?.setAttribute("filter-config", JSON.stringify(filterConfig));
 </Tabs>
 
 
-
-
-## 7. Group Configuration
-You can enable/disable the option to group comments in the `comment sidebar` with the `group config` attribute:
+## 12. System Grouping Customization
+- Enable/disable the option to group comments in the sidebar with the `group config` attribute:
 
 <Tabs>
 <Tab title="React / Next.js">
 
 ```jsx
 const groupConfig = {
-  enable: true, // to enable/disable group by option
-  name: "Custom Group By", // customise group by heading
+  enable: true, // whether to enable group by option
+  name: "Custom Group By", // change the display name of the group by option in the filter panel
 };
 
 <VeltCommentsSidebar groupConfig={groupConfig} />
@@ -292,8 +550,8 @@ const groupConfig = {
 
 ```jsx
 const groupConfig = {
-  enable: true, // to enable/disable group by option
-  name: "Custom Group By", // customise group by heading
+  enable: true, // whether to enable group by option
+  name: "Custom Group By", // change the display name of the group by option in the filter panel
 };
 
 
@@ -306,11 +564,35 @@ commentsSidebar?.setAttribute("group-config", JSON.stringify(groupConfig));
 
 </Tabs>
 
+## 13. System Sorting Customization
+
+- Change the default sorting order of Comments in the Sidebar.
+- Default: `desc`
+
+There are three options for sorting:
+ - `asc` - to show comments in ascending order of when they were last updated
+ - `desc` - to show comments in descending order of when they were last updated
+ - `none` - to show comments in the sequence they were added
+ 
+ <Tabs>
+<Tab title="React / Next.js">
+```jsx
+<VeltCommentsSidebar sortData="asc" />
+```
+</Tab>
+
+ <Tab title="HTML / Other Frameworks">
+```jsx
+<velt-comments-sidebar sort-data="asc"></velt-comments-sidebar>
+```
+</Tab>
 
 
+</Tabs>
 
-## 8. Programmatic Filters
-You can progammically set the filters on the `comment sidebar` by passing an object to the `filters` attribute:
+
+## 14. Apply System Filters Programmatically
+- Programmatically set the system filters on the sidebar:
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -375,149 +657,23 @@ commentElement.setCommentSidebarFilters(filters);
 </Tabs>
 
 
-## 9. Embed the Sidebar in a component
-
-**You can customize the location of the sidebar.**
-
-By default, the sidebar will open up from the right corner of the page.
-Instead with embed mode, you can move the sidebar anywhere and it will take up the full width and height of its container.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-<div className="sidebar-container">
-  <VeltCommentsSidebar embedMode={true} />
-</div>
-```
-</Tab>
-
-<Tab title="HTML / Other Frameworks">
-```jsx
-<div className="sidebar-container">
-  <velt-comments-sidebar embed-mode="true"></velt-comments-sidebar>
-</div>
-```
-</Tab>
-
-</Tabs>
-
-
-
-## 10. Sort Order of Comments in Sidebar
-
-By default, the `Comments` in the `Sidebar` are ordered in descending order of when they were last updated.
-
-You can change this sorting order with the `sort data` property.
-
-There are three options for sorting:
- - `asc` - to show comments in descendending order of when they were last updated
- - `desc` - to show comments in ascending order of when they were last updated
- - `none` - to show comments in the sequence they were added
- 
- <Tabs>
-<Tab title="React / Next.js">
-```jsx
-<VeltCommentsSidebar sortData="asc" />
-```
-</Tab>
-
- <Tab title="HTML / Other Frameworks">
-```jsx
-<velt-comments-sidebar sort-data="asc"></velt-comments-sidebar>
-```
-</Tab>
-
-
-</Tabs>
-
-## 11. Change the direction where the sidebar opens from
-You can customize the sidebar to open from left.
-
-`Default: right`
-
-<Tabs>
-<Tab title="React / Next.js">
-
-
-```jsx
-<VeltCommentsSidebar position="left | right"/>
-```
-</Tab>
-
-<Tab title="HTML / Other Frameworks">
- 
-```jsx
-<velt-comments-sidebar position="left | right"/>
-```
-</Tab>
-
-</Tabs>
-
-## 12. Change the layout of the filter panel in the sidebar.
-
+## 15. Filter panel layout customization
+- Change the layout of the filter panel in the sidebar.
+- Options: `menu` or `bottomSheet`
 `Default: bottomSheet`
 
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
-<VeltCommentsSidebar filterPanelLayout="menu | bottomSheet"/>
+<VeltCommentsSidebar filterPanelLayout="menu"/>
 ```
 </Tab>
 
 <Tab title="HTML / Other Frameworks">
 ```jsx
-<velt-comments-sidebar filter-panel-layout="menu | bottomSheet"/>
+<velt-comments-sidebar filter-panel-layout="menu"/>
 ```
 </Tab>
 
 </Tabs>
 
-## 13. Exclude comments from certain locations in the Sidebar.
-
-<Tabs>
-<Tab title="React / Next.js">
-
-Using Props:
-```jsx
-<VeltCommentsSidebar excludeLocationIds={['location1', 'location2']} />
-```
-
-Using API:
-```jsx
-const commentElement = client.getCommentElement();
-commentElement.excludeLocationIdsFromSidebar(['location1', 'location2']);
-```
-</Tab>
-
-<Tab title="HTML / Other Frameworks">
-Using Props:
-```jsx
-<velt-comments-sidebar exclude-location-ids='["location1", "location2"]'></velt-comments-sidebar>
-```
-
-Using API:
-```jsx
-const commentElement = Velt.getCommentElement();
-commentElement.excludeLocationIdsFromSidebar(['location1', 'location2']);
-```
-</Tab>
-
-</Tabs>
-
-## 14. Open Sidebar floating over the Sidebar Button.
-
-<Tabs>
-<Tab title="React / Next.js">
-
-```jsx
-<VeltSidebarButton floatingMode={true} />
-```
-</Tab>
-
-<Tab title="HTML / Other Frameworks">
-```jsx
-<velt-sidebar-button floating-mode="true"></velt-sidebar-button>
-```
-</Tab>
-
-</Tabs>

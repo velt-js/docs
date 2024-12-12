@@ -50,5 +50,3 @@ npm install @veltdev/react
 
 - [X](https://x.com/veltjs): To receive updates, announcements,
   and general Velt tips.
-
-- [Discord](https://discord.gg/GupvcYH27h): To ask questions and share tips. (Less active).

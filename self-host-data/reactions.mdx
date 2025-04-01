@@ -1,0 +1,115 @@
+---
+title: "Reactions"
+description: "Self-host your reactions data while using Velt's components. Keep reaction storage on your infrastructure with minimal metadata stored on Velt servers."
+---
+
+# Overview
+Velt supports self-hosting your reactions and related data:
+
+- Reactions can be stored on your own infrastructure, with only necessary identifiers on Velt servers.
+- Velt Components automatically hydrate reaction data in the frontend by fetching from your configured data provider.
+- This gives you full control over reaction data while maintaining all Velt collaboration features.
+- This automatically also ensures that the in-app notifications content related to reactions is not stored on Velt servers. The content is generated using the reactions data in the frontend.
+
+# How does it work?
+- When reactions are created, updated, deleted or requested, the SDK uses your configured [`ReactionAnnotationDataProvider`](/api-reference/sdk/models/data-models#reactionannotationdataprovider) to handle storage and retrieval
+- The data provider implements `get`, `save`, and `delete` methods to interact with your database
+- Velt handles the data mapping and realtime synchronization while delegating persistence of actual content to your infrastructure
+- For write requests (save, delete), the operation is first performed on your database and only if we get a success response, the SDK will perform the operation on the Velt server.
+- You can configure retries, timeouts, etc. for the data provider.
+
+
+Here are the methods that you need to implement on the data provider:
+## get
+Method to fetch reactions from your database. On error we will retry.
+- Param: [`GetReactionRequest`](/api-reference/sdk/models/api-request-objects#getreactionrequest)
+- Return: [`Promise<ResolverResponse<Record<string, PartialReactionAnnotation>>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+## save
+Save reactions to your database. Return a success or error response. On error we will retry.
+- Param: [`SaveReactionRequest`](/api-reference/sdk/models/api-request-objects#savereactionrequest)
+- Return: [`Promise<ResolverResponse<T>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+## delete
+Delete reactions from your database. Return a success or error response. On error we will retry.
+- Param: [`DeleteReactionRequest`](/api-reference/sdk/models/api-request-objects#deletereactionrequest)
+- Return: [`Promise<ResolverResponse<T>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+## config
+Configuration for the reaction data provider.
+- Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig)
+
+# Example Implementation
+
+<Tabs>
+<Tab title="React / Next.js">
+``` jsx
+const fetchReactionsFromDB = async (request: GetReactionRequest) => {
+    // Fetch reaction annotations from your DB
+    const result = await __getReactionsFromYourDB__(request)
+      .then((response) => {
+        return { data: response, success: true, statusCode: 200 };
+      })
+      .catch((error) => {
+        return { success: false, statusCode: 500 };
+      });
+
+    return result;
+};
+
+const saveReactionsToDB = async (request: SaveReactionRequest) => {
+    const result = await __saveReactionsToYourDB__(request)
+      .then((response) => {
+        return { success: true, statusCode: 200 };
+      })
+      .catch((error) => {
+        return { success: false, statusCode: 500 };
+    });
+    return result;
+};
+
+const deleteReactionsFromDB = async (request: DeleteReactionRequest) => {
+    const result = await __deleteReactionsFromYourDB__(request)
+      .then((response) => {
+        return { success: true, statusCode: 200 };
+      })
+      .catch((error) => {
+        return { success: false, statusCode: 500 };
+    });
+    return result;
+};
+
+const reactionResolverConfig: ResolverConfig = {
+    resolveTimeout: 2000,
+    saveRetryConfig: {
+        retryCount: 3,
+        retryDelay: 2000
+    },
+    deleteRetryConfig: {
+        retryCount: 3,
+        retryDelay: 2000
+    }
+};
+
+
+const reactionAnnotationDataProvider: ReactionAnnotationDataProvider = {
+    get: fetchReactionsFromDB,
+    save: saveReactionsToDB,
+    delete: deleteReactionsFromDB,
+    config: reactionResolverConfig
+};
+
+<VeltProvider 
+    apiKey='YOUR_API_KEY'
+    dataProviders={{
+        reaction: reactionAnnotationDataProvider
+    }}
+>
+</VeltProvider>
+
+```
+</Tab>
+<Tab title="Other Frameworks">
+
+</Tab>
+</Tabs>

@@ -1,0 +1,116 @@
+---
+title: "Comments"
+description: "Self-host your comments data while using Velt's components. Keep comment storage on your infrastructure with minimal metadata stored on Velt servers."
+---
+
+# Overview
+Velt supports self-hosting your comments and related data:
+
+- Comments can be stored on your own infrastructure, with only necessary identifiers on Velt servers.
+- Velt Components automatically hydrate comment data in the frontend by fetching from your configured data provider.
+- This gives you full control over comment data while maintaining all Velt collaboration features.
+- This automatically also ensures that the in-app notifications content is not stored on Velt servers. The content is generated using the comments data in the frontend.
+
+# How does it work?
+- When comments are created, updated, deleted or requested, the SDK uses your configured [`CommentAnnotationDataProvider`](/api-reference/sdk/models/data-models#commentannotationdataprovider) to handle storage and retrieval
+- The data provider implements `get`, `save`, and `delete` methods to interact with your database
+- Velt handles the data mapping and realtime synchronization while delegating persistence of actual content to your infrastructure
+- The data provider works at the Comment Annotation (Thread) level not at the individual Comment (Message) level.
+- For write requests (save, delete), the operation is first performed on your database and only if we get a success response, the SDK will perform the operation on the Velt server.
+- You can configure retries, timeouts, etc. for the data provider.
+
+Here are the methods that you need to implement on the data provider:
+## get
+Method to fetch comments from your database. On error we will retry.
+- Param: [`GetCommentRequest`](/api-reference/sdk/models/api-request-objects#getcommentrequest)
+- Return: [`Promise<ResolverResponse<Record<string, PartialCommentAnnotation>>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+## save
+Save comments to your database. Return a success or error response. On error we will retry.
+- Param: [`SaveCommentRequest`](/api-reference/sdk/models/api-request-objects#savecommentrequest)
+  - Note in the `SaveCommentRequest` object, you will receive [the event name](/api-reference/sdk/models/data-models#resolveractions) that triggered the save.
+- Return: [`Promise<ResolverResponse<T>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+## delete
+Delete comments from your database. Return a success or error response. On error we will retry.
+- Param: [`DeleteCommentRequest`](/api-reference/sdk/models/api-request-objects#deletecommentrequest)
+- Return: [`Promise<ResolverResponse<T>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+## config
+Configuration for the comment data provider.
+- Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig)
+
+# Example Implementation
+
+<Tabs>
+<Tab title="React / Next.js">
+``` jsx
+const fetchCommentsFromDB = async (request: GetCommentRequest) => {
+    // Fetch comment annotations from your DB
+    const result = await __getCommentsFromYourDB__(request)
+      .then((response) => {
+        return { data: response, success: true, statusCode: 200 };
+      })
+      .catch((error) => {
+        return { success: false, statusCode: 500 };
+      });
+
+    return result;
+};
+
+const saveCommentsToDB = async (request: SaveCommentRequest) => {
+    const result = await __saveCommentsToYourDB__(request)
+      .then((response) => {
+        return { success: true, statusCode: 200 };
+      })
+      .catch((error) => {
+        return { success: false, statusCode: 500 };
+    });
+    return result;
+};
+
+const deleteCommentsFromDB = async (request: DeleteCommentRequest) => {
+    const result = await __deleteCommentsFromYourDB__(request)
+      .then((response) => {
+        return { success: true, statusCode: 200 };
+      })
+      .catch((error) => {
+        return { success: false, statusCode: 500 };
+    });
+    return result;
+};
+
+const commentResolverConfig: ResolverConfig = {
+    resolveTimeout: 2000,
+    saveRetryConfig: {
+        retryCount: 3,
+        retryDelay: 2000
+    },
+    deleteRetryConfig: {
+        retryCount: 3,
+        retryDelay: 2000
+    }
+};
+
+
+const commentAnnotationDataProvider: CommentAnnotationDataProvider = {
+    get: fetchCommentsFromDB,
+    save: saveCommentsToDB,
+    delete: deleteCommentsFromDB,
+    config: commentResolverConfig
+};
+
+<VeltProvider 
+    apiKey='YOUR_API_KEY'
+    dataProviders={{
+        comment: commentAnnotationDataProvider
+    }}
+>
+</VeltProvider>
+
+```
+</Tab>
+<Tab title="Other Frameworks">
+
+</Tab>
+</Tabs>

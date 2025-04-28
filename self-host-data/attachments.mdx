@@ -1,0 +1,163 @@
+---
+title: "Attachments"
+description: "Self-host your comments file attachments data while using Velt's components. Keep attachment storage on your infrastructure with minimal metadata stored on Velt servers."
+---
+
+<Warning>
+  - This feature is currently in beta and is subject to change.
+  - This is currently only compatible with `setDocuments` method.
+  - Ensure that the data providers are set prior to calling `identify` method.
+  - The data provider methods must return the correct status code (e.g. 200 for success, 500 for errors) and success boolean in the response object. This ensures proper error handling and retries.
+</Warning>
+
+# Overview
+Velt supports self-hosting your comments file attachments data:
+
+- Attachments can be stored on your own infrastructure, with only necessary identifiers on Velt servers.
+- Velt Components automatically hydrate attachment data in the frontend by fetching from your configured data provider.
+- This gives you full control over attachment data while maintaining the file attachment features.
+
+# How does it work?
+When users upload or delete attachments:
+
+1. The SDK uses your configured [`AttachmentDataProvider`](/api-reference/sdk/models/data-models#attachmentdataprovider) to handle storage
+2. Your data provider implements two key methods:
+   - `save`: Stores the file and returns its URL
+   - `delete`: Removes the file from storage
+
+**The process works as follows:**
+
+When an attachment operation occurs:
+
+1. The SDK first attempts to save/delete the file on your storage infrastructure
+2. If successful:
+   - The SDK updates Velt's servers with minimal metadata
+   - The [`PartialComment`](/api-reference/sdk/models/data-models#partialcomment) object is updated to reference the attachment including the attachment url, name and metadata.
+   - When the comment is saved, this information is stored on your end.
+   - Velt servers only store necessary identifiers, not the actual files or URLs
+3. If the operation fails, no changes are made to Velt's servers and the operation is retried if you have configured retries.
+
+
+
+Here are the methods that you need to implement on the data provider:
+## save
+Save attachments to your storage backend. Return the url with a success or error response. On error we will retry.
+- Param: [`SaveAttachmentResolverRequest`](/api-reference/sdk/models/api-request-objects#saveattachmentresolverrequest)
+- Return: [`Promise<ResolverResponse<SaveAttachmentResolverData>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+## delete
+Delete attachments from your storage backend. Return a success or error response. On error we will retry.
+- Param: [`DeleteAttachmentResolverRequest`](/api-reference/sdk/models/api-request-objects#deleteattachmentresolverrequest)
+- Return: [`Promise<ResolverResponse<undefined>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+## config
+Configuration for the attachment data provider.
+- Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig)
+
+# Example Implementation
+
+<Tabs>
+<Tab title="React / Next.js">
+``` jsx
+const saveAttachmentsToDB = async (request: SaveAttachmentResolverRequest) => {
+    const result = await __saveAttachmentsToYourDB__(request)
+      .then((response) => {
+        return { success: true, statusCode: 200 };
+      })
+      .catch((error) => {
+        return { success: false, statusCode: 500 };
+    });
+    return result;
+};
+
+const deleteAttachmentsFromDB = async (request: DeleteAttachmentResolverRequest) => {
+    const result = await __deleteAttachmentsFromYourDB__(request)
+      .then((response) => {
+        return { success: true, statusCode: 200 };
+      })
+      .catch((error) => {
+        return { success: false, statusCode: 500 };
+    });
+    return result;
+};
+
+const attachmentResolverConfig: ResolverConfig = {
+    resolveTimeout: 2000,
+    saveRetryConfig: {
+        retryCount: 3,
+        retryDelay: 2000
+    },
+    deleteRetryConfig: {
+        retryCount: 3,
+        retryDelay: 2000
+    }
+};
+
+
+const attachmentDataProvider: AttachmentDataProvider = {
+    save: saveAttachmentsToDB,
+    delete: deleteAttachmentsFromDB,
+    config: attachmentResolverConfig
+};
+
+<VeltProvider 
+    apiKey='YOUR_API_KEY'
+    dataProviders={{
+        attachment: attachmentDataProvider
+    }}
+>
+</VeltProvider>
+
+```
+</Tab>
+<Tab title="Other Frameworks">
+``` jsx
+const saveAttachmentsToDB = async (request) => {
+    const result = await __saveAttachmentsToYourDB__(request)
+      .then((response) => {
+        return { success: true, statusCode: 200 };
+      })
+      .catch((error) => {
+        return { success: false, statusCode: 500 };
+    });
+    return result;
+};
+
+const deleteAttachmentsFromDB = async (request) => {
+    const result = await __deleteAttachmentsFromYourDB__(request)
+      .then((response) => {
+        return { success: true, statusCode: 200 };
+      })
+      .catch((error) => {
+        return { success: false, statusCode: 500 };
+    });
+    return result;
+};
+
+const attachmentResolverConfig = {
+    resolveTimeout: 2000,
+    saveRetryConfig: {
+        retryCount: 3,
+        retryDelay: 2000
+    },
+    deleteRetryConfig: {
+        retryCount: 3,
+        retryDelay: 2000
+    }
+};
+
+
+const attachmentDataProvider = {
+    save: saveAttachmentsToDB,
+    delete: deleteAttachmentsFromDB,
+    config: attachmentResolverConfig
+};
+
+Velt.setDataProviders({
+    attachment: attachmentDataProvider
+});
+
+```
+
+</Tab>
+</Tabs>

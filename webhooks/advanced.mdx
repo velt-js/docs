@@ -1,0 +1,378 @@
+---
+title: Advanced Webhooks
+---
+
+Webhooks are how services notify each other of events.
+
+At their core they are just a POST request to a pre-determined endpoint.
+The endpoint can be whatever you want, and you can just add them from the UI.
+You normally use one endpoint per service, and that endpoint listens to all of the event types.
+
+For example, if you receive webhooks from Acme Inc., you can structure your URL like: https://www.example.com/acme/webhooks/.
+
+The way to indicate that a webhook has been processed is by returning a 2xx (status code 200-299) response to the webhook message within a reasonable time-frame (15s).
+
+It's also important to disable CSRF protection for this endpoint if the framework you use enables them by default.
+
+Another important aspect of handling webhooks is to verify the signature and timestamp when processing them.
+
+You can learn more about it in the [signature verification section](#verifying-webhook-signatures).
+
+## Endpoints
+
+### Adding an endpoint
+
+In order to start listening to messages, you will need to configure your endpoints.
+
+Adding an endpoint is as simple as providing a URL that you control and selecting the event types that you want to listen to.
+
+
+### Playground
+
+If your endpoint isn't quite ready to start receiving events, you can press the "with Svix Play" button to have a unique URL generated for you.
+
+You'll be able to view and inspect webhooks sent to your Svix Play URL, making it effortless to get started.
+
+
+
+### Testing endpoints
+
+Once you've added an endpoint, you'll want to make sure its working.
+
+The "Testing" tab lets you send test events to your endpoint.
+
+After sending an example event, you can click into the message to view the message payload, all of the message attempts, and whether it succeeded or failed.
+
+
+## Events
+
+If you don't specify any event types, by default, your endpoint will receive all events, regardless of type.
+
+This can be helpful for getting started and for testing, but we recommend changing this to a subset later on to avoid receiving extraneous messages.
+
+{/* ### Comments
+
+
+### Huddle */}
+
+
+
+
+## Rate Limits
+The rate limit is defined as a limit for the number of messages per second to send to the endpoint. After the limit is reached, requests will get throttled so to keep a consistent rate under the limit.
+
+Due to the nature of distributed systems the actual rate of messages can sometimes be slightly above the enforce rate limit. So for example, if you set a rate limit of 1,000 per seconds, an endpoint may potentially get messages at a rate of 1,050 or even higher.
+
+You can set the rate limit on each of the endpoints you create.
+
+
+## Retries
+
+We attempt to deliver each webhook message based on a retry schedule with exponential backoff.
+Each message is attempted based on the following schedule, where each period is started following the failure of the preceding attempt:
+
+- Immediately
+- 5 seconds
+- 5 minutes
+- 30 minutes
+- 2 hours
+- 5 hours
+- 10 hours
+- 10 hours (in addition to the previous)
+
+For example, an attempt that fails three times before eventually succeeding will be delivered roughly 35 minutes and 5 seconds following the first attempt.
+
+If an endpoint is removed or disabled delivery attempts to the endpoint will be disabled as well.
+
+
+### Indicating successful delivery
+
+The way to indicate that a webhook has been processed is by returning a 2xx (status code 200-299) response to the webhook message within a reasonable time-frame (15s). Any other status code, including 3xx redirects are treated as failures.
+
+### Failed delivery handling
+
+After the conclusion of the above attempts the message will be marked as Failed for this endpoint, and you will get a webhook of type `message.attempt.exhausted` notifying you of this error.
+
+### Manual retries
+
+Use the console to manually retry each message at any time, or automatically retry ("Recover") all failed messages starting from a given date.
+
+{/* ## Integrations
+
+### Slack
+
+### Teams
+
+### Zapier
+
+### Resend
+
+### Loops
+ */}
+
+
+
+## Security
+
+### Verifying webhook signatures
+
+Webhook signatures let you verify that webhook messages are actually sent by us and not a malicious actor.
+
+
+Each webhook call includes three headers with additional information that are used for verification:
+
+* `webhook-id`: the unique message identifier for the webhook message. This identifier is unique across all messages, but will be the same when the same webhook is being resent (e.g. due to a previous failure).
+* `webhook-timestamp`: timestamp in [seconds since epoch](https://en.wikipedia.org/wiki/Unix_time).
+* `webhook-signature`: the [Base64](https://en.wikipedia.org/wiki/Base64) encoded list of signatures (space delimited).
+
+#### Constructing the signed content
+
+The content to sign is composed by concatenating the id, timestamp and payload, separated by the full-stop character (`.`). In code, it will look something like:
+
+```javascript
+const signedContent = `${webhook_id}.${webhook_timestamp}.${body}`;
+```
+
+Where `body` is the raw body of the request. The signature is sensitive to any changes, so even a small change in the body will cause the signature to be completely different. This means that you should *not* change the body in any way before verifying.
+
+#### Determining the expected signature
+
+We use an [HMAC](https://en.wikipedia.org/wiki/Hash-based_message_authentication_code) with [SHA-256](https://en.wikipedia.org/wiki/SHA-2) to sign its webhooks.
+
+So to calculate the expected signature, you should HMAC the `signed_content` from above using the base64 portion of your signing secret (this is the part after the `whsec_` prefix) as the key.
+For example, given the secret `whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw` you will want to use `MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw`.
+
+For example, this is how you can calculate the signature in Node.js:
+
+```javascript
+const crypto = require('crypto');
+
+const signedContent = `${webhook_id}.${webhook_timestamp}.${body}`;
+const secret = "whsec_5WbX5kEWLlfzsGNjH64I8lOOqUB6e8FH";
+
+// Need to base64 decode the secret
+const secretBytes = Buffer.from(secret.split('_')[1], "base64");
+const signature = crypto
+  .createHmac('sha256', secretBytes)
+  .update(signedContent)
+  .digest('base64');
+
+console.log(signature);
+```
+
+This generated signature should match one of the ones sent in the `webhook-signature` header.
+
+The `webhook-signature` header is composed of a list of space delimited signatures and their corresponding version identifiers. The signature list is most commonly of length one. Though there could be any number of signatures. For example:
+
+```
+v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE= v1,bm9ldHUjKzFob2VudXRob2VodWUzMjRvdWVvdW9ldQo= v2,MzJsNDk4MzI0K2VvdSMjMTEjQEBAQDEyMzMzMzEyMwo=
+```
+
+Make sure to remove the version prefix and delimiter (e.g. `v1,`) before verifying the signature.
+
+Please note that to compare the signatures it's recommended to use a constant-time string comparison method in order to prevent timing attacks.
+
+#### Verify timestamp
+
+As mentioned above, we also send the timestamp of the attempt in the `webhook-timestamp` header. You should compare this timestamp against your system timestamp and make sure it's within your tolerance in order to prevent timestamp attacks.
+
+
+#### Example signatures
+
+Here is an example you can use to verify you implemented everything correctly. Please note that this may fail verification due to the timestamp being old.
+
+```javascript
+secret = 'whsec_plJ3nmyCDGBKInavdOK15jsl';
+payload = '{"event_type":"ping","data":{"success":true}}';
+msg_id = 'msg_loFOjxBNrRLzqYUf';
+timestamp = '1731705121';
+
+// Would generate the following signature:
+signature = 'v1,rAvfW3dJ/X/qxhsaXPOyyCGmRKsaKWcsNccKXlIktD0=';
+```
+
+Additionally, you can use the [webhook simulation tool](https://www.standardwebhooks.com/simulate) to generate as many examples as you need.
+
+
+### Additional Authentication
+
+We sign all webhooks in order to ensure the security and authenticity of all of the webhooks being sent.
+
+This security mechanism is already sufficient (and better) than other methods such as [HTTP Basic Authentication](https://en.wikipedia.org/wiki/Basic_access_authentication), and using an authentication token. However, some systems and IT departments have varying requirements for any HTTP request hitting their services (including webhooks), so we've built in support for these additional authentication modes.
+
+#### HTTP Basic Authentication
+
+HTTP Basic Authentication (Basic Auth), is a common way of sending a server a pair of username and password, or more often a username and auth token. While there are different ways of passing these credentials, the simplest and most common way is by including it as part of the URL.
+
+You can add it to the URL by prefixing the URL with the username and password (or token) and the @ symbol as such:
+
+```
+https://USERNAME:PASSWORD@example.com/webhook/
+```
+
+#### Header based authentication
+
+Some services require specific headers to be passed in order to be processed by their load balancers or application servers. These services often require a specific authentication token passed in the `Authorization` header, but sometimes there could also be different headers and values.
+
+We support setting custom headers to be sent for each endpoint both [using the API](https://api.svix.com/docs#operation/update_endpoint_headers_api_v1_app__app_id__endpoint__endpoint_id__headers__put) and using [the application portal](./using-app-portal/adding-endpoints.mdx).
+
+#### Firewalls (IP blocking)
+
+Many organizations have strict firewall rules for which IPs are allowed to send traffic to their systems. While this is not a very strong security mechanism on its own, it's often useful when used in conjunction with other methods (such as webhook signatures).
+
+We only send webhooks requests from a specific set of IPs as detailed below:
+
+
+#### Static Source IP Addresses
+In case your webhook receiving endpoint is behind a firewall or NAT, you may need to allow traffic from Svix's static IP addresses.
+```plaintext
+44.228.126.217
+50.112.21.217
+52.24.126.164
+54.148.139.208
+2600:1f24:64:8000::/56
+```
+
+### Payload Encoding
+- Enable Base64 encoding for webhook payloads (disabled by default).
+- Addresses issues with payloads containing HTML tags that may fail due to strict endpoint policies.
+- If enabled, ensure your server can decode Base64 encoded payloads.
+- Example of decoding a Base64 encoded payload:
+
+   ```js
+   const encodedData = "eyJ0ZXN0IjoxLCJ0ZXN0MSI6IjxkaXY+PC9kaXY+In0="
+   const decodedData = Buffer.from(encodedData, 'base64').toString('utf-8');
+   console.log(JSON.parse(decodedData));
+   ```
+
+### Payload Encryption
+- Enable payload encryption for enhanced security (disabled by default).
+- Configure this option in the [Velt Console](https://console.velt.dev/dashboard/config/webhook).
+- Encryption details:
+  - Payload encryption: AES-256-CBC
+  - Key encryption: RSA with PKCS1 OAEP padding and SHA-256 hash
+- Public key format:
+  - Provide only the base64-encoded key string, without PEM headers/footers
+  - Recommended key size: 2048 bits
+- Example of setting up decryption for Node.js:
+<Tabs>
+<Tab title="Sample Encrypted Payload">
+``` js
+{
+  "encryptedData": "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",
+  "encryptedKey": "OzSHFXzrXFC5wDvM5NPRkriY/NaC/USvFUPE+f4NZ30tiD2qb8sJM2XT2K7uNIZ05uDLfsJ6/BbEoYC1SOPXcFJMYqRiYFiI9RWrNgR4EtPWZ84RgrmxGcZZjzSqHzjuls8g++cuqJGRV+ePbTRH+z2OuZZu0vMKZiemaZpHL46Ewi9HUnbRDXvOlKFFHmQm5tayZ7m7Mv5iu4T5R3DPEAHlZnGqtP98ToLxUJUS2Eku/iLHXRmhmZXn55Qt5GYiyss8P5/miPqJCu1QG0CStn5Nsl4KvU+I4QYAOcMFWWUAGofOwPWtt8vPh8Bx+7t7BbayKpA4ZUEWWAjC+zASxg==",
+  "iv": "SHM0UHU5WXoyTG03TnExWA=="
+}
+```
+</Tab>
+<Tab title="Sample Decryption Code">
+```javascript
+    const crypto = require('crypto');
+
+    /**
+     * Decrypts the symmetric key using the provided private key.
+     * @param {string} encryptedKey - Base64 encoded encrypted symmetric key
+     * @param {string} privateKey - RSA private key
+     * @returns {Buffer} Decrypted symmetric key
+     */
+    function decryptSymmetricKey(encryptedKey, privateKey) {
+        try {
+            const encryptedSymmetricKey = Buffer.from(encryptedKey, 'base64');
+            const decryptedSymmetricKey = crypto.privateDecrypt(
+                {
+                    key: `-----BEGIN RSA PRIVATE KEY-----\n${privateKey}\n-----END RSA PRIVATE KEY-----`,
+                    padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+                    oaepHash: 'sha256',
+                },
+                encryptedSymmetricKey
+            );
+            return decryptedSymmetricKey;
+        } catch (error) {
+            console.error('Error decrypting symmetric key:', error);
+            throw new Error('Failed to decrypt symmetric key');
+        }
+    }
+
+    /**
+     * Decrypts the webhook data using the provided symmetric key and IV.
+     * @param {string} encryptedWebhookData - Base64 encoded encrypted webhook data
+     * @param {Buffer} symmetricKey - Decrypted symmetric key
+     * @param {string} payloadIv - Base64 encoded initialization vector
+     * @returns {Object} Decrypted webhook data as a JSON object
+     */
+    function decryptWebhookData(encryptedWebhookData, symmetricKey, payloadIv) {
+        try {
+            const iv = Buffer.from(payloadIv, 'base64');
+            const decipher = crypto.createDecipheriv('aes-256-cbc', symmetricKey, iv);
+            let decryptedData = decipher.update(encryptedWebhookData, 'base64', 'utf8');
+            decryptedData += decipher.final('utf8');
+            return JSON.parse(decryptedData);
+        } catch (error) {
+            console.error('Error decrypting webhook data:', error);
+            throw new Error('Failed to decrypt webhook data');
+        }
+    }
+
+    // Example usage:
+    // const decryptedKey = decryptSymmetricKey(encryptedKey, privateKey);
+    // const decryptedData = decryptWebhookData(encryptedWebhookData, decryptedKey, payloadIv);
+    ```
+</Tab>
+</Tabs>
+
+
+
+
+## Debugging
+
+### Troubleshooting tips
+
+There are some common reasons why your webhook endpoint is failing:
+
+**Not using the raw payload body**
+
+This is the most common issue. When generating the signed content, we use the raw string body of the message payload.
+
+If you convert JSON payloads into strings using methods like stringify, different implementations may produce different string representations of the JSON object, which can lead to discrepancies when verifying the signature. It's crucial to verify the payload exactly as it was sent, byte-for-byte or string-for-string, to ensure accurate verification.
+
+**Missing the secret key**
+
+From time to time we see people using the wrong secret key. Remember that keys are unique to endpoints.
+
+**Sending the wrong response codes**
+
+When we receive a response with a 2xx status code, we interpret that as a successful delivery even if you indicate a failure in the response payload. Make sure to use the right response status codes so we know when message are supposed to succeed vs fail.
+
+**Responses timing out**
+
+We will consider any message that fails to send a response within 15 seconds a failed message. If your endpoint is also processing complicated workflows, it may timeout and result in failed messages.
+
+We suggest having your endpoint simply receive the message and add it to a queue to be processed asynchronously so you can respond promptly and avoiding getting timed out.
+
+### Failure Recovery
+
+#### Re-enable a disabled endpoint
+
+If all attempts to a specific endpoint fail for a period of 5 days, the endpoint will be disabled. To re-enable a disabled endpoint, go to the webhook dashboard, find the endpoint from the list and select "Enable Endpoint".
+
+#### Recovering/Resending failed messages
+
+If your service has downtime or if your endpoint was misconfigured, you probably want to recover any messages that failed during the downtime.
+
+If you want to replay a single event, you can find the message from the UI and click the options menu next to any of the attempts.
+
+From there, click "resend" to have the same message send to your endpoint again.
+
+If you need to recover from a service outage and want to replay all the events since a given time, you can do so from the Endpoint page. On an endpoint's details page, click  "Options > Recover Failed Messages".
+
+From there, you can choose a time window to recover from.
+
+For a more granular recovery - for example, if you know the exact timestamp that you want to recover from - you can click the options menu on any message from the endpoint page.
+
+From there, you can click "Replay..." and choose to "Replay all failed messages since this time."
+
+
+### Logs
+
+You can see all of the activity logs for your endpoint in the "Logs" tab.
+

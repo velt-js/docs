@@ -1,6 +1,106 @@
 <Update label="4.5.0-beta.39" description="July 03 2025">
 
 ### New Features
+- [**CRDT**]: Added Yjs based CRDT library (`@veltdev/tiptap-crdt) for Tiptap Editor (in beta).
+  - This enables live cursors and collaborative editing out of the box.
+  - This is framework agnostic and can be used with any Tiptap editor.
+
+**Installation:**
+```bash
+npm install @veltdev/tiptap-crdt @tiptap/react @tiptap/starter-kit @tiptap/extension-collaboration @tiptap/extension-collaboration-cursor
+```
+
+**Basic Implementation:**
+```jsx expandable lines
+import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
+import { EditorContent, useEditor } from '@tiptap/react';
+import StarterKit from '@tiptap/starter-kit';
+import { useVeltClient, useVeltEventCallback } from '@veltdev/react';
+import { VeltTipTapStore, createVeltTipTapStore } from '@veltdev/tiptap-crdt';
+import { User } from '@veltdev/types';
+import React, { useEffect, useRef, useState } from 'react';
+
+const CollaborativeEditor: React.FC = () => {
+  // Store reference to hold the VeltTipTap store instance
+  const veltTiptapStoreRef = useRef<VeltTipTapStore | null>(null);
+
+  // Get Velt client and user from Velt hooks. This assumes you have already initialized the Velt client.
+  const { client } = useVeltClient();
+  const veltUser = useVeltEventCallback('userUpdate');
+
+  // Track when the store is ready for editor initialization
+  const [veltTiptapStoreReady, setVeltTiptapStoreReady] = useState(false);
+
+  // Initialize the VeltTipTap store when client and user are available
+  useEffect(() => {
+    if (!veltUser || !client) return;
+
+    initializeStore();
+
+    // Cleanup function to destroy store when component unmounts
+    return () => {
+      if (veltTiptapStoreRef.current) {
+        veltTiptapStoreRef.current.destroy();
+      }
+    };
+  }, [client, veltUser]);
+
+  const initializeStore = async () => {
+    // Create the VeltTipTap store with unique editor ID and Velt client
+    const veltTiptapStore = await createVeltTipTapStore({ 
+      editorId: 'my-collaborative-editor', // Unique identifier for this editor
+      veltClient: client! 
+    });
+    
+    veltTiptapStoreRef.current = veltTiptapStore;
+    setVeltTiptapStoreReady(true);
+  }
+
+  // Initialize TipTap editor with collaboration extensions
+  const editor = useEditor({
+    extensions: [
+      // Basic TipTap extensions
+      StarterKit.configure({
+        history: false, // Disable default history to use Collaboration's history management
+      }),
+      // Add collaboration extensions only when store is ready
+      ...(
+        veltTiptapStoreRef.current ?
+          [
+            // Get the collaboration extension from the VeltTipTap store
+            veltTiptapStoreRef.current.getCollabExtension(),
+            // Configure cursor tracking with the same provider
+            CollaborationCursor.configure({
+              provider: veltTiptapStoreRef.current.getStore().getProvider(),
+              user: veltUser as User,
+            }),
+          ]
+          : []
+      ),
+    ],
+    // Start with empty content to avoid conflicts with YJS initialization
+    content: ''
+  }, [veltTiptapStoreReady, veltUser]); // Re-initialize when store is ready or user changes
+
+  return (
+    <div className="editor-container">
+      <div className="editor-header">
+        Collaborative Editor - {veltUser?.name ? `Editing as ${veltUser.name}` : 'Please login to start editing'}
+      </div>
+      <div className="editor-content">
+        <EditorContent editor={editor} />
+      </div>
+      <div className="status">
+        {veltTiptapStoreReady ? 'Connected to collaborative session' : 'Connecting to collaborative session...'}
+      </div>
+    </div>
+  );
+};
+
+export default CollaborativeEditor;
+```
+
+
 - [**Video Editor**]: Added zoom button in video editor with [wireframes support](/ui-customization/features/async/recorder/video-editor#addzoombutton).
 - [**Recorder**]: Added API to turn on/off the microphone on the recorder control panel.
 <Tabs>

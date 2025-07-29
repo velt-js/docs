@@ -1,0 +1,170 @@
+---
+title: General Purpose
+description: Setup CRDT for any framework.
+---
+
+## Introduction
+
+Use this to add Yjs based CRDT to your project.
+
+## Store APIs
+
+### createVeltStore
+
+- Creates a new CRDT store instance.
+- You can initialize many stores within the same document.
+
+**Params:**
+- `id`: `string`: Unique identifier for the store.
+- `type`: `'array' | 'map' | 'text' | 'xml'`: Type of the store.
+- `initialValue`: `T`: [Optional] Initial value for the store (e.g., `[]` for an empty array).
+- `veltClient`: `Velt`: Instance of the Velt client for synchronization.
+
+**Returns:**
+- `Promise<Store<T> | null>`: A Promise resolving to a `Store<T>` instance or `null` if creation fails.
+
+### getValue
+- Retrieves the current value of the store.  
+
+**Returns:**
+- `T`: The current state of the data (e.g., an array, map, text, xml).  
+
+### update
+- Updates the store with a new value. Changes are propagated to all connected clients via CRDT merging.  
+
+**Params:**
+- `newValue`: `T`: The updated data to set.  
+
+**Returns:**
+- `void`: void.  
+
+### subscribe
+- Subscribes to changes in the store's value. The callback is invoked whenever the value updates, either locally or from remote changes.  
+
+**Params:**
+- `callback`: `(newValue: T) => void`: Function to call when the new value is emitted.  
+
+**Returns:**
+- `() => void`: An unsubscribe function to stop listening.  
+
+
+## Version History
+### saveVersion
+- Saves the current state as a version with the given name.
+
+**Params:**
+- `versionName`: `string`: A unique name for this version.
+
+### getVersions
+- Fetches all saved versions.
+
+**Returns:**
+- `Promise<Version[]>`: A Promise resolving to an array of Version objects.
+
+### getVersionById
+- Fetches a version by its ID.
+
+**Params:**
+- `versionId`: `string`: The ID of the version to fetch.
+
+**Returns:**
+- `Promise<Version>`: A Promise resolving to the Version object.
+
+### setStateFromVersion
+- Restores the store to the state of the given version.
+
+**Params:**
+- `version`: `Version`: The Version object to restore from.
+
+**Returns:**
+- `void`: void.
+
+
+
+## Example Usage
+
+```jsx
+import { Store, createVeltStore } from '@veltdev/crdt';
+
+export const YourComponent = () => {
+
+    const [store, setStore] = useState<Store<T> | null>(null);
+    const [value, setValue] = useState<T | null>(null);
+    const { client } = useVeltClient();
+    const veltUser = useVeltEventCallback('userUpdate');
+
+    useEffect(() => {
+        if (!client || !veltUser) return;
+
+        let unsubscribe: (() => void) | undefined;
+
+        const initialize = async () => {
+            const store = await createVeltStore<T>({
+                id: 'your-store-id',
+                type: 'array', // or 'map', 'text', 'xml'
+                initialValue: [], // initial value for the store
+                veltClient: client,
+            })
+            if (!store) return;
+            setStore(store);
+
+
+            unsubscribe = store.subscribe((value: T) => {
+                // do something with the value
+                setValue(value);
+            });
+        };
+
+        initialize();
+
+        return () => {
+            if (unsubscribe) {
+                unsubscribe();
+            }
+        };
+    }, [client, veltUser]);
+
+    // get value from store
+    const getStoreValue = () => {
+        return store?.getValue();
+    }
+
+    // update value to store
+    const updateStoreValue = (newValue: any) => {
+        store?.update(newValue);
+    }
+}
+```
+
+### Version History Example
+
+```jsx
+const store = await createVeltStore({
+  id: 'my-document',
+  veltClient: client,
+  type: 'text', // or array, map, xml
+  initialValue: 'Hello, world!'
+});
+
+// Make some changes to your data
+store.update('Hello, collaborative world!');
+
+// Save the current state as a version
+store.storeVersion('First Update');
+
+// Make more changes
+store.update('Hello, amazing collaborative world!');
+
+// Save another version
+store.storeVersion('Second Update');
+
+// Fetch all saved versions
+const versions = await store.getVersionList();
+console.log('Available versions:', versions);
+
+// Restore to a previous version
+const firstVersion = versions.find(v => v.versionName === 'First Update');
+if (firstVersion) {
+  store.setStateFromVersion(firstVersion);
+}
+```

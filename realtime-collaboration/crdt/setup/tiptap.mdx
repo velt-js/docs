@@ -5,6 +5,13 @@ description: Setup CRDT for Tiptap Editor.
 
 This enables live cursors and collaborative editing out of the box. This is framework agnostic and can be used with any Tiptap editor.
 
+## Prerequisites
+
+- Node.js (v14 or higher)
+- React (v16.8 or higher for hooks)
+- A Velt account with an API key ([sign up](https://velt.dev))
+- Optional: TypeScript for type safety
+
 ## Step 1: Install Dependencies
 
 First, install the required packages:
@@ -16,7 +23,19 @@ npm install @veltdev/tiptap-crdt @tiptap/react @tiptap/starter-kit @tiptap/exten
 
 ## Step 2: Setup Velt
 
-[Learn more](/get-started/setup/install)
+Initialize the Velt client by wrapping your app with the `VeltProvider`. This enables authentication and collaboration features. See [Velt Setup Docs](/get-started/setup/install) for details.
+
+```jsx
+import { VeltProvider } from '@veltdev/react';
+
+export function Root() {
+  return (
+    <VeltProvider apiKey="YOUR_API_KEY">
+      <App />
+    </VeltProvider>
+  );
+}
+```
 
 
 ## Step 3: Import Required Components
@@ -52,10 +71,7 @@ const CollaborativeEditor: React.FC = () => {
 
 ## Step 5: Initialize the VeltTipTap Store
 
-- Set up the store initialization.
-- Pass the editorId and Velt client to the Velt Tiptap store. When multiple editors are used, each editor should have a unique editorId.
-- Set the local state to track when the store is ready.
-- Add cleanup function to destroy the store when the component unmounts.
+Initialize the store with a unique `editorId` and your Velt client, track readiness, and clean up on unmount.
 
 ```jsx
   // Initialize the VeltTipTap store when client and user are available
@@ -123,6 +139,10 @@ const CollaborativeEditor: React.FC = () => {
 ## Step 7: Render the Editor
 
 ```jsx
+  if (!editor) {
+    return <div className="status">Loading editor…</div>;
+  }
+
   return (
     <div className="editor-container">
       <div className="editor-header">
@@ -140,6 +160,38 @@ const CollaborativeEditor: React.FC = () => {
 
 export default CollaborativeEditor;
 ```
+
+Add minimal styles to your app's stylesheet:
+
+```css
+.editor-container {
+  padding: 20px;
+}
+.editor-header {
+  font-size: 1.2em;
+  margin-bottom: 10px;
+}
+.editor-content {
+  border: 1px solid #ccc;
+  padding: 10px;
+  min-height: 200px;
+}
+.status {
+  margin-top: 10px;
+  color: #666;
+}
+```
+
+## Testing and Debugging
+
+To test collaboration:
+1. Open two browser windows with different user sessions.
+2. Edit in one window and verify changes and cursors appear in the other.
+
+Common issues:
+- Cursors not appearing: Ensure each editor has a unique `editorId` and users are authenticated.
+- Editor not loading: Confirm the Velt client is initialized and the API key is valid.
+- Desynced content: Make sure TipTap `history` is disabled when using collaboration.
 
 ## Complete Example
 
@@ -155,23 +207,20 @@ import { User } from '@veltdev/types';
 import React, { useEffect, useRef, useState } from 'react';
 
 const CollaborativeEditor: React.FC = () => {
-  // Store reference to hold the VeltTipTap store instance
+  // Create a ref to hold our store instance
   const veltTiptapStoreRef = useRef<VeltTipTapStore | null>(null);
 
-  // Get Velt client and user from Velt hooks. This assumes you have already initialized the Velt client.
   const { client } = useVeltClient();
+
   const veltUser = useVeltEventCallback('userUpdate');
 
-  // Track when the store is ready for editor initialization
-  const [veltTiptapStoreReady, setVeltTiptapStoreReady] = useState(false);
-
-  // Initialize the VeltTipTap store when client and user are available
+  // Initialize the store
   useEffect(() => {
     if (!veltUser || !client) return;
 
     initializeStore();
 
-    // Cleanup function to destroy store when component unmounts
+    // Clean up when the component unmounts
     return () => {
       if (veltTiptapStoreRef.current) {
         veltTiptapStoreRef.current.destroy();
@@ -180,31 +229,29 @@ const CollaborativeEditor: React.FC = () => {
   }, [client, veltUser]);
 
   const initializeStore = async () => {
-    // Create the VeltTipTap store with unique editor ID and Velt client
-    const veltTiptapStore = await createVeltTipTapStore({ 
-      editorId: 'my-collaborative-editor', // Unique identifier for this editor
-      veltClient: client! 
-    });
-    
+    const veltTiptapStore = await createVeltTipTapStore({ editorId: 'velt-tiptap-crdt-demo', veltClient: client! });
     veltTiptapStoreRef.current = veltTiptapStore;
     setVeltTiptapStoreReady(true);
   }
 
-  // Initialize TipTap editor with collaboration extensions
+  // Track when the store is ready
+  const [veltTiptapStoreReady, setVeltTiptapStoreReady] = useState(false);
+
+  // Initialize the editor with our collaboration extension
   const editor = useEditor({
     extensions: [
-      // Basic TipTap extensions
       StarterKit.configure({
-        history: false, // Disable default history to use Collaboration's history management
+        history: false, // Disables default history to use Collaboration's history management
       }),
-      // Add collaboration extensions only when store is ready
       ...(
         veltTiptapStoreRef.current ?
           [
-            // Get the collaboration extension from the VeltTipTap store
+            // Use ONLY the collaboration extension from the store
+            // This already handles the Firestore sync internally
             veltTiptapStoreRef.current.getCollabExtension(),
-            // Configure cursor tracking with the same provider
+            // Configure the cursor with the same provider
             CollaborationCursor.configure({
+              // Use the provider from the store
               provider: veltTiptapStoreRef.current.getStore().getProvider(),
               user: veltUser as User,
             }),
@@ -212,9 +259,9 @@ const CollaborativeEditor: React.FC = () => {
           : []
       ),
     ],
-    // Start with empty content to avoid conflicts with YJS initialization
+    // Set initial content directly to avoid conflicts with YJS initialization
     content: ''
-  }, [veltTiptapStoreReady, veltUser]); // Re-initialize when store is ready or user changes
+  }, [veltTiptapStoreReady, veltUser]); // Re-initialize when store is ready
 
   return (
     <div className="editor-container">
@@ -230,14 +277,24 @@ const CollaborativeEditor: React.FC = () => {
     </div>
   );
 };
-
 export default CollaborativeEditor;
 ```
 
+<Frame>
+  <iframe
+    src="https://velt-tiptap-crdt-demo.vercel.app/"
+    className="w-full"
+    height="500px"
+  ></iframe>
+</Frame>
+
+[Open in larger window](https://velt-tiptap-crdt-demo.vercel.app/)
+
 ## Key Points
 
-- **Unique Editor ID**: Each editor instance needs a unique `editorId` to maintain separate collaborative sessions
-- **Store Lifecycle**: The VeltTipTap store is created asynchronously and must be properly cleaned up
-- **Extension Order**: Collaboration extensions are only added after the store is ready
-- **History Management**: Disable TipTap's default history to prevent conflicts
-- **User Authentication**: Ensure users are authenticated before initializing the collaborative session
+- **Unique editorId**: Use a unique `editorId` per editor instance.
+- **Disable history**: Turn off TipTap `history` when using collaboration.
+- **Initialize and clean up**: Create the VeltTipTap store after auth and destroy it on unmount.
+- **Auth required**: Ensure the Velt client is initialized and user is available before starting.
+
+

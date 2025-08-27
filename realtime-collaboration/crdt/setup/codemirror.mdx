@@ -1,0 +1,282 @@
+---
+title: CodeMirror Editor
+description: Setup CRDT for CodeMirror Editor.
+---
+
+@veltdev/codemirror-crdt is a library for enabling real-time, collaborative editing in CodeMirror using CRDT (Conflict-free Replicated Data Types). It integrates Yjs for conflict resolution, awareness (e.g., user cursors), and undo/redo, powered by the Velt collaboration platform. This allows multiple users to edit code simultaneously without conflicts, with features like presence indicators and synced changes.
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- React (v16.8 or higher for hooks)
+- A Velt account with an API key ([sign up](https://velt.dev))
+- Optional: TypeScript for type safety
+
+## Step 1: Install Dependencies
+
+Install the required packages:
+
+```bash
+npm install @veltdev/codemirror-crdt @veltdev/react
+```
+
+## Step 2: Setup Velt
+
+Wrap your app with the `VeltProvider` to enable authentication and collaboration features. See [Velt Setup Docs](/get-started/setup/install) for details.
+
+```jsx
+import { VeltProvider } from '@veltdev/react';
+
+export function Root() {
+  return (
+    <VeltProvider apiKey="YOUR_API_KEY">
+      <App />
+    </VeltProvider>
+  );
+}
+```
+
+## Step 3: Import Required Modules
+
+Import the CodeMirror and Velt CRDT utilities you'll need:
+
+```jsx
+import React, { useEffect, useRef, useState } from 'react';
+import { createVeltCodeMirrorStore } from '@veltdev/codemirror-crdt';
+import { yCollab } from 'y-codemirror.next';
+import { EditorState } from '@codemirror/state';
+import { basicSetup, EditorView } from 'codemirror';
+import { useVeltClient } from '@veltdev/react';
+```
+
+## Step 4: Setup Component State
+
+Create the necessary refs and state. The store provides the Yjs text, awareness (for cursors), and undo manager.
+
+```jsx
+const CollaborativeCodeEditor: React.FC = () => {
+  // DOM ref where the CodeMirror editor will mount
+  const editorRef = useRef<HTMLDivElement | null>(null);
+
+  // Track the EditorView instance for cleanup
+  const editorViewRef = useRef<EditorView | null>(null);
+
+  // Store readiness flag
+  const [storeReady, setStoreReady] = useState(false);
+
+  // Velt client for auth and connectivity
+  const { client } = useVeltClient();
+
+  // Hold the store instance
+  const storeRef = useRef<Awaited<ReturnType<typeof createVeltCodeMirrorStore>> | null>(null);
+```
+
+## Step 5: Initialize the Velt CodeMirror Store
+
+Initialize the store with a unique `editorId` and your Velt client; clean up on unmount.
+
+```jsx
+  useEffect(() => {
+    if (!client) return;
+
+    let mounted = true;
+
+    const init = async () => {
+      const store = await createVeltCodeMirrorStore({
+        editorId: 'my-codemirror-collab-editor', // Unique identifier (e.g., 'index.html')
+        veltClient: client!
+      });
+      if (!mounted) return;
+      storeRef.current = store;
+      setStoreReady(true);
+    };
+
+    init();
+
+    return () => {
+      mounted = false;
+      // Destroy CodeMirror view
+      if (editorViewRef.current) {
+        editorViewRef.current.destroy();
+        editorViewRef.current = null;
+      }
+      // Destroy store
+      if (storeRef.current) {
+        storeRef.current.destroy();
+        storeRef.current = null;
+      }
+    };
+  }, [client]);
+```
+
+## Step 6: Configure CodeMirror Collaboration
+
+Create an `EditorState` that uses the Yjs text, awareness, and undo manager from the store. Mount an `EditorView` when ready.
+
+```jsx
+  useEffect(() => {
+    if (!storeReady || !editorRef.current || !storeRef.current) return;
+
+    const store = storeRef.current;
+
+    const state = EditorState.create({
+      doc: store.getYText()?.toString() ?? '',
+      extensions: [
+        basicSetup,
+        // Add language and tooling extensions as needed (e.g., javascript(), css(), html(), autocompletion())
+        yCollab(store.getYText(), store.getAwareness(), { undoManager: store.getUndoManager() }),
+      ],
+    });
+
+    const view = new EditorView({
+      state,
+      parent: editorRef.current,
+    });
+
+    editorViewRef.current = view;
+  }, [storeReady]);
+```
+
+## Step 7: Render the Editor
+
+```jsx
+  return (
+    <div className="editor-container">
+      <div className="editor-header">Collaborative Code Editor</div>
+      <div className="editor-content" ref={editorRef} />
+      <div className="status">{storeReady ? 'Connected to collaborative session' : 'Connecting to collaborative session...'}</div>
+    </div>
+  );
+};
+
+export default CollaborativeCodeEditor;
+```
+
+Add minimal styles to your app's stylesheet:
+
+```css
+.editor-container {
+  padding: 20px;
+}
+.editor-header {
+  font-size: 1.2em;
+  margin-bottom: 10px;
+}
+.editor-content {
+  border: 1px solid #ccc;
+  padding: 10px;
+  min-height: 200px;
+}
+.status {
+  margin-top: 10px;
+  color: #666;
+}
+```
+
+## Testing and Debugging
+
+To test collaboration:
+1. Open two browser windows with different user sessions.
+2. Type in one window and verify changes and cursors appear in the other.
+
+Common issues:
+- Cursors not appearing: Ensure each editor has a unique `editorId` and users are authenticated.
+- Editor not loading: Confirm the Velt client is initialized and the API key is valid.
+- Disconnected session: Check network and that the provider is active via the store.
+
+## Complete Example
+
+Here's the full implementation:
+
+```jsx expandable lines
+import React, { useEffect, useRef, useState } from 'react';
+import { createVeltCodeMirrorStore } from '@veltdev/codemirror-crdt';
+import { yCollab } from 'y-codemirror.next';
+import { EditorState } from '@codemirror/state';
+import { basicSetup, EditorView } from 'codemirror';
+import { useVeltClient } from '@veltdev/react';
+
+const CollaborativeCodeEditor: React.FC = () => {
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
+  const [storeReady, setStoreReady] = useState(false);
+  const { client } = useVeltClient();
+  const storeRef = useRef<Awaited<ReturnType<typeof createVeltCodeMirrorStore>> | null>(null);
+
+  useEffect(() => {
+    if (!client) return;
+
+    let mounted = true;
+
+    const init = async () => {
+      const store = await createVeltCodeMirrorStore({
+        editorId: 'velt-codemirror-crdt-demo',
+        veltClient: client!,
+      });
+      if (!mounted) return;
+      storeRef.current = store;
+      setStoreReady(true);
+    };
+
+    init();
+
+    return () => {
+      mounted = false;
+      if (editorViewRef.current) {
+        editorViewRef.current.destroy();
+        editorViewRef.current = null;
+      }
+      if (storeRef.current) {
+        storeRef.current.destroy();
+        storeRef.current = null;
+      }
+    };
+  }, [client]);
+
+  useEffect(() => {
+    if (!storeReady || !editorRef.current || !storeRef.current) return;
+
+    const store = storeRef.current;
+
+    const state = EditorState.create({
+      doc: store.getYText()?.toString() ?? '',
+      extensions: [
+        basicSetup,
+        yCollab(store.getYText(), store.getAwareness(), { undoManager: store.getUndoManager() }),
+      ],
+    });
+
+    const view = new EditorView({ state, parent: editorRef.current });
+    editorViewRef.current = view;
+  }, [storeReady]);
+
+  return (
+    <div className="editor-container">
+      <div className="editor-header">Collaborative Code Editor</div>
+      <div className="editor-content" ref={editorRef} />
+      <div className="status">{storeReady ? 'Connected to collaborative session' : 'Connecting to collaborative session...'}</div>
+    </div>
+  );
+};
+
+export default CollaborativeCodeEditor;
+```
+
+<Frame>
+  <iframe
+    src="https://velt-codemirror-crdt-demo.vercel.app/"
+    className="w-full"
+    height="500px"
+  ></iframe>
+</Frame>
+
+[Open in larger window](https://velt-codemirror-crdt-demo.vercel.app/)
+
+## Key Points
+
+- **Unique editorId**: Use a unique `editorId` per editor instance.
+- **Wait for auth**: Initialize the store only after the Velt client is ready.
+- **Use yCollab**: Pass the store's Yjs text, awareness, and undo manager to `yCollab`.
+- **Initialize and clean up**: Destroy the `EditorView` and store on unmount to avoid leaks.
+
+

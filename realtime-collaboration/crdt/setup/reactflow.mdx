@@ -1,0 +1,337 @@
+---
+title: React Flow
+description: Setup CRDT for React Flow diagrams.
+---
+
+@veltdev/reactflow-crdt provides CRDT-based real-time collaboration for React Flow diagrams. It syncs nodes and edges across users, enabling collaborative editing and presence awareness.
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- React (v16.8 or higher for hooks)
+- A Velt account with an API key ([sign up](https://velt.dev))
+- Optional: TypeScript for type safety
+
+## Step 1: Install Dependencies
+
+Install the required packages:
+
+```bash
+npm install @veltdev/reactflow-crdt @veltdev/react @xyflow/react zustand
+```
+
+Also include React Flow styles in your app (see example below).
+
+## Step 2: Setup Velt
+
+Wrap your app with the `VeltProvider` to enable authentication and collaboration features. See [Velt Setup Docs](/get-started/setup/install) for details.
+
+```jsx
+import { VeltProvider } from '@veltdev/react';
+
+export function Root() {
+  return (
+    <VeltProvider apiKey="YOUR_API_KEY">
+      <App />
+    </VeltProvider>
+  );
+}
+```
+
+## Step 3: Import Required Modules
+
+Import React Flow, Velt hooks, and the CRDT store utilities:
+
+```jsx
+import {
+  Background,
+  ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
+  type Edge
+} from '@xyflow/react';
+import { useCallback, useRef } from 'react';
+import { useVeltClient, useVeltInitState } from '@veltdev/react';
+import { veltReactFlowStore } from '@veltdev/reactflow-crdt';
+import '@xyflow/react/dist/style.css';
+import { useShallow } from 'zustand/react/shallow';
+```
+
+## Step 4: Setup Component State
+
+Create a selector and initial graph state. The CRDT-aware store exposes React Flow-compatible change handlers and state.
+
+```jsx
+const selector = (state: any) => ({
+  nodes: state.nodes,
+  edges: state.edges,
+  onNodesChange: state.onNodesChange,
+  onEdgesChange: state.onEdgesChange,
+  onConnect: state.onConnect,
+  setNodes: state.setNodes,
+  setEdges: state.setEdges,
+});
+
+const initialNodes = [
+  {
+    id: '0',
+    type: 'input',
+    data: { label: 'Node' },
+    position: { x: 0, y: 50 },
+  },
+];
+const initialEdges: Edge[] = [];
+
+let id = 9;
+const getId = () => `${id++}`;
+const nodeOrigin: [number, number] = [0.5, 0];
+```
+
+## Step 5: Initialize the React Flow CRDT Store
+
+Initialize the store with a unique `editorId` and your Velt client; the store provides CRDT-synced handlers compatible with React Flow.
+
+```jsx
+const AddNodeOnEdgeDrop = () => {
+  const { client } = useVeltClient();
+
+  const storeRef = useRef<any>(null);
+  if (storeRef.current === null) {
+    storeRef.current = veltReactFlowStore({
+      editorId: 'editor1',  // Unique ID for this collaborative instance
+      initialEdges,
+      initialNodes,
+      veltClient: client,  // Velt client from useVeltClient
+    });
+  }
+  const { nodes, edges, onNodesChange, onEdgesChange, onConnect } = storeRef.current(
+    useShallow(selector),
+  );
+
+  const reactFlowWrapper = useRef(null);
+  const { screenToFlowPosition } = useReactFlow();
+
+  const onConnectEnd = useCallback(
+    (event: any, connectionState: any) => {
+      if (!connectionState.isValid) {
+        const id = getId();
+        const { clientX, clientY } = 'changedTouches' in event ? event.changedTouches[0] : event;
+        const newNode = {
+          id,
+          position: screenToFlowPosition({ x: clientX, y: clientY }),
+          data: { label: `Node ${id}` },
+          origin: [0.5, 0.0],
+        };
+
+        // Add new node using CRDT-aware change handler
+        onNodesChange([{ type: 'add', item: newNode }]);
+
+        // Add new edge using CRDT-aware change handler
+        const newEdge = {
+          id,
+          source: connectionState.fromNode.id,
+          target: id,
+        };
+        onEdgesChange([{ type: 'add', item: newEdge }]);
+      }
+    },
+    [screenToFlowPosition, onNodesChange, onEdgesChange],
+  );
+
+  return (
+    <div className="react-flow-container" ref={reactFlowWrapper}>
+      <ReactFlow
+        style={{ backgroundColor: "#F7F9FB" }}
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}  // CRDT-synced node changes
+        onEdgesChange={onEdgesChange}  // CRDT-synced edge changes
+        onConnect={onConnect}  // CRDT-synced connections
+        onConnectEnd={onConnectEnd}  // Custom handler for adding nodes/edges
+        fitView
+        fitViewOptions={{ padding: 2 }}
+        nodeOrigin={nodeOrigin}
+      >
+        <Background />
+      </ReactFlow>
+    </div>
+  );
+};
+```
+
+## Step 6: Render the Component
+
+Ensure Velt is initialized before rendering; wrap your component with `ReactFlowProvider`.
+
+```jsx
+function ReactFlowComponent() {
+  const veltInitialized = useVeltInitState();
+
+  if (!veltInitialized) {
+    return <div>Loading...</div>;
+  }
+
+  return (
+    <ReactFlowProvider>
+      <AddNodeOnEdgeDrop />
+    </ReactFlowProvider>
+  );
+}
+
+export default ReactFlowComponent;
+```
+
+## Testing and Debugging
+
+To test collaboration:
+1. Open two browser windows with different user sessions.
+2. Move nodes or create connections in one window and verify they sync in the other.
+
+Common issues:
+- Nodes/edges not syncing: Ensure each diagram has a unique `editorId` and the Velt client is initialized.
+- Styles missing: Verify `@xyflow/react/dist/style.css` is imported.
+- No updates on connect: Use the provided CRDT-aware `onNodesChange`/`onEdgesChange` and `onConnect` handlers from the store.
+
+## Complete Example
+
+Here's the full implementation:
+
+```jsx expandable lines
+import {
+  Background,
+  ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
+  type Edge
+} from '@xyflow/react';
+import { useCallback, useRef } from 'react';
+import { useVeltClient, useVeltInitState } from '@veltdev/react';
+import { veltReactFlowStore } from '@veltdev/reactflow-crdt';
+import '@xyflow/react/dist/style.css';
+import { useShallow } from 'zustand/react/shallow';
+
+const selector = (state: any) => ({
+  nodes: state.nodes,
+  edges: state.edges,
+  onNodesChange: state.onNodesChange,
+  onEdgesChange: state.onEdgesChange,
+  onConnect: state.onConnect,
+  setNodes: state.setNodes,
+  setEdges: state.setEdges,
+});
+
+const initialNodes = [
+  {
+    id: '0',
+    type: 'input',
+    data: { label: 'Node' },
+    position: { x: 0, y: 50 },
+  },
+];
+const initialEdges: Edge[] = [];
+
+let id = 9;
+const getId = () => `${id++}`;
+const nodeOrigin: [number, number] = [0.5, 0];
+
+const AddNodeOnEdgeDrop = () => {
+  const { client } = useVeltClient();
+
+  const storeRef = useRef<any>(null);
+  if (storeRef.current === null) {
+    storeRef.current = veltReactFlowStore({
+      editorId: 'editor1',  // Unique ID for this collaborative instance
+      initialEdges,
+      initialNodes,
+      veltClient: client,  // Velt client from useVeltClient
+    });
+  }
+  const { nodes, edges, onNodesChange, onEdgesChange, onConnect } = storeRef.current(
+    useShallow(selector),
+  );
+
+  const reactFlowWrapper = useRef(null);
+  const { screenToFlowPosition } = useReactFlow();
+
+  const onConnectEnd = useCallback(
+    (event: any, connectionState: any) => {
+      if (!connectionState.isValid) {
+        const id = getId();
+        const { clientX, clientY } = 'changedTouches' in event ? event.changedTouches[0] : event;
+        const newNode = {
+          id,
+          position: screenToFlowPosition({ x: clientX, y: clientY }),
+          data: { label: `Node ${id}` },
+          origin: [0.5, 0.0],
+        };
+
+        // Add new node using CRDT-aware change handler
+        onNodesChange([{ type: 'add', item: newNode }]);
+
+        // Add new edge using CRDT-aware change handler
+        const newEdge = {
+          id,
+          source: connectionState.fromNode.id,
+          target: id,
+        };
+        onEdgesChange([{ type: 'add', item: newEdge }]);
+      }
+    },
+    [screenToFlowPosition, onNodesChange, onEdgesChange],
+  );
+
+  return (
+    <div className="react-flow-container" ref={reactFlowWrapper}>
+      <ReactFlow
+        style={{ backgroundColor: "#F7F9FB" }}
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}  // CRDT-synced node changes
+        onEdgesChange={onEdgesChange}  // CRDT-synced edge changes
+        onConnect={onConnect}  // CRDT-synced connections
+        onConnectEnd={onConnectEnd}  // Custom handler for adding nodes/edges
+        fitView
+        fitViewOptions={{ padding: 2 }}
+        nodeOrigin={nodeOrigin}
+      >
+        <Background />
+      </ReactFlow>
+    </div>
+  );
+};
+
+function ReactFlowComponent() {
+  const veltInitialized = useVeltInitState();
+
+  if (!veltInitialized) {
+    return <div>Loading...</div>;
+  }
+
+  return (
+    <ReactFlowProvider>
+      <AddNodeOnEdgeDrop />
+    </ReactFlowProvider>
+  );
+}
+
+export default ReactFlowComponent;
+```
+
+<Frame>
+  <iframe
+    src="https://velt-reactflow-crdt-demo.vercel.app/"
+    className="w-full"
+    height="500px"
+  ></iframe>
+</Frame>
+
+[Open in larger window](https://velt-reactflow-crdt-demo.vercel.app/)
+
+## Key Points
+
+- **Unique editorId**: Use a unique `editorId` per diagram instance.
+- **Use CRDT handlers**: Always apply the store-provided `onNodesChange`, `onEdgesChange`, and `onConnect`.
+- **Initialize and clean up**: Ensure Velt is initialized before using the store; destroy store if your integration exposes cleanup.
+- **Styles required**: Import `@xyflow/react/dist/style.css` so nodes and edges render correctly.
+
+

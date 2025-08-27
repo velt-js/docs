@@ -5,166 +5,247 @@ description: Setup CRDT for any framework.
 
 ## Introduction
 
-Use this to add Yjs based CRDT to your project.
+Use these guides to add Yjs-based CRDT to your project with Velt. Pick the React Hook wrapper for the fastest integration in React apps, or the core library for other frameworks and vanilla setups.
 
-## Store APIs
+<Tabs>
 
-### createVeltStore
+  <Tab title="React Hook Wrapper (@veltdev/crdt-react)">
 
-- Creates a new CRDT store instance.
-- You can initialize many stores within the same document.
+  <Steps titleSize="h2">
 
-**Params:**
-- `id`: `string`: Unique identifier for the store.
-- `type`: `'array' | 'map' | 'text' | 'xml'`: Type of the store.
-- `initialValue`: `T`: [Optional] Initial value for the store (e.g., `[]` for an empty array).
-- `veltClient`: `Velt`: Instance of the Velt client for synchronization.
+  <Step title="Install dependencies">
+  **npm:**
+  ```bash
+  npm install @veltdev/crdt-react @veltdev/crdt @veltdev/react
+  ```
 
-**Returns:**
-- `Promise<Store<T> | null>`: A Promise resolving to a `Store<T>` instance or `null` if creation fails.
+  **yarn:**
+  ```bash
+  yarn add @veltdev/crdt-react @veltdev/crdt @veltdev/react
+  ```
+  </Step>
 
-### getValue
-- Retrieves the current value of the store.  
+  <Step title="Initialize Velt in your app">
+  Wrap your app with `VeltProvider`. See the full setup in [Install Docs](/get-started/setup/install).
 
-**Returns:**
-- `T`: The current state of the data (e.g., an array, map, text, xml).  
+  ```jsx
+  import { VeltProvider } from '@veltdev/react';
 
-### update
-- Updates the store with a new value. Changes are propagated to all connected clients via CRDT merging.  
+  export function Root() {
+    return (
+      <VeltProvider apiKey="YOUR_API_KEY">
+        <App />
+      </VeltProvider>
+    );
+  }
+  ```
+  </Step>
 
-**Params:**
-- `newValue`: `T`: The updated data to set.  
+  <Step title="Use the hook to create and sync a CRDT store">
+  This example uses a `text` store and wires it to a `<textarea/>`.
 
-**Returns:**
-- `void`: void.  
+  ```jsx
+  import React from 'react';
+  import { useVeltCrdtStore } from '@veltdev/crdt-react';
 
-### subscribe
-- Subscribes to changes in the store's value. The callback is invoked whenever the value updates, either locally or from remote changes.  
+  const CollaborativeNote: React.FC = () => {
+    const {
+      value,
+      update,
+      saveVersion,
+      getVersions,
+      getVersionById,
+      setStateFromVersion,
+    } = useVeltCrdtStore<string>({
+      id: 'my-collab-note',
+      type: 'text',
+      initialValue: 'Hello, world!',
+      debounceMs: 100,
+    });
 
-**Params:**
-- `callback`: `(newValue: T) => void`: Function to call when the new value is emitted.  
+    const onSaveVersion = async () => {
+      const versionId = await saveVersion('Checkpoint');
+      console.log('Saved version:', versionId);
+    };
 
-**Returns:**
-- `() => void`: An unsubscribe function to stop listening.  
+    const onRestoreLatest = async () => {
+      const versions = await getVersions();
+      if (versions.length === 0) return;
+      const latest = versions[0];
+      await setStateFromVersion(latest);
+    };
 
+    return (
+      <div>
+        <h3>Collaborative Note</h3>
+        <textarea
+          value={value ?? ''}
+          onChange={(e) => update(e.target.value)}
+          rows={8}
+          style={{ width: '100%' }}
+        />
+        <div style={{ marginTop: 8 }}>
+          <button onClick={onSaveVersion}>Save Version</button>
+          <button onClick={onRestoreLatest} style={{ marginLeft: 8 }}>Restore Latest</button>
+        </div>
+      </div>
+    );
+  };
 
-## Version History
-### saveVersion
-- Saves the current state as a version with the given name.
+  export default CollaborativeNote;
+  ```
+  </Step>
 
-**Params:**
-- `versionName`: `string`: A unique name for this version.
+  </Steps>
 
-### getVersions
-- Fetches all saved versions.
+  ### Hook API Summary
 
-**Returns:**
-- `Promise<Version[]>`: A Promise resolving to an array of Version objects.
+  - Requires Velt client initialized via `useVeltClient` from `@veltdev/react`.
+  - Generic `<T>` allows typing the store value (e.g., `string` for text, `any[]` for arrays).
 
-### getVersionById
-- Fetches a version by its ID.
+  #### Returns
+  - `value: T | null` — Current value of the store.
+  - `versions: Version[]` — List of all stored versions.
+  - `store: Store<T> | null` — The underlying Velt Store instance.
+  - `update: (newValue: T) => void` — Updates the store value.
+  - `saveVersion: (versionName: string) => Promise<string>` — Saves a new version and returns its ID.
+  - `getVersions: () => Promise<Version[]>` — Fetches all versions.
+  - `getVersionById: (versionId: string) => Promise<Version | null>` — Fetches a specific version by ID.
+  - `restoreVersion: (versionId: string) => Promise<boolean>` — Restores the store to a specific version.
+  - `setStateFromVersion: (version: Version) => Promise<void>` — Sets the store state from a version object.
 
-**Params:**
-- `versionId`: `string`: The ID of the version to fetch.
+  </Tab>
 
-**Returns:**
-- `Promise<Version>`: A Promise resolving to the Version object.
+  <Tab title="Non‑React / Other Frameworks (@veltdev/crdt)">
 
-### setStateFromVersion
-- Restores the store to the state of the given version.
+  <Steps titleSize="h2">
 
-**Params:**
-- `version`: `Version`: The Version object to restore from.
+  <Step title="Install dependencies">
+  **npm:**
+  ```bash
+  npm install @veltdev/crdt @veltdev/client
+  ```
 
-**Returns:**
-- `void`: void.
+  **yarn:**
+  ```bash
+  yarn add @veltdev/crdt @veltdev/client
+  ```
+  </Step>
 
+  <Step title="Initialize the Velt client">
+  For non-React apps, initialize the client directly. For framework-specific steps (Angular, Vue, HTML), see [Install Docs](/get-started/setup/install).
 
+  ```ts
+  import { initVelt } from '@veltdev/client';
 
-## Example Usage
+  // Initialize once in your app bootstrap
+  export const client = await initVelt('YOUR_API_KEY');
+  ```
+  </Step>
 
-```jsx
-import { Store, createVeltStore } from '@veltdev/crdt';
+  <Step title="Create a CRDT store, subscribe, update, and manage versions">
+  A minimal TypeScript example wiring a `text` store:
 
-export const YourComponent = () => {
+  ```ts
+  import { createVeltStore, Store } from '@veltdev/crdt';
+  import { initVelt } from '@veltdev/client';
 
-    const [store, setStore] = useState<Store<T> | null>(null);
-    const [value, setValue] = useState<T | null>(null);
-    const { client } = useVeltClient();
-    const veltUser = useVeltEventCallback('userUpdate');
+  async function main() {
+    const veltClient = await initVelt('YOUR_API_KEY');
 
-    useEffect(() => {
-        if (!client || !veltUser) return;
+    const store = await createVeltStore<string>({
+      id: 'my-document',
+      type: 'text', // 'array' | 'map' | 'text' | 'xml'
+      initialValue: 'Hello, world!',
+      veltClient,
+    });
 
-        let unsubscribe: (() => void) | undefined;
+    if (!store) throw new Error('Failed to create store');
 
-        const initialize = async () => {
-            const store = await createVeltStore<T>({
-                id: 'your-store-id',
-                type: 'array', // or 'map', 'text', 'xml'
-                initialValue: [], // initial value for the store
-                veltClient: client,
-            })
-            if (!store) return;
-            setStore(store);
+    // Listen for changes from local or remote peers
+    const unsubscribe = store.subscribe((newValue) => {
+      console.log('Updated value:', newValue);
+    });
 
+    // Apply a local change (replicates to others)
+    store.update('Hello, collaborative world!');
 
-            unsubscribe = store.subscribe((value: T) => {
-                // do something with the value
-                setValue(value);
-            });
-        };
+    // Create a named version
+    const versionId = await store.saveVersion('Initial checkpoint');
+    console.log('Saved version id:', versionId);
 
-        initialize();
+    // List and restore
+    const versions = await store.getVersions();
+    console.log('Versions:', versions.map(v => v.versionName));
 
-        return () => {
-            if (unsubscribe) {
-                unsubscribe();
-            }
-        };
-    }, [client, veltUser]);
-
-    // get value from store
-    const getStoreValue = () => {
-        return store?.getValue();
+    const fetched = await store.getVersionById(versionId);
+    if (fetched) {
+      await store.setStateFromVersion(fetched);
     }
 
-    // update value to store
-    const updateStoreValue = (newValue: any) => {
-        store?.update(newValue);
-    }
-}
-```
+    // Later: stop listening
+    unsubscribe();
+  }
 
-### Version History Example
+  main().catch(console.error);
+  ```
+  </Step>
 
-```jsx
-const store = await createVeltStore({
-  id: 'my-document',
-  veltClient: client,
-  type: 'text', // or array, map, xml
-  initialValue: 'Hello, world!'
-});
+  </Steps>
 
-// Make some changes to your data
-store.update('Hello, collaborative world!');
+  ### Core API Reference
 
-// Save the current state as a version
-store.storeVersion('First Update');
+  #### Exported Functions
+  - `createVeltStore<T>(options: CreateVeltStoreOptions<T>): Promise<Store<T> | null>`
+    - Creates a new CRDT store instance.
+    - Parameters (`CreateVeltStoreOptions<T>`):
+      - `id: string` — Unique identifier for the store.
+      - `type: string` — Type of the store (e.g., `'array'` for array-based CRDTs, `'object'` for object-based).
+      - `initialValue: T` — Optional initial value (e.g., `[]` for an empty array).
+      - `veltClient: Velt` — Instance of the Velt client for synchronization.
+    - Returns:
+      - A Promise resolving to a `Store<T>` instance or `null` if creation fails.
 
-// Make more changes
-store.update('Hello, amazing collaborative world!');
+  #### Store Interface
+  - `Store<T>`
+    - Represents a collaborative data store of type `T` (e.g., `Array<SomeType>`, object, text or xml).
+    - Methods:
+      - `getValue(): T`
+        - Retrieves the current value of the store.
+        - Returns: The current state of the data (e.g., an array or object).
+        - Usage: Call this to read the latest synchronized value.
+      - `update(newValue: T): void`
+        - Updates the store with a new value. Changes are propagated to all connected clients via CRDT merging.
+        - Parameters: `newValue` — The updated data to set.
+        - Returns: `void`.
+        - Usage: Use this to apply local changes, which will be replicated automatically. For arrays, this might involve spreading existing items and adding new ones; for objects, merging properties.
+      - `subscribe(callback: (newValue: T) => void): () => void`
+        - Subscribes to changes in the store's value. The callback is invoked whenever the value updates, either locally or from remote changes.
+        - Parameters: `callback` — Function to call with the new value.
+        - Returns: An unsubscribe function to stop listening.
+        - Usage: Ideal for React's `useEffect` to keep component state in sync with the store.
 
-// Save another version
-store.storeVersion('Second Update');
+  #### Version Control Methods
+  - `saveVersion(versionName: string): Promise<string>`
+    - Creates a snapshot of the current document state as a named version.
+    - Parameters: `versionName` — Human-readable name for this version (e.g., "Initial draft", "Final review").
+    - Returns: Promise that resolves to the unique version ID string.
+    - Usage: Use this to create restore points or milestones in your document's history.
+  - `getVersions(): Promise<Version[]>`
+    - Retrieves all saved versions of this document, ordered by timestamp (most recent first).
+    - Returns: Promise that resolves to an array of `Version` objects.
+    - Usage: Use this to display a version history list to users.
+  - `getVersionById(versionId: string): Promise<Version | null>`
+    - Retrieves a specific version by its unique identifier.
+    - Parameters: `versionId` — The unique ID of the version.
+    - Returns: Promise that resolves to the `Version` object if found, or `null` if not found.
+    - Usage: Use this to get details about a specific version before restoring it.
+  - `setStateFromVersion(version: Version): Promise<void>`
+    - Updates the document state using data from a specific version object.
+    - Parameters: `version` — The `Version` object containing the state to restore.
+    - Returns: Promise that resolves when the state has been successfully updated.
+    - Usage: To restore specific version state.
 
-// Fetch all saved versions
-const versions = await store.getVersionList();
-console.log('Available versions:', versions);
+  </Tab>
 
-// Restore to a previous version
-const firstVersion = versions.find(v => v.versionName === 'First Update');
-if (firstVersion) {
-  store.setStateFromVersion(firstVersion);
-}
-```
+</Tabs>

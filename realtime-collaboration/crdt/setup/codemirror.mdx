@@ -12,7 +12,9 @@ description: Setup CRDT for CodeMirror Editor.
 - A Velt account with an API key ([sign up](https://velt.dev))
 - Optional: TypeScript for type safety
 
-## Step 1: Install Dependencies
+## Setup
+
+### Step 1: Install Dependencies
 
 Install the required packages:
 
@@ -20,7 +22,7 @@ Install the required packages:
 npm install @veltdev/codemirror-crdt @veltdev/react
 ```
 
-## Step 2: Setup Velt
+### Step 2: Setup Velt
 
 Wrap your app with the `VeltProvider` to enable authentication and collaboration features. See [Velt Setup Docs](/get-started/setup/install) for details.
 
@@ -36,12 +38,11 @@ export function Root() {
 }
 ```
 
-## Step 3: Import Required Components
+### Step 3: Import Required Components
 
 Import the CodeMirror and Velt CRDT utilities you'll need:
 
 ```jsx
-import React, { useEffect, useRef, useState } from 'react';
 import { createVeltCodeMirrorStore } from '@veltdev/codemirror-crdt';
 import { yCollab } from 'y-codemirror.next';
 import { EditorState } from '@codemirror/state';
@@ -49,9 +50,9 @@ import { basicSetup, EditorView } from 'codemirror';
 import { useVeltClient } from '@veltdev/react';
 ```
 
-## Step 4: Setup Component State
+### Step 4: Setup Component State
 
-Create the necessary refs and state. The store provides the Yjs text, awareness (for cursors), and undo manager.
+Use component state to mount the editor only after the CRDT store is ready and re-initialize on user/store changes to avoid early init bugs and duplicate providers.
 
 ```jsx
 const CollaborativeCodeEditor: React.FC = () => {
@@ -71,9 +72,9 @@ const CollaborativeCodeEditor: React.FC = () => {
   const storeRef = useRef<Awaited<ReturnType<typeof createVeltCodeMirrorStore>> | null>(null);
 ```
 
-## Step 5: Initialize the VeltCodeMirror Store
+### Step 5: Initialize the VeltCodeMirror Store
 
-Initialize the store with a unique `editorId` and your Velt client; clean up on unmount.
+Initialize one store per editor. For multiple editors on the same page, create multiple stores and give each a unique `editorId` so their providers, content, and cursors stay isolated, enabling multiple editor support.
 
 ```jsx
   useEffect(() => {
@@ -109,7 +110,7 @@ Initialize the store with a unique `editorId` and your Velt client; clean up on 
   }, [client]);
 ```
 
-## Step 6: Configure CodeMirror Collaboration
+### Step 6: Configure CodeMirror Collaboration
 
 Create an `EditorState` that uses the Yjs text, awareness, and undo manager from the store. Mount an `EditorView` when ready.
 
@@ -137,7 +138,12 @@ Create an `EditorState` that uses the Yjs text, awareness, and undo manager from
   }, [storeReady]);
 ```
 
-## Step 7: Render the Editor
+### Step 7: Render the Editor
+
+Render the editor once it’s initialized. Show a loading state while connecting and display the live connection status next to the editor.
+
+<Tabs>
+<Tab title="Code">
 
 ```jsx
   return (
@@ -152,7 +158,8 @@ Create an `EditorState` that uses the Yjs text, awareness, and undo manager from
 export default CollaborativeCodeEditor;
 ```
 
-Add minimal styles to your app's stylesheet:
+</Tab>
+<Tab title="CSS">
 
 ```css
 .editor-container {
@@ -173,20 +180,31 @@ Add minimal styles to your app's stylesheet:
 }
 ```
 
+</Tab>
+</Tabs>
+
+## Notes
+
+- **Unique editorId**: Use a unique `editorId` per editor instance.
+- **Wait for auth**: Initialize the store only after the Velt client is ready.
+- **Use yCollab**: Pass the store's Yjs text, awareness, and undo manager to `yCollab`.
+- **Initialize and clean up**: Destroy the `EditorView` and store on unmount to avoid leaks.
+
 ## Testing and Debugging
 
-To test collaboration:
+**To test collaboration:**
 1. Open two browser windows with different user sessions.
 2. Type in one window and verify changes and cursors appear in the other.
 
-Common issues:
+**Common issues:**
 - Cursors not appearing: Ensure each editor has a unique `editorId` and users are authenticated.
 - Editor not loading: Confirm the Velt client is initialized and the API key is valid.
 - Disconnected session: Check network and that the provider is active via the store.
 
 ## Complete Example
 
-Here's the full implementation:
+<Tabs>
+<Tab title="Complete Code">
 
 ```jsx Expandable Example expandable lines
 import React, { useEffect, useRef, useState } from 'react';
@@ -262,6 +280,9 @@ const CollaborativeCodeEditor: React.FC = () => {
 export default CollaborativeCodeEditor;
 ```
 
+</Tab>
+<Tab title="Live Demo">
+
 <Frame>
   <iframe
     src="https://velt-codemirror-crdt-demo.vercel.app/"
@@ -272,11 +293,123 @@ export default CollaborativeCodeEditor;
 
 [Open in larger window](https://velt-codemirror-crdt-demo.vercel.app/)
 
-## Key Points
+</Tab>
+</Tabs>
 
-- **Unique editorId**: Use a unique `editorId` per editor instance.
-- **Wait for auth**: Initialize the store only after the Velt client is ready.
-- **Use yCollab**: Pass the store's Yjs text, awareness, and undo manager to `yCollab`.
-- **Initialize and clean up**: Destroy the `EditorView` and store on unmount to avoid leaks.
+## Encryption
 
+You can encrypt CRDT data before it’s stored in Velt by registering a custom encryption provider. For CRDT methods, input data is of type `Uint8Array | number[]`.
 
+<Tabs>
+<Tab title="React / Next.js">
+
+```ts
+async function encryptData(config: EncryptConfig<string>): Promise<string> {
+  const encryptedData = await yourEncryptDataMethod(config.data);
+  return encryptedData;
+}
+
+async function decryptData(config: DecryptConfig<string>): Promise<string> {
+  const decryptedData = await yourDecryptDataMethod(config.data);
+  return decryptedData;
+}
+
+const encryptionProvider: VeltEncryptionProvider<string, string> = {
+  encrypt: encryptData,
+  decrypt: decryptData,
+};
+
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  encryptionProvider={encryptionProvider}
+/>
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+async function encryptData(config: EncryptConfig<string>): Promise<string> {
+  const encryptedData = await yourEncryptDataMethod(config.data);
+  return encryptedData;
+}
+
+async function decryptData(config: DecryptConfig<string>): Promise<string> {
+  const decryptedData = await yourDecryptDataMethod(config.data);
+  return decryptedData;
+}
+
+const encryptionProvider: VeltEncryptionProvider<string, string> = {
+  encrypt: encryptData,
+  decrypt: decryptData,
+};
+
+client.setEncryptionProvider(encryptionProvider);
+```
+
+</Tab>
+</Tabs>
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+ · [EncryptConfig](/api-reference/sdk/models/data-models#encryptconfig)
+ · [DecryptConfig](/api-reference/sdk/models/data-models#decryptconfig)
+
+## APIs
+
+#### [createVeltCodeMirrorStore](/api-reference/sdk/api/api-methods#createveltcodemirrorstore)
+
+Create and initialize a collaborative CodeMirror store instance.
+
+- Params: [VeltCodeMirrorStoreConfig](/api-reference/sdk/models/data-models#veltcodemirrorstoreconfig)
+- Returns: `Promise<VeltCodeMirrorStore>`
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```jsx
+const store = await createVeltCodeMirrorStore({ editorId: 'velt-cm-doc', veltClient: client });
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+const store = await createVeltCodeMirrorStore({ editorId: 'velt-cm-doc', veltClient: client });
+```
+
+</Tab>
+</Tabs>
+
+#### [store.getYText()](/api-reference/sdk/api/api-methods#store-getytext)
+
+Get the shared Y.Text bound to the current CodeMirror document.
+
+- Returns: `Y.Text | null`
+
+```ts
+const docText = store.getYText()?.toString() ?? '';
+```
+
+#### [store.getAwareness()](/api-reference/sdk/api/api-methods#store-getawareness)
+
+Access the Yjs Awareness instance associated with the store.
+
+- Returns: `Awareness`
+
+```ts
+yCollab(store.getYText()!, store.getAwareness(), { undoManager: store.getUndoManager() });
+```
+
+#### [store.getUndoManager()](/api-reference/sdk/api/api-methods#store-getundomanager)
+
+Access the Yjs UndoManager for collaborative undo/redo.
+
+- Returns: `Y.UndoManager`
+
+```ts
+const extensions = [
+  basicSetup,
+  yCollab(store.getYText()!, store.getAwareness(), { undoManager: store.getUndoManager() }),
+];
+```

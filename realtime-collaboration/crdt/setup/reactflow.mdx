@@ -12,7 +12,9 @@ description: Setup CRDT for React Flow diagrams.
 - A Velt account with an API key ([sign up](https://velt.dev))
 - Optional: TypeScript for type safety
 
-## Step 1: Install Dependencies
+## Setup
+
+### Step 1: Install Dependencies
 
 Install the required packages:
 
@@ -22,7 +24,7 @@ npm install @veltdev/reactflow-crdt @veltdev/react @xyflow/react zustand
 
 Also include React Flow styles in your app (see example below).
 
-## Step 2: Setup Velt
+### Step 2: Setup Velt
 
 Wrap your app with the `VeltProvider` to enable authentication and collaboration features. See [Velt Setup Docs](/get-started/setup/install) for details.
 
@@ -38,7 +40,7 @@ export function Root() {
 }
 ```
 
-## Step 3: Import Required Components
+### Step 3: Import Required Components
 
 Import React Flow, Velt hooks, and the CRDT store utilities:
 
@@ -57,7 +59,7 @@ import '@xyflow/react/dist/style.css';
 import { useShallow } from 'zustand/react/shallow';
 ```
 
-## Step 4: Setup Component State
+### Step 4: Setup Component State
 
 Create a selector and initial graph state. The CRDT-aware store exposes React Flow-compatible change handlers and state.
 
@@ -87,9 +89,9 @@ const getId = () => `${id++}`;
 const nodeOrigin: [number, number] = [0.5, 0];
 ```
 
-## Step 5: Initialize the React Flow CRDT Store
+### Step 5: Initialize the React Flow CRDT Store
 
-Initialize the store with a unique `editorId` and your Velt client; the store provides CRDT-synced handlers compatible with React Flow.
+Initialize one store per editor. For multiple editors on the same page, create multiple stores and give each a unique `editorId` so their providers, content, and cursors stay isolated, enabling multiple editor support.
 
 ```jsx
 const AddNodeOnEdgeDrop = () => {
@@ -159,7 +161,7 @@ const AddNodeOnEdgeDrop = () => {
 };
 ```
 
-## Step 6: Render the Component
+### Step 6: Render the Component
 
 Ensure Velt is initialized before rendering; wrap your component with `ReactFlowProvider`.
 
@@ -181,20 +183,29 @@ function ReactFlowComponent() {
 export default ReactFlowComponent;
 ```
 
+## Notes
+
+- **Unique editorId**: Use a unique `editorId` per diagram instance.
+- **Use CRDT handlers**: Always apply the store-provided `onNodesChange`, `onEdgesChange`, and `onConnect`.
+- **Initialize and clean up**: Ensure Velt is initialized before using the store; destroy store if your integration exposes cleanup.
+- **Styles required**: Import `@xyflow/react/dist/style.css` so nodes and edges render correctly.
+
+
 ## Testing and Debugging
 
-To test collaboration:
+**To test collaboration:**
 1. Open two browser windows with different user sessions.
 2. Move nodes or create connections in one window and verify they sync in the other.
 
-Common issues:
+**Common issues:**
 - Nodes/edges not syncing: Ensure each diagram has a unique `editorId` and the Velt client is initialized.
 - Styles missing: Verify `@xyflow/react/dist/style.css` is imported.
 - No updates on connect: Use the provided CRDT-aware `onNodesChange`/`onEdgesChange` and `onConnect` handlers from the store.
 
 ## Complete Example
 
-Here's the full implementation:
+<Tabs>
+<Tab title="Complete Code">
 
 ```jsx Expandable Example expandable lines
 import {
@@ -317,6 +328,9 @@ function ReactFlowComponent() {
 export default ReactFlowComponent;
 ```
 
+</Tab>
+<Tab title="Live Demo">
+
 <Frame>
   <iframe
     src="https://velt-reactflow-crdt-demo.vercel.app/"
@@ -327,11 +341,136 @@ export default ReactFlowComponent;
 
 [Open in larger window](https://velt-reactflow-crdt-demo.vercel.app/)
 
-## Key Points
+</Tab>
+</Tabs>
+## Encryption
 
-- **Unique editorId**: Use a unique `editorId` per diagram instance.
-- **Use CRDT handlers**: Always apply the store-provided `onNodesChange`, `onEdgesChange`, and `onConnect`.
-- **Initialize and clean up**: Ensure Velt is initialized before using the store; destroy store if your integration exposes cleanup.
-- **Styles required**: Import `@xyflow/react/dist/style.css` so nodes and edges render correctly.
+You can encrypt CRDT data before it’s stored in Velt by registering a custom encryption provider. For CRDT methods, input data is of type `Uint8Array | number[]`.
 
+<Tabs>
+<Tab title="React / Next.js">
 
+```ts
+async function encryptData(config: EncryptConfig<string>): Promise<string> {
+  const encryptedData = await yourEncryptDataMethod(config.data);
+  return encryptedData;
+}
+
+async function decryptData(config: DecryptConfig<string>): Promise<string> {
+  const decryptedData = await yourDecryptDataMethod(config.data);
+  return decryptedData;
+}
+
+const encryptionProvider: VeltEncryptionProvider<string, string> = {
+  encrypt: encryptData,
+  decrypt: decryptData,
+};
+
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  encryptionProvider={encryptionProvider}
+/>
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+async function encryptData(config: EncryptConfig<string>): Promise<string> {
+  const encryptedData = await yourEncryptDataMethod(config.data);
+  return encryptedData;
+}
+
+async function decryptData(config: DecryptConfig<string>): Promise<string> {
+  const decryptedData = await yourDecryptDataMethod(config.data);
+  return decryptedData;
+}
+
+const encryptionProvider: VeltEncryptionProvider<string, string> = {
+  encrypt: encryptData,
+  decrypt: decryptData,
+};
+
+client.setEncryptionProvider(encryptionProvider);
+```
+
+</Tab>
+</Tabs>
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+ · [EncryptConfig](/api-reference/sdk/models/data-models#encryptconfig)
+ · [DecryptConfig](/api-reference/sdk/models/data-models#decryptconfig)
+
+## APIs
+
+#### [veltReactFlowStore](/api-reference/sdk/api/api-methods#veltreactflowstore)
+
+Create and initialize a collaborative React Flow Zustand store.
+
+- Params: [VeltReactFlowStoreConfig](/api-reference/sdk/models/data-models#veltreactflowstoreconfig)
+- Returns: `VeltReactFlowStore` (Zustand store; callable with a selector)
+
+```tsx
+const store = veltReactFlowStore({
+  editorId: 'editor1',
+  initialNodes,
+  initialEdges,
+  veltClient: client,
+});
+```
+
+#### [onNodesChange()](/api-reference/sdk/api/api-methods#onnodeschange)
+
+CRDT-aware handler to apply node changes (add/update/remove) that sync across collaborators.
+
+- Params: [NodeChange[]](/api-reference/sdk/models/data-models#nodechange)
+- Returns: `void`
+
+```tsx
+onNodesChange([{ type: 'add', item: newNode }]);
+```
+
+#### [onEdgesChange()](/api-reference/sdk/api/api-methods#onedgeschange)
+
+CRDT-aware handler to apply edge changes (add/update/remove) that sync across collaborators.
+
+- Params: [EdgeChange[]](/api-reference/sdk/models/data-models#edgechange)
+- Returns: `void`
+
+```tsx
+onEdgesChange([{ type: 'add', item: newEdge }]);
+```
+
+#### [onConnect()](/api-reference/sdk/api/api-methods#onconnect)
+
+CRDT-aware connect handler compatible with React Flow’s `<ReactFlow onConnect={...} />`.
+
+- Params: [Connection](/api-reference/sdk/models/data-models#connection)
+- Returns: `void`
+
+```tsx
+<ReactFlow onConnect={onConnect} />
+```
+
+#### [setNodes()](/api-reference/sdk/api/api-methods#setnodes)
+
+Imperative setter for nodes (useful for non-event updates). Synced via the store.
+
+- Params: [Node[]](/api-reference/sdk/models/data-models#node-react-flow) | ((prev: [Node[]](/api-reference/sdk/models/data-models#node-react-flow)) => [Node[]](/api-reference/sdk/models/data-models#node-react-flow))
+- Returns: `void`
+
+```tsx
+setNodes(prev => [...prev, myNode]);
+```
+
+#### [setEdges()](/api-reference/sdk/api/api-methods#setedges)
+
+Imperative setter for edges (useful for non-event updates). Synced via the store.
+
+- Params: [Edge[]](/api-reference/sdk/models/data-models#edge-react-flow) | ((prev: [Edge[]](/api-reference/sdk/models/data-models#edge-react-flow)) => [Edge[]](/api-reference/sdk/models/data-models#edge-react-flow))
+- Returns: `void`
+
+```tsx
+setEdges(prev => [...prev, myEdge]);
+```

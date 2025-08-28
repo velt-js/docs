@@ -1,0 +1,428 @@
+---
+title: Core
+description: Setup CRDT for any framework.
+---
+
+## Introduction
+
+Use these guides to add Yjs-based CRDT to your project with Velt. Pick the React Hook wrapper for the fastest integration in React apps, or the core library for other frameworks and vanilla setups.
+
+## Setup
+<Tabs>
+
+  <Tab title="React Hook Wrapper (@veltdev/crdt-react)">
+
+  <Steps titleSize="h2">
+
+  <Step title="Install dependencies">
+  **npm:**
+  ```bash
+  npm install @veltdev/crdt-react @veltdev/crdt @veltdev/react
+  ```
+
+  **yarn:**
+  ```bash
+  yarn add @veltdev/crdt-react @veltdev/crdt @veltdev/react
+  ```
+  </Step>
+
+  <Step title="Initialize Velt in your app">
+  Wrap your app with `VeltProvider`. See the full setup in [Install Docs](/get-started/setup/install).
+
+  ```jsx
+  import { VeltProvider } from '@veltdev/react';
+
+  export function Root() {
+    return (
+      <VeltProvider apiKey="YOUR_API_KEY">
+        <App />
+      </VeltProvider>
+    );
+  }
+  ```
+  </Step>
+
+  <Step title="Use the hook to create and sync a CRDT store">
+  This example uses a `text` store and wires it to a `<textarea/>`.
+
+  ```jsx
+  import React from 'react';
+  import { useVeltCrdtStore } from '@veltdev/crdt-react';
+
+  const CollaborativeNote: React.FC = () => {
+    const {
+      value,
+      update,
+      saveVersion,
+      getVersions,
+      getVersionById,
+      setStateFromVersion,
+    } = useVeltCrdtStore<string>({
+      id: 'my-collab-note',
+      type: 'text',
+      initialValue: 'Hello, world!',
+      debounceMs: 100,
+    });
+
+    const onSaveVersion = async () => {
+      const versionId = await saveVersion('Checkpoint');
+      console.log('Saved version:', versionId);
+    };
+
+    const onRestoreLatest = async () => {
+      const versions = await getVersions();
+      if (versions.length === 0) return;
+      const latest = versions[0];
+      await setStateFromVersion(latest);
+    };
+
+    return (
+      <div>
+        <h3>Collaborative Note</h3>
+        <textarea
+          value={value ?? ''}
+          onChange={(e) => update(e.target.value)}
+          rows={8}
+          style={{ width: '100%' }}
+        />
+        <div style={{ marginTop: 8 }}>
+          <button onClick={onSaveVersion}>Save Version</button>
+          <button onClick={onRestoreLatest} style={{ marginLeft: 8 }}>Restore Latest</button>
+        </div>
+      </div>
+    );
+  };
+
+  export default CollaborativeNote;
+  ```
+  </Step>
+
+  </Steps>
+
+
+  ## APIs
+
+  #### [useVeltCrdtStore](/api-reference/sdk/api/api-methods#useveltcrdtstore)
+
+  React hook to create and sync a collaborative CRDT store.
+
+  - Params: [VeltCrdtStoreConfig](/api-reference/sdk/models/data-models#veltcrdtstoreconfig)
+  - Returns: [`Store<T>`](/api-reference/sdk/models/data-models#store)
+
+  <Tabs>
+  <Tab title="React / Next.js">
+
+  ```jsx
+  const {
+    value,
+    update,
+    saveVersion,
+    getVersions,
+    getVersionById,
+    setStateFromVersion,
+  } = useVeltCrdtStore<string>({
+    id: 'my-collab-note',
+    type: 'text',
+    initialValue: 'Hello, world!',
+    debounceMs: 100,
+  });
+  ```
+
+  </Tab>
+  </Tabs>
+
+  #### [update](/api-reference/sdk/api/api-methods#update)
+
+  Update the store value.
+
+  - Params: `newValue: T`
+  - Returns: `void`
+
+  ```jsx
+  update('New value');
+  ```
+
+  #### [saveVersion](/api-reference/sdk/api/api-methods#saveversion)
+
+  Save a snapshot of the current state as a named version.
+
+  - Params: `versionName: string`
+  - Returns: `Promise<string>`
+
+  ```jsx
+  await saveVersion('Checkpoint');
+  ```
+
+  #### [getVersions](/api-reference/sdk/api/api-methods#getversions)
+
+  Fetch all saved versions.
+
+  - Params: `none`
+  - Returns: `Promise<Version[]>`
+
+  ```jsx
+  const versions = await getVersions();
+  ```
+
+  #### [getVersionById](/api-reference/sdk/api/api-methods#getversionbyid)
+
+  Fetch a specific version by ID.
+
+  - Params: `versionId: string`
+  - Returns: `Promise<Version | null>`
+
+  ```jsx
+  const version = await getVersionById('abc123');
+  ```
+
+  #### [setStateFromVersion](/api-reference/sdk/api/api-methods#setstatefromversion)
+
+  Restore the store state from a specific version.
+
+  - Params: `version: Version`
+  - Returns: `Promise<void>`
+
+  ```jsx
+  await setStateFromVersion(version);
+  ```
+
+  </Tab>
+
+  <Tab title="Other Frameworks (@veltdev/crdt)">
+
+  <Steps titleSize="h2">
+
+  <Step title="Install dependencies">
+  **npm:**
+  ```bash
+  npm install @veltdev/crdt @veltdev/client
+  ```
+
+  **yarn:**
+  ```bash
+  yarn add @veltdev/crdt @veltdev/client
+  ```
+  </Step>
+
+  <Step title="Initialize the Velt client">
+  For non-React apps, initialize the client directly. For framework-specific steps (Angular, Vue, HTML), see [Install Docs](/get-started/setup/install).
+
+  ```ts
+  import { initVelt } from '@veltdev/client';
+
+  // Initialize once in your app bootstrap
+  export const client = await initVelt('YOUR_API_KEY');
+  ```
+  </Step>
+
+  <Step title="Create a CRDT store, subscribe, update, and manage versions">
+  A minimal TypeScript example wiring a `text` store:
+
+  ```ts
+  import { createVeltStore, Store } from '@veltdev/crdt';
+  import { initVelt } from '@veltdev/client';
+
+  async function main() {
+    const veltClient = await initVelt('YOUR_API_KEY');
+
+    const store = await createVeltStore<string>({
+      id: 'my-document',
+      type: 'text', // 'array' | 'map' | 'text' | 'xml'
+      initialValue: 'Hello, world!',
+      veltClient,
+    });
+
+    if (!store) throw new Error('Failed to create store');
+
+    // Listen for changes from local or remote peers
+    const unsubscribe = store.subscribe((newValue) => {
+      console.log('Updated value:', newValue);
+    });
+
+    // Apply a local change (replicates to others)
+    store.update('Hello, collaborative world!');
+
+    // Create a named version
+    const versionId = await store.saveVersion('Initial checkpoint');
+    console.log('Saved version id:', versionId);
+
+    // List and restore
+    const versions = await store.getVersions();
+    console.log('Versions:', versions.map(v => v.versionName));
+
+    const fetched = await store.getVersionById(versionId);
+    if (fetched) {
+      await store.setStateFromVersion(fetched);
+    }
+
+    // Later: stop listening
+    unsubscribe();
+  }
+
+  main().catch(console.error);
+  ```
+  </Step>
+
+  </Steps>
+
+  ## APIs
+
+  #### [createVeltStore](/api-reference/sdk/api/api-methods#createveltstore)
+
+  Create and initialize a collaborative CRDT store.
+
+  - Params: [CreateVeltStoreOptions](/api-reference/sdk/models/data-models#createveltstoreoptions)
+  - Returns: [`Store<T>`](/api-reference/sdk/models/data-models#store) | `null`
+
+  <Tabs>
+  <Tab title="Other Frameworks">
+
+  ```ts
+  const store = await createVeltStore<string>({
+    id: 'my-document',
+    type: 'text',
+    initialValue: 'Hello, world!',
+    veltClient,
+  });
+  ```
+
+  </Tab>
+  </Tabs>
+
+  #### [getValue](/api-reference/sdk/api/api-methods#getvalue)
+
+  Get the current store value.
+
+  - Returns: `T`
+
+  ```ts
+  const value = store.getValue();
+  ```
+
+  #### [update](/api-reference/sdk/api/api-methods#update)
+
+  Update the store value and sync to peers.
+
+  - Params: `newValue: T`
+  - Returns: `void`
+
+  ```ts
+  store.update('New Value');
+  ```
+
+  #### [subscribe](/api-reference/sdk/api/api-methods#subscribe)
+
+  Subscribe to changes in the store.
+
+  - Params: `(newValue: T) => void`
+  - Returns: `() => void` (unsubscribe)
+
+  ```ts
+  const unsubscribe = store.subscribe(console.log);
+  ```
+
+  #### [saveVersion](/api-reference/sdk/api/api-methods#saveversion)
+
+  Save a snapshot of the current state as a named version.
+
+  - Params: `versionName: string`
+  - Returns: `Promise<string>` (versionId)
+
+  ```ts
+  const versionId = await store.saveVersion('Initial checkpoint');
+  ```
+
+  #### [getVersions](/api-reference/sdk/api/api-methods#getversions)
+
+  Fetch all saved versions.
+
+  - Returns: `Promise<Version[]>`
+
+  ```ts
+  const versions = await store.getVersions();
+  ```
+
+  #### [getVersionById](/api-reference/sdk/api/api-methods#getversionbyid)
+
+  Fetch a specific version by ID.
+
+  - Params: `versionId: string`
+  - Returns: `Promise<Version | null>`
+
+  ```ts
+  const version = await store.getVersionById('abc123');
+  ```
+
+  #### [setStateFromVersion](/api-reference/sdk/api/api-methods#setstatefromversion)
+
+  Restore the store state from a specific version object.
+
+  - Params: `version: Version`
+  - Returns: `Promise<void>`
+
+  ```ts
+  await store.setStateFromVersion(version);
+  ```
+
+  </Tab>
+
+</Tabs>
+
+## Encryption
+
+You can encrypt CRDT data before it’s stored in Velt by registering a custom encryption provider. For CRDT methods, input data is of type `Uint8Array | number[]`.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```ts
+async function encryptData(config: EncryptConfig<string>): Promise<string> {
+  const encryptedData = await yourEncryptDataMethod(config.data);
+  return encryptedData;
+}
+
+async function decryptData(config: DecryptConfig<string>): Promise<string> {
+  const decryptedData = await yourDecryptDataMethod(config.data);
+  return decryptedData;
+}
+
+const encryptionProvider: VeltEncryptionProvider<string, string> = {
+  encrypt: encryptData,
+  decrypt: decryptData,
+};
+
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  encryptionProvider={encryptionProvider}
+/>
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+async function encryptData(config: EncryptConfig<string>): Promise<string> {
+  const encryptedData = await yourEncryptDataMethod(config.data);
+  return encryptedData;
+}
+
+async function decryptData(config: DecryptConfig<string>): Promise<string> {
+  const decryptedData = await yourDecryptDataMethod(config.data);
+  return decryptedData;
+}
+
+const encryptionProvider: VeltEncryptionProvider<string, string> = {
+  encrypt: encryptData,
+  decrypt: decryptData,
+};
+
+client.setEncryptionProvider(encryptionProvider);
+```
+
+</Tab>
+</Tabs>
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+ · [EncryptConfig](/api-reference/sdk/models/data-models#encryptconfig)
+ · [DecryptConfig](/api-reference/sdk/models/data-models#decryptconfig)

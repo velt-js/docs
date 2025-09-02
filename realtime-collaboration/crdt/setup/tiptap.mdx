@@ -18,21 +18,19 @@ This enables live cursors and collaborative editing out of the box. This is fram
 
 First, install the required packages:
 
-<Tabs>
-<Tab title="React">
+Install the new React-specific library:
 
-```bash
-npm install @veltdev/tiptap-crdt @tiptap/react @tiptap/starter-kit @tiptap/extension-collaboration @tiptap/extension-collaboration-cursor
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
+<Tabs> 
+  <Tab title="React">
+    ```bash
+    npm install @veltdev/tiptap-crdt-react @tiptap/react @tiptap/starter-kit @tiptap/extension-collaboration @tiptap/extension-collaboration-cursor
+    ```
+  </Tab> 
+  <Tab title="Other Frameworks">
+    ```txt
+    Coming soon
+    ```
+  </Tab>
 </Tabs>
 
 
@@ -40,240 +38,52 @@ Coming soon
 
 Initialize the Velt client by wrapping your app with the `VeltProvider`. This enables authentication and collaboration features. See [Velt Setup Docs](/get-started/setup/install) for details.
 
-<Tabs>
-<Tab title="React">
 
-```jsx
-import { VeltProvider } from '@veltdev/react';
+### Step 3: Basic Implementation
 
-export function Root() {
-  return (
-    <VeltProvider apiKey="YOUR_API_KEY">
-      <App />
-    </VeltProvider>
-  );
-}
-```
+Use the new useVeltTiptapCrdtExtension hook to wire up CRDT with Tiptap, no manual store plumbing required.
 
-</Tab>
-<Tab title="Other Frameworks">
+<Tabs> 
+  <Tab title="React">
+  ```jsx
+    const CollaborativeEditor: React.FC = () => {
+      const veltTiptapCrdtExtension = useVeltTiptapCrdtExtension({
+        editorId: 'YOUR_EDITOR_ID',
+      });
 
-```txt
-Coming soon
-```
+      const editor = useEditor(
+        {
+          extensions: [
+            StarterKit.configure({ history: false }),
+            ...(veltTiptapCrdtExtension ? [veltTiptapCrdtExtension] : []),
+          ],
+          content: '',
+        },
+        [veltTiptapCrdtExtension]
+      );
 
-</Tab>
-</Tabs>
-
-
-### Step 3: Import Required Components
-
-Import all necessary components and hooks:
-
-<Tabs>
-<Tab title="React">
-
-```jsx
-import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
-import { EditorContent, useEditor } from '@tiptap/react';
-import StarterKit from '@tiptap/starter-kit';
-import { useVeltClient, useVeltEventCallback } from '@veltdev/react';
-import { VeltTipTapStore, createVeltTipTapStore } from '@veltdev/tiptap-crdt';
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
-</Tabs>
-
-### Step 4: Setup Component State
-
-Use component state to mount the editor only after the CRDT store is ready and re-initialize on user/store changes to avoid early init bugs and duplicate providers.
-
-<Tabs>
-<Tab title="React">
-
-```jsx
-const CollaborativeEditor: React.FC = () => {
-  // Store reference to hold the VeltTipTap store instance
-  const veltTiptapStoreRef = useRef<VeltTipTapStore | null>(null);
-
-  // Get Velt client and user from Velt hooks. Velt User will be used to generate the live text cursors.
-  const { client } = useVeltClient();
-  const veltUser = useVeltEventCallback('userUpdate');
-
-  // Track when the store is ready for editor initialization
-  const [veltTiptapStoreReady, setVeltTiptapStoreReady] = useState(false);
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
-</Tabs>
-
-### Step 5: Initialize the VeltTipTap Store
-
-Initialize one store per editor. For multiple editors on the same page, create multiple stores and give each a unique `editorId` so their providers, content, and cursors stay isolated, enabling multiple editor support.
-
-<Tabs>
-<Tab title="React">
-
-```jsx
-  // Initialize the VeltTipTap store when client and user are available
-  useEffect(() => {
-    if (!veltUser || !client) return;
-
-    initializeStore();
-
-    // Cleanup function to destroy store when component unmounts
-    return () => {
-      if (veltTiptapStoreRef.current) {
-        veltTiptapStoreRef.current.destroy();
-      }
+      return (
+        <div className="editor-container">
+          <div className="editor-content">
+            <EditorContent editor={editor} />
+          </div>
+          <div className="status">
+            {veltTiptapCrdtExtension
+              ? 'Connected to collaborative session'
+              : 'Connecting to collaborative session...'}
+          </div>
+        </div>
+      );
     };
-  }, [client, veltUser]);
 
-  const initializeStore = async () => {
-    // Create the VeltTipTap store with unique editor ID and Velt client
-    const veltTiptapStore = await createVeltTipTapStore({ 
-      editorId: 'my-collaborative-editor', // Unique identifier for this editor
-      veltClient: client! 
-    });
-    
-    veltTiptapStoreRef.current = veltTiptapStore;
-    setVeltTiptapStoreReady(true);
-  }
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
-</Tabs>
-
-### Step 6: Configure the TipTap Editor
-
-- Set up the editor with collaboration extensions.
-- Add the collaboration extension from the VeltTipTap store when the store is ready.
-- Configure cursor tracking with the same provider and Velt User.
-- Disable default history to prevent conflicts.
-
-
-<Tabs>
-<Tab title="React">
-
-```jsx
-  // Initialize TipTap editor with collaboration extensions
-  const editor = useEditor({
-    extensions: [
-      // Basic TipTap extensions
-      StarterKit.configure({
-        history: false, // Disable default history to prevent conflicts
-      }),
-      // Add collaboration extensions only when store is ready
-      ...(
-        veltTiptapStoreRef.current ?
-          [
-            // Get the collaboration extension from the VeltTipTap store
-            veltTiptapStoreRef.current.getCollabExtension(),
-            // Configure cursor tracking with the same provider
-            CollaborationCursor.configure({
-              provider: veltTiptapStoreRef.current.getStore().getProvider(),
-              user: veltUser as User,
-            }),
-          ]
-          : []
-      ),
-    ],
-    // Start with empty content to avoid conflicts with YJS initialization
-    content: ''
-  }, [veltTiptapStoreReady, veltUser]); // Re-initialize when store is ready or user changes
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
-</Tabs>
-
-### Step 7: Render the Editor
-
-Render the editor once it’s initialized. Show a loading state while connecting and display the live connection status next to the editor.
-
-<Tabs>
-<Tab title="Code">
-
-```jsx
-  if (!editor) {
-    return <div className="status">Loading editor…</div>;
-  }
-
-  return (
-    <div className="editor-container">
-      <div className="editor-header">
-        Collaborative Editor - {veltUser?.name ? `Editing as ${veltUser.name}` : 'Please login to start editing'}
-      </div>
-      <div className="editor-content">
-        <EditorContent editor={editor} />
-      </div>
-      <div className="status">
-        {veltTiptapStoreReady ? 'Connected to collaborative session' : 'Connecting to collaborative session...'}
-      </div>
-    </div>
-  );
-};
-
-export default CollaborativeEditor;
-```
-
-</Tab>
-<Tab title="CSS">
-
-```css
-.editor-container {
-  padding: 20px;
-}
-.editor-header {
-  font-size: 1.2em;
-  margin-bottom: 10px;
-}
-.editor-content {
-  border: 1px solid #ccc;
-  padding: 10px;
-  min-height: 200px;
-}
-.status {
-  margin-top: 10px;
-  color: #666;
-}
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
+    export default CollaborativeEditor;
+  ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```txt
+    Coming soon
+    ```
+  </Tab>
 </Tabs>
 
 ## Notes
@@ -302,86 +112,42 @@ Use two sessions to test real-time collaboration: open this page in your current
 <Tab title="Complete Code">
 
 ```jsx Expandable Example expandable lines
-import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
-import { EditorContent, useEditor } from '@tiptap/react';
-import StarterKit from '@tiptap/starter-kit';
-import { useVeltClient, useVeltEventCallback } from '@veltdev/react';
-import { VeltTipTapStore, createVeltTipTapStore } from '@veltdev/tiptap-crdt';
-import { User } from '@veltdev/types';
-import React, { useEffect, useRef, useState } from 'react';
+    import { EditorContent, useEditor } from '@tiptap/react';
+    import StarterKit from '@tiptap/starter-kit';
+    import { useVeltTiptapCrdtExtension } from '@veltdev/tiptap-crdt-react';
+    import React from 'react';
 
-const CollaborativeEditor: React.FC = () => {
-  // Create a ref to hold our store instance
-  const veltTiptapStoreRef = useRef<VeltTipTapStore | null>(null);
+    const CollaborativeEditor: React.FC = () => {
+      const veltTiptapCrdtExtension = useVeltTiptapCrdtExtension({
+        editorId: 'YOUR_EDITOR_ID',
+      });
 
-  const { client } = useVeltClient();
+      const editor = useEditor(
+        {
+          extensions: [
+            StarterKit.configure({ history: false }),
+            ...(veltTiptapCrdtExtension ? [veltTiptapCrdtExtension] : []),
+          ],
+          content: '',
+        },
+        [veltTiptapCrdtExtension]
+      );
 
-  const veltUser = useVeltEventCallback('userUpdate');
-
-  // Initialize the store
-  useEffect(() => {
-    if (!veltUser || !client) return;
-
-    initializeStore();
-
-    // Clean up when the component unmounts
-    return () => {
-      if (veltTiptapStoreRef.current) {
-        veltTiptapStoreRef.current.destroy();
-      }
+      return (
+        <div className="editor-container">
+          <div className="editor-content">
+            <EditorContent editor={editor} />
+          </div>
+          <div className="status">
+            {veltTiptapCrdtExtension
+              ? 'Connected to collaborative session'
+              : 'Connecting to collaborative session...'}
+          </div>
+        </div>
+      );
     };
-  }, [client, veltUser]);
 
-  const initializeStore = async () => {
-    const veltTiptapStore = await createVeltTipTapStore({ editorId: 'velt-tiptap-crdt-demo', veltClient: client! });
-    veltTiptapStoreRef.current = veltTiptapStore;
-    setVeltTiptapStoreReady(true);
-  }
-
-  // Track when the store is ready
-  const [veltTiptapStoreReady, setVeltTiptapStoreReady] = useState(false);
-
-  // Initialize the editor with our collaboration extension
-  const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        history: false, // Disables default history to use Collaboration's history management
-      }),
-      ...(
-        veltTiptapStoreRef.current ?
-          [
-            // Use ONLY the collaboration extension from the store
-            // This already handles the Firestore sync internally
-            veltTiptapStoreRef.current.getCollabExtension(),
-            // Configure the cursor with the same provider
-            CollaborationCursor.configure({
-              // Use the provider from the store
-              provider: veltTiptapStoreRef.current.getStore().getProvider(),
-              user: veltUser as User,
-            }),
-          ]
-          : []
-      ),
-    ],
-    // Set initial content directly to avoid conflicts with YJS initialization
-    content: ''
-  }, [veltTiptapStoreReady, veltUser]); // Re-initialize when store is ready
-
-  return (
-    <div className="editor-container">
-      <div className="editor-header">
-        Collaborative Editor - {veltUser?.name ? `Editing as ${veltUser.name}` : 'Please login to start editing'}
-      </div>
-      <div className="editor-content">
-        <EditorContent editor={editor} />
-      </div>
-      <div className="status">
-        {veltTiptapStoreReady ? 'Connected to collaborative session' : 'Connecting to collaborative session...'}
-      </div>
-    </div>
-  );
-};
-export default CollaborativeEditor;
+    export default CollaborativeEditor;
 ```
 
 </Tab>
@@ -461,6 +227,22 @@ See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryp
 
 
 ## APIs
+
+#### useVeltTiptapCrdtExtension()
+Provides real-time collaborative TipTap editor functionality with Yjs and Velt SDK synchronization.
+
+- Signature: useVeltTiptapCrdtExtension(config: VeltTiptapCrdtExtensionConfig): Extension | null
+- Params: [VeltTiptapCrdtExtensionConfig](/api-reference/sdk/models/data-models#velttiptapcrdtextensionconfig)
+- Returns: Extension | null
+- React Hook: useVeltTiptapCrdtExtension()
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const collab = useVeltTiptapCrdtExtension({ editorId: 'my-doc' });
+```
+</Tab>
+</Tabs>
 
 #### [createVeltTipTapStore](/api-reference/sdk/api/api-methods#createvelttiptapstore)
 

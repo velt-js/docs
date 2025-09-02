@@ -3,7 +3,7 @@ title: BlockNote Editor
 description: Setup CRDT for BlockNote Editor.
 ---
 
-This enables live cursors and real-time collaborative editing in BlockNote using Velt's CRDT-powered sync.
+The @veltdev/blocknote-crdt-react library provides seamless integration between BlockNote rich text editor and Velt's collaborative features, enabling real-time collaborative editing with Conflict-free Replicated Data Types (CRDT).
 
 ## Prerequisites
 
@@ -16,252 +16,73 @@ This enables live cursors and real-time collaborative editing in BlockNote using
 
 ### Step 1: Install Dependencies
 
-Install the required packages:
+First, install the required packages:
 
 <Tabs>
-<Tab title="React">
-
-```bash
-npm install @veltdev/blocknote-crdt @blocknote/react @blocknote/mantine @blocknote/core
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
+  <Tab title="React">
+    ```bash
+    npm install @veltdev/blocknote-crdt-react
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```txt
+    Coming soon
+    ```
+  </Tab>
 </Tabs>
-
-Also include BlockNote styles in your app (see below).
 
 ### Step 2: Setup Velt
 
-Wrap your app with the `VeltProvider` to enable authentication and collaboration features. See [Velt Setup Docs](/get-started/setup/install) for details.
+Initialize the Velt client by wrapping your app with the `VeltProvider`. This enables authentication and collaboration features. See [Velt Setup Docs](/get-started/setup/install) for details.
+
+
+### Step 3: Initialize Velt CRDT Store
+
+Use the new useVeltBlockNoteCrdtExtension hook to wire up CRDT with BlockNote, no manual store plumbing required.
+
 
 <Tabs>
 <Tab title="React">
 
 ```jsx
-import { VeltProvider } from '@veltdev/react';
+const BlockNoteCollaborativeEditor: React.FC = () => {
 
-export function Root() {
-  return (
-    <VeltProvider apiKey="YOUR_API_KEY">
-      <App />
-    </VeltProvider>
-  );
-}
-```
+  const { collaborationConfig, veltBlockNoteStoreReady } = useVeltBlockNoteCrdtExtension({
+    editorId: 'YOUR_EDITOR_ID',
+    initialContent: JSON.stringify([{ type: "paragraph", content: "" }])
+  });
 
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
-</Tabs>
-
-### Step 3: Import Required Components
-
-Import the necessary components, hooks, and styles for BlockNote and Velt:
-
-<Tabs>
-<Tab title="React">
-
-```jsx
-import { useCreateBlockNote } from '@blocknote/react';
-import { BlockNoteView } from '@blocknote/mantine';
-import '@blocknote/mantine/style.css';
-import '@blocknote/core/fonts/inter.css';
-import { useVeltClient, useVeltEventCallback } from '@veltdev/react';
-import { VeltBlockNoteStore, createVeltBlockNoteStore } from '@veltdev/blocknote-crdt';
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
-</Tabs>
-
-### Step 4: Setup Component State
-
-Use component state to mount the editor only after the CRDT store is ready and re-initialize on user/store changes to avoid early init bugs and duplicate providers.
-
-<Tabs>
-<Tab title="React">
-
-```jsx
-const CollaborativeEditor: React.FC = () => {
-  // Store reference to hold the VeltBlockNote store instance
-  const veltBlockNoteStoreRef = useRef<VeltBlockNoteStore | null>(null);
-
-  // Get Velt client and user from Velt hooks
-  const { client } = useVeltClient();
-  const veltUser = useVeltEventCallback('userUpdate');
-
-  // Track when the store is ready for editor initialization
-  const [veltBlockNoteStoreReady, setVeltBlockNoteStoreReady] = useState(false);
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
-</Tabs>
-
-### Step 5: Initialize the VeltBlockNote Store
-
-Initialize one store per editor. For multiple editors on the same page, create multiple stores and give each a unique `editorId` so their providers, content, and cursors stay isolated, enabling multiple editor support.
-
-<Tabs>
-<Tab title="React">
-
-```jsx
-  // Initialize the VeltBlockNote store when client and user are available
-  useEffect(() => {
-    if (!veltUser || !client) return;
-
-    initializeStore();
-
-    return () => {
-      if (veltBlockNoteStoreRef.current) {
-        veltBlockNoteStoreRef.current.destroy();
-      }
-    };
-  }, [client, veltUser]);
-
-  const initializeStore = async () => {
-    // Create the VeltBlockNote store with unique editor ID and Velt client
-    const veltBlockNoteStore = await createVeltBlockNoteStore({
-      editorId: 'my-collaborative-editor', // Unique identifier for this editor
-      veltClient: client!
-    });
-
-    veltBlockNoteStoreRef.current = veltBlockNoteStore;
-    setVeltBlockNoteStoreReady(true);
-  }
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
-</Tabs>
-
-### Step 6: Configure BlockNote Collaboration
-
-Derive the collaboration configuration from the store and Velt user and pass it to BlockNote.
-
-<Tabs>
-<Tab title="React">
-
-```jsx
-  // Compute collaboration config (stable object; memoize if needed for perf)
-  const collaborationConfig = useMemo(() => {
-    if (!veltBlockNoteStoreReady || !veltBlockNoteStoreRef.current || !veltUser) return undefined;
-
-    const store = veltBlockNoteStoreRef.current;
-
-    return {
-      fragment: store.getYXml()!,
-      provider: store.getStore().getProvider(),
-      user: {
-        name: veltUser.name || 'Anonymous',
-        color: veltUser.color || '#000000'
-      },
-    };
-  }, [veltBlockNoteStoreReady, veltUser]);
-
-  // Initialize BlockNote editor with collaboration config
+  // Now call the hook at top level with the config
   const editor = useCreateBlockNote({
     collaboration: collaborationConfig,
-    // Add other static options if needed
-  }, [collaborationConfig]); // Recreate if collaboration config changes
-```
+    // Add any other static options here
+  }, [collaborationConfig]); // Deps ensure re-init if config changes
 
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
-</Tabs>
-
-### Step 7: Render the Editor
-
-Render the editor once it’s initialized. 
-
-<Tabs>
-<Tab title="Code">
-
-```jsx
   return (
-    <div className="editor-container">
-      <div className="editor-header">
-        Collaborative Editor - {veltUser?.name ? `Editing as ${veltUser.name}` : 'Please login to start editing'}
+    <>
+      <div className="editor-container">
+        <div className="editor-content">
+          <BlockNoteView editor={editor} key={collaborationConfig ? 'collab-on' : 'collab-off'} />
+        </div>
+        <div className="status">
+          {veltBlockNoteStoreReady ? 'Connected to collaborative session' : 'Connecting to collaborative session...'}
+        </div>
       </div>
-      <div className="editor-content">
-        <BlockNoteView editor={editor} key={collaborationConfig ? 'collab-on' : 'collab-off'} />
-      </div>
-      <div className="status">
-        {veltBlockNoteStoreReady ? 'Connected to collaborative session' : 'Connecting to collaborative session...'}
-      </div>
-    </div>
+    </>
   );
 };
 
-export default CollaborativeEditor;
+export default BlockNoteCollaborativeEditor;
 ```
 
- </Tab>
- <Tab title="CSS">
-
-```css
-.editor-container {
-  padding: 20px;
-}
-.editor-header {
-  font-size: 1.2em;
-  margin-bottom: 10px;
-}
-.editor-content {
-  border: 1px solid #ccc;
-  padding: 10px;
-  min-height: 200px;
-}
-.status {
-  margin-top: 10px;
-  color: #666;
-}
-```
-
- </Tab>
- <Tab title="Other Frameworks">
+</Tab>
+<Tab title="Other Frameworks">
 
 ```txt
 Coming soon
 ```
 
- </Tab>
+</Tab>
 </Tabs>
 
 ## Notes
@@ -287,59 +108,19 @@ Coming soon
 <Tab title="Complete Code">
 
 ```jsx Expandable Example expandable lines
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useCreateBlockNote } from "@blocknote/react";
+import '@blocknote/core/fonts/inter.css';
 import { BlockNoteView } from "@blocknote/mantine";
-import '@blocknote/mantine/style.css'
-import '@blocknote/core/fonts/inter.css'
-import { useVeltClient, useVeltEventCallback } from "@veltdev/react";
-import { VeltBlockNoteStore, createVeltBlockNoteStore } from "@veltdev/blocknote-crdt";
+import '@blocknote/mantine/style.css';
+import { useCreateBlockNote } from "@blocknote/react";
+import { useVeltBlockNoteCrdtExtension } from "@veltdev/blocknote-crdt-react";
+import React from "react";
 
 const BlockNoteCollaborativeEditor: React.FC = () => {
-  const veltBlockNoteStoreRef = useRef<VeltBlockNoteStore | null>(null);
-  const { client } = useVeltClient();
-  const veltUser = useVeltEventCallback('userUpdate');
 
-  useEffect(() => {
-    if (!veltUser || !client) return;
-
-    initializeStore();
-
-    return () => {
-      if (veltBlockNoteStoreRef.current) {
-        veltBlockNoteStoreRef.current.destroy();
-      }
-    };
-  }, [client, veltUser]);
-
-  const initializeStore = async () => {
-    const veltBlockNoteStore = await createVeltBlockNoteStore({
-      editorId: 'velt-blocknote-crdt-demo-11-aug-2-default',
-      veltClient: client!,
-      initialContent: JSON.stringify([{ type: "paragraph", content: "" }]) // BlockNote-compatible initial block
-    });
-    veltBlockNoteStoreRef.current = veltBlockNoteStore;
-    setVeltBlockNoteStoreReady(true);
-  }
-
-  const [veltBlockNoteStoreReady, setVeltBlockNoteStoreReady] = useState(false);
-
-  // Compute collaboration config (stable object; memoize if needed for perf)
-  const collaborationConfig = useMemo(() => {
-    if (!veltBlockNoteStoreReady || !veltBlockNoteStoreRef.current || !veltUser) return undefined;
-
-    const store = veltBlockNoteStoreRef.current;
-    store.getStore().getProvider().connect(); // Ensure connected
-
-    return {
-      fragment: store.getYXml()!,
-      provider: store.getStore().getProvider(),
-      user: {
-        name: veltUser.name || 'Anonymous',
-        color: veltUser.color || '#000000'
-      },
-    };
-  }, [veltBlockNoteStoreReady, veltUser]);
+  const { collaborationConfig, veltBlockNoteStoreReady } = useVeltBlockNoteCrdtExtension({
+    editorId: 'YOUR_EDITOR_ID',
+    initialContent: JSON.stringify([{ type: "paragraph", content: "" }])
+  });
 
   // Now call the hook at top level with the config
   const editor = useCreateBlockNote({
@@ -350,9 +131,6 @@ const BlockNoteCollaborativeEditor: React.FC = () => {
   return (
     <>
       <div className="editor-container">
-        <div className="editor-header">
-          Collaborative Editor - {veltUser?.name ? `Editing as ${veltUser.name}` : 'Please login to start editing'}
-        </div>
         <div className="editor-content">
           <BlockNoteView editor={editor} key={collaborationConfig ? 'collab-on' : 'collab-off'} />
         </div>
@@ -446,6 +224,15 @@ See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryp
 
 
 ## APIs
+
+#### [useVeltBlockNoteCrdtExtension()](/api-reference/sdk/api/api-methods#useveltblocknotecrdtextension)
+
+Provides real-time collaborative BlockNote editor functionality with Yjs and Velt SDK synchronization.
+
+- Signature: useVeltBlockNoteCrdtExtension(config: VeltBlockNoteCrdtExtensionConfig)
+- Params: [VeltBlockNoteCrdtExtensionConfig](/api-reference/sdk/models/data-models#veltblocknotecrdtextensionconfig)
+- Returns: Extension | null
+- React Hook: `useVeltBlockNoteCrdtExtension()`
 
 #### [createVeltBlockNoteStore](/api-reference/sdk/api/api-methods#createveltblocknotestore)
 

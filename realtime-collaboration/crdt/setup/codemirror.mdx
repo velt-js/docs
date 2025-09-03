@@ -3,7 +3,7 @@ title: CodeMirror Editor
 description: Setup CRDT for CodeMirror Editor.
 ---
 
-@veltdev/codemirror-crdt is a library for enabling real-time, collaborative editing in CodeMirror using CRDT (Conflict-free Replicated Data Types). It integrates Yjs for conflict resolution, awareness (e.g., user cursors), and undo/redo, powered by the Velt collaboration platform. This allows multiple users to edit code simultaneously without conflicts, with features like presence indicators and synced changes.
+The @veltdev/codemirror-crdt-react library provides seamless integration between CodeMirror rich text editor and Velt's collaborative features, enabling real-time collaborative editing with Conflict-free Replicated Data Types (CRDT).
 
 ## Prerequisites
 
@@ -22,7 +22,7 @@ Install the required packages:
 <Tab title="React">
 
 ```bash
-npm install @veltdev/codemirror-crdt @veltdev/react
+npm install @veltdev/codemirror-crdt-react @veltdev/react
 ```
 
 </Tab>
@@ -37,225 +37,38 @@ Coming soon
 
 ### Step 2: Setup Velt
 
-Wrap your app with the `VeltProvider` to enable authentication and collaboration features. See [Velt Setup Docs](/get-started/setup/install) for details.
+Initialize the Velt client by wrapping your app with the `VeltProvider`. This enables authentication and collaboration features. See [Velt Setup Docs](/get-started/setup/install) for details.
+
+### Step 3: Initialize Velt CRDT Store
+
+Use the new useVeltCodeMirrorCrdtExtension hook to wire up CRDT with CodeMirror, no manual store plumbing required.
+
 
 <Tabs>
 <Tab title="React">
 
 ```jsx
-import { VeltProvider } from '@veltdev/react';
+// Add hook in your codemirror editor component
+const { store, isLoading } = useVeltCodeMirrorCrdtExtension({ editorId });
 
-export function Root() {
-  return (
-    <VeltProvider apiKey="YOUR_API_KEY">
-      <App />
-    </VeltProvider>
-  );
-}
-```
+useEffect(() => {
+  if (!store || !editorRef.current) return;
 
-</Tab>
-<Tab title="Other Frameworks">
+  const startState = EditorState.create({
+    doc: store.getYText()?.toString() ?? '',
+    extensions: [
+      basicSetup,
+      yCollab(store.getYText()!, store.getAwareness(), { undoManager: store.getUndoManager() }),
+    ],
+  });
 
-```txt
-Coming soon
-```
-
-</Tab>
-</Tabs>
-
-### Step 3: Import Required Components
-
-Import the CodeMirror and Velt CRDT utilities you'll need:
-
-<Tabs>
-<Tab title="React">
-
-```jsx
-import { createVeltCodeMirrorStore } from '@veltdev/codemirror-crdt';
-import { yCollab } from 'y-codemirror.next';
-import { EditorState } from '@codemirror/state';
-import { basicSetup, EditorView } from 'codemirror';
-import { useVeltClient } from '@veltdev/react';
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
-</Tabs>
-
-### Step 4: Setup Component State
-
-Use component state to mount the editor only after the CRDT store is ready and re-initialize on user/store changes to avoid early init bugs and duplicate providers.
-
-<Tabs>
-<Tab title="React">
-
-```jsx
-const CollaborativeCodeEditor: React.FC = () => {
-  // DOM ref where the CodeMirror editor will mount
-  const editorRef = useRef<HTMLDivElement | null>(null);
-
-  // Track the EditorView instance for cleanup
-  const editorViewRef = useRef<EditorView | null>(null);
-
-  // Store readiness flag
-  const [storeReady, setStoreReady] = useState(false);
-
-  // Velt client for auth and connectivity
-  const { client } = useVeltClient();
-
-  // Hold the store instance
-  const storeRef = useRef<Awaited<ReturnType<typeof createVeltCodeMirrorStore>> | null>(null);
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
-</Tabs>
-
-### Step 5: Initialize the VeltCodeMirror Store
-
-Initialize one store per editor. For multiple editors on the same page, create multiple stores and give each a unique `editorId` so their providers, content, and cursors stay isolated, enabling multiple editor support.
-
-<Tabs>
-<Tab title="React">
-
-```jsx
-  useEffect(() => {
-    if (!client) return;
-
-    let mounted = true;
-
-    const init = async () => {
-      const store = await createVeltCodeMirrorStore({
-        editorId: 'my-codemirror-collab-editor', // Unique identifier (e.g., 'index.html')
-        veltClient: client!
-      });
-      if (!mounted) return;
-      storeRef.current = store;
-      setStoreReady(true);
-    };
-
-    init();
-
-    return () => {
-      mounted = false;
-      // Destroy CodeMirror view
-      if (editorViewRef.current) {
-        editorViewRef.current.destroy();
-        editorViewRef.current = null;
-      }
-      // Destroy store
-      if (storeRef.current) {
-        storeRef.current.destroy();
-        storeRef.current = null;
-      }
-    };
-  }, [client]);
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
-</Tabs>
-
-### Step 6: Configure CodeMirror Collaboration
-
-Create an `EditorState` that uses the Yjs text, awareness, and undo manager from the store. Mount an `EditorView` when ready.
-
-<Tabs>
-<Tab title="React">
-
-```jsx
-  useEffect(() => {
-    if (!storeReady || !editorRef.current || !storeRef.current) return;
-
-    const store = storeRef.current;
-
-    const state = EditorState.create({
-      doc: store.getYText()?.toString() ?? '',
-      extensions: [
-        basicSetup,
-        // Add language and tooling extensions as needed (e.g., javascript(), css(), html(), autocompletion())
-        yCollab(store.getYText(), store.getAwareness(), { undoManager: store.getUndoManager() }),
-      ],
-    });
-
-    const view = new EditorView({
-      state,
+  viewRef.current = new EditorView({
+      state: startState,
       parent: editorRef.current,
-    });
+  });
 
-    editorViewRef.current = view;
-  }, [storeReady]);
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```txt
-Coming soon
-```
-
-</Tab>
-</Tabs>
-
-### Step 7: Render the Editor
-
-Render the editor once it’s initialized. 
-
-<Tabs>
-<Tab title="Code">
-
-```jsx
-  return (
-    <div className="editor-container">
-      <div className="editor-header">Collaborative Code Editor</div>
-      <div className="editor-content" ref={editorRef} />
-      <div className="status">{storeReady ? 'Connected to collaborative session' : 'Connecting to collaborative session...'}</div>
-    </div>
-  );
-};
-
-export default CollaborativeCodeEditor;
-```
-
-</Tab>
-<Tab title="CSS">
-
-```css
-.editor-container {
-  padding: 20px;
-}
-.editor-header {
-  font-size: 1.2em;
-  margin-bottom: 10px;
-}
-.editor-content {
-  border: 1px solid #ccc;
-  padding: 10px;
-  min-height: 200px;
-}
-.status {
-  margin-top: 10px;
-  color: #666;
-}
+  return () => viewRef.current?.destroy();
+}, [store]);
 ```
 
 </Tab>
@@ -291,82 +104,50 @@ Coming soon
 <Tabs>
 <Tab title="Complete Code">
 
-```jsx Expandable Example expandable lines
-import React, { useEffect, useRef, useState } from 'react';
-import { createVeltCodeMirrorStore } from '@veltdev/codemirror-crdt';
-import { yCollab } from 'y-codemirror.next';
-import { EditorState } from '@codemirror/state';
-import { basicSetup, EditorView } from 'codemirror';
-import { useVeltClient } from '@veltdev/react';
+See [Velt CodeMirror Demo Repo](https://github.com/velt-js/velt-codemirror-crdt-demo) for our complete implementation.
 
-const CollaborativeCodeEditor: React.FC = () => {
-  const editorRef = useRef<HTMLDivElement | null>(null);
-  const editorViewRef = useRef<EditorView | null>(null);
-  const [storeReady, setStoreReady] = useState(false);
-  const { client } = useVeltClient();
-  const storeRef = useRef<Awaited<ReturnType<typeof createVeltCodeMirrorStore>> | null>(null);
+```jsx Relevant Code expandable lines
+// Import required modules
+import { useVeltCodeMirrorCrdtExtension } from "@veltdev/codemirror-crdt-react";
+import { yCollab } from "y-codemirror.next";
+import { EditorState } from "@codemirror/state";
+import { basicSetup, EditorView } from "codemirror";
 
-  useEffect(() => {
-    if (!client) return;
+// Add hook in your codemirror editor component
+const { store, isLoading } = useVeltCodeMirrorCrdtExtension({ editorId });
 
-    let mounted = true;
+useEffect(() => {
+    if (!store || !editorRef.current) return;
 
-    const init = async () => {
-      const store = await createVeltCodeMirrorStore({
-        editorId: 'velt-codemirror-crdt-demo',
-        veltClient: client!,
-      });
-      if (!mounted) return;
-      storeRef.current = store;
-      setStoreReady(true);
-    };
+    // Clean up existing view if any
+    viewRef.current?.destroy();
 
-    init();
-
-    return () => {
-      mounted = false;
-      if (editorViewRef.current) {
-        editorViewRef.current.destroy();
-        editorViewRef.current = null;
-      }
-      if (storeRef.current) {
-        storeRef.current.destroy();
-        storeRef.current = null;
-      }
-    };
-  }, [client]);
-
-  useEffect(() => {
-    if (!storeReady || !editorRef.current || !storeRef.current) return;
-
-    const store = storeRef.current;
-
-    const state = EditorState.create({
-      doc: store.getYText()?.toString() ?? '',
-      extensions: [
-        basicSetup,
-        yCollab(store.getYText(), store.getAwareness(), { undoManager: store.getUndoManager() }),
-      ],
+    const startState = EditorState.create({
+        doc: store.getYText()?.toString() ?? '',
+        extensions: [
+            basicSetup,
+            autocompletion(),
+            yCollab(store.getYText()!, store.getAwareness(), { undoManager: store.getUndoManager() }),
+        ],
     });
 
-    const view = new EditorView({ state, parent: editorRef.current });
-    editorViewRef.current = view;
-  }, [storeReady]);
+    viewRef.current = new EditorView({
+        state: startState,
+        parent: editorRef.current,
+    });
 
-  return (
-    <div className="editor-container">
-      <div className="editor-header">Collaborative Code Editor</div>
-      <div className="editor-content" ref={editorRef} />
-      <div className="status">{storeReady ? 'Connected to collaborative session' : 'Connecting to collaborative session...'}</div>
-    </div>
-  );
-};
-
-export default CollaborativeCodeEditor;
+    return () => {
+        viewRef.current?.destroy();
+        viewRef.current = null;
+    };
+}, [store]);
 ```
 
 </Tab>
 <Tab title="Live Demo">
+
+
+[Open in larger window](https://velt-codemirror-crdt-demo.vercel.app/)
 
 <Frame>
   <iframe
@@ -375,8 +156,6 @@ export default CollaborativeCodeEditor;
     height="500px"
   ></iframe>
 </Frame>
-
-[Open in larger window](https://velt-codemirror-crdt-demo.vercel.app/)
 
 </Tab>
 </Tabs>
@@ -443,6 +222,17 @@ See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryp
 
 ## APIs
 
+#### [useVeltCodeMirrorCrdtExtension()](/api-reference/sdk/api/api-methods#useveltcodemirrorcrdtextension)
+
+Provides real-time collaborative CodeMirror editor functionality with Yjs and Velt SDK synchronization.
+
+- Signature: useVeltCodeMirrorCrdtExtension(config: VeltCodeMirrorCrdtExtensionConfig)
+- Params: [VeltCodeMirrorCrdtExtensionConfig](/api-reference/sdk/models/data-models#veltcodemirrorcrdtextensionconfig)
+- Returns: [VeltCodeMirrorCrdtExtensionResponse](/api-reference/sdk/models/data-models#veltcodemirrorcrdtextensionresponse)
+- React Hook: `useVeltCodeMirrorCrdtExtension()`
+
+
+{/*
 #### [createVeltCodeMirrorStore](/api-reference/sdk/api/api-methods#createveltcodemirrorstore)
 
 Create and initialize a collaborative CodeMirror store instance.
@@ -466,6 +256,7 @@ const store = await createVeltCodeMirrorStore({ editorId: 'velt-cm-doc', veltCli
 
 </Tab>
 </Tabs>
+*/}
 
 #### [getStore()](/api-reference/sdk/api/api-methods#getstore)
 

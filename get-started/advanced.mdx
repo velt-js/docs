@@ -13,146 +13,7 @@ However, if you want to add another layer of categorization to organize users to
 
 <Tip>If a **Document** is like a house, a **Location** is like a room within the house.</Tip>
 
-To learn more about `Locations`, check out its dedicated section [here](/key-concepts/overview#set-location).
-
-<Tabs>
-<Tab title="React">
-
-<CodeGroup>
-```jsx React / Next.js with Hooks
-import { useSetLocation } from '@veltdev/react';
-
-export default function DocumentComponent() {
-  useSetLocation('room-1');
-
-  return (
-    <div>
-      {/* Your document content */}
-    </div>
-  );
-}
-```
-
-```jsx React / Next.js (Non-hooks)
-import { useVeltClient } from '@veltdev/react';
-
-export default function DocumentComponent() {
-  const { client } = useVeltClient();
-
-  useEffect(() => {
-    if (client) {
-      client.setLocation('room-1');
-    }
-  }, [client]);
-
-  return (
-    <div>
-      {/* Your document content */}
-    </div>
-  );
-}
-```
-</CodeGroup>
-
-</Tab>
-
-<Tab title="Angular">
-
-<CodeGroup>
-```jsx Angular Location Setup
-import { Component } from '@angular/core';
-import { initVelt } from '@veltdev/client';
-
-@Component({
-  selector: 'app-document',
-  template: `<div><!-- Your document content --></div>`
-})
-export class DocumentComponent {
-  client: any;
-
-  async ngOnInit() {
-    this.client = await initVelt('YOUR_VELT_API_KEY');
-    // Set location after document initialization
-    this.client.setLocation('room-1');
-  }
-}
-```
-</CodeGroup>
-
-</Tab>
-
-<Tab title="Vue.js">
-
-<CodeGroup>
-```js Vue.js Location Setup
-import { initVelt } from '@veltdev/client';
-
-export default {
-  name: 'DocumentComponent',
-  data() {
-    return {
-      client: null
-    }
-  },
-  async mounted() {
-    this.client = await initVelt('YOUR_VELT_API_KEY');
-    // Set location after document initialization
-    this.client.setLocation('room-1');
-  }
-}
-```
-</CodeGroup>
-
-</Tab>
-
-<Tab title="HTML">
-
-<CodeGroup>
-```js HTML Location Setup
-// Set location after document initialization
-Velt.setLocation('room-1');
-```
-
-```html Complete HTML with Location
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>My Document</title>
-  <script type="module" src="https://cdn.velt.dev/lib/sdk@latest/velt.js" onload="loadVelt()"></script>
-  <script>
-    async function loadVelt() {
-      await Velt.init("YOUR_VELT_API_KEY");
-
-      // Authenticate user
-      const user = {
-        userId: "user123",
-        organizationId: "org123",
-        name: "John Doe",
-        email: "john@example.com",
-        photoUrl: "https://i.pravatar.cc/300",
-        color: "#FF6B6B",
-        textColor: "#FFFFFF"
-      };
-      await Velt.identify(user);
-
-      // Set document and location
-      await Velt.setDocument('my-document-id', { documentName: 'My Document' });
-      Velt.setLocation('room-1');
-    }
-  </script>
-</head>
-<body>
-  <h1>My Document - Room 1</h1>
-  <velt-comments></velt-comments>
-  <!-- Your document content -->
-</body>
-</html>
-```
-</CodeGroup>
-
-</Tab>
-</Tabs>
+To learn more about `Locations`, check out its dedicated section [here](/key-concepts/overview#locations).
 
 ## Contacts
 
@@ -160,220 +21,357 @@ When you reply to a comment, you can `@mention` other teammates that are added t
 
 To learn more about creating a `User's Contacts List`, [read here](/key-concepts/overview#contact-list).
 
-<Tabs>
-<Tab title="React">
+
+## JWT Authentication Tokens
+
+For enhanced security, you can use JWT tokens to authenticate users instead of passing user data directly in the client-side code. This provides an additional layer of security by verifying user identity on the server side. To learn more, see the [JWT Tokens page](/security/jwt-tokens).
+
+<Warning>
+**Critical JWT Token Requirements:**
+- JWT tokens must be generated server-side using your auth token from the Velt Console
+- Never expose JWT tokens or auth tokens in client-side code
+- Tokens expire after 48 hours and need to be refreshed
+- Include the JWT token in the `authToken` field when calling `identify()`
+</Warning>
+
+### Step 1: Enable JWT Tokens in Console
+
+First, enable JWT tokens in your Velt Console:
+
+1. Go to [console.velt.dev](https://console.velt.dev/dashboard/config/general)
+2. Enable the toggle for `Require JWT Token` (listed at the bottom of the page)
+
+<Warning>JWT tokens won't work unless you enable this setting in your console.</Warning>
+
+### Step 2: Generate Auth Token
+
+You need an auth token to generate JWT tokens. You can generate this from the **Auth Token** section in your Velt Console dashboard.
+
+<Frame>
+![](/images/customization/auth-token.png)
+</Frame>
+
+<Warning>Store auth tokens securely on your server-side environment and never expose them in client-side code.</Warning>
+
+<Tip>Auth tokens are long-lived and should be rotated periodically for security best practices.</Tip>
+
+### Step 3: Create Server Endpoint for JWT Token Generation
+
+Create a server endpoint that generates and serves JWT tokens to your client:
 
 <CodeGroup>
-```jsx React / Next.js with Hooks
-import { useSetContacts } from '@veltdev/react';
+```js Node.js Server Endpoint
+const express = require('express');
+const app = express();
+const PORT = 8080;
 
-export default function App() {
-  const contacts = [
-    {
-      userId: 'user1',
-      name: 'Alice Johnson',
-      email: 'alice@example.com',
-      photoUrl: 'https://i.pravatar.cc/301'
-    },
-    {
-      userId: 'user2',
-      name: 'Bob Smith',
-      email: 'bob@example.com',
-      photoUrl: 'https://i.pravatar.cc/302'
+// Your auth token from Velt Console
+const VELT_AUTH_TOKEN = "your-generated-auth-token-from-console";
+
+async function generateVeltJWTToken(userId, userProperties = {}) {
+  const url = "https://api.velt.dev/v2/auth/token";
+  const body = {
+    data: {
+      userId: userId,
+      apiKey: "YOUR_VELT_API_KEY",
+      authToken: VELT_AUTH_TOKEN,
+      userProperties: {
+        organizationId: userProperties.organizationId,
+        email: userProperties.email,
+        isAdmin: userProperties.isAdmin || false
+      }
     }
-  ];
+  };
 
-  useSetContacts(contacts);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
 
-  return (
-    <div>
-      {/* Your app content */}
-    </div>
-  );
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data?.result?.data?.token;
+  } catch (error) {
+    console.error("Error generating JWT token:", error);
+    throw error;
+  }
 }
+
+// Endpoint to generate JWT tokens
+app.get('/generate-velt-jwt-token', async (req, res) => {
+  try {
+    const { userId, organizationId, email, isAdmin } = req.query;
+    const token = await generateVeltJWTToken(userId, {
+      organizationId,
+      email,
+      isAdmin: isAdmin === 'true'
+    });
+    res.json({ token });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to generate token' });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`JWT Server listening on port ${PORT}`);
+});
 ```
 
-```jsx React / Next.js (Non-hooks)
-import { useVeltClient } from '@veltdev/react';
+```python Python Server Endpoint
+from flask import Flask, request, jsonify
+import requests
+import os
 
-export default function App() {
-  const { client } = useVeltClient();
+app = Flask(__name__)
+
+# Your auth token from Velt Console
+VELT_AUTH_TOKEN = "your-generated-auth-token-from-console"
+VELT_API_KEY = "YOUR_VELT_API_KEY"
+
+def generate_velt_jwt_token(user_id, user_properties=None):
+    url = "https://api.velt.dev/v2/auth/token"
+
+    if user_properties is None:
+        user_properties = {}
+
+    body = {
+        "data": {
+            "userId": user_id,
+            "apiKey": VELT_API_KEY,
+            "authToken": VELT_AUTH_TOKEN,
+            "userProperties": {
+                "organizationId": user_properties.get("organizationId"),
+                "email": user_properties.get("email"),
+                "isAdmin": user_properties.get("isAdmin", False)
+            }
+        }
+    }
+
+    try:
+        response = requests.post(url, json=body)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("result", {}).get("data", {}).get("token")
+    except Exception as error:
+        print(f"Error generating JWT token: {error}")
+        raise error
+
+@app.route('/generate-velt-jwt-token', methods=['GET'])
+def get_jwt_token():
+    try:
+        user_id = request.args.get('userId')
+        organization_id = request.args.get('organizationId')
+        email = request.args.get('email')
+        is_admin = request.args.get('isAdmin') == 'true'
+
+        token = generate_velt_jwt_token(user_id, {
+            "organizationId": organization_id,
+            "email": email,
+            "isAdmin": is_admin
+        })
+
+        return jsonify({"token": token})
+    except Exception as error:
+        return jsonify({"error": "Failed to generate token"}), 500
+
+if __name__ == '__main__':
+    app.run(port=8080)
+```
+
+```ruby Ruby Server Endpoint
+require 'sinatra'
+require 'net/http'
+require 'json'
+
+# Your auth token from Velt Console
+VELT_AUTH_TOKEN = "your-generated-auth-token-from-console"
+VELT_API_KEY = "YOUR_VELT_API_KEY"
+
+def generate_velt_jwt_token(user_id, user_properties = {})
+  url = URI("https://api.velt.dev/v2/auth/token")
+
+  body = {
+    data: {
+      userId: user_id,
+      apiKey: VELT_API_KEY,
+      authToken: VELT_AUTH_TOKEN,
+      userProperties: {
+        organizationId: user_properties[:organizationId],
+        email: user_properties[:email],
+        isAdmin: user_properties[:isAdmin] || false
+      }
+    }
+  }
+
+  begin
+    http = Net::HTTP.new(url.host, url.port)
+    http.use_ssl = true
+
+    request = Net::HTTP::Post.new(url)
+    request["Content-Type"] = "application/json"
+    request.body = body.to_json
+
+    response = http.request(request)
+
+    unless response.is_a?(Net::HTTPSuccess)
+      raise "HTTP error! status: #{response.code}"
+    end
+
+    data = JSON.parse(response.body)
+    data.dig("result", "data", "token")
+  rescue => error
+    puts "Error generating JWT token: #{error}"
+    raise error
+  end
+end
+
+get '/generate-velt-jwt-token' do
+  begin
+    user_id = params['userId']
+    organization_id = params['organizationId']
+    email = params['email']
+    is_admin = params['isAdmin'] == 'true'
+
+    token = generate_velt_jwt_token(user_id, {
+      organizationId: organization_id,
+      email: email,
+      isAdmin: is_admin
+    })
+
+    { token: token }.to_json
+  rescue => error
+    status 500
+    { error: "Failed to generate token" }.to_json
+  end
+end
+```
+
+```php PHP Server Endpoint
+<?php
+require 'vendor/autoload.php';
+
+// Your auth token from Velt Console
+$VELT_AUTH_TOKEN = "your-generated-auth-token-from-console";
+$VELT_API_KEY = "YOUR_VELT_API_KEY";
+
+function generateVeltJWTToken($userId, $userProperties = []) {
+    $url = "https://api.velt.dev/v2/auth/token";
+
+    $body = [
+        "data" => [
+            "userId" => $userId,
+            "apiKey" => $VELT_API_KEY,
+            "authToken" => $VELT_AUTH_TOKEN,
+            "userProperties" => [
+                "organizationId" => $userProperties["organizationId"] ?? null,
+                "email" => $userProperties["email"] ?? null,
+                "isAdmin" => $userProperties["isAdmin"] ?? false
+            ]
+        ]
+    ];
+
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json'
+    ]);
+
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+    if (curl_errno($ch) || $httpCode !== 200) {
+        throw new Exception("HTTP error! status: {$httpCode}");
+    }
+
+    curl_close($ch);
+
+    $data = json_decode($response, true);
+    return $data["result"]["data"]["token"] ?? null;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && $_SERVER['REQUEST_URI'] === '/generate-velt-jwt-token') {
+    try {
+        $userId = $_GET['userId'] ?? null;
+        $organizationId = $_GET['organizationId'] ?? null;
+        $email = $_GET['email'] ?? null;
+        $isAdmin = ($_GET['isAdmin'] ?? 'false') === 'true';
+
+        $token = generateVeltJWTToken($userId, [
+            "organizationId" => $organizationId,
+            "email" => $email,
+            "isAdmin" => $isAdmin
+        ]);
+
+        header('Content-Type: application/json');
+        echo json_encode(["token" => $token]);
+    } catch (Exception $error) {
+        http_response_code(500);
+        echo json_encode(["error" => "Failed to generate token"]);
+    }
+}
+?>
+```
+</CodeGroup>
+
+## Token Refresh
+
+JWT tokens expire after 48 hours from generation. Handle token expiration by subscribing to the error event and refreshing tokens when needed:
+
+<CodeGroup>
+```jsx React Token Refresh
+import { useVeltEventCallback } from "@veltdev/react";
+
+export default function AuthComponent() {
+  const errorEvent = useVeltEventCallback('error');
 
   useEffect(() => {
-    if (client) {
-      const contacts = [
-        {
-          userId: 'user1',
-          name: 'Alice Johnson',
-          email: 'alice@example.com',
-          photoUrl: 'https://i.pravatar.cc/301'
-        },
-        {
-          userId: 'user2',
-          name: 'Bob Smith',
-          email: 'bob@example.com',
-          photoUrl: 'https://i.pravatar.cc/302'
-        }
-      ];
-
-      client.setContacts(contacts);
+    if (errorEvent?.code === "token_expired") {
+      // Generate new JWT token from your server
+      fetch("/api/auth/refresh-token")
+        .then(res => res.json())
+        .then(data => {
+          // Re-authenticate with new token
+          useIdentify(user, { authToken: data.newToken });
+        });
     }
-  }, [client]);
+  }, [errorEvent]);
 
-  return (
-    <div>
-      {/* Your app content */}
-    </div>
-  );
+  return <div>Authentication Component</div>;
 }
 ```
-</CodeGroup>
 
-</Tab>
-
-<Tab title="Angular">
-
-<CodeGroup>
-```jsx Angular Contacts Setup
-import { Component } from '@angular/core';
-import { initVelt } from '@veltdev/client';
-
-@Component({
-  selector: 'app-root',
-  template: `<div><!-- Your app content --></div>`
-})
-export class AppComponent {
-  client: any;
-
-  async ngOnInit() {
-    this.client = await initVelt('YOUR_VELT_API_KEY');
-
-    const contacts = [
-      {
-        userId: 'user1',
-        name: 'Alice Johnson',
-        email: 'alice@example.com',
-        photoUrl: 'https://i.pravatar.cc/301'
-      },
-      {
-        userId: 'user2',
-        name: 'Bob Smith',
-        email: 'bob@example.com',
-        photoUrl: 'https://i.pravatar.cc/302'
-      }
-    ];
-
-    this.client.setContacts(contacts);
+```js Other Frameworks Token Refresh
+// Subscribe to error events to handle token expiration
+client.on('error').subscribe((error) => {
+  if (error?.code === "token_expired") {
+    // Generate new JWT token from your server
+    fetch("/api/auth/refresh-token")
+      .then(res => res.json())
+      .then(data => {
+        // Re-authenticate with new token
+        client.identify(user, { authToken: data.newToken });
+      });
   }
-}
+});
 ```
 </CodeGroup>
 
-</Tab>
-
-<Tab title="Vue.js">
-
-<CodeGroup>
-```js Vue.js Contacts Setup
-import { initVelt } from '@veltdev/client';
-
-export default {
-  name: 'App',
-  data() {
-    return {
-      client: null
-    }
-  },
-  async mounted() {
-    this.client = await initVelt('YOUR_VELT_API_KEY');
-
-    const contacts = [
-      {
-        userId: 'user1',
-        name: 'Alice Johnson',
-        email: 'alice@example.com',
-        photoUrl: 'https://i.pravatar.cc/301'
-      },
-      {
-        userId: 'user2',
-        name: 'Bob Smith',
-        email: 'bob@example.com',
-        photoUrl: 'https://i.pravatar.cc/302'
-      }
-    ];
-
-    this.client.setContacts(contacts);
-  }
-}
-```
-</CodeGroup>
-
-</Tab>
-
-<Tab title="HTML">
-
-<CodeGroup>
-```js HTML Contacts Setup
-const contacts = [
-  {
-    userId: 'user1',
-    name: 'Alice Johnson',
-    email: 'alice@example.com',
-    photoUrl: 'https://i.pravatar.cc/301'
-  },
-  {
-    userId: 'user2',
-    name: 'Bob Smith',
-    email: 'bob@example.com',
-    photoUrl: 'https://i.pravatar.cc/302'
-  }
-];
-
-Velt.setContacts(contacts);
-```
-
-```html Complete HTML with Contacts
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>My App with Contacts</title>
-  <script type="module" src="https://cdn.velt.dev/lib/sdk@latest/velt.js" onload="loadVelt()"></script>
-  <script>
-    async function loadVelt() {
-      await Velt.init("YOUR_VELT_API_KEY");
-
-      // Set up contacts for @mentions
-      const contacts = [
-        {
-          userId: 'user1',
-          name: 'Alice Johnson',
-          email: 'alice@example.com',
-          photoUrl: 'https://i.pravatar.cc/301'
-        },
-        {
-          userId: 'user2',
-          name: 'Bob Smith',
-          email: 'bob@example.com',
-          photoUrl: 'https://i.pravatar.cc/302'
-        }
-      ];
-
-      Velt.setContacts(contacts);
-    }
-  </script>
-</head>
-<body>
-  <h1>My Collaborative App</h1>
-  <velt-comments></velt-comments>
-  <!-- Your app content -->
-</body>
-</html>
-```
-</CodeGroup>
-
-</Tab>
-</Tabs>
+<Info>
+**Security Benefits of JWT Tokens:**
+- Server-side validation of user identity
+- Protection against client-side data manipulation
+- Secure user authentication without exposing sensitive data
+- Token expiration for enhanced security
+</Info>
 
 ## Detect if Velt SDK is Initialized
 
@@ -542,522 +540,3 @@ subscription?.unsubscribe();
 
 </Tab>
 </Tabs>
-
-
-## JWT Authentication Tokens
-
-For enhanced security, you can use JWT tokens to authenticate users instead of passing user data directly in the client-side code. This provides additional layer of security by verifying user identity on the server side.
-
-<Warning>
-**Critical JWT Token Requirements:**
-- JWT tokens must be generated server-side using your auth token from the Velt Console
-- Never expose JWT tokens or auth tokens in client-side code
-- Tokens expire after 48 hours and need to be refreshed
-- Include the JWT token in the `authToken` field when calling `identify()`
-</Warning>
-
-### Step 1: Enable JWT Tokens in Console
-
-First, enable JWT tokens in your Velt Console:
-
-1. Go to [console.velt.dev](https://console.velt.dev/dashboard/config/general)
-2. Enable the toggle for `Require JWT Token` (listed at the bottom of the page)
-
-<Warning>JWT tokens won't work unless you enable this setting in your console.</Warning>
-
-### Step 2: Generate Auth Token
-
-You need an auth token to generate JWT tokens. Generate this from the Velt Console:
-
-- Open the Velt Console at [console.velt.dev](https://console.velt.dev) and navigate to your project dashboard.
-
-### Step 3: Navigate to Auth Token Section
-
-In your project dashboard, find the Auth Token section in the settings or security area.
-
-### Step 4: Click Generate Token Button
-
-Under the Auth Token section, click on the "Generate Token" button to create a new authentication token:
-
-<Frame>
-![](/images/auth-token-generate.png)
-</Frame>
-
-### Step 5: Copy the Generated Token
-
-Once generated, securely copy the token. This token will be used in your server-side code for JWT token generation:
-
-<Frame>
-![](/images/customization/auth-token.png)
-</Frame>
-
-<Warning>Store auth tokens securely on your server-side environment and never expose them in client-side code.</Warning>
-
-<Tip>Auth tokens are long-lived and should be rotated periodically for security best practices.</Tip>
-
-### Step 6: Create Server Endpoint for JWT Token Generation
-
-Create a server endpoint that generates and serves JWT tokens to your client:
-
-<CodeGroup>
-```js Node.js Server Endpoint
-const express = require('express');
-const app = express();
-const PORT = 8080;
-
-// Your auth token from Velt Console
-const VELT_AUTH_TOKEN = "your-generated-auth-token-from-console";
-
-async function generateVeltJWTToken(userId, userProperties = {}) {
-  const url = "https://api.velt.dev/v1/auth/token/get";
-  const body = {
-    data: {
-      userId: userId,
-      apiKey: "YOUR_VELT_API_KEY",
-      authToken: VELT_AUTH_TOKEN,
-      userProperties: {
-        organizationId: userProperties.organizationId,
-        email: userProperties.email,
-        isAdmin: userProperties.isAdmin || false
-      }
-    }
-  };
-
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const data = await response.json();
-    return data?.result?.data?.token;
-  } catch (error) {
-    console.error("Error generating JWT token:", error);
-    throw error;
-  }
-}
-
-// Endpoint to generate JWT tokens
-app.get('/generate-velt-jwt-token', async (req, res) => {
-  try {
-    const { userId, organizationId, email, isAdmin } = req.query;
-    const token = await generateVeltJWTToken(userId, {
-      organizationId,
-      email,
-      isAdmin: isAdmin === 'true'
-    });
-    res.json({ token });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to generate token' });
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`JWT Server listening on port ${PORT}`);
-});
-```
-
-```python Python Server Endpoint
-from flask import Flask, request, jsonify
-import requests
-import os
-
-app = Flask(__name__)
-
-# Your auth token from Velt Console
-VELT_AUTH_TOKEN = "your-generated-auth-token-from-console"
-VELT_API_KEY = "YOUR_VELT_API_KEY"
-
-def generate_velt_jwt_token(user_id, user_properties=None):
-    url = "https://api.velt.dev/v1/auth/token/get"
-
-    if user_properties is None:
-        user_properties = {}
-
-    body = {
-        "data": {
-            "userId": user_id,
-            "apiKey": VELT_API_KEY,
-            "authToken": VELT_AUTH_TOKEN,
-            "userProperties": {
-                "organizationId": user_properties.get("organizationId"),
-                "email": user_properties.get("email"),
-                "isAdmin": user_properties.get("isAdmin", False)
-            }
-        }
-    }
-
-    try:
-        response = requests.post(url, json=body)
-        response.raise_for_status()
-        data = response.json()
-        return data.get("result", {}).get("data", {}).get("token")
-    except Exception as error:
-        print(f"Error generating JWT token: {error}")
-        raise error
-
-@app.route('/generate-velt-jwt-token', methods=['GET'])
-def get_jwt_token():
-    try:
-        user_id = request.args.get('userId')
-        organization_id = request.args.get('organizationId')
-        email = request.args.get('email')
-        is_admin = request.args.get('isAdmin') == 'true'
-
-        token = generate_velt_jwt_token(user_id, {
-            "organizationId": organization_id,
-            "email": email,
-            "isAdmin": is_admin
-        })
-
-        return jsonify({"token": token})
-    except Exception as error:
-        return jsonify({"error": "Failed to generate token"}), 500
-
-if __name__ == '__main__':
-    app.run(port=8080)
-```
-
-```ruby Ruby Server Endpoint
-require 'sinatra'
-require 'net/http'
-require 'json'
-
-# Your auth token from Velt Console
-VELT_AUTH_TOKEN = "your-generated-auth-token-from-console"
-VELT_API_KEY = "YOUR_VELT_API_KEY"
-
-def generate_velt_jwt_token(user_id, user_properties = {})
-  url = URI("https://api.velt.dev/v1/auth/token/get")
-
-  body = {
-    data: {
-      userId: user_id,
-      apiKey: VELT_API_KEY,
-      authToken: VELT_AUTH_TOKEN,
-      userProperties: {
-        organizationId: user_properties[:organizationId],
-        email: user_properties[:email],
-        isAdmin: user_properties[:isAdmin] || false
-      }
-    }
-  }
-
-  begin
-    http = Net::HTTP.new(url.host, url.port)
-    http.use_ssl = true
-
-    request = Net::HTTP::Post.new(url)
-    request["Content-Type"] = "application/json"
-    request.body = body.to_json
-
-    response = http.request(request)
-
-    unless response.is_a?(Net::HTTPSuccess)
-      raise "HTTP error! status: #{response.code}"
-    end
-
-    data = JSON.parse(response.body)
-    data.dig("result", "data", "token")
-  rescue => error
-    puts "Error generating JWT token: #{error}"
-    raise error
-  end
-end
-
-get '/generate-velt-jwt-token' do
-  begin
-    user_id = params['userId']
-    organization_id = params['organizationId']
-    email = params['email']
-    is_admin = params['isAdmin'] == 'true'
-
-    token = generate_velt_jwt_token(user_id, {
-      organizationId: organization_id,
-      email: email,
-      isAdmin: is_admin
-    })
-
-    { token: token }.to_json
-  rescue => error
-    status 500
-    { error: "Failed to generate token" }.to_json
-  end
-end
-```
-
-```php PHP Server Endpoint
-<?php
-require 'vendor/autoload.php';
-
-// Your auth token from Velt Console
-$VELT_AUTH_TOKEN = "your-generated-auth-token-from-console";
-$VELT_API_KEY = "YOUR_VELT_API_KEY";
-
-function generateVeltJWTToken($userId, $userProperties = []) {
-    $url = "https://api.velt.dev/v1/auth/token/get";
-
-    $body = [
-        "data" => [
-            "userId" => $userId,
-            "apiKey" => $VELT_API_KEY,
-            "authToken" => $VELT_AUTH_TOKEN,
-            "userProperties" => [
-                "organizationId" => $userProperties["organizationId"] ?? null,
-                "email" => $userProperties["email"] ?? null,
-                "isAdmin" => $userProperties["isAdmin"] ?? false
-            ]
-        ]
-    ];
-
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json'
-    ]);
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-
-    if (curl_errno($ch) || $httpCode !== 200) {
-        throw new Exception("HTTP error! status: {$httpCode}");
-    }
-
-    curl_close($ch);
-
-    $data = json_decode($response, true);
-    return $data["result"]["data"]["token"] ?? null;
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && $_SERVER['REQUEST_URI'] === '/generate-velt-jwt-token') {
-    try {
-        $userId = $_GET['userId'] ?? null;
-        $organizationId = $_GET['organizationId'] ?? null;
-        $email = $_GET['email'] ?? null;
-        $isAdmin = ($_GET['isAdmin'] ?? 'false') === 'true';
-
-        $token = generateVeltJWTToken($userId, [
-            "organizationId" => $organizationId,
-            "email" => $email,
-            "isAdmin" => $isAdmin
-        ]);
-
-        header('Content-Type: application/json');
-        echo json_encode(["token" => $token]);
-    } catch (Exception $error) {
-        http_response_code(500);
-        echo json_encode(["error" => "Failed to generate token"]);
-    }
-}
-?>
-```
-</CodeGroup>
-
-## Signing in a User
-There are two ways to authenticate a user in Velt.
-
-1. Using an Auth Provider (recommended)
-2. Using Identify method
-
-#### **1. Auth Provider (Recommended)**
-
-With this approach, you configure an authentication provider that automatically handles token generation and refresh:
-
-<CodeGroup>
-```jsx React / Next.js Auth Provider
-import { VeltProvider } from '@veltdev/react';
-
-export default function App() {
-    const user = {
-      userId: "user123",
-      organizationId: "org123",
-      name: "John Doe",
-      email: "john@example.com",
-      photoUrl: "https://i.pravatar.cc/300",
-      color: "#FF6B6B",
-      textColor: "#FFFFFF"
-    };
-
-  return (
-    <VeltProvider authProvider={{
-      user,
-      retryConfig: { retryCount: 3, retryDelay: 1000 },
-      generateToken: async () => {
-        // Call your server endpoint to generate JWT token
-        const response = await fetch('/generate-velt-jwt-token?' + new URLSearchParams({
-          userId: user.userId,
-          organizationId: user.organizationId,
-          email: user.email
-        }));
-        const data = await response.json();
-        return data.token;
-      }
-    }}>
-      {/* Your app content */}
-    </VeltProvider>
-  );
-}
-```
-
-```js Other Frameworks Auth Provider
-    const user = {
-      userId: "user123",
-      organizationId: "org123",
-      name: "John Doe",
-      email: "john@example.com",
-      photoUrl: "https://i.pravatar.cc/300",
-      color: "#FF6B6B",
-      textColor: "#FFFFFF"
-    };
-
-Velt.setVeltAuthProvider({
-  user,
-  retryConfig: { retryCount: 3, retryDelay: 1000 },
-  generateToken: async () => {
-    // Call your server endpoint to generate JWT token
-    const response = await fetch('/generate-velt-jwt-token?' + new URLSearchParams({
-      userId: user.userId,
-      organizationId: user.organizationId,
-      email: user.email
-    }));
-    const data = await response.json();
-    return data.token;
-  }
-});
-```
-</CodeGroup>
-
-<Tip>The Auth Provider method is recommended because Velt automatically handles token refresh and retry logic for you.</Tip>
-
-#### **2. Manual Identify (Alternative)**
-
-In this approach, you manually call the `identify` method with JWT tokens. This gives you more control but requires you to handle token refresh yourself:
-
-<CodeGroup>
-```jsx React / Next.js Manual Identify
-import { useIdentify } from "@veltdev/react";
-
-export default function AuthComponent() {
-  const user = {
-    userId: "user123",
-    organizationId: "org123",
-    name: "John Doe",
-    email: "john@example.com",
-    photoUrl: "https://i.pravatar.cc/300",
-    color: "#FF6B6B",
-    textColor: "#FFFFFF"
-  };
-
-  // Fetch JWT token from your server
-  const fetchJWTToken = async () => {
-    const response = await fetch('/generate-velt-jwt-token?' + new URLSearchParams({
-      userId: user.userId,
-      organizationId: user.organizationId,
-      email: user.email
-    }));
-    const data = await response.json();
-    return data.token;
-  };
-
-  useIdentify(user, {
-    authToken: await fetchJWTToken()
-  });
-
-  return <div>User authenticated with enhanced security</div>;
-}
-```
-
-```js Other Frameworks Manual Identify
-      const user = {
-        userId: "user123",
-        organizationId: "org123",
-        name: "John Doe",
-        email: "john@example.com",
-        photoUrl: "https://i.pravatar.cc/300",
-        color: "#FF6B6B",
-        textColor: "#FFFFFF"
-      };
-
-// Fetch JWT token from your server
-const fetchJWTToken = async () => {
-  const response = await fetch('/generate-velt-jwt-token?' + new URLSearchParams({
-    userId: user.userId,
-    organizationId: user.organizationId,
-    email: user.email
-  }));
-  const data = await response.json();
-  return data.token;
-};
-
-await Velt.identify(user, {
-  authToken: await fetchJWTToken()
-});
-```
-</CodeGroup>
-
-<Info>
-**When to use Manual Identify:**
-- When you need more control over when tokens are generated and refreshed
-- When integrating with existing authentication flows
-- When you need to force reset user authentication state
-</Info>
-
-## Token Refresh
-
-JWT tokens expire after 48 hours from generation. Handle token expiration by subscribing to the error event and refreshing tokens when needed:
-
-<CodeGroup>
-```jsx React Token Refresh
-import { useVeltEventCallback } from "@veltdev/react";
-
-export default function AuthComponent() {
-  const errorEvent = useVeltEventCallback('error');
-
-  useEffect(() => {
-    if (errorEvent?.code === "token_expired") {
-      // Generate new JWT token from your server
-      fetch("/api/auth/refresh-token")
-        .then(res => res.json())
-        .then(data => {
-          // Re-authenticate with new token
-          useIdentify(user, { authToken: data.newToken });
-        });
-    }
-  }, [errorEvent]);
-
-  return <div>Authentication Component</div>;
-}
-```
-
-```js Other Frameworks Token Refresh
-// Subscribe to error events to handle token expiration
-client.on('error').subscribe((error) => {
-  if (error?.code === "token_expired") {
-    // Generate new JWT token from your server
-    fetch("/api/auth/refresh-token")
-      .then(res => res.json())
-      .then(data => {
-        // Re-authenticate with new token
-        client.identify(user, { authToken: data.newToken });
-      });
-  }
-});
-```
-</CodeGroup>
-
-<Info>
-**Security Benefits of JWT Tokens:**
-- Server-side validation of user identity
-- Protection against client-side data manipulation
-- Secure user authentication without exposing sensitive data
-- Token expiration for enhanced security
-</Info>

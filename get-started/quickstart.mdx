@@ -76,7 +76,13 @@ In the Velt Console, add your app's domain to "Managed Domains" to whitelist it 
 
 ### Step 4: Initialize Velt
 
-Add your API key and render collaborative components to verify setup.
+Initialize the SDK and render the base collaborative components. Pick your framework and:
+- React: wrap your app with `VeltProvider` and pass your API key.
+- Angular/Vue/HTML: call the init function with your API key to bootstrap the client.
+
+This confirms the SDK is loaded and ready for adding features in later steps.
+
+See the tabs below for your specific implementation:
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -84,15 +90,14 @@ Add your API key and render collaborative components to verify setup.
 <Warning>If using Next.js, add <code>'use client'</code> directive at the top of files containing Velt components to ensure proper client-side rendering.</Warning>
 
 <CodeGroup>
-```jsx Step 1: Basic Setup
+```jsx Step 1: Provider Setup
 'use client'; // MAKE SURE TO INCLUDE 'use client' for Next.js implementation
 
-import { VeltProvider, VeltComments } from '@veltdev/react';
+import { VeltProvider } from '@veltdev/react';
 
 export default function App() {
   return (
     <VeltProvider apiKey="YOUR_VELT_API_KEY">
-      <VeltComments />
       {/* Your app content */}
     </VeltProvider>
   );
@@ -142,7 +147,7 @@ export class AppComponent implements OnInit {
 <Tab title="Vue.js">
 
 <CodeGroup>
-```js Step 1: Main.js Configuration
+```js Step 1: Main.js Setup
 import Vue from 'vue';
 import App from './App.vue';
 
@@ -172,7 +177,7 @@ export default {
 
 <CodeGroup>
 
-```js Step 1: Initialize Velt
+```js Step 1: Script Include and Init
 <script type="module" src="https://cdn.velt.dev/lib/sdk@latest/velt.js" onload="loadVelt()"></script>
   <script>
     async function loadVelt() {
@@ -187,9 +192,13 @@ export default {
 
 ### Step 5: Authenticate Users
 
+There are two ways to authenticate in Velt. Pick one based on your needs:
+- **Auth Provider (recommended)**: Configure once and Velt will **fetch/refresh tokens automatically**. See details in the [Key Concepts](/key-concepts/overview#authenticate-a-user).
+- **Identify API (more personable)**: Call `identify(user, options)` directly where you need it for more control. Learn more in the [Key Concepts](/key-concepts/overview#authenticate-a-user).
+
 <Warning>
-**Critical Authentication Requirements:**
-- You must configure `authProvider` on the `VeltProvider` during your app's initialization.
+**Critical Authentication Requirement:**
+- You must authenticate the user. The recommended path is configuring `authProvider` on `VeltProvider` during initialization.
 </Warning>
 
 You first need to create a user object with the required user information. The `user` object should include the following fields: `userId`, `organizationId`, `name`, `email`, and `photoUrl`.
@@ -207,6 +216,10 @@ const user = {
 
 Then, you need to provide a function that generates a Velt JWT token from your backend. You can learn more about generating a Velt JWT token [here](/api-reference/rest-apis/v2/auth/generate-token).
 
+<Tip>
+During development, `generateToken` can be omitted; however, if you are using the identify() method for production it is highly recommended to provide `generateToken` for basic security and seamless token refresh. See both approaches in the [Key Concepts](/key-concepts/overview#authenticate-a-user).
+</Tip>
+
 <Tabs>
 <Tab title="React / Next.js">
 
@@ -223,7 +236,6 @@ return (
       }
     }}
   >
-    <VeltComments />
     {/* Your app content */}
   </VeltProvider>
 );
@@ -282,33 +294,20 @@ Velt.setVeltAuthProvider({
 
 A **Document** represents a shared collaborative space where users can interact. The `setDocument` method initializes this space and takes a unique `documentId` and optional `metadata`. 
 
+By default, users can only access documents within their own organization. Use this to set the document for the current organization the user is logged into.
+
 Learn more about documents [here](/key-concepts/overview#documents).
 
+To subscribe to multiple documents in a single call, use `setDocuments` and pass an array; see the [API reference](/api-reference/sdk/api/api-methods#setdocuments).
+
 <Warning>The SDK will not work without initializing the document.</Warning>
-
-#### Initialize Document for Current Organization
-
-By default, users can only access documents within their own organization. Use this to set the document for the current organization the user is logged into.
 
 <Tabs>
 <Tab title="React / Next.js">
 
 <CodeGroup>
-```jsx React / Next.js with Hooks
-import { useSetDocument } from '@veltdev/react';
-
-export default function DocumentComponent() {
-  useSetDocument('unique-document-id', { documentName: 'Document Name' });
-
-  return (
-    <div>
-      {/* Your document content */}
-    </div>
-  );
-}
-```
-
-```jsx React / Next.js (Non-hooks)
+```jsx React / Next.js
+import { useEffect } from 'react';
 import { useVeltClient } from '@veltdev/react';
 
 export default function DocumentComponent() {
@@ -316,7 +315,9 @@ export default function DocumentComponent() {
 
   useEffect(() => {
     if (client) {
-      client.setDocument('unique-document-id', { documentName: 'Document Name' });
+      client.setDocuments([
+        { id: 'unique-document-id', metadata: { documentName: 'Document Name' } }
+      ]);
     }
   }, [client]);
 
@@ -348,7 +349,9 @@ export class DocumentComponent {
   async ngOnInit() {
     this.client = await initVelt('YOUR_VELT_API_KEY');
     // Set document for current organization
-    this.client.setDocument('unique-document-id', { documentName: 'Document Name' });
+    this.client.setDocuments([
+      { id: 'unique-document-id', metadata: { documentName: 'Document Name' } }
+    ]);
   }
 }
 ```
@@ -360,7 +363,9 @@ export class DocumentService {
 
   async initializeDocument() {
     if (this.client) {
-      this.client.setDocument('unique-document-id', { documentName: 'Document Name' });
+      this.client.setDocuments([
+        { id: 'unique-document-id', metadata: { documentName: 'Document Name' } }
+      ]);
     }
   }
 }
@@ -385,7 +390,9 @@ export default {
   async mounted() {
     this.client = await initVelt('YOUR_VELT_API_KEY');
     // Set document for current organization
-    this.client.setDocument('unique-document-id', { documentName: 'Document Name' });
+    this.client.setDocuments([
+      { id: 'unique-document-id', metadata: { documentName: 'Document Name' } }
+    ]);
   }
 }
 ```
@@ -401,7 +408,9 @@ export default {
     onMounted(async () => {
       client.value = await initVelt('YOUR_VELT_API_KEY');
       // Set document for current organization
-      client.value.setDocument('unique-document-id', { documentName: 'Document Name' });
+      client.value.setDocuments([
+        { id: 'unique-document-id', metadata: { documentName: 'Document Name' } }
+      ]);
     });
 
     return {
@@ -423,7 +432,9 @@ async function loadVelt() {
   await Velt.init("YOUR_VELT_API_KEY");
 
   // Set document for current organization
-  Velt.setDocument('unique-document-id', { documentName: 'Document Name' });
+  Velt.setDocuments([
+    { id: 'unique-document-id', metadata: { documentName: 'Document Name' } }
+  ]);
 }
 ```
 
@@ -437,7 +448,9 @@ async function loadVelt() {
   <script>
     async function loadVelt() {
       await Velt.init("YOUR_VELT_API_KEY");
-      Velt.setDocument('unique-document-id', { documentName: 'Document Name' });
+      Velt.setDocuments([
+        { id: 'unique-document-id', metadata: { documentName: 'Document Name' } }
+      ]);
     }
   </script>
 </head>
@@ -453,13 +466,15 @@ async function loadVelt() {
 </Tab>
 </Tabs>
 
-### Step 7: Install Velt Components
+### Step 7: Install Velt Feature Components
 
 Add the `VeltComments`, `VeltCommentTool`, and `VeltPresence` components to enable comments and presence features.
 
+Use the tabs below to see the setup for React, Angular, Vue, and HTML.
+
 <Tabs>
 <Tab title="React / Next.js">
-In `App.js`, add `VeltComments` to enable the Comments functionality.
+In your root component add these features:
 
 <CodeGroup>
 ```jsx App.js
@@ -471,7 +486,11 @@ import { VeltProvider, VeltComments } from '@veltdev/react';
   <YourDocument/>
 </VeltProvider>
 ```
+</CodeGroup>
 
+In your document component add these:
+
+<CodeGroup>
 ```jsx YourDocument.js
 import { VeltCommentTool, VeltPresence } from '@veltdev/react';
 
@@ -484,14 +503,18 @@ import { VeltCommentTool, VeltPresence } from '@veltdev/react';
 </Tab>
 
 <Tab title="Angular">
-In your `app.component.html`, add `<velt-comments>` to enable the Comments functionality. In your document component's HTML, add `<velt-presence>` and `<velt-comment-tool>`.
+In your root component add these features:
 
 <CodeGroup>
 ```html app.component.html
 <velt-comments></velt-comments>
 <!-- Your other components -->
 ```
+</CodeGroup>
 
+In your document component add these:
+
+<CodeGroup>
 ```html your-document.component.html
 <velt-presence></velt-presence>
 <velt-comment-tool></velt-comment-tool>
@@ -501,7 +524,7 @@ In your `app.component.html`, add `<velt-comments>` to enable the Comments funct
 </Tab>
 
 <Tab title="Vue.js">
-In your `App.vue` template, add `<velt-comments>` to enable the Comments functionality. In your document component's template, add `<velt-presence>` and `<velt-comment-tool>`.
+In your root component add these features:
 
 <CodeGroup>
 ```html App.vue
@@ -512,7 +535,11 @@ In your `App.vue` template, add `<velt-comments>` to enable the Comments functio
   </div>
 </template>
 ```
+</CodeGroup>
 
+In your document component add these:
+
+<CodeGroup>
 ```html YourDocument.vue
 <template>
   <div>
@@ -526,7 +553,7 @@ In your `App.vue` template, add `<velt-comments>` to enable the Comments functio
 </Tab>
 
 <Tab title="HTML">
-Add the `<velt-comments>`, `<velt-presence>`, and `<velt-comment-tool>` tags inside the `<body>` of your HTML file.
+In your root component add these features (tags inside `<body>`):
 
 ```html index.html
 <body>
@@ -541,16 +568,6 @@ Add the `<velt-comments>`, `<velt-presence>`, and `<velt-comment-tool>` tags ins
 </Tabs>
 
 ### Step 8: Verify Setup
-
-1. Start your development server
-2. Open your app in a browser
-3. You should see a comments panel appear (may be collapsed by default)
-4. Click the comment tool and try adding comments to test functionality
-5. Open a second browser tab (incognito mode) to test multiple user features (eg. presence)
-
-<Tip>If you don't see the comments panel, check your browser console for API key or network errors.</Tip>
-
-## Testing and Debugging
 
 A good first step is to check if the Velt SDK has been initialized correctly. Open your browser's developer console and run the following command:
 ```js
@@ -568,6 +585,10 @@ This should return the document metadata you've set. If it returns an error or `
 1. Open two browser tabs side by side with one in incognito mode
 2. Log in with different users in each tab
 3. You should see user avatars appear showing presence in both tabs
+
+<Tip>If you don't see the comments panel, check your browser console for API key or network errors.</Tip>
+
+## Testing and Debugging
 
 **Common issues:**
 - **"API key invalid" error**: Double-check your API key from the [Velt Console](https://console.velt.dev)
@@ -863,8 +884,9 @@ export default {
 ## Next Steps
 
 Now that you've completed the basic setup, you can explore more advanced Velt features and concepts:
-- **[Key Concepts For New Users](/key-concepts)**: Read through our curated list for an in-depth breakdown of the Velt SDK and cool features.
+- **[Key Concepts](/key-concepts)**: Read through our curated list for an in-depth breakdown of the Velt SDK and cool features.
 - **[Documents and Locations](/key-concepts/overview#documents)**: Learn how to structure your app's collaborative spaces.
 - **[Users and User Groups](/key-concepts/overview#users)**: Configure and manage your users and groups.
 - **[Access Control](/key-concepts/overview#access-control)**: Define permissions to control who can access what.
 - **[Authentication](/key-concepts/overview#authentication)**: Explore more advanced authentication methods.
+ - **[UI Customization](/ui-customization/overview)**: Customize layouts, styling, templates, and actions for Velt components.

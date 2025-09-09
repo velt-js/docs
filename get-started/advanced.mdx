@@ -57,30 +57,37 @@ You need an auth token to generate JWT tokens. You can generate this from the **
 
 ### Step 3: Create Server Endpoint for JWT Token Generation
 
-Create a server endpoint that generates and serves JWT tokens to your client:
+Create a server endpoint that generates and serves JWT tokens to your client.
+
+See our [generate_token API call](/api-reference/rest-apis/v2/auth/generate-token) for more information.
 
 <CodeGroup>
-```js Node.js Server Endpoint
+```js Node.js Server Endpoint expandable lines
 const express = require('express');
 const app = express();
 const PORT = 8080;
 
-// Your auth token from Velt Console
+// Your credentials from Velt Console
+const VELT_API_KEY = "YOUR_VELT_API_KEY";
 const VELT_AUTH_TOKEN = "your-generated-auth-token-from-console";
 
-async function generateVeltJWTToken(userId, userProperties = {}) {
-  const url = "https://api.velt.dev/v2/auth/token";
+async function generateVeltJWTToken(userId, config = {}) {
+  const url = "https://api.velt.dev/v2/auth/generate_token";
+
   const body = {
-    data: {
-      userId: userId,
-      apiKey: "YOUR_VELT_API_KEY",
-      authToken: VELT_AUTH_TOKEN,
-      userProperties: {
-        organizationId: userProperties.organizationId,
-        email: userProperties.email,
-        isAdmin: userProperties.isAdmin || false
-      }
-    }
+    userId: userId,
+    userProperties: {
+      name: config.name,
+      email: config.email,
+      isAdmin: config.isAdmin || false
+    },
+    permissions: config.organizationId
+      ? {
+          resources: [
+            { type: "organization", id: config.organizationId }
+          ]
+        }
+      : undefined
   };
 
   try {
@@ -88,6 +95,8 @@ async function generateVeltJWTToken(userId, userProperties = {}) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "x-velt-api-key": VELT_API_KEY,
+        "x-velt-auth-token": VELT_AUTH_TOKEN
       },
       body: JSON.stringify(body),
     });
@@ -107,9 +116,10 @@ async function generateVeltJWTToken(userId, userProperties = {}) {
 // Endpoint to generate JWT tokens
 app.get('/generate-velt-jwt-token', async (req, res) => {
   try {
-    const { userId, organizationId, email, isAdmin } = req.query;
+    const { userId, organizationId, name, email, isAdmin } = req.query;
     const token = await generateVeltJWTToken(userId, {
       organizationId,
+      name,
       email,
       isAdmin: isAdmin === 'true'
     });
@@ -124,38 +134,44 @@ app.listen(PORT, () => {
 });
 ```
 
-```python Python Server Endpoint
+```python Python Server Endpoint expandable lines
 from flask import Flask, request, jsonify
 import requests
-import os
 
 app = Flask(__name__)
 
-# Your auth token from Velt Console
+# Your credentials from Velt Console
 VELT_AUTH_TOKEN = "your-generated-auth-token-from-console"
 VELT_API_KEY = "YOUR_VELT_API_KEY"
 
-def generate_velt_jwt_token(user_id, user_properties=None):
-    url = "https://api.velt.dev/v2/auth/token"
+def generate_velt_jwt_token(user_id, config=None):
+    url = "https://api.velt.dev/v2/auth/generate_token"
 
-    if user_properties is None:
-        user_properties = {}
+    if config is None:
+        config = {}
 
     body = {
-        "data": {
-            "userId": user_id,
-            "apiKey": VELT_API_KEY,
-            "authToken": VELT_AUTH_TOKEN,
-            "userProperties": {
-                "organizationId": user_properties.get("organizationId"),
-                "email": user_properties.get("email"),
-                "isAdmin": user_properties.get("isAdmin", False)
-            }
+        "userId": user_id,
+        "userProperties": {
+            "name": config.get("name"),
+            "email": config.get("email"),
+            "isAdmin": config.get("isAdmin", False)
         }
     }
 
+    if config.get("organizationId"):
+        body["permissions"] = {
+            "resources": [
+                {"type": "organization", "id": config.get("organizationId")}
+            ]
+        }
+
     try:
-        response = requests.post(url, json=body)
+        response = requests.post(url, json=body, headers={
+            "Content-Type": "application/json",
+            "x-velt-api-key": VELT_API_KEY,
+            "x-velt-auth-token": VELT_AUTH_TOKEN
+        })
         response.raise_for_status()
         data = response.json()
         return data.get("result", {}).get("data", {}).get("token")
@@ -168,11 +184,13 @@ def get_jwt_token():
     try:
         user_id = request.args.get('userId')
         organization_id = request.args.get('organizationId')
+        name = request.args.get('name')
         email = request.args.get('email')
         is_admin = request.args.get('isAdmin') == 'true'
 
         token = generate_velt_jwt_token(user_id, {
             "organizationId": organization_id,
+            "name": name,
             "email": email,
             "isAdmin": is_admin
         })
@@ -185,30 +203,34 @@ if __name__ == '__main__':
     app.run(port=8080)
 ```
 
-```ruby Ruby Server Endpoint
+```ruby Ruby Server Endpoint expandable lines
 require 'sinatra'
 require 'net/http'
 require 'json'
 
-# Your auth token from Velt Console
+# Your credentials from Velt Console
 VELT_AUTH_TOKEN = "your-generated-auth-token-from-console"
 VELT_API_KEY = "YOUR_VELT_API_KEY"
 
-def generate_velt_jwt_token(user_id, user_properties = {})
-  url = URI("https://api.velt.dev/v2/auth/token")
+def generate_velt_jwt_token(user_id, config = {})
+  url = URI("https://api.velt.dev/v2/auth/generate_token")
 
   body = {
-    data: {
-      userId: user_id,
-      apiKey: VELT_API_KEY,
-      authToken: VELT_AUTH_TOKEN,
-      userProperties: {
-        organizationId: user_properties[:organizationId],
-        email: user_properties[:email],
-        isAdmin: user_properties[:isAdmin] || false
-      }
+    userId: user_id,
+    userProperties: {
+      name: config[:name],
+      email: config[:email],
+      isAdmin: config[:isAdmin] || false
     }
   }
+
+  if config[:organizationId]
+    body[:permissions] = {
+      resources: [
+        { type: 'organization', id: config[:organizationId] }
+      ]
+    }
+  end
 
   begin
     http = Net::HTTP.new(url.host, url.port)
@@ -216,6 +238,8 @@ def generate_velt_jwt_token(user_id, user_properties = {})
 
     request = Net::HTTP::Post.new(url)
     request["Content-Type"] = "application/json"
+    request["x-velt-api-key"] = VELT_API_KEY
+    request["x-velt-auth-token"] = VELT_AUTH_TOKEN
     request.body = body.to_json
 
     response = http.request(request)
@@ -236,11 +260,13 @@ get '/generate-velt-jwt-token' do
   begin
     user_id = params['userId']
     organization_id = params['organizationId']
+    name = params['name']
     email = params['email']
     is_admin = params['isAdmin'] == 'true'
 
     token = generate_velt_jwt_token(user_id, {
       organizationId: organization_id,
+      name: name,
       email: email,
       isAdmin: is_admin
     })
@@ -253,36 +279,42 @@ get '/generate-velt-jwt-token' do
 end
 ```
 
-```php PHP Server Endpoint
+```php PHP Server Endpoint expandable lines
 <?php
 require 'vendor/autoload.php';
 
-// Your auth token from Velt Console
+// Your credentials from Velt Console
 $VELT_AUTH_TOKEN = "your-generated-auth-token-from-console";
 $VELT_API_KEY = "YOUR_VELT_API_KEY";
 
-function generateVeltJWTToken($userId, $userProperties = []) {
-    $url = "https://api.velt.dev/v2/auth/token";
+function generateVeltJWTToken($userId, $config = []) {
+    $url = "https://api.velt.dev/v2/auth/generate_token";
 
     $body = [
-        "data" => [
-            "userId" => $userId,
-            "apiKey" => $VELT_API_KEY,
-            "authToken" => $VELT_AUTH_TOKEN,
-            "userProperties" => [
-                "organizationId" => $userProperties["organizationId"] ?? null,
-                "email" => $userProperties["email"] ?? null,
-                "isAdmin" => $userProperties["isAdmin"] ?? false
-            ]
+        "userId" => $userId,
+        "userProperties" => [
+            "name" => $config["name"] ?? null,
+            "email" => $config["email"] ?? null,
+            "isAdmin" => $config["isAdmin"] ?? false
         ]
     ];
+
+    if (!empty($config["organizationId"])) {
+        $body["permissions"] = [
+            "resources" => [
+                ["type" => "organization", "id" => $config["organizationId"]]
+            ]
+        ];
+    }
 
     $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json'
+        'Content-Type: application/json',
+        'x-velt-api-key: ' . $VELT_API_KEY,
+        'x-velt-auth-token: ' . $VELT_AUTH_TOKEN
     ]);
 
     $response = curl_exec($ch);
@@ -302,11 +334,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && $_SERVER['REQUEST_URI'] === '/genera
     try {
         $userId = $_GET['userId'] ?? null;
         $organizationId = $_GET['organizationId'] ?? null;
+        $name = $_GET['name'] ?? null;
         $email = $_GET['email'] ?? null;
         $isAdmin = ($_GET['isAdmin'] ?? 'false') === 'true';
 
         $token = generateVeltJWTToken($userId, [
             "organizationId" => $organizationId,
+            "name" => $name,
             "email" => $email,
             "isAdmin" => $isAdmin
         ]);

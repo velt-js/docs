@@ -101,6 +101,240 @@ Initialize the Velt client by following the [Velt Setup Docs](/get-started/setup
 </Tab>
 </Tabs>
 
+<Note>
+We recommend using the default UI for simplicity and velocity. If you want to customize behavior and access control, the following APIs are available: [Editor](/realtime-collaboration/single-editor-mode/customize-behavior#editor) and [Viewer](/realtime-collaboration/single-editor-mode/customize-behavior#viewer).
+</Note>
+
+### Step 4: Set the editor (necessary)
+
+Declare the editor for the current document/session so editing is enabled for one user while others remain read-only. You can set the editor automatically on load or programmatically on an explicit action.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const liveStateSyncElement = useLiveStateSyncUtils();
+
+// Option A: Declare current user as the editor on load
+useEffect(() => {
+  liveStateSyncElement.setUserAsEditor();
+}, []);
+
+// Option B: Programmatically set the current user as the editor
+function becomeEditor() {
+  // No parameters; sets the current user as the editor
+  liveStateSyncElement.setUserAsEditor();
+}
+
+// Example button:
+// <button onClick={becomeEditor}>Become editor</button>
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```html
+<script type="module">
+  // Assume Velt client is already initialized as shown above
+  const liveStateSyncElement = Velt.getLiveStateSyncElement();
+
+  // Option A: Declare current user as the editor on load
+  liveStateSyncElement.setUserAsEditor();
+
+  // Option B: Programmatically set the current user as the editor
+  function becomeEditor() {
+    // No parameters; sets the current user as the editor
+    liveStateSyncElement.setUserAsEditor();
+  }
+</script>
+
+<!-- Example button:
+<button onclick="becomeEditor()">Become editor</button>
+-->
+```
+</Tab>
+</Tabs>
+
+<Note>
+When the editor is set, editing tools should become enabled for that user while other users are placed in read-only mode.
+</Note>
+
+<Warning>
+Ensure the correct user identity is initialized before calling the editor assignment. Otherwise, editor state can be attributed to the wrong user.
+</Warning>
+
+Learn more: [Set User as Editor](/realtime-collaboration/single-editor-mode/customize-behavior#setuseraseditor)
+
+### Step 5: Make the other user a viewer (auto-assigned but reflected in UI)
+
+Non-editor users are automatically viewers. Reflect that state in your UI and optionally enforce a global reset when needed.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+// Reflect viewer vs editor state in UI
+const { isEditor, isEditorOnCurrentTab } = useUserEditorState();
+
+return (
+  <div>
+    <div>Role: {isEditor ? 'Editor' : 'Viewer'}</div>
+    {isEditor && <div>Editing on this tab: {isEditorOnCurrentTab ? 'Yes' : 'No'}</div>}
+  </div>
+);
+
+// Optional: enforce everyone back to viewer state
+// const liveStateSyncElement = useLiveStateSyncUtils();
+// liveStateSyncElement.resetUserAccess();
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```html
+<script type="module">
+  const liveStateSyncElement = Velt.getLiveStateSyncElement();
+
+  // Reflect viewer vs editor state in UI
+  const subscription = liveStateSyncElement.isUserEditor().subscribe((userEditorAccess) => {
+    const role = userEditorAccess?.isEditor ? 'Editor' : 'Viewer';
+    console.log('Role:', role, 'Editor on current tab:', userEditorAccess?.isEditorOnCurrentTab);
+  });
+
+  // Optional: enforce everyone back to viewer state
+  // liveStateSyncElement.resetUserAccess();
+</script>
+```
+</Tab>
+</Tabs>
+
+See: [Is User Editor](/realtime-collaboration/single-editor-mode/customize-behavior#isusereditor) and [Reset User Access](/realtime-collaboration/single-editor-mode/customize-behavior#resetuseraccess)
+
+### Step 6: Passing access (requests + accept/reject UX)
+
+Provide an access handoff flow so viewers can request edit access and the editor can accept or reject.
+
+- Default UI (recommended): Use the built-in banner/controls.
+- Custom UI: Use the APIs to request and respond to access.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const liveStateSyncElement = useLiveStateSyncUtils();
+
+// Default UI (recommended): ensure default UI is enabled and/or panel is rendered
+liveStateSyncElement.enableDefaultSingleEditorUI();
+// <VeltSingleEditorModePanel shadowDom={false} />
+
+// Custom UI: Editor-side — show banner and accept/reject
+const editorAccessRequested = useEditorAccessRequestHandler();
+
+return (
+  <div>
+    {editorAccessRequested && (
+      <div>
+        {`User ${editorAccessRequested.requestedBy?.name || editorAccessRequested.requestedBy?.email} requests access`} →
+        <button onClick={() => liveStateSyncElement.acceptEditorAccessRequest()}>Accept</button>
+        <button onClick={() => liveStateSyncElement.rejectEditorAccessRequest()}>Reject</button>
+      </div>
+    )}
+
+    {/* Custom UI: Viewer-side — request/cancel access */}
+    <button
+      onClick={() =>
+        liveStateSyncElement.requestEditorAccess().subscribe((status) => {
+          console.log('Request status:', status);
+        })
+      }
+    >
+      Request edit access
+    </button>
+    <button onClick={() => liveStateSyncElement.cancelEditorAccessRequest()}>Cancel request</button>
+  </div>
+);
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```html
+<script type="module">
+  const liveStateSyncElement = Velt.getLiveStateSyncElement();
+
+  // Default UI (recommended)
+  liveStateSyncElement.enableDefaultSingleEditorUI();
+
+  // Custom UI: Editor-side — subscribe to requests and accept/reject
+  liveStateSyncElement.isEditorAccessRequested().subscribe((data) => {
+    if (data) {
+      const nameOrEmail = data.requestedBy?.name || data.requestedBy?.email;
+      console.log(`Access requested by: ${nameOrEmail}`);
+      // Example: show banner with Accept/Reject buttons that call:
+      // liveStateSyncElement.acceptEditorAccessRequest();
+      // liveStateSyncElement.rejectEditorAccessRequest();
+    }
+  });
+
+  // Custom UI: Viewer-side — request/cancel access
+  function requestAccess() {
+    liveStateSyncElement.requestEditorAccess().subscribe((status) => {
+      console.log('Request status:', status);
+    });
+  }
+
+  function cancelAccessRequest() {
+    liveStateSyncElement.cancelEditorAccessRequest();
+  }
+</script>
+
+<!-- Example buttons:
+<button onclick="requestAccess()">Request edit access</button>
+<button onclick="cancelAccessRequest()">Cancel request</button>
+-->
+```
+</Tab>
+</Tabs>
+
+Learn more: [Is Editor Access Requested](/realtime-collaboration/single-editor-mode/customize-behavior#iseditoraccessrequested), [Accept Editor Access Request](/realtime-collaboration/single-editor-mode/customize-behavior#accepteditoraccessrequest), [Reject Editor Access Request](/realtime-collaboration/single-editor-mode/customize-behavior#rejecteditoraccessrequest), [Request Editor Access](/realtime-collaboration/single-editor-mode/customize-behavior#requesteditoraccess), [Cancel Editor Access Request](/realtime-collaboration/single-editor-mode/customize-behavior#canceleditoraccessrequest)
+
+### Step 7: Prevent concurrent editing by the same user (tab locking)
+
+If the same user opens another tab and tries to edit, lock the editor to a single tab and guide them back to the active tab when needed.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const liveStateSyncElement = useLiveStateSyncUtils();
+const { isEditor, isEditorOnCurrentTab } = useUserEditorState();
+
+// If the user is the editor but on the wrong tab, prompt and switch
+if (isEditor && isEditorOnCurrentTab === false) {
+  // Show UX prompt like: "You are already editing this page in another tab. Continue editing there."
+  // Provide an action to move editing to this tab:
+  const takeOver = () => liveStateSyncElement.editCurrentTab();
+  // Example: <button onClick={takeOver}>Edit on this tab</button>
+}
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```html
+<script type="module">
+  const liveStateSyncElement = Velt.getLiveStateSyncElement();
+
+  liveStateSyncElement.isUserEditor().subscribe((userEditorAccess) => {
+    if (userEditorAccess?.isEditor && userEditorAccess?.isEditorOnCurrentTab === false) {
+      // Show UX prompt like: "You are already editing this page in another tab. Continue editing there."
+      // Provide an action to move editing to this tab:
+      // liveStateSyncElement.editCurrentTab();
+    }
+  });
+</script>
+```
+</Tab>
+</Tabs>
+
+<Note>
+Recommended UX copy: "You are already editing this page in another tab. Continue editing there."
+</Note>
+
+Learn more: [Edit Current Tab](/realtime-collaboration/single-editor-mode/customize-behavior#editcurrenttab) and [Is User Editor](/realtime-collaboration/single-editor-mode/customize-behavior#isusereditor)
+
 ## Notes
 
 - **Initialize Velt first**: Ensure the Velt client is initialized and the user/document are set before enabling Single Editor Mode.
@@ -183,175 +417,8 @@ export default function App() {
 </Tab>
 </Tabs>
 
-## APIs
+## Next: Customize Behavior
 
-### Enable/Disable
+Learn how to fine-tune Single Editor Mode behavior, timeouts, events, and UI.
 
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-const liveStateSyncElement = useLiveStateSyncUtils();
-
-// Enable with optional config
-liveStateSyncElement.enableSingleEditorMode({
-  customMode: false,
-  singleTabEditor: true
-});
-
-// Disable
-liveStateSyncElement.disableSingleEditorMode();
-```
-</Tab>
-
-<Tab title="Other Frameworks">
-```jsx
-const liveStateSyncElement = Velt.getLiveStateSyncElement();
-
-// Enable with optional config
-liveStateSyncElement.enableSingleEditorMode({
-  customMode: false,
-  singleTabEditor: true
-});
-
-// Disable
-liveStateSyncElement.disableSingleEditorMode();
-```
-</Tab>
-</Tabs>
-
-### Scope and Fine-Tuning
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-const liveStateSyncElement = useLiveStateSyncUtils();
-
-// Limit Single Editor Mode to specific containers
-liveStateSyncElement.singleEditorModeContainerIds(['rightPanel', 'editor']);
-
-// Custom Mode (manual control on native elements)
-return (
-  <>
-    <div data-velt-sync-access="true">Controlled by Single Editor Mode</div>
-    <button data-velt-sync-access-disabled="true">Not controlled</button>
-  </>
-);
-```
-</Tab>
-
-<Tab title="Other Frameworks">
-```html
-<!-- Limit Single Editor Mode to specific containers -->
-<script>
-const liveStateSyncElement = Velt.getLiveStateSyncElement();
-liveStateSyncElement.singleEditorModeContainerIds(['rightPanel', 'editor']);
-</script>
-
-<!-- Custom Mode (manual control on native elements) -->
-<div data-velt-sync-access="true">Controlled by Single Editor Mode</div>
-<button data-velt-sync-access-disabled="true">Not controlled</button>
-```
-</Tab>
-</Tabs>
-
-<Warning>
-You must add the `data-velt-sync-access-*` attributes to native HTML elements (e.g., `div`, `button`, `input`) when using `customMode: true`. These attributes do not work when applied directly to React components.
-</Warning>
-
-### Timeouts and Tab Control
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-const liveStateSyncElement = useLiveStateSyncUtils();
-
-// Set automatic editor access timeout (seconds; default 5)
-liveStateSyncElement.setEditorAccessTimeout(15);
-
-// Transfer on timeout
-liveStateSyncElement.enableEditorAccessTransferOnTimeOut();
-// Or disable
-liveStateSyncElement.disableEditorAccessTransferOnTimeOut();
-
-// Move editor role to this tab
-liveStateSyncElement.editCurrentTab();
-```
-</Tab>
-
-<Tab title="Other Frameworks">
-```jsx
-const liveStateSyncElement = Velt.getLiveStateSyncElement();
-
-liveStateSyncElement.setEditorAccessTimeout(15);
-liveStateSyncElement.enableEditorAccessTransferOnTimeOut();
-// Or
-liveStateSyncElement.disableEditorAccessTransferOnTimeOut();
-
-liveStateSyncElement.editCurrentTab();
-```
-</Tab>
-</Tabs>
-
-### Access Requests
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-import {
-  useUserEditorState,
-  useEditor,
-  useEditorAccessRequestHandler,
-  useLiveStateSyncUtils
-} from '@veltdev/react';
-
-const liveStateSyncElement = useLiveStateSyncUtils();
-
-// Request access; emits null → pending, true/false → resolved
-const subscription = liveStateSyncElement.requestEditorAccess().subscribe((status) => {
-  if (status === null) console.log('Request pending');
-  else if (status) console.log('Request accepted');
-  else console.log('Request rejected');
-});
-
-// Cancel request
-liveStateSyncElement.cancelEditorAccessRequest();
-
-// Hooks
-const { isEditor, isEditorOnCurrentTab } = useUserEditorState();
-const editor = useEditor(); // User | null
-const editorAccessRequested = useEditorAccessRequestHandler(); // { requestStatus, requestedBy } | null
-```
-</Tab>
-
-<Tab title="Other Frameworks">
-```jsx
-const liveStateSyncElement = Velt.getLiveStateSyncElement();
-
-let subscription = liveStateSyncElement.requestEditorAccess().subscribe((status) => {
-  if (status === null) console.log('Request pending');
-  else if (status) console.log('Request accepted');
-  else console.log('Request rejected');
-});
-
-liveStateSyncElement.cancelEditorAccessRequest();
-```
-</Tab>
-</Tabs>
-
-### UI
-
-Render the default panel to handle request/accept/reject flows and editor tab changes.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-<VeltSingleEditorModePanel shadowDom={false} />
-```
-</Tab>
-
-<Tab title="Other Frameworks">
-```html
-<velt-single-editor-mode-panel shadow-dom="false"></velt-single-editor-mode-panel>
-```
-</Tab>
-</Tabs>
+[Go to Customize Behavior](/realtime-collaboration/single-editor-mode/customize-behavior)

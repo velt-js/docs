@@ -19,6 +19,10 @@ Velt supports self-hosting your comments and related data:
 - This gives you full control over comment data while maintaining all Velt collaboration features.
 - This automatically also ensures that the in-app notifications content is not stored on Velt servers. The content is generated using the comments data in the frontend.
 
+<Warning>
+Email notifications via Velt's SendGrid integration are not available when you self-host comment content. Since the content lives on your infrastructure, Velt cannot construct and send emails via the sendgrid integration. Instead, use [Webhooks](/webhooks/basic) to receive events (e.g., mentions, replies), fetch the relevant comment/notification content from your database, and send emails from your own email provider.
+</Warning>
+
 # How does it work?
 - When comments are created, updated, deleted or requested, the SDK uses your configured [`CommentAnnotationDataProvider`](/api-reference/sdk/models/data-models#commentannotationdataprovider) to handle storage and retrieval
 - The data provider implements `get`, `save`, and `delete` methods to interact with your database
@@ -191,6 +195,79 @@ Velt.setDataProviders({
 
 </Tab>
 </Tabs>
+
+# Triggering Email Notifications when Self-Hosting
+
+When you self-host content, use Webhooks to trigger emails from your own system:
+
+<Steps>
+<Step title="Enable relevant webhooks">
+Subscribe to comment-related events (e.g., user mentions, replies). See [Webhooks basics](/webhooks/basic).
+</Step>
+
+<Step title="Receive webhook and fetch content from your DB">
+Your server receives the webhook event. Use IDs from the payload (e.g., `annotationId`, `commentId`) to query your own comment and notification content from your database via your Data Provider.
+</Step>
+
+<Step title="Assemble email content and recipients">
+Combine the webhook event context with the self-hosted content to build the subject, body, and list of recipients (e.g., mentioned users).
+</Step>
+
+<Step title="Send email via your provider">
+Use your own email service (SendGrid under your account, SES, Postmark, etc.) to send the email.
+
+<Tip>
+If you previously configured SendGrid in Velt Console, that configuration will not be used for self-hosted content. Use your own SendGrid account or another email provider from your server.
+</Tip>
+</Step>
+</Steps>
+
+<RequestExample>
+```json cURL
+POST /webhooks/velt HTTP/1.1
+Content-Type: application/json
+
+{
+  "actionType": "newlyAdded",
+  "commentAnnotation": { "annotationId": "ANNOTATION_ID", "metadata": { "documentId": "DOC_ID" } },
+  "latestComment": { "commentId": 123, "from": { "userId": "USER_1" } },
+  "fromUser": { "userId": "USER_1" },
+  "documentMetadata": { "url": "https://app.example.com/doc/123" }
+}
+```
+</RequestExample>
+
+<ResponseExample>
+```javascript Node.js
+// Pseudocode: handle webhook, fetch content, send email
+app.post('/webhooks/velt', async (req, res) => {
+  const evt = req.body;
+  const annotationId = evt?.commentAnnotation?.annotationId;
+  const latestCommentId = evt?.latestComment?.commentId;
+
+  // 1) Fetch self-hosted content
+  const annotation = await db.commentAnnotations.get(annotationId);
+  const latestComment = annotation?.comments?.[latestCommentId];
+
+  // 2) Resolve recipients (e.g., mentioned users)
+  const recipients = await resolveMentionedUsers(annotation, latestComment);
+
+  // 3) Compose email
+  const subject = `${evt.fromUser?.userId} mentioned you`;
+  const body = latestComment?.commentText || '';
+  const pageUrl = evt?.documentMetadata?.url;
+
+  // 4) Send via your provider
+  await emailClient.send({ to: recipients, subject, html: renderTemplate({ body, pageUrl }) });
+
+  res.sendStatus(200);
+});
+```
+</ResponseExample>
+
+<Check>
+You now send email notifications from your own infrastructure while keeping content self-hosted.
+</Check>
 
 # Sample Data
 

@@ -65,11 +65,12 @@ Account for common terminology variants:
 ## Systematic Replacement Process
 
 ### Phase 1: Discovery and Validation
-1. **Scan all allowed paths** for target terminology using word boundary patterns
-2. **Generate comprehensive match report** with file paths, line numbers, and context
-3. **Validate change safety** by analyzing surrounding context
-4. **Create detailed change map** with from/to mappings for each context
-5. **Identify cross-reference dependencies** that need updating
+1. **For each edit introduced by Agents 1-5, grep ±100-150 lines of surrounding context** to understand the change environment
+2. **Scan all allowed paths** for target terminology using word boundary patterns
+3. **Generate comprehensive match report** with file paths, line numbers, and context
+4. **Validate change safety** by analyzing surrounding context
+5. **Create detailed change map** with from/to mappings for each context
+6. **Identify cross-reference dependencies** that need updating
 
 ### Phase 2: Systematic Replacement
 1. **Apply changes by category** (headings → code → URLs → config)
@@ -77,6 +78,7 @@ Account for common terminology variants:
 3. **Maintain casing consistency** across different contexts
 4. **Preserve code functionality** and documentation structure
 5. **Validate each change** maintains meaning and readability
+6. **Ensure consistency and alignment across files** - if mismatches remain, fix them as part of QA
 
 ### Phase 3: Comprehensive Validation
 1. **Re-scan to confirm all changes applied** correctly

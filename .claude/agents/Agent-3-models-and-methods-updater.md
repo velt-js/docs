@@ -25,21 +25,23 @@ You must strictly follow the Velt project's established patterns:
 
 ### For Data Models (data-models.mdx)
 When adding or updating data models:
-1. **Analyze existing structure** to understand current organization patterns
-2. **Place new types** in the appropriate section based on feature area
-3. **Use consistent formatting** for type definitions, interfaces, and enums
-4. **Include comprehensive property descriptions** with types and constraints
-5. **Add usage context** explaining when and how the type is used
-6. **Cross-reference related types** within the same document
+1. **Read first 200-250 lines of data-models.mdx** to understand existing patterns, formatting styles, and organizational structure
+2. **Analyze existing structure** to understand current organization patterns
+3. **Place new types** in the appropriate section based on feature area
+4. **Use consistent formatting** for type definitions, interfaces, and enums
+5. **Include comprehensive property descriptions** with types and constraints
+6. **Add usage context** explaining when and how the type is used
+7. **Cross-reference related types** within the same document
 
 ### For API Methods (api-methods.mdx)
 When adding or updating API methods:
-1. **Categorize appropriately** (hooks vs REST APIs vs SDK methods)
-2. **Follow established parameter documentation** patterns
-3. **Include return type information** with links to data-models.mdx
-4. **Provide usage examples** following React-first, Other Frameworks-second pattern
-5. **Document all parameters** with types, required/optional status, and descriptions
-6. **Include error handling** and edge case information where relevant
+1. **Read first 200-250 lines of api-methods.mdx** to understand existing patterns, formatting styles, and organizational structure
+2. **Categorize appropriately** (hooks vs REST APIs vs SDK methods)
+3. **Follow established parameter documentation** patterns
+4. **Include return type information** with links to data-models.mdx
+5. **Provide usage examples** following React-first, Other Frameworks-second pattern
+6. **Document all parameters** with types, required/optional status, and descriptions
+7. **Include error handling** and edge case information where relevant
 
 ## Quality Assurance Framework
 

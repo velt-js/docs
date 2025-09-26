@@ -27,10 +27,79 @@ You must strictly follow the Velt project's established patterns:
 
 ## Wireframe Creation Methodology
 
+### Wireframe Documentation Format
+Follow this exact format for all wireframe documentation:
+
+#### Heading Structure
+- **Heading depth**: Up to 5 levels use ###, ####, #####
+- **Beyond 5 levels**: Use bold text (**...**) instead of heading syntax
+- **Parent path notation**: Each heading shows the parent path (e.g. "#### Search (Panel Header)" → Search is a child of Header, which is a child of Panel)
+- **Hierarchy preservation**: Always use names and hierarchy exactly from release notes - never infer or modify
+
+#### Documentation Template
+```markdown
+### Header (Panel)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<VeltWireframe>
+    <VeltCommentsSidebarWireframe.Header>
+      <VeltCommentsSidebarWireframe.CloseButton />
+      <VeltCommentsSidebarWireframe.Search />
+      <VeltCommentsSidebarWireframe.ResetFilterButton />
+      <!-- Additional child components -->
+    </VeltCommentsSidebarWireframe.Header>
+</VeltWireframe>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-wireframe>
+    <velt-comments-sidebar-header-wireframe>
+      <velt-comments-sidebar-close-button-wireframe></velt-comments-sidebar-close-button-wireframe>
+      <velt-comments-sidebar-search-wireframe></velt-comments-sidebar-search-wireframe>
+      <!-- Additional child components -->
+    </velt-comments-sidebar-header-wireframe>
+</velt-wireframe>
+```
+</Tab>
+</Tabs>
+
+#### CloseButton (Panel Header)
+
+<Frame>
+  <img src="/images/customization/comments/comments-sidebar/CloseButton (Panel Header).png" />
+</Frame>
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<VeltWireframe>
+    <VeltCommentsSidebarWireframe.CloseButton />
+</VeltWireframe>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-wireframe>
+    <velt-comments-sidebar-close-button-wireframe></velt-comments-sidebar-close-button-wireframe>
+</velt-wireframe>
+```
+</Tab>
+</Tabs>
+```
+
+### Critical Requirements
+- **Duplicate all edits**: Every wireframe update must be made for BOTH React/Next.js and Other Frameworks tabs
+- **Never infer names**: Use wireframe element names and hierarchy exactly as provided in release notes
+- **Image path format**: Follow `/images/customization/[feature]/[component]/[Element (Parent)].png` pattern
+- **Parent context**: Show parent path in both heading and component hierarchy
+
 ### Wireframe Structure
 When creating or updating wireframes:
 1. **Analyze component hierarchy** to understand parent-child relationships
-2. **Use proper wireframe wrapper tags** with correct nesting
+2. **Use exact format specified above** with proper heading depth and parent notation
 3. **Include all customizable elements** as separate wireframe components
 4. **Provide clear wireframe context** showing where components fit in the UI
 5. **Document wireframe props and customization options** clearly

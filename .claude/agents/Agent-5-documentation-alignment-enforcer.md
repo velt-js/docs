@@ -54,6 +54,9 @@ Avoid changes in:
    - Consider plurals and adjectival forms
    - Account for case variations
 
+4. **Grep entire files** where edits are needed based on Agent-2's output, rather than making isolated changes
+5. **Match existing layout and styling** when implementing alignment edits to maintain documentation consistency
+
 ### Systematic Alignment Process
 
 #### Feature and API Alignment

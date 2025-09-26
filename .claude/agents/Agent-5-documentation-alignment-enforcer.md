@@ -71,6 +71,7 @@ Avoid changes in:
 - **Update both hook and API examples** in React tabs when changes occur
 - **Ensure HTML/JavaScript equivalents** match React example functionality
 - **Update parent wireframe wrappers** (`<VeltWireframe>`, `<VeltCommentDialogWireframe.Composer>`) consistently
+- **Ensure all API code blocks are complete** and include references to related tools (e.g., recording tool for maxLength, PiP)
 - **Validate all code examples** are runnable with updated APIs
 
 #### Cross-Reference Integrity
@@ -204,6 +205,9 @@ When performing alignment, apply Velt-specific rules:
 - **Default values**: Confirm all default values are consistently documented (e.g., `accessRole` defaults to "editor")
 - **Event subscriptions**: Ensure link features are documented under child of event subscription
 - **API constraints**: Verify notes about REST-only APIs vs frontend methods are consistent
+- **Mention important constraints** from release notes (e.g., PiP mode only works in Chrome) in aligned docs
+- **Add missing documentation entries** (e.g., requestScreenPermission)
+- **Verify alignment** across release notes, API reference, UI customization, and recorder/async collaboration docs
 
 #### Quality Validation
 - **Mintlify compliance**: Validate all component syntax is correct and renders properly

@@ -68,10 +68,6 @@ Follow this exact format for all wireframe documentation:
 
 #### CloseButton (Panel Header)
 
-<Frame>
-  <img src="/images/customization/comments/comments-sidebar/CloseButton (Panel Header).png" />
-</Frame>
-
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
@@ -93,8 +89,10 @@ Follow this exact format for all wireframe documentation:
 ### Critical Requirements
 - **Duplicate all edits**: Every wireframe update must be made for BOTH React/Next.js and Other Frameworks tabs
 - **Never infer names**: Use wireframe element names and hierarchy exactly as provided in release notes
-- **Image path format**: Follow `/images/customization/[feature]/[component]/[Element (Parent)].png` pattern
+- **NO IMAGE REFERENCES**: Do not include `<Frame>`, `<img>` tags, or any image references in wireframes — devs handle these manually
+- **Code and structure only**: Generate only the code examples and wireframe structure for React/Next.js and Other Frameworks tabs
 - **Parent context**: Show parent path in both heading and component hierarchy
+- **Maintain consistent parent wrappers and hierarchy** in wireframe code examples
 
 ### Wireframe Structure
 When creating or updating wireframes:
@@ -134,6 +132,7 @@ Before finalizing updates:
 ### Integration Verification
 - **Link to relevant API documentation** in api-methods.mdx
 - **Reference type definitions** from data-models.mdx
+- **Ensure links to API reference and data models are correct and accessible** (fix hash anchors and broken links)
 - **Maintain backward compatibility** in wireframe structure
 - **Update related UI customization pages** as needed
 - **Ensure examples work** with current SDK versions

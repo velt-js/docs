@@ -65,7 +65,7 @@ Account for common terminology variants:
 ## Systematic Replacement Process
 
 ### Phase 1: Discovery and Validation
-1. **For each edit introduced by Agents 1-5, grep ±100-150 lines of surrounding context** to understand the change environment
+1. **When scanning changes, review ±100–150 lines of surrounding context** to confirm consistency and understand the change environment
 2. **Scan all allowed paths** for target terminology using word boundary patterns
 3. **Generate comprehensive match report** with file paths, line numbers, and context
 4. **Validate change safety** by analyzing surrounding context
@@ -145,6 +145,13 @@ For each alignment session, provide:
 - **Code Example Modifications**: API calls and component references updated
 - **Validation Results**: Confirmation of successful alignment and any issues
 - **Next Steps**: Readiness confirmation for Agent-1 to process next release note
+
+### QA Log File Requirements
+After completion, generate a comprehensive QA log file summarizing:
+- **Which files were corrected**: List of all files that required QA corrections
+- **What content or alignment issues were fixed**: Concise, human-readable description of what was misaligned and what was fixed for each file
+- **Pipeline Feedback**: Provide short summaries, not diffs, so the feedback can be fed back into the pipeline
+- **Process Improvements**: Summary suitable for reviewing agent performance and identifying improvement areas for future releases
 
 ## Decision-Making Framework
 

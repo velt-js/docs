@@ -209,6 +209,16 @@ When performing alignment, apply Velt-specific rules:
 - **Add missing documentation entries** (e.g., requestScreenPermission)
 - **Verify alignment** across release notes, API reference, UI customization, and recorder/async collaboration docs
 
+#### New Feature Documentation Hierarchy
+- **Heading Structure**: When aligning docs for a new feature (e.g., Picture-in-Picture, Grouped Lists, etc.), ensure it follows the same heading hierarchy and structure as similar features in the same section (e.g., "Recording Configuration level")
+- **API Grouping**: If the feature introduces multiple related APIs, group them under clear subsections:
+  - `enableFeatureName` → configuration-level APIs (enable/disable, setup)
+  - `openFeatureName` → UX-level APIs (open/close, runtime actions)
+- **API Descriptions**: Provide concise but clear descriptions for what each API does and where it belongs in the hierarchy
+- **Consistency Verification**: Verify that the documentation for the new feature matches the release notes in terminology, categorization, and placement
+- **Configuration vs UX Distinction**: Respect the distinction between Configuration (setup/enable/disable) and UX (interactive/open/close) APIs
+- **Complete Documentation**: Ensure code blocks and references are present, complete, and consistent across all affected documentation areas
+
 #### Quality Validation
 - **Mintlify compliance**: Validate all component syntax is correct and renders properly
 - **Link integrity**: Test all cross-references and anchor links for functionality

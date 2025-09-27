@@ -55,7 +55,7 @@ Follow this exact format for all wireframe documentation:
 </Tab>
 <Tab title="Other Frameworks">
 ```html
-<velt-wireframe>
+<velt-wireframe style="display:none;">
     <velt-comments-sidebar-header-wireframe>
       <velt-comments-sidebar-close-button-wireframe></velt-comments-sidebar-close-button-wireframe>
       <velt-comments-sidebar-search-wireframe></velt-comments-sidebar-search-wireframe>
@@ -78,7 +78,7 @@ Follow this exact format for all wireframe documentation:
 </Tab>
 <Tab title="Other Frameworks">
 ```html
-<velt-wireframe>
+<velt-wireframe style="display:none;">
     <velt-comments-sidebar-close-button-wireframe></velt-comments-sidebar-close-button-wireframe>
 </velt-wireframe>
 ```
@@ -93,6 +93,8 @@ Follow this exact format for all wireframe documentation:
 - **Code and structure only**: Generate only the code examples and wireframe structure for React/Next.js and Other Frameworks tabs
 - **Parent context**: Show parent path in both heading and component hierarchy
 - **Maintain consistent parent wrappers and hierarchy** in wireframe code examples
+- **Wireframe Display**: All `<velt-wireframe>` parent tags must include `style="display:none;"`
+- **Naming Consistency**: Enforce the same structural and naming conventions from release notes — no deviations, no inferred names
 
 ### Wireframe Structure
 When creating or updating wireframes:

@@ -100,6 +100,8 @@ Your planning output must follow this format:
 - [ ] New documentation file paths and structures specified
 - [ ] Agent-5 instructions provided for new documentation creation
 - [ ] Detailed analysis findings written to log file for review
+- [ ] **Customize behavior documentation planned for main feature docs** (not UI customization section)
+- [ ] **Version accuracy validated** - all planned content matches the release note version exactly
 
 ## Log File Requirements
 Create a comprehensive log file documenting:
@@ -113,15 +115,7 @@ Create a comprehensive log file documenting:
 - **Quality Assurance Items**: Checklist items and verification steps
 ```
 
-## Quality Standards
-
-### Alignment with Velt Standards
-- Follow the three-section structure: New Features → Improvements → Bug Fixes
-- Ensure React examples always come first in tabs
-- Include both hook and API method examples in React tabs
-- Add parent wireframe wrappers for UI customization examples
-- Link to Data Models page instead of duplicating types inline
-- Use user-facing terminology (avoid internal service names)
+## Quality Assurance Framework
 
 ### Comprehensive Coverage
 - Never miss updates to related documentation when features change
@@ -148,6 +142,17 @@ When prioritizing updates:
 3. **Dependencies**: Foundation changes (data models) before examples
 4. **Consistency**: Terminology alignment across all affected files
 
+## Output Requirements
+
+Your planning output must:
+- **Identify all affected documentation areas** comprehensively
+- **Specify exact file paths** for updates and new documentation creation
+- **Provide detailed change descriptions** for each area
+- **Prioritize tasks** by dependency and user impact
+- **Flag breaking changes** and migration requirements
+- **Include Agent-5 instructions** for new documentation creation
+- **Generate comprehensive log file** documenting all findings and requirements
+
 ## Pipeline Integration
 
 ### Agent Pipeline Flow
@@ -160,19 +165,18 @@ Agent-1 (release notes) → **Agent-2** (current) → Agent-3 (tech docs) → Ag
 
 ### Velt Project Specific Requirements
 
-#### Documentation Standards Alignment
+#### Documentation Standards and Terminology
 - **Three-section structure**: New Features → Improvements → Bug Fixes
 - **Code examples**: Always React/Next.js first, Other Frameworks second
 - **Type definitions**: Never inline - always reference Data Models page
 - **Wireframe patterns**: Include parent wrapper tags (`<VeltWireframe>`)
 - **API documentation**: Separate hooks and methods appropriately
-
-#### Special Terminology Handling
-- **User-facing terms**: "Cloud Functions" → "Access Control", "Recorder / Player" → "Recorder", "Comments / Wireframes" → "UI Customization"
+- **User-facing terminology**: "Cloud Functions" → "Access Control", "Recorder / Player" → "Recorder", "Comments / Wireframes" → "UI Customization"
 - **Role definitions**: Always define Editor vs Viewer roles with what, why, and how
 - **Default values**: Specify defaults explicitly (e.g., `accessRole` defaults to `"editor"`)
 - **Grouped lists**: Use "Grouped lists" terminology, not "Added group support"
 - **Generic phrasing**: Never mention client names - use "host app" or "optimized Single Editor Mode"
+- **Customize behavior placement**: Plan for "customize behavior" documentation to be added to the main feature documentation (e.g., Recorder docs), NOT in UI customization section
 
 #### Component and API Requirements
 - **CRDT vs SDK separation**: Never mix Core SDK updates into CRDT updates

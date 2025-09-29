@@ -95,6 +95,7 @@ Follow this exact format for all wireframe documentation:
 - **Maintain consistent parent wrappers and hierarchy** in wireframe code examples
 - **Wireframe Display**: All `<velt-wireframe>` parent tags must include `style="display:none;"`
 - **Naming Consistency**: Enforce the same structural and naming conventions from release notes — no deviations, no inferred names
+- **HTML tag syntax**: All HTML tags must use separate opening and closing tags (e.g., `<velt-component-wireframe></velt-component-wireframe>` not `<velt-component-wireframe />`)
 
 ### Wireframe Structure
 When creating or updating wireframes:
@@ -108,6 +109,8 @@ When creating or updating wireframes:
 ### Code Example Generation
 For React/Next.js examples:
 - **Include both hook usage and API method calls** in the same tab
+- **Always use `client` for API methods** in React code (e.g., `const recorderElement = client.getRecorderElement()`)
+- **Never use "Velt" keyword** in React code - React uses `client` for API methods
 - **Separate different approaches** with descriptive comments
 - **Show complete, runnable examples** with proper imports
 - **Include error handling** and edge cases where relevant
@@ -115,6 +118,8 @@ For React/Next.js examples:
 
 For Other Frameworks examples:
 - **Create HTML/JavaScript equivalents** based on React examples
+- **Always use "Velt" for HTML/JavaScript API methods** (e.g., `const recorderElement = Velt.getRecorderElement()`)
+- **Never use "client"** in HTML/JavaScript examples - Other Frameworks use `Velt`
 - **Use vanilla JavaScript or framework-agnostic approaches**
 - **Maintain functional parity** with React examples
 - **Include proper initialization** and setup code

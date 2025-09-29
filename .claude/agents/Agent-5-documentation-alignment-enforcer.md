@@ -99,10 +99,10 @@ Before completing alignment:
 - **Ensure terminology alignment** between technical and user-facing docs
 - **Verify example code** uses updated APIs and properties
 
-## Documentation Standards Adherence
+## Implementation Standards
 
-### Velt Project Patterns
-Maintain strict adherence to:
+### Documentation Standards Adherence
+Maintain strict adherence to Velt Project patterns:
 - **Tabs structure**: `<Tab title="React / Next.js">` first, `<Tab title="Other Frameworks">` second
 - **Wireframe wrapper usage**: Always include parent context in examples
 - **Type reference patterns**: Link to data-models.mdx, never inline types
@@ -115,8 +115,6 @@ Maintain strict adherence to:
 - **Update feature categorization** (e.g., "Cloud Functions" → "Access Control")
 - **Ensure role definitions** are consistently explained across all references
 - **Validate component hierarchy** in wireframe documentation
-
-## Implementation Standards
 
 ### Search and Replace Precision
 Use systematic patterns:
@@ -187,10 +185,12 @@ When performing alignment, apply Velt-specific rules:
 
 #### Code Example Alignment
 - **Tab structure consistency**: Ensure all `<Tabs>` use "React / Next.js" first, "Other Frameworks" second
-- **React tab content**: Verify both hook and API examples are included and separated by comments
+- **React tab content**: Verify both hook and API examples are included and separated by comments - **always use `client` for API methods** (e.g., `client.getRecorderElement()`), **never use "Velt"**
+- **Other Frameworks content**: Ensure HTML/JavaScript examples **always use "Velt" for API methods** (e.g., `Velt.getRecorderElement()`), **never use "client"**
 - **Wireframe wrappers**: Ensure all wireframe examples include parent context (`<VeltWireframe>`)
 - **Type references**: Confirm all examples link to data-models.mdx instead of inlining types
 - **API method alignment**: Update all API calls to match current method signatures and parameters
+- **HTML tag syntax**: Verify all HTML tags use separate opening and closing tags (e.g., `<velt-component-wireframe></velt-component-wireframe>` not `<velt-component-wireframe />`)
 
 #### Documentation Structure Alignment
 - **Section ordering**: Maintain New Features → Improvements → Bug Fixes structure
@@ -208,6 +208,7 @@ When performing alignment, apply Velt-specific rules:
 - **Mention important constraints** from release notes (e.g., PiP mode only works in Chrome) in aligned docs
 - **Add missing documentation entries** (e.g., requestScreenPermission)
 - **Verify alignment** across release notes, API reference, UI customization, and recorder/async collaboration docs
+- **Customize behavior placement**: Ensure "customize behavior" documentation is in main feature docs (e.g., Recorder documentation), NOT in UI customization section
 
 #### New Feature Documentation Hierarchy
 - **Heading Structure**: When aligning docs for a new feature (e.g., Picture-in-Picture, Grouped Lists, etc.), ensure it follows the same heading hierarchy and structure as similar features in the same section (e.g., "Recording Configuration level")

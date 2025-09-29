@@ -175,7 +175,11 @@ Your QA alignment must:
 - **Confirm Agent-1 readiness** for next release note processing
 - **Document any follow-up items** or potential issues identified
 
-## Agent Pipeline Integration
+## Pipeline Integration
+
+### Agent Pipeline Flow
+Agent-6 serves as the final QA step in the release note processing cycle:
+**Agent-1** (process release note) → **Agent-2** (plan updates) → **Agent-3** (update tech docs) → **Agent-4** (update UI docs) → **Agent-5** (align documentation) → **Agent-6** (current - QA terminology alignment) → **Return to Agent-1** (next release note)
 
 ### Pre-Agent-6 Requirements
 Before starting QA alignment:
@@ -190,13 +194,9 @@ After completing QA alignment:
 - **Signal Agent-1 readiness** to process the next release note in the queue
 - **Document any follow-up requirements** for future release note processing
 
-## Continuous Process Flow
-Agent-6 serves as the final QA step in the release note processing cycle:
-**Agent-1** (process release note) → **Agent-2** (plan updates) → **Agent-3** (update tech docs) → **Agent-4** (update UI docs) → **Agent-5** (align documentation) → **Agent-6** (QA terminology alignment) → **Return to Agent-1** (next release note)
+### Velt Project Specific Requirements
 
-## Advanced Velt Project Requirements
-
-### Terminology Mapping Standards
+#### Terminology Mapping Standards
 Apply these specific Velt terminology mappings during QA alignment:
 - **"Cloud Functions" → "Access Control"**: Update all references consistently
 - **"Recorder / Player" → "Recorder"**: Simplify terminology across documentation
@@ -204,21 +204,23 @@ Apply these specific Velt terminology mappings during QA alignment:
 - **"Added group support" → "Grouped lists"**: Use preferred feature naming
 - **Client names**: Replace with generic terms ("host app", "optimized Single Editor Mode")
 
-### Code Pattern Consistency
+#### Code Pattern Consistency
 - **Tab structure**: Ensure all `<Tabs>` use exactly "React / Next.js" and "Other Frameworks"
-- **React tab content**: Verify separation between hook examples and API method examples with comments
+- **React tab content**: Verify separation between hook examples and API method examples with comments - **always use `client` for API methods** (e.g., `client.getRecorderElement()`), **never use "Velt"**
+- **Other Frameworks content**: Verify **"Velt" is always used for API methods** in HTML/JavaScript examples (e.g., `Velt.getRecorderElement()`), **never use "client"**
 - **Wireframe wrappers**: Confirm all examples include parent context (`<VeltWireframe>`, `<VeltCommentDialogWireframe.Composer>`)
 - **Type references**: Replace inline types with links to data-models.mdx
 - **Component syntax**: Validate `<Update>`, `<Warning>`, `<Check>`, `<Steps>`, `<CodeGroup>` usage
+- **HTML tag syntax**: Ensure all HTML tags use separate opening and closing tags (e.g., `<velt-component-wireframe></velt-component-wireframe>` not `<velt-component-wireframe />`)
 
-### Documentation Structure Validation
+#### Documentation Structure Validation
 - **Section ordering**: Enforce New Features → Improvements → Bug Fixes structure
 - **No duplicate headings**: Ensure no repeated section names within same version
 - **Feature naming**: Use feature names as subsection headings, never generic labels
 - **Breaking changes**: Ensure `<Warning>` components are properly placed for migrations
 - **Cross-references**: Update links when slugs change (e.g., `#old-feature-name` → `#new-feature-name`)
 
-### Special Velt Validation Rules
+#### Special Velt Validation Rules
 - **CRDT vs SDK separation**: Verify no mixing of Core SDK updates into CRDT documentation
 - **Role definitions**: Ensure Editor/Viewer roles consistently explain what, why, and how
 - **Default values**: Confirm `accessRole` defaults to "editor" is documented consistently
@@ -226,7 +228,7 @@ Apply these specific Velt terminology mappings during QA alignment:
 - **Event subscriptions**: Ensure link features are under child of event subscription
 - **Historical preservation**: Don't edit historical release notes unless purely terminological
 
-### Quality Assurance Checklist Integration
+#### Quality Assurance Checklist Integration
 Before completing QA alignment, verify:
 - [ ] All references follow first 500 lines of relevant changelog
 - [ ] Correct Mintlify component syntax throughout

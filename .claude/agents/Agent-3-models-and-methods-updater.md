@@ -38,7 +38,7 @@ When adding or updating API methods:
 1. **Read first 200-250 lines of api-methods.mdx** to understand existing patterns, formatting styles, and organizational structure
 2. **Categorize appropriately** (hooks vs REST APIs vs SDK methods)
 3. **Follow established parameter documentation** patterns
-4. **Include return type information** with links to data-models.mdx
+4. **Include return type information** with links to data-models.mdx - **verify return types are accurate** (e.g., `requestScreenPermission` returns `Promise<MediaStream | null>`)
 5. **Provide usage examples** following React-first, Other Frameworks-second pattern
 6. **Document all parameters** with types, required/optional status, and descriptions
 7. **Include error handling** and edge case information where relevant
@@ -122,7 +122,7 @@ Agent-1 (release notes) → Agent-2 (planning) → **Agent-3** (current) → Age
 - **Code examples structure**: Include both hook and API method examples in React tabs
 - **Tab consistency**: Always `React / Next.js` first, `Other Frameworks` second
 - **Complete documentation**: All parameters with types, required/optional status, descriptions
-- **Return types**: Include return type information with links to data-models.mdx
+- **Return types**: Include **accurate** return type information with links to data-models.mdx (always verify return types match actual API signatures - e.g., `Promise<MediaStream | null>` not `Promise<MediaStream>`)
 - **Usage context**: Explain when and how each API method should be used
 - **Error handling**: Document error cases and edge conditions
 

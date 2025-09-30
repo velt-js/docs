@@ -1039,16 +1039,25 @@ Velt permissions apply to these resources:
 Most permission changes occur at the **Folder** and **Document** level, but Organizations can set defaults that flow down hierarchically.
 </Note>
 
-### Permissions (Access Types)
+#### Access Types
 Access types define **who** can access a resource:
 - **`public`** **(default)**: Any authenticated user in your app who initializes Velt can access the resource’s collaboration layer.
 - **`organizationPrivate`**: Only users in the same organization as the resource can access it.
 - **`restricted`**: Only explicitly permitted users can access the resource.
 
-**Change access type**
-- **Folder:** Use the existing [Update Folder Access Type](/api-reference/rest-apis/v2/folders/update-folder-access) REST endpoint.
-- **Document:** Use the existing [Update Document Access Type](/api-reference/rest-apis/v2/documents/update-document-access) REST endpoint.
-- **Defaults:** You can also change the default access type in your app configuration ([console](https://console.velt.dev/dashboard/config/appconfig)).
+**APIs (backend)**
+- **Folder:** Use [Update Folder Access Type](/api-reference/rest-apis/v2/folders/update-folder-access).
+- **Document:** Use [Update Document Access Type](/api-reference/rest-apis/v2/documents/update-document-access).
+- **Defaults:** Update default access across your app.
+
+<Steps>
+<Step title="Open Velt Console">
+  Go to the App Config in the Velt Console: [console.velt.dev](https://console.velt.dev/dashboard/config/appconfig)
+</Step>
+<Step title="Choose default access type">
+  Select the desired default access type for new resources and save your changes.
+</Step>
+</Steps>
 
 <Tip>
 **Access Types = who can access. Roles = what they can do once they have access.** These controls are orthogonal and compose together.
@@ -1056,11 +1065,11 @@ Access types define **who** can access a resource:
 
 ### Roles
 Roles define **what** an allowed user can do on a resource:
-- **Editor** – Read/write to comments, annotations, presence, cursors, and recordings; start/manage recordings; perform other write actions.
-- **Viewer** – Read-only access to collaboration features; cannot modify or post new collaborative data.
+- **Editor:** Read and write access to collaboration features data for the given resource. **This is the default role.**
+- **Viewer:** Read-only access to collaboration features data for the given resource.
 
 <Note>
-The default role is **editor**. Assign or override roles per resource via your backend when granting permissions. Frontend SDK methods cannot set or change `accessRole`.
+Assign or override roles per resource via your backend when granting permissions. Frontend SDK methods cannot set or change `accessRole`.
 </Note>
 
 ### Configuration Modes
@@ -1068,48 +1077,50 @@ Choose how your app keeps Velt permissions in sync:
 
 #### 1) On-Demand Permissions
 Grant or revoke permissions **at runtime** when a user logs in or navigates to a resource.
-- Best when your app has granular, dynamic rules or mixed sources of truth.
-- Supports temporary, expiring access and ad-hoc sharing without a full sync job.
+- Best when your app has a very complex and granular permissioning system and you want to keep your system as the source of truth.
+- Supports temporary (time-bound) access and permanent access, enabling ad‑hoc sharing and expiring invites.
 
-**Backend (REST)**
-- **Add permissions**: Use the existing [Add Permissions REST API](/api-reference/rest-apis/v2/auth/add-permissions) for a resource (organization/folder/document).
-- **Remove permissions**: Use the existing [Remove Permissions REST API](/api-reference/rest-apis/v2/auth/remove-permissions) for a resource.
+##### **Temporary vs. Permanent Access**
+- **Temporary access**: Grant permissions with an expiry or revoke after session/end of task (e.g., guest reviewers, contractors). Use this when access should automatically end or be short‑lived.
+- **Permanent access**: Grant durable permissions for members or long‑term collaborators. Use this when roles rarely change and should persist across sessions.
 
-**Frontend (SDK)**
-- During login/initialization, [set the auth provider](/get-started/quickstart#step-5%3A-authenticate-users) and [generate a token](/api-reference/rest-apis/v2/auth/generate-token) from your backend (identify/auth notes already present in this file).
-- The frontend should **not** directly assign roles or access types; it should consume what the backend issues.
+##### **APIs**
+- **Add permissions (backend)**
+  - When the user logs in, grant the minimum required access for the current resource(s) using [Add Permissions](/api-reference/rest-apis/v2/auth/add-permissions).
+  - When the user switches between resources (e.g., folders/documents), grant or adjust access for the newly active resource(s).
+- **Remove permissions (backend)**
+  - Revoke access when the user signs out, loses membership, or navigates away from sensitive resources using [Remove Permissions](/api-reference/rest-apis/v2/auth/remove-permissions).
+- **Get permissions**
+  - **(backend):** Determine and return the user’s effective permissions/roles during login and on resource changes. Your backend is the source of truth.
+  - **(frontend):** Consume the issued token and reflect the allowed operations. The frontend should not calculate or assign permissions; it should enforce what the backend grants.
+
+<Note>
+Users are automatically added to their organization upon sign‑in when you include `organizationId` in the identify/auth payload. You do not need to pre-create the user for on-demand flows.
+</Note>
 
 #### 2) Synced Permissions
-Periodically or event-driven **sync** between your app and Velt.
+- Periodically or event‑driven sync between your app and Velt.
 - Do an initial bulk load, then keep up with adds/removes/role changes.
 
-**Backend (REST)**
-- **Initial sync**: Use the existing [Add Users](/api-reference/rest-apis/v2/users/add-users) endpoint (bulk if available).
-- **Ongoing sync**: Use [Add Users](/api-reference/rest-apis/v2/users/add-users) on user onboarding; [Delete User](/api-reference/rest-apis/v2/users/delete-users) (or equivalent) on off-boarding; Provision/Remove Access on resource membership or role changes.
+##### **APIs (backend)**
+- [**Add users**](/api-reference/rest-apis/v2/users/add-users)
+  - Initial sync: Bulk add existing users so they appear in mentions and can be permissioned.
+  - Ongoing sync: Add users on onboarding to keep your directory in sync.
+- [**Remove users**](/api-reference/rest-apis/v2/users/delete-users)
+  - Ongoing sync: Remove users on off‑boarding to revoke access and clean up directories.
+- [**Get permissions**](/api-reference/rest-apis/v2/auth/get-permissions)
+  - **(backend):** Keep the authoritative mapping of which users have which roles on which resources; update Velt via add/remove permissions as changes occur.
+  - **(frontend):** Rely on the token issued by your backend; do not assign roles or compute access in the client.
 
-**Frontend (SDK)**
-- At login, call your backend’s identify/auth flow. The SDK consumes the issued token and reflects the server’s latest permissions. See our [Quickstart Guide](/get-started/quickstart) for more info.
+<Note>
+Users are auto‑added to their organization on sign‑in when `organizationId` is provided. Use user sync primarily for directory completeness and pre-provisioning.
+</Note>
 
-### APIs & Suggested Integration
 
-#### Backend (authoritative)
-Use REST endpoints to **set source-of-truth** permissions and roles:
-- [Add Permissions](/api-reference/rest-apis/v2/auth/add-permissions) to a resource (org/folder/document).
-- [Remove Permissions](/api-reference/rest-apis/v2/auth/remove-permissions) from a resource.
-- Update Access Type on a resource:
-  - Folder: [Update Folder Access Type](/api-reference/rest-apis/v2/folders/update-folder-access)
-  - Document: [Update Document Access Type](/api-reference/rest-apis/v2/documents/update-document-access)
-- User lifecycle: [Add Users](/api-reference/rest-apis/v2/users/add-users), [Delete Users](/api-reference/rest-apis/v2/users/delete-users) (for synced mode).
-- **Identify / Sign-in / Org join** flows that your backend controls.
-
-#### Frontend (consumer)
-Use the SDK to initialize the session and read the result of backend permissions:
-- **Initialize authentication**: set `VeltAuthProvider` and fetch a JWT from your backend. See [Advanced Setup](/get-started/advanced).
-- **Subscribe & read**: listen to resource data allowed by the issued permissions.
-- **No writes to permissions**: the frontend does not create or modify permissions; it only acts within what the token allows.
 
 <Check>
-**Quick sanity test**
+### Quick sanity test
+Use this short flow to validate your end-to-end access control setup (roles and access types):
 1. Change a user’s role to **viewer** for a document on the backend.
 2. Refresh the client and confirm they can read but not write comments/annotations.
 3. Switch the document’s access type to **restricted** and remove the user’s explicit permission.

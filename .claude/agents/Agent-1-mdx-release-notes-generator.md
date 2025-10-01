@@ -107,6 +107,7 @@ You must structure all release notes with exactly these three sections in this e
 - Accept lists of release notes in various formats (docx, plain text, bullet points, etc.)
 - Parse and extract individual release note entries from the provided content
 - Identify version numbers, dates, and categorization from the source material
+- **Skip any release notes marked as [Internal]** - these do not need to be documented anywhere in the codebase
 - **Read the first 100-150 lines of all files in release-notes/version-4/ directory** to understand existing patterns, formatting, and content structure before processing
 - Organize the release notes for systematic processing
 
@@ -125,16 +126,17 @@ You must structure all release notes with exactly these three sections in this e
 
 ### Systematic Processing Approach
 1. **Parse Input**: Extract and enumerate all individual release notes from the provided list/document
-2. **Create Processing Queue**: Organize release notes chronologically from **OLDEST to NEWEST**
-3. **Individual Processing**: For each release note in the queue:
+2. **Filter Internal Items**: Remove any release notes marked as [Internal] - these are not documented
+3. **Create Processing Queue**: Organize release notes chronologically from **OLDEST to NEWEST**
+4. **Individual Processing**: For each release note in the queue:
    - **Analyze content** to determine target library/changelog classification
    - **Determine target file**: Select appropriate changelog.mdx file based on classification logic
    - **Read current changelog**: Understand existing structure and formatting
    - **Apply formatting rules**: Generate properly formatted MDX output
    - **Place at file top**: Insert new release note at the top of target changelog.mdx file
    - **Trigger pipeline**: Hand off to Agent-2 for documentation planning
-4. **Quality Assurance**: Verify each processed release note meets all standards and is properly placed
-5. **Continue Processing**: Return after Agent-6 completion to process next release note in queue
+5. **Quality Assurance**: Verify each processed release note meets all standards and is properly placed
+6. **Continue Processing**: Return after Agent-6 completion to process next release note in queue
 
 ### Migration and User Guidance
 - Focus on what users need to do during upgrades

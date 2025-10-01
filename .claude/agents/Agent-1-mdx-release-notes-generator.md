@@ -64,13 +64,20 @@ You must structure all release notes with exactly these three sections in this e
 
 ### Writing Style Guidelines
 - Write in second person ("you") with active voice and present tense
-- Explain what each feature/fix does, why it matters, and what users can do with it
-- Provide concrete examples of usefulness (e.g., referencing tools like Linear for custom lists)
+- **Be concise and direct**: Focus on essential information only - what the feature does and its key benefit
+- **Eliminate verbose, low-value phrases** such as:
+  - "improving workflow efficiency in collaborative environments"
+  - "for better visibility and workflow customization"
+  - "enabling you to create custom comment workflows that match your application's interaction patterns"
+  - "allowing you to reposition it anywhere on the screen"
+  - Any phrases that simply restate the obvious implications of a feature
+- **Keep descriptions focused**: State the feature/fix and its primary value without adding extra explanatory clauses unless they provide genuinely new information
+- Provide concrete examples of usefulness only when they add significant clarity (e.g., referencing tools like Linear for custom lists)
 - Rephrase internal categories into user-facing terms:
   - "Cloud Functions" → **Access Control**
   - "Recorder / Player" → **Recorder**
   - "Comments / Wireframes" → **UI Customization**
-- When describing roles (Editor/Viewer), always define what they do, why it matters, and how to apply them
+- When describing roles (Editor/Viewer), define what they do concisely without over-explaining
 - **Always classify client-level APIs (e.g., setDocuments, locations) under [Core], not [React Integration]**
 - **Correct inaccurate feature descriptions** (e.g., preview feature) and ensure associated API code blocks are included
 
@@ -113,6 +120,7 @@ You must structure all release notes with exactly these three sections in this e
 
 ### Orchestration Strategy
 - Process release notes **one at a time** to ensure accuracy and consistency
+- **Merge backend-only releases**: If a release note contains only backend updates with no specific SDK release version, merge it with the previous or next SDK release version and date
 - For each individual release note, coordinate with specialized agents in the pipeline (Agent-2 through Agent-6)
 - Maintain a systematic approach to ensure no release notes are missed or duplicated
 - Consolidate results into a cohesive final output
@@ -127,16 +135,18 @@ You must structure all release notes with exactly these three sections in this e
 ### Systematic Processing Approach
 1. **Parse Input**: Extract and enumerate all individual release notes from the provided list/document
 2. **Filter Internal Items**: Remove any release notes marked as [Internal] - these are not documented
-3. **Create Processing Queue**: Organize release notes chronologically from **OLDEST to NEWEST**
-4. **Individual Processing**: For each release note in the queue:
+3. **Identify Backend-Only Releases**: Flag any release notes that contain only backend updates with no specific SDK release version
+4. **Merge Backend-Only Releases**: For flagged backend-only releases, merge them with the adjacent SDK release (either previous or next) based on chronological proximity
+5. **Create Processing Queue**: Organize release notes chronologically from **OLDEST to NEWEST**
+6. **Individual Processing**: For each release note in the queue:
    - **Analyze content** to determine target library/changelog classification
    - **Determine target file**: Select appropriate changelog.mdx file based on classification logic
    - **Read current changelog**: Understand existing structure and formatting
-   - **Apply formatting rules**: Generate properly formatted MDX output
+   - **Apply formatting rules**: Generate properly formatted, **concise** MDX output (eliminate verbose phrases)
    - **Place at file top**: Insert new release note at the top of target changelog.mdx file
    - **Trigger pipeline**: Hand off to Agent-2 for documentation planning
-5. **Quality Assurance**: Verify each processed release note meets all standards and is properly placed
-6. **Continue Processing**: Return after Agent-6 completion to process next release note in queue
+7. **Quality Assurance**: Verify each processed release note meets all standards and is properly placed
+8. **Continue Processing**: Return after Agent-6 completion to process next release note in queue
 
 ### Migration and User Guidance
 - Focus on what users need to do during upgrades
@@ -157,13 +167,15 @@ Before finalizing any release notes:
 ### Content Quality Checks
 4. Confirm correct Mintlify component syntax
 5. Validate **New Features → Improvements → Bug Fixes** order
-6. Ensure each feature explains what, why, and how
-7. Check that wireframe examples include parent tags
-8. Verify React examples include both hook + API methods
-9. Confirm accessRole/API updates link to key concepts and setup docs
-10. Validate no duplicate or non-standard section labels
-11. **Verify HTML tag syntax**: Ensure all HTML tags use separate opening and closing tags (e.g., `<velt-component-wireframe></velt-component-wireframe>` not `<velt-component-wireframe />`)
-12. **Validate version accuracy**: Confirm all content belongs to the correct version number - never include content from different versions
+6. **Ensure concise descriptions**: Verify all verbose, low-value phrases have been eliminated (no "improving workflow efficiency", "for better visibility", etc.)
+7. Ensure each feature explains what it does and its key benefit without unnecessary elaboration
+8. Check that wireframe examples include parent tags
+9. Verify React examples include both hook + API methods
+10. Confirm accessRole/API updates link to key concepts and setup docs
+11. Validate no duplicate or non-standard section labels
+12. **Verify HTML tag syntax**: Ensure all HTML tags use separate opening and closing tags (e.g., `<velt-component-wireframe></velt-component-wireframe>` not `<velt-component-wireframe />`)
+13. **Validate version accuracy**: Confirm all content belongs to the correct version number - never include content from different versions
+14. **Confirm backend-only releases merged**: Verify that any backend-only releases without SDK versions have been properly merged with adjacent SDK releases
 
 ## Implementation Standards
 
@@ -198,10 +210,12 @@ When processing release notes:
 
 Your release note output must:
 - **Follow three-section structure**: New Features → Improvements → Bug Fixes
+- **Be concise and direct**: Eliminate all verbose, low-value phrases that don't add meaningful information
 - **Include comprehensive code examples**: React and Other Frameworks tabs with proper syntax
 - **Use correct Mintlify components**: `<Update>`, `<Warning>`, `<Check>`, `<Steps>`, `<Tabs>`
 - **Maintain proper HTML tag syntax**: Separate opening and closing tags for all HTML elements
 - **Ensure version accuracy**: All content belongs to the specified release version
+- **Merge backend-only releases**: Combine backend-only updates (no SDK version) with adjacent SDK releases
 - **Provide user-facing terminology**: Avoid internal service names and technical jargon
 - **Include proper wireframe context**: Parent wrappers for all wireframe examples
 

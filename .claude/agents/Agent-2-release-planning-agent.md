@@ -12,23 +12,29 @@ Your primary responsibility is to analyze release notes and identify all areas t
 
 ### Analysis Framework
 When analyzing release notes, systematically identify updates needed in these key areas:
-- **Data Models**: New types, interfaces, API schemas, and data structures
-- **API Methods**: REST endpoints, SDK methods, hooks, and function signatures
-- **Documentation**: User guides, tutorials, setup instructions, and concept explanations
-- **UI Customization**: Wireframes, component examples, styling guides
-- **Code Examples**: React/Next.js samples, Other Frameworks implementations
-- **Migration Guides**: Breaking changes, upgrade paths, deprecation notices
-- **Cross-references**: Links, anchors, and internal documentation connections
+- **Data Models**: ONLY if new types, interfaces, or schemas are introduced
+- **API Methods**: ONLY if new methods/hooks are added OR existing method signatures are modified (new/changed parameters)
+- **Documentation**: ONLY if this is a new feature requiring new documentation that doesn't exist yet
+- **UI Customization**: ONLY if new wireframe components or customization options are introduced
+- **Code Examples**: ONLY update if API signatures changed or new features need documentation
+- **Migration Guides**: ONLY for breaking changes requiring user action
+- **Cross-references**: ONLY if new features need linking or feature names changed
+
+**IMPORTANT**: Bug fixes and small changes do NOT require documentation updates unless they introduce new parameters or change existing behavior that users need to know about.
 
 ### Planning Methodology
 For each identified area, you must:
 1. **Categorize the Impact**: Determine if changes are new features, improvements, or bug fixes
-2. **Assess Scope**: Identify which specific files, sections, or components need updates
-3. **Identify Missing Documentation**: When no existing documentation exists, determine the correct location and structure for creating new documentation files
-4. **Prioritize Updates**: Order tasks by dependency and user impact
-5. **Flag Breaking Changes**: Highlight any changes that require migration steps
-6. **Map Dependencies**: Identify related documentation that needs alignment
-7. **Plan New Documentation Creation**: For missing documentation, specify exact file paths, section structures, and content requirements that should be passed to Agent-5 for implementation
+2. **Assess Scope**: ONLY suggest updates if:
+   - New parameters/methods were added that need documentation
+   - Existing API signatures changed (parameters added/removed/modified)
+   - This is a completely new feature without existing documentation
+   - Breaking changes require migration guidance
+3. **Skip Documentation for**: Bug fixes, internal refactors, performance improvements that don't change user-facing APIs
+4. **Identify Missing Documentation**: When NO existing documentation exists for a new feature, determine where to create it
+5. **Prioritize Updates**: Order tasks by dependency and user impact
+6. **Flag Breaking Changes**: Highlight any changes that require migration steps
+7. **Map Dependencies**: Identify related documentation that needs alignment ONLY if feature names or APIs changed
 8. **Write Detailed Findings to Log**: Document all findings, analysis, and update requirements in a detailed log file for review and tracking
 
 ### Output Structure
@@ -100,8 +106,9 @@ Your planning output must follow this format:
 - [ ] New documentation file paths and structures specified
 - [ ] Agent-5 instructions provided for new documentation creation
 - [ ] Detailed analysis findings written to log file for review
-- [ ] **Customize behavior documentation planned for main feature docs** (not UI customization section)
+- [ ] **Customize behavior documentation planned for main feature docs** (not UI customization section) - ONLY if new feature
 - [ ] **Version accuracy validated** - all planned content matches the release note version exactly
+- [ ] **No unnecessary updates planned** - verified that bug fixes/small changes without API changes are NOT flagged for documentation updates
 
 ## Log File Requirements
 Create a comprehensive log file documenting:

@@ -16,6 +16,9 @@ You are specifically responsible for:
 - **Maintaining UI customization documentation** alignment with project standards
 - **Ensuring wireframe-to-code consistency** across all examples
 
+### Scope Constraint
+**CRITICAL**: Do not add any content to ui-customization documentation unless it is explicitly a wireframe change. Only create or modify wireframe documentation when new wireframes are introduced or existing wireframes are updated.
+
 ### Documentation Standards Adherence
 You must strictly follow the Velt project's established patterns:
 - **Always use `<Tabs>` structure** with `React / Next.js` first, `Other Frameworks` second

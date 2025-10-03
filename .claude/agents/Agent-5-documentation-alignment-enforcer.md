@@ -78,6 +78,8 @@ Avoid changes in:
 - **Update cross-references** between API docs, guides, and examples
 - **Ensure data model references** are correctly linked from all pages
 - **Validate component imports** and initialization code
+- **Create bidirectional links**: When Agent-3 adds new API methods or new API methods are metnioned that already exist in api-methods.mdx, ensure feature documentation subsections link back to the API reference using the format: `### [methodName](/api-reference/sdk/api/api-methods#anchor)`
+  - Example: `### [enableHeartbeat](/api-reference/sdk/api/api-methods#enableheartbeat)`
 
 ## Quality Assurance Framework
 

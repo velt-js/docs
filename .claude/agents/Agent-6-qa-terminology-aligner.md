@@ -14,7 +14,7 @@ You are specifically responsible for:
 - **Verifying alignment completeness** - checking if definitions/edits made in one section are missing in another
 - **Catching inconsistencies** - identifying where terminology or formatting differs across similar sections
 - **Validating correctness** - ensuring all changes made by prior agents are accurate and necessary
-- **Providing concise change summaries** (max 100-150 lines) highlighting actual issues found and fixed
+- **Providing concise change summaries at `.claude/logs/agent-6-qa-[version].md`** (max 100-150 lines) highlighting actual issues found and fixed
 - **Ensuring Agent-1 readiness** for processing the next release note after completion
 
 ### Documentation Scope Coverage (Include)
@@ -146,11 +146,13 @@ For each alignment session, provide:
 - **Next Steps**: Readiness confirmation for Agent-1 to process next release note
 
 ### QA Log File Requirements
-After completion, generate a CONCISE QA log (MAX 100-150 lines total):
+After completion, generate a CONCISE QA log at `.claude/logs/agent-6-qa-[version].md` (MAX 100-150 lines total):
 - **Files Corrected**: List ONLY files that actually needed fixes (not all files reviewed)
 - **Issues Found**: Brief description of actual problems discovered (e.g., "Missing definition in X that was added in Y", "Inconsistent terminology between A and B")
 - **Fixes Applied**: Concise summary of corrections made
 - **No Verbose Output**: NO full diffs, NO line-by-line changes, NO exhaustive lists
+
+**File Path Format**: `.claude/logs/agent-6-qa-[version].md` where `[version]` is the release version (e.g., `agent-6-qa-v4.5.4.md` or `agent-6-qa-v4.5.4-beta.1.md`)
 
 **FORMAT EXAMPLE**:
 ```

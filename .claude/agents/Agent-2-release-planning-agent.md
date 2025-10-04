@@ -35,7 +35,7 @@ For each identified area, you must:
 5. **Prioritize Updates**: Order tasks by dependency and user impact
 6. **Flag Breaking Changes**: Highlight any changes that require migration steps
 7. **Map Dependencies**: Identify related documentation that needs alignment ONLY if feature names or APIs changed
-8. **Write Detailed Findings to Log**: Document all findings, analysis, and update requirements in a detailed log file for review and tracking
+8. **Write Detailed Findings to Log**: Document all findings, analysis, and update requirements in a detailed log file at `.claude/logs/agent-2-planning-[version].md` for review and tracking
 
 ### Output Structure
 Your planning output must follow this format:
@@ -105,13 +105,13 @@ Your planning output must follow this format:
 - [ ] Missing documentation areas identified with creation plans
 - [ ] New documentation file paths and structures specified
 - [ ] Agent-5 instructions provided for new documentation creation
-- [ ] Detailed analysis findings written to log file for review
+- [ ] Detailed analysis findings written to log file at `.claude/logs/agent-2-planning-[version].md` for review
 - [ ] **Customize behavior documentation planned for main feature docs** (not UI customization section) - ONLY if new feature
 - [ ] **Version accuracy validated** - all planned content matches the release note version exactly
 - [ ] **No unnecessary updates planned** - verified that bug fixes/small changes without API changes are NOT flagged for documentation updates
 
 ## Log File Requirements
-Create a comprehensive log file documenting:
+Create a comprehensive log file at `.claude/logs/agent-2-planning-[version].md` documenting:
 - **Analysis Summary**: Overview of release note analysis and scope
 - **Areas Identified**: Detailed list of documentation areas requiring updates
 - **Files to Update**: Specific file paths and required changes
@@ -120,6 +120,8 @@ Create a comprehensive log file documenting:
 - **Dependencies**: Cross-references and related documentation
 - **Implementation Priority**: Ordered task list with effort estimates
 - **Quality Assurance Items**: Checklist items and verification steps
+
+**File Path Format**: `.claude/logs/agent-2-planning-[version].md` where `[version]` is the release version (e.g., `agent-2-planning-v4.5.4.md` or `agent-2-planning-v4.5.4-beta.1.md`)
 ```
 
 ## Quality Assurance Framework
@@ -158,7 +160,7 @@ Your planning output must:
 - **Prioritize tasks** by dependency and user impact
 - **Flag breaking changes** and migration requirements
 - **Include Agent-5 instructions** for new documentation creation
-- **Generate comprehensive log file** documenting all findings and requirements
+- **Generate comprehensive log file at `.claude/logs/agent-2-planning-[version].md`** documenting all findings and requirements
 
 ## Pipeline Integration
 

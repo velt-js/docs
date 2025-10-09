@@ -1,0 +1,1569 @@
+openapi: 3.1.0
+info:
+  title: Velt REST API
+  version: 2.0.0
+  description: |
+    Velt REST API for managing organizations, documents, folders, users, comments, notifications, and more.
+    
+    ## Authentication
+    All endpoints require two headers:
+    - `x-velt-api-key`: Your API key from Velt Console  
+    - `x-velt-auth-token`: Your Auth Token
+    
+    ## Features
+    - Organizations management
+    - Document and folder management
+    - User management with access control
+    - Comment annotations
+    - Real-time notifications
+    - GDPR compliance tools
+    
+    ## Access Control
+    Set `accessRole` to `viewer` (read-only) or `editor` (read/write) on each resource to define user capabilities.
+  contact:
+    name: Velt Support
+    url: https://docs.velt.dev
+  
+servers:
+  - url: https://api.velt.dev/v2
+    description: Production server
+
+security:
+  - ApiKeyAuth: []
+    AuthToken: []
+
+tags:
+  - name: Organizations
+    description: Manage organizations - top-level containers for documents and users
+  - name: Users
+    description: Add, update, retrieve, and delete users with access control
+  - name: Documents
+    description: Manage documents within organizations
+  - name: Folders
+    description: Organize documents in folders
+  - name: Auth
+    description: Manage authentication tokens and user permissions
+  - name: Notifications
+    description: Handle user notifications
+  - name: User Groups
+    description: Manage organization user groups
+  - name: Comments
+    description: Manage comments and comment annotations
+  - name: Workspace
+    description: Configure workspace domains
+  - name: Livestate
+    description: Broadcast real-time events
+  - name: GDPR
+    description: GDPR compliance data operations
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-velt-api-key
+      description: Your API key from the Velt Console
+    AuthToken:
+      type: apiKey
+      in: header
+      name: x-velt-auth-token
+      description: Your Auth Token for authentication
+  
+  schemas:
+    Organization:
+      type: object
+      required:
+        - organizationId
+        - organizationName
+      properties:
+        organizationId:
+          type: string
+          description: Unique identifier for the organization
+          example: yourOrganizationId
+        organizationName:
+          type: string
+          description: Display name of the organization
+          example: Your Organization Name
+        disabled:
+          type: boolean
+          description: Whether the organization is disabled
+          example: false
+    
+    User:
+      type: object
+      required:
+        - userId
+        - name
+        - email
+      properties:
+        userId:
+          type: string
+          description: Unique identifier for the user
+          example: yourUserId1
+        name:
+          type: string
+          description: Display name of the user
+          example: User Name
+        email:
+          type: string
+          format: email
+          description: Email address of the user
+          example: user@email.com
+        accessRole:
+          type: string
+          enum: [viewer, editor]
+          description: Access role for the resource (viewer for read-only, editor for read/write)
+          example: editor
+        initial:
+          type: string
+          description: User initials (auto-generated from name if not provided)
+          example: UN
+    
+    Document:
+      type: object
+      required:
+        - documentId
+      properties:
+        documentId:
+          type: string
+          description: Unique identifier for the document
+          example: yourDocumentId
+        documentName:
+          type: string
+          description: Display name of the document
+          example: Your Document Name
+        accessType:
+          type: string
+          enum: [public, restricted]
+          description: Access type of the document
+          example: public
+        disabled:
+          type: boolean
+          description: Whether the document is disabled
+          example: false
+    
+    Folder:
+      type: object
+      required:
+        - folderId
+      properties:
+        folderId:
+          type: string
+          description: Unique identifier for the folder
+          example: yourFolderId
+        folderName:
+          type: string
+          description: Display name of the folder
+          example: yourFolderName
+        parentFolderId:
+          type: string
+          description: ID of the parent folder
+          example: yourParentFolderId
+        organizationId:
+          type: string
+          description: Organization ID the folder belongs to
+        createdAt:
+          type: integer
+          format: int64
+          description: Unix timestamp of creation
+        lastUpdated:
+          type: integer
+          format: int64
+          description: Unix timestamp of last update
+    
+    Resource:
+      type: object
+      required:
+        - type
+        - id
+      properties:
+        type:
+          type: string
+          enum: [organization, document, folder]
+          description: Type of resource
+          example: organization
+        id:
+          type: string
+          description: ID of the resource
+          example: org_123
+        organizationId:
+          type: string
+          description: Organization ID (required when type is document or folder)
+          example: org_123
+        accessRole:
+          type: string
+          enum: [viewer, editor]
+          description: Access role for this resource
+          default: editor
+          example: editor
+        expiresAt:
+          type: integer
+          format: int64
+          description: Unix timestamp when permission expires (optional)
+          example: 1640995200
+    
+    SuccessResponse:
+      type: object
+      properties:
+        result:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [success]
+              example: success
+            message:
+              type: string
+              example: Operation completed successfully
+            data:
+              type: object
+              description: Response data specific to the operation
+    
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message:
+              type: string
+              description: Error message describing what went wrong
+              example: ERROR_MESSAGE
+            status:
+              type: string
+              description: Error status code
+              example: INVALID_ARGUMENT
+
+paths:
+  /organizations/add:
+    post:
+      summary: Add Organizations
+      description: Use this API to add new organizations and its metadata. If an organization already exists, this will update its metadata.
+      operationId: addOrganizations
+      tags:
+        - Organizations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizations
+                  properties:
+                    organizations:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Organization'
+            example:
+              data:
+                organizations:
+                  - organizationId: yourOrganizationId
+                    organizationName: Your Organization Name
+      responses:
+        '200':
+          description: Organizations added successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        example: success
+                      message:
+                        type: string
+                        example: Organization(s) added successfully.
+                      data:
+                        type: object
+                        additionalProperties:
+                          type: object
+                          properties:
+                            success:
+                              type: boolean
+                            id:
+                              type: string
+                            message:
+                              type: string
+              example:
+                result:
+                  status: success
+                  message: Organization(s) added successfully.
+                  data:
+                    yourOrganizationId:
+                      success: true
+                      id: "02cf91e5e7a5f4c0b600c84cf248384b"
+                      message: Added Successfully
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /organizations/get:
+    post:
+      summary: Get Organizations
+      description: |
+        Use this API to retrieve specific organizations by organization IDs.
+        
+        **Requirements:**
+        - Enable advanced queries option in the Velt Console
+        - Deploy v4 series of the Velt SDK
+      operationId: getOrganizations
+      tags:
+        - Organizations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  properties:
+                    organizationIds:
+                      type: array
+                      items:
+                        type: string
+                      description: Array of Organization IDs (max 30). If not provided, returns all organizations.
+                      example: [yourOrganizationId]
+                    pageSize:
+                      type: integer
+                      default: 1000
+                      description: Number of items per page
+                      example: 1000
+                    pageToken:
+                      type: string
+                      description: Page token from previous API call
+                      example: pageToken
+            example:
+              data:
+                organizationIds: [yourOrganizationId]
+                pageSize: 1000
+                pageToken: pageToken
+      responses:
+        '200':
+          description: Organizations retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                      message:
+                        type: string
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Organization'
+                      nextPageToken:
+                        type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /organizations/update:
+    post:
+      summary: Update Organizations
+      description: Use this API to update existing organization(s) metadata.
+      operationId: updateOrganizations
+      tags:
+        - Organizations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizations
+                  properties:
+                    organizations:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Organization'
+            example:
+              data:
+                organizations:
+                  - organizationId: yourOrganizationId
+                    organizationName: Your Updated Organization Name
+      responses:
+        '200':
+          description: Organizations updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /organizations/delete:
+    post:
+      summary: Delete Organizations
+      description: Use this API to delete specific organization(s) data by their IDs.
+      operationId: deleteOrganizations
+      tags:
+        - Organizations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizationIds
+                  properties:
+                    organizationIds:
+                      type: array
+                      items:
+                        type: string
+                      description: Array of Organization IDs to delete
+                      example: [yourOrganizationId1, yourOrganizationId2]
+            example:
+              data:
+                organizationIds: [yourOrganizationId1, yourOrganizationId2]
+      responses:
+        '200':
+          description: Organizations deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /organizations/access/disablestate/update:
+    post:
+      summary: Update Disabled State for Organizations
+      description: |
+        Use this API to enable or disable both read and write access for all documents for all users.
+        
+        Use case: Disable access when a customer's trial or subscription has ended.
+      operationId: updateOrganizationDisabledState
+      tags:
+        - Organizations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizationIds
+                    - disabled
+                  properties:
+                    organizationIds:
+                      type: array
+                      items:
+                        type: string
+                      description: Array of Organization IDs
+                      example: [yourOrganizationId1, yourOrganizationId2]
+                    disabled:
+                      type: boolean
+                      description: Whether to disable read and write access
+                      example: true
+            example:
+              data:
+                organizationIds: [yourOrganizationId1, yourOrganizationId2]
+                disabled: true
+      responses:
+        '200':
+          description: Disabled state updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /users/add:
+    post:
+      summary: Add Users
+      description: |
+        Use this API to add Users to organizations, folders, or documents.
+        
+        - **Organization:** Provides access to all documents unless they have restricted access
+        - **Folder:** Provides access to all documents in the folder (pass folderId)
+        - **Document:** Provides access to the specific document (pass documentId)
+        
+        **Access Control:**
+        Set `accessRole` to `viewer` (read-only) or `editor` (read/write) for each resource.
+      operationId: addUsers
+      tags:
+        - Users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizationId
+                    - users
+                  properties:
+                    organizationId:
+                      type: string
+                      description: Organization ID
+                      example: yourOrganizationId
+                    createOrganization:
+                      type: boolean
+                      description: If true, creates organization if it doesn't exist
+                    documentId:
+                      type: string
+                      description: Document ID (optional, for document-level access)
+                      example: yourDocumentId
+                    createDocument:
+                      type: boolean
+                      description: If true, creates document if it doesn't exist
+                    folderId:
+                      type: string
+                      description: Folder ID (optional, for folder-level access)
+                      example: yourFolderId
+                    createFolder:
+                      type: boolean
+                      description: If true, creates folder if it doesn't exist
+                    users:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/User'
+            examples:
+              organizationEditor:
+                summary: Add editor to organization
+                value:
+                  data:
+                    organizationId: yourOrganizationId
+                    users:
+                      - userId: yourUserId1
+                        name: User Name
+                        email: user@email.com
+                        accessRole: editor
+              documentViewer:
+                summary: Add viewer to document
+                value:
+                  data:
+                    organizationId: yourOrganizationId
+                    documentId: yourDocumentId
+                    users:
+                      - userId: yourUserId1
+                        name: User Name
+                        email: user@email.com
+                        accessRole: viewer
+      responses:
+        '200':
+          description: Users processed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                      message:
+                        type: string
+                      data:
+                        type: object
+                        additionalProperties:
+                          type: object
+                          properties:
+                            success:
+                              type: boolean
+                            id:
+                              type: string
+                            message:
+                              type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /users/get:
+    post:
+      summary: Get Users
+      description: |
+        Use this API to retrieve users based on various filters such as organization ID, document ID, folder ID, organization user group IDs or user IDs.
+        
+        **Requirements:**
+        - Enable advanced queries option in the Velt Console
+        - Deploy v4 series of the Velt SDK
+      operationId: getUsers
+      tags:
+        - Users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizationId
+                  properties:
+                    organizationId:
+                      type: string
+                      description: Organization ID
+                    documentId:
+                      type: string
+                      description: Document ID
+                    folderId:
+                      type: string
+                      description: Folder ID
+                    userIds:
+                      type: array
+                      items:
+                        type: string
+                      description: Array of User IDs (max 30)
+                    organizationUserGroupIds:
+                      type: array
+                      items:
+                        type: string
+                      description: Array of Organization User Group IDs (max 30)
+                    allDocuments:
+                      type: boolean
+                      description: If true, retrieves all document users within the organization
+                    groupByDocumentId:
+                      type: boolean
+                      description: If true, response is grouped by document ID (works with allDocuments)
+                    pageSize:
+                      type: integer
+                      default: 1000
+                      description: Number of items per page
+                    pageToken:
+                      type: string
+                      description: Page token from previous API call
+      responses:
+        '200':
+          description: Users retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                      message:
+                        type: string
+                      data:
+                        oneOf:
+                          - type: array
+                            items:
+                              $ref: '#/components/schemas/User'
+                          - type: object
+                            additionalProperties:
+                              type: array
+                              items:
+                                $ref: '#/components/schemas/User'
+                      nextPageToken:
+                        type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /users/update:
+    post:
+      summary: Update Users
+      description: |
+        Use this API to update user metadata based on various filters such as organization ID, document ID, folder ID and user IDs.
+        
+        **Access Control:**
+        Set `accessRole` to `viewer` (read-only) or `editor` (read/write) for each resource.
+      operationId: updateUsers
+      tags:
+        - Users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizationId
+                    - users
+                  properties:
+                    organizationId:
+                      type: string
+                      description: Organization ID
+                    documentId:
+                      type: string
+                      description: Document ID
+                    folderId:
+                      type: string
+                      description: Folder ID
+                    users:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/User'
+      responses:
+        '200':
+          description: Users updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /users/delete:
+    post:
+      summary: Delete Users
+      description: |
+        Use this API to remove Users from organizations or documents.
+        
+        - **Organization:** Removes access from all documents and data
+        - **Document:** Removes access from specified document (pass documentId)
+        - **Folder:** Removes access from specified folder (pass folderId)
+      operationId: deleteUsers
+      tags:
+        - Users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizationId
+                    - userIds
+                  properties:
+                    organizationId:
+                      type: string
+                      description: Organization ID
+                    documentId:
+                      type: string
+                      description: Document ID (optional)
+                    folderId:
+                      type: string
+                      description: Folder ID (optional)
+                    userIds:
+                      type: array
+                      items:
+                        type: string
+                      description: Array of User IDs to delete
+      responses:
+        '200':
+          description: Users deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /organizations/documents/add:
+    post:
+      summary: Add Documents
+      description: Use this API to add documents with metadata to an organization.
+      operationId: addDocuments
+      tags:
+        - Documents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizationId
+                    - documents
+                  properties:
+                    organizationId:
+                      type: string
+                      description: Organization ID
+                    createOrganization:
+                      type: boolean
+                      description: If true, creates organization if it doesn't exist
+                    documents:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Document'
+                    folderId:
+                      type: string
+                      description: Folder ID to add documents to
+                    createFolder:
+                      type: boolean
+                      description: If true, creates folder if it doesn't exist
+      responses:
+        '200':
+          description: Documents added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /organizations/documents/get:
+    post:
+      summary: Get Documents
+      description: |
+        Use this API to retrieve specific documents or all documents from an organization.
+        
+        **Requirements:**
+        - Enable advanced queries option in the Velt Console
+        - Deploy v4 series of the Velt SDK
+      operationId: getDocuments
+      tags:
+        - Documents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizationId
+                  properties:
+                    organizationId:
+                      type: string
+                      description: Organization ID
+                    documentIds:
+                      type: array
+                      items:
+                        type: string
+                      description: Array of Document IDs (max 30)
+                    folderId:
+                      type: string
+                      description: Filters documents by folder ID
+                    pageSize:
+                      type: integer
+                      default: 1000
+                      description: Number of items per page
+                    pageToken:
+                      type: string
+                      description: Page token from previous API call
+      responses:
+        '200':
+          description: Documents retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                      message:
+                        type: string
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Document'
+                      pageToken:
+                        type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /organizations/documents/update:
+    post:
+      summary: Update Documents
+      description: Use this API to update metadata of documents within an organization.
+      operationId: updateDocuments
+      tags:
+        - Documents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizationId
+                    - documents
+                  properties:
+                    organizationId:
+                      type: string
+                      description: Organization ID
+                    documents:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Document'
+      responses:
+        '200':
+          description: Documents updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /organizations/documents/delete:
+    post:
+      summary: Delete Documents
+      description: Use this API to delete specific documents from an organization.
+      operationId: deleteDocuments
+      tags:
+        - Documents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizationId
+                    - documentIds
+                  properties:
+                    organizationId:
+                      type: string
+                      description: Organization ID
+                    documentIds:
+                      type: array
+                      items:
+                        type: string
+                      description: Array of Document IDs to delete
+      responses:
+        '200':
+          description: Documents deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /organizations/folders/add:
+    post:
+      summary: Add Folder
+      description: |
+        Use this API to create a new folder in an organization.
+        
+        **Requirements:**
+        - Enable advanced queries option in the Velt Console
+        - Deploy v4 series of the Velt SDK
+      operationId: addFolder
+      tags:
+        - Folders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizationId
+                    - folders
+                  properties:
+                    organizationId:
+                      type: string
+                      description: Organization ID
+                    createOrganization:
+                      type: boolean
+                      description: If true, creates organization if it doesn't exist
+                    folders:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Folder'
+      responses:
+        '200':
+          description: Folder created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /organizations/folders/get:
+    post:
+      summary: Get Folders
+      description: |
+        Use this API to retrieve the given folder's metadata and its subfolders.
+        
+        **Requirements:**
+        - Enable advanced queries option in the Velt Console
+        - Deploy v4 series of the Velt SDK
+      operationId: getFolders
+      tags:
+        - Folders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizationId
+                  properties:
+                    organizationId:
+                      type: string
+                      description: Organization ID
+                    folderId:
+                      type: string
+                      description: Folder ID (optional). If not provided, returns all folders.
+      responses:
+        '200':
+          description: Folders retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                      message:
+                        type: string
+                      data:
+                        type: array
+                        items:
+                          allOf:
+                            - $ref: '#/components/schemas/Folder'
+                            - type: object
+                              properties:
+                                subFolders:
+                                  type: array
+                                  items:
+                                    $ref: '#/components/schemas/Folder'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/generate_token:
+    post:
+      summary: Generate Token
+      description: |
+        Use this API to generate authentication JWT token for users to access Velt features. The token contains user information and permissions for specific resources.
+        
+        - JWT token expires in 48 hours
+        - Can specify permissions for different resource types (organization, folder, document)
+        
+        **Access Control:**
+        Set `accessRole` to `viewer` (read-only) or `editor` (read/write) for each resource.
+      operationId: generateToken
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - userId
+                - userProperties
+                - permissions
+              properties:
+                userId:
+                  type: string
+                  description: Unique identifier for the user
+                  example: user123
+                userProperties:
+                  type: object
+                  required:
+                    - name
+                    - email
+                  properties:
+                    isAdmin:
+                      type: boolean
+                      description: Whether the user has admin privileges
+                      default: false
+                    name:
+                      type: string
+                      description: Display name of the user
+                      example: John Doe
+                    email:
+                      type: string
+                      format: email
+                      description: Email address of the user
+                      example: john@example.com
+                permissions:
+                  type: object
+                  required:
+                    - resources
+                  properties:
+                    resources:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Resource'
+            examples:
+              orgAndDoc:
+                summary: Organization viewer and document editor
+                value:
+                  userId: user123
+                  userProperties:
+                    isAdmin: false
+                    name: John Doe
+                    email: john@example.com
+                  permissions:
+                    resources:
+                      - type: organization
+                        id: org_123
+                        accessRole: viewer
+                      - type: document
+                        id: doc_456
+                        organizationId: org_123
+                        accessRole: editor
+                        expiresAt: 1640995200
+      responses:
+        '200':
+          description: Token generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                      message:
+                        type: string
+                      data:
+                        type: object
+                        properties:
+                          token:
+                            type: string
+                            description: JWT token
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/permissions/add:
+    post:
+      summary: Add Permissions
+      description: |
+        Use this API to add permissions to a user for various resources like organizations, folders, documents, etc.
+        
+        - Can add permissions for multiple resources in a single API call
+        - The `expiresAt` field is optional
+        
+        **Access Control:**
+        Set `accessRole` to `viewer` (read-only) or `editor` (read/write) for each resource.
+      operationId: addPermissions
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - user
+                    - permissions
+                  properties:
+                    user:
+                      type: object
+                      required:
+                        - userId
+                      properties:
+                        userId:
+                          type: string
+                          description: The ID of the user to add permissions to
+                    permissions:
+                      type: object
+                      required:
+                        - resources
+                      properties:
+                        resources:
+                          type: array
+                          items:
+                            $ref: '#/components/schemas/Resource'
+      responses:
+        '200':
+          description: Permissions added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /notifications/get:
+    post:
+      summary: Get Notifications
+      description: |
+        Use this API to retrieve notifications.
+        
+        **Requirements:**
+        - Enable advanced queries option in the Velt Console
+        - Deploy v4 series of the Velt SDK
+      operationId: getNotifications
+      tags:
+        - Notifications
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizationId
+                  properties:
+                    organizationId:
+                      type: string
+                      description: Organization ID
+                    documentId:
+                      type: string
+                      description: Document ID (either this or userId)
+                    locationId:
+                      type: string
+                      description: Location ID
+                    userId:
+                      type: string
+                      description: User ID (either this or documentId)
+                    notificationIds:
+                      type: array
+                      items:
+                        type: string
+                      description: Array of Notification IDs (max 30)
+                    pageSize:
+                      type: integer
+                      default: 1000
+                      description: Number of items per page
+                    pageToken:
+                      type: string
+                      description: Page token from previous API call
+                    order:
+                      type: string
+                      enum: [asc, desc]
+                      default: desc
+                      description: Order of notifications based on timestamp
+      responses:
+        '200':
+          description: Notifications retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                      message:
+                        type: string
+                      data:
+                        type: array
+                        items:
+                          type: object
+                      pageToken:
+                        type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /organizations/usergroups/add:
+    post:
+      summary: Add User Groups
+      description: Use this API to add organization user groups to a specific organization.
+      operationId: addUserGroups
+      tags:
+        - User Groups
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+              properties:
+                data:
+                  type: object
+                  required:
+                    - organizationId
+                    - organizationUserGroups
+                  properties:
+                    organizationId:
+                      type: string
+                    organizationUserGroups:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          groupId:
+                            type: string
+                          groupName:
+                            type: string
+      responses:
+        '200':
+          description: User groups added successfully
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: Invalid request
+
+  /commentannotations/comments/add:
+    post:
+      summary: Add Comments
+      description: Use this API to add comments within a specific CommentAnnotation.
+      operationId: addComments
+      tags:
+        - Comments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+      responses:
+        '200':
+          description: Comments added successfully
+        '400':
+          description: Invalid request
+
+  /workspace/domains/add:
+    post:
+      summary: Add Domains
+      description: Add domains to workspace allowed list.
+      operationId: addDomains
+      tags:
+        - Workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - data
+      responses:
+        '200':
+          description: Domains added successfully
+        '400':
+          description: Invalid request
+
+  /workspace/domains/delete:
+    post:
+      summary: Delete Domains
+      description: Remove domains from workspace allowed list.
+      operationId: deleteDomains
+      tags:
+        - Workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Domains deleted successfully
+        '400':
+          description: Invalid request
+
+  /livestate/broadcast:
+    post:
+      summary: Broadcast Event
+      description: Broadcast live state events for real-time sync.
+      operationId: broadcastEvent
+      tags:
+        - Livestate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Event broadcasted successfully
+        '400':
+          description: Invalid request
+
+  /users/data/get:
+    post:
+      summary: Get All User Data (GDPR)
+      description: Get all feature data for a user (GDPR compliance).
+      operationId: getAllUserData
+      tags:
+        - GDPR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Data fetched successfully
+        '400':
+          description: Invalid request
+
+  /users/data/delete:
+    post:
+      summary: Delete All User Data (GDPR)
+      description: Delete all user data (GDPR compliance - irreversible).
+      operationId: deleteAllUserData
+      tags:
+        - GDPR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Deletion initiated successfully
+        '400':
+          description: Invalid request
+

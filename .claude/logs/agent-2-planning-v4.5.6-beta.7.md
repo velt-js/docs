@@ -233,14 +233,6 @@ const specificData = await liveStateSyncElement.fetchLiveStateData({
     liveStateDataId: "LIVE_STATE_DATA_ID"
 });
 
-// With TypeScript type support
-interface MyDataType {
-    key: string;
-    value: number;
-}
-const typedData = await liveStateSyncElement.fetchLiveStateData<MyDataType>({
-    liveStateDataId: "LIVE_STATE_DATA_ID"
-});
 
 // Using API methods
 const liveStateSyncElement = client.getLiveStateSyncElement();

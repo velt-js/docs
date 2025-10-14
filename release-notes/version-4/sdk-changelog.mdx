@@ -10,6 +10,195 @@ description: Release Notes of changes added to the core Velt SDK
 - `@veltdev/sdk`
 
 
+<Update label="4.5.6-beta.11" description="October 14, 2025">
+
+### New Features
+
+- [**Access Control**]: Added Permission Provider as a new authentication method. Instead of pre-syncing users via REST API or passing details in the `identify` method, Velt now validates access requests in real-time by querying your authorization service. When a user requests access to a resource, Velt calls your provider to determine if access should be granted, then handles user syncing automatically.
+
+<Note>
+Set your API key's `defaultDocumentAccessType` to `restricted` so access is denied by default unless explicitly granted through the provider.
+</Note>
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+// Using API methods
+const client = useVeltClient();
+
+client.setPermissionProvider({
+  onResourceAccessRequired: async (requests) => {
+    // Implement your authorization logic
+    const data = [];
+    requests.forEach((request) => {
+      if (request.resource.type === 'document') {
+        data.push({
+          userId: request.userId,
+          resourceId: request.resource.id,
+          type: request.resource.type,
+          hasAccess: true,
+          accessRole: 'viewer',
+          expiresAt: Date.now() + 10 * 60 * 1000, // 10 mins
+        });
+      } else {
+        data.push({
+          userId: request.userId,
+          resourceId: request.resource.id,
+          type: request.resource.type,
+          hasAccess: true,
+        });
+      }
+    });
+
+    // Generate secure signature via REST API
+    const result = await fetch('https://api.velt.dev/v2/auth/generate_signature', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-velt-api-key': 'YOUR_API_KEY',
+        'x-velt-auth-token': 'YOUR_AUTH_TOKEN',
+      },
+      body: JSON.stringify({ data })
+    }).then(res => res.json());
+
+    return {
+      data,
+      success: true,
+      statusCode: 200,
+      signature: result?.result?.data?.signature
+    };
+  },
+  retryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  },
+  // Set to true if access control changes frequently (e.g., for high-frequency notifications)
+  forceRefresh: false,
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<script>
+Velt.setPermissionProvider({
+  onResourceAccessRequired: async (requests) => {
+    // Implement your authorization logic
+    const data = [];
+    requests.forEach((request) => {
+      if (request.resource.type === 'document') {
+        data.push({
+          userId: request.userId,
+          resourceId: request.resource.id,
+          type: request.resource.type,
+          hasAccess: true,
+          accessRole: 'viewer',
+          expiresAt: Date.now() + 10 * 60 * 1000, // 10 mins
+        });
+      } else {
+        data.push({
+          userId: request.userId,
+          resourceId: request.resource.id,
+          type: request.resource.type,
+          hasAccess: true,
+        });
+      }
+    });
+
+    // Generate secure signature via REST API
+    const result = await fetch('https://api.velt.dev/v2/auth/generate_signature', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-velt-api-key': 'YOUR_API_KEY',
+        'x-velt-auth-token': 'YOUR_AUTH_TOKEN',
+      },
+      body: JSON.stringify({ data })
+    }).then(res => res.json());
+
+    return {
+      data,
+      success: true,
+      statusCode: 200,
+      signature: result?.result?.data?.signature
+    };
+  },
+  retryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  },
+  // Set to true if access control changes frequently (e.g., for high-frequency notifications)
+  forceRefresh: false,
+});
+</script>
+```
+</Tab>
+</Tabs>
+
+### Improvements
+
+- [**Access Control**]: Added `maxDepth` parameter to [`getFolders` REST API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/get-folders). You can now retrieve nested subfolders at any depth level. The response includes `ancestors` array showing parent hierarchy and `inheritAccessFromParent` field indicating whether access is inherited.
+
+```bash
+curl --location 'https://api.velt.dev/v2/organizations/folders/get' \
+--header 'x-velt-api-key: YOUR_API_KEY' \
+--header 'x-velt-auth-token: YOUR_AUTH_TOKEN' \
+--header 'Content-Type: application/json' \
+--data '{
+    "data": {
+        "organizationId": "org1",
+        "folderId": "folder1",
+        "maxDepth": 3
+    }
+}'
+```
+
+- [**Access Control**]: Added `inheritFromParent` parameter to the [update folder access REST API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/update-folder-access). You can now configure a folder to inherit access permissions from its parent folder.
+
+```bash
+curl --location 'https://api.velt.dev/v2/organizations/folders/access/update' \
+--header 'x-velt-api-key: YOUR_API_KEY' \
+--header 'x-velt-auth-token: YOUR_AUTH_TOKEN' \
+--header 'Content-Type: application/json' \
+--data '{
+  "data": {
+    "organizationId": "org1",
+    "folderIds": ["folder1"],
+    "inheritFromParent": true
+  }
+}'
+```
+
+- [**Access Control**]: The [update folder REST API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/update-folder) now handles folder moves correctly. When a folder is moved to a different parent, its `ancestors` array and `accessType` are automatically updated, and all subfolder information is updated accordingly.
+
+- [**Access Control**]: Added `accessType` parameter to the [create folder REST API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/add-folder). You can now set a folder's access permissions during creation.
+
+```bash
+curl --location 'https://api.velt.dev/v2/organizations/folders/add' \
+--header 'x-velt-api-key: YOUR_API_KEY' \
+--header 'x-velt-auth-token: YOUR_AUTH_TOKEN' \
+--header 'Content-Type: application/json' \
+--data '{
+  "data": {
+    "organizationId": "org1",
+    "folders": [
+      {
+        "folderId": "folder2025",
+        "folderName": "folder2025",
+        "accessType": "restricted"
+      }
+    ]
+  }
+}'
+```
+
+- [**Core**]: The `setDocuments` method now filters out documents the user doesn't have access to instead of failing the entire operation. Previously, if any document in the array was inaccessible, the entire query would fail.
+
+- [**Access Control**]: Document-level access is now prioritized over folder-level access. If the document doesn't have explicit access settings, it inherits from its folder or top parent.
+
+- [**Access Control**]: Folder document limit set to 50 when using `setDocuments` with the `allDocuments` flag. When fetching all documents from a folder, only the first 50 documents are retrieved, and any documents the user doesn't have access to are filtered out.
+
+</Update>
+
 <Update label="4.5.6-beta.9" description="October 10, 2025">
 
 ### Bug Fixes

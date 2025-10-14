@@ -82,6 +82,10 @@ Folders help you organize documents in a hierarchical way, like a traditional fi
 - Subscribe to a folder and its documents using the `setDocuments` method.
 - Subscribe to all documents in the folder or a specific set of documents. If you want to subscribe to specific documents in the folder then you can pass upto 30 documents at a time.
 
+<Note>
+**Filtering Behavior:** When using `setDocuments` with the `allDocuments` flag, the method automatically filters out documents the user doesn't have access to instead of failing the entire operation. The folder document limit is set to 50 documents when using `allDocuments: true`. Any documents the user doesn't have access to are silently filtered from the result.
+</Note>
+
 <Tabs>
 <Tab title="React / Next.js">
 
@@ -279,6 +283,10 @@ For example, in a slide presentation app, the whole slide deck would be a single
 - A user can be added to multiple Documents.
 - You can set Document level access control to override the Organization's access control it inherited but not the Folder's access control.
 
+<Note>
+**Document Access Priority:** Document-level access settings now take priority over folder-level access settings. If a document has its own explicit access configuration, those settings will be used. If the document doesn't have explicit access settings, it will inherit from its parent folder or organization.
+</Note>
+
 
 ### APIs
 
@@ -290,6 +298,10 @@ For example, in a slide presentation app, the whole slide deck would be a single
 - For features like comments, notifications, recorder, reactions etc. you will be able to read and write to multiple documents at the same time.
 - For features like cursors, presence, huddle, live state sync etc. it will default to the root document.
 - Sidebar will automatically show data from all the documents.
+
+<Warning>
+**Access Filtering:** The `setDocuments` method now filters out documents the user doesn't have access to instead of failing the entire operation. Previously, if any document in the array was inaccessible, the entire query would fail. Now only accessible documents are subscribed, and inaccessible ones are silently filtered out.
+</Warning>
 
 **Params:**
 - `documents`: [Document[]](/api-reference/sdk/models/data-models#document)
@@ -945,10 +957,11 @@ User Groups let you organize users into teams (like "engineering" or "marketing"
 
 ### Frontend APIs
 #### Authenticate a User
-There are two ways to authenticate a user in Velt.
+There are three ways to authenticate a user in Velt.
 
 1. Using an Auth Provider (recommended)
 2. Using Identify method
+3. Using Permission Provider
 
 
 ##### **1. Use Auth Provider**
@@ -1086,6 +1099,131 @@ await client.identify(user, {
 });
 
 ```
+
+##### **3. Use Permission Provider**
+- This approach provides real-time permission validation by querying your authorization service whenever a user requests access to a resource.
+- Instead of pre-syncing users or passing permissions during authentication, Velt validates access requests in real-time and handles user syncing automatically.
+- Set your API key's `defaultDocumentAccessType` to `restricted` so access is denied by default unless explicitly granted through the provider.
+- This method is best when you want to keep your authorization system as the source of truth without pre-syncing data to Velt.
+- **Params**:
+  - `onResourceAccessRequired`: Function that receives permission queries and returns access decisions
+  - `retryConfig`: [AuthRetryConfig](/api-reference/sdk/models/data-models#authretryconfig) - Configuration for retry behavior
+  - `forceRefresh`: `boolean` - Set to true if access control changes frequently (e.g., for high-frequency notifications)
+
+<Note>
+The Permission Provider requires secure signature generation using the [Generate Signature API](/api-reference/rest-apis/v2/auth/generate-signature). This ensures that permission responses are cryptographically verified and cannot be tampered with.
+</Note>
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const client = useVeltClient();
+
+client.setPermissionProvider({
+  onResourceAccessRequired: async (requests) => {
+    // Implement your authorization logic
+    const data = [];
+    requests.forEach((request) => {
+      if (request.resource.type === 'document') {
+        data.push({
+          userId: request.userId,
+          resourceId: request.resource.id,
+          type: request.resource.type,
+          hasAccess: true,
+          accessRole: 'viewer',
+          expiresAt: Date.now() + 10 * 60 * 1000, // 10 mins
+        });
+      } else {
+        data.push({
+          userId: request.userId,
+          resourceId: request.resource.id,
+          type: request.resource.type,
+          hasAccess: true,
+        });
+      }
+    });
+
+    // Generate secure signature via REST API
+    const result = await fetch('https://api.velt.dev/v2/auth/generate_signature', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-velt-api-key': 'YOUR_API_KEY',
+        'x-velt-auth-token': 'YOUR_AUTH_TOKEN',
+      },
+      body: JSON.stringify({ data })
+    }).then(res => res.json());
+
+    return {
+      data,
+      success: true,
+      statusCode: 200,
+      signature: result?.result?.data?.signature
+    };
+  },
+  retryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  },
+  // Set to true if access control changes frequently (e.g., for high-frequency notifications)
+  forceRefresh: false,
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setPermissionProvider({
+  onResourceAccessRequired: async (requests) => {
+    // Implement your authorization logic
+    const data = [];
+    requests.forEach((request) => {
+      if (request.resource.type === 'document') {
+        data.push({
+          userId: request.userId,
+          resourceId: request.resource.id,
+          type: request.resource.type,
+          hasAccess: true,
+          accessRole: 'viewer',
+          expiresAt: Date.now() + 10 * 60 * 1000, // 10 mins
+        });
+      } else {
+        data.push({
+          userId: request.userId,
+          resourceId: request.resource.id,
+          type: request.resource.type,
+          hasAccess: true,
+        });
+      }
+    });
+
+    // Generate secure signature via REST API
+    const result = await fetch('https://api.velt.dev/v2/auth/generate_signature', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-velt-api-key': 'YOUR_API_KEY',
+        'x-velt-auth-token': 'YOUR_AUTH_TOKEN',
+      },
+      body: JSON.stringify({ data })
+    }).then(res => res.json());
+
+    return {
+      data,
+      success: true,
+      statusCode: 200,
+      signature: result?.result?.data?.signature
+    };
+  },
+  retryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  },
+  // Set to true if access control changes frequently (e.g., for high-frequency notifications)
+  forceRefresh: false,
+});
+```
+</Tab>
+</Tabs>
 
 #### Sign out a User
 In a given session or browser tab, if you want to switch users, 
@@ -1360,9 +1498,153 @@ console.log(permissions)
 </Tabs>
 
 <Note>
-When you include `organizationId` in the identify/auth payload, Velt automatically creates and associates the user with that organization. The Auto-create Organization Users console setting is **enabled by default**, so you don’t need to pre-create users for on-demand flows. [Go to Console under App Configuration -> Auto-create Organization User](https://console.velt.dev/dashboard/config/appconfig)
+When you include `organizationId` in the identify/auth payload, Velt automatically creates and associates the user with that organization. The Auto-create Organization Users console setting is **enabled by default**, so you don't need to pre-create users for on-demand flows. [Go to Console under App Configuration -> Auto-create Organization User](https://console.velt.dev/dashboard/config/appconfig)
 </Note>
 
+#### 3) Real-time Permission Provider
+- Validate access requests in real-time by querying your authorization service directly from the frontend.
+- Instead of pre-syncing permissions to Velt or managing them via backend APIs, implement a provider function that Velt calls whenever permission validation is needed.
+- Best for applications that want to keep their existing authorization system as the single source of truth without maintaining a separate permission store.
+- Set your API key's `defaultDocumentAccessType` to `restricted` so access is denied by default unless explicitly granted through the provider.
+
+##### **How it works**
+1. Configure a `setPermissionProvider` function in your frontend that implements your authorization logic
+2. When a user requests access to a resource, Velt calls your provider function with the permission query
+3. Your function checks permissions against your authorization system and returns the access decision
+4. The response must be cryptographically signed using the [Generate Signature API](/api-reference/rest-apis/v2/auth/generate-signature) to ensure security
+5. Velt validates the signature and grants/denies access based on your response
+
+##### **When to use**
+- Your app has complex, dynamic permissions that change frequently
+- You want to avoid syncing permission data to an external system
+- You need real-time permission validation without backend synchronization overhead
+- Your authorization logic is already centralized and easily accessible from your frontend
+
+##### **Frontend API**
+Use [`setPermissionProvider()`](/api-reference/sdk/api/api-methods#setpermissionprovider) to configure the permission provider.
+
+**Params:**
+- `onResourceAccessRequired`: Function that receives [PermissionQuery[]](/api-reference/sdk/models/data-models#permissionquery) and returns [PermissionResult](/api-reference/sdk/models/data-models#permissionresult)
+- `retryConfig`: [AuthRetryConfig](/api-reference/sdk/models/data-models#authretryconfig) - Configuration for retry behavior on failures
+- `forceRefresh`: `boolean` - Set to true if access control changes frequently (forces re-validation on each access check)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const client = useVeltClient();
+
+client.setPermissionProvider({
+  onResourceAccessRequired: async (requests) => {
+    // Implement your authorization logic
+    const data = [];
+    requests.forEach((request) => {
+      if (request.resource.type === 'document') {
+        data.push({
+          userId: request.userId,
+          resourceId: request.resource.id,
+          type: request.resource.type,
+          hasAccess: true,
+          accessRole: 'viewer',
+          expiresAt: Date.now() + 10 * 60 * 1000, // 10 mins
+        });
+      } else {
+        data.push({
+          userId: request.userId,
+          resourceId: request.resource.id,
+          type: request.resource.type,
+          hasAccess: true,
+        });
+      }
+    });
+
+    // Generate secure signature via REST API
+    const result = await fetch('https://api.velt.dev/v2/auth/generate_signature', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-velt-api-key': 'YOUR_API_KEY',
+        'x-velt-auth-token': 'YOUR_AUTH_TOKEN',
+      },
+      body: JSON.stringify({ data })
+    }).then(res => res.json());
+
+    return {
+      data,
+      success: true,
+      statusCode: 200,
+      signature: result?.result?.data?.signature
+    };
+  },
+  retryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  },
+  // Set to true if access control changes frequently (e.g., for high-frequency notifications)
+  forceRefresh: false,
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setPermissionProvider({
+  onResourceAccessRequired: async (requests) => {
+    // Implement your authorization logic
+    const data = [];
+    requests.forEach((request) => {
+      if (request.resource.type === 'document') {
+        data.push({
+          userId: request.userId,
+          resourceId: request.resource.id,
+          type: request.resource.type,
+          hasAccess: true,
+          accessRole: 'viewer',
+          expiresAt: Date.now() + 10 * 60 * 1000, // 10 mins
+        });
+      } else {
+        data.push({
+          userId: request.userId,
+          resourceId: request.resource.id,
+          type: request.resource.type,
+          hasAccess: true,
+        });
+      }
+    });
+
+    // Generate secure signature via REST API
+    const result = await fetch('https://api.velt.dev/v2/auth/generate_signature', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-velt-api-key': 'YOUR_API_KEY',
+        'x-velt-auth-token': 'YOUR_AUTH_TOKEN',
+      },
+      body: JSON.stringify({ data })
+    }).then(res => res.json());
+
+    return {
+      data,
+      success: true,
+      statusCode: 200,
+      signature: result?.result?.data?.signature
+    };
+  },
+  retryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  },
+  // Set to true if access control changes frequently (e.g., for high-frequency notifications)
+  forceRefresh: false,
+});
+```
+</Tab>
+</Tabs>
+
+##### **Backend API**
+Use the [Generate Signature API](/api-reference/rest-apis/v2/auth/generate-signature) to cryptographically sign your permission responses.
+
+<Note>
+The Permission Provider approach requires that you implement the signature generation on your backend to ensure the security and integrity of permission responses. Never expose your API keys on the frontend.
+</Note>
 
 
 <Check>

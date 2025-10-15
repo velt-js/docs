@@ -14,64 +14,9 @@ description: Release Notes of changes added to the core Velt SDK
 
 ### Improvements
 
-- [**Notifications**]: Notifications in "For You" and "Documents" tabs now only show for documents the user has access to. This ensures users only receive notifications for accessible content and prevents email notifications for inaccessible documents. This behavior also applies when using Permission Provider to manage access control.
+- [**Notifications**]: In-app notifications and APIs now only create and retrieve notifications for documents the user has access to; notifications for inaccessible documents will no longer be generated or returned (including historical ones)
 
 - [**REST APIs**]: Added `verifyUserPermissions` flag to [`Add Notifications`](https://docs.velt.dev/api-reference/rest-apis/v2/notifications/add-notifications) and [`Update Notifications`](https://docs.velt.dev/api-reference/rest-apis/v2/notifications/update-notifications) REST APIs. When enabled, notifications are only created or updated for users who have access to the specified document.
-
-**Add Notifications API:**
-```bash
-curl --location 'https://api.velt.dev/v2/notifications/add' \
---header 'Content-Type: application/json' \
---header 'x-velt-api-key: YOUR_API_KEY' \
---header 'x-velt-auth-token: YOUR_AUTH_TOKEN' \
---data '{
-  "data": {
-    "organizationId": "org1",
-    "documentId": "document3",
-    "actionUser": {
-      "userId": "1.1"
-    },
-    "verifyUserPermissions": true,
-    "displayHeadlineMessageTemplate": "This is main template, you can pass variables using curly brackets like this",
-    "displayHeadlineMessageTemplateData": {
-      "actionUser": {
-        "userId": "1.1"
-      },
-      "recipientUser": {
-        "userId": "2.2"
-      }
-    },
-    "displayBodyMessage": "This is body message (Secondary message)",
-    "notifyUsers": [
-      {
-        "userId": "2.2"
-      }
-    ],
-    "notifyAll": false
-  }
-}'
-```
-
-**Update Notifications API:**
-```bash
-curl --location 'https://api.velt.dev/v2/notifications/update' \
---header 'Content-Type: application/json' \
---header 'x-velt-api-key: YOUR_API_KEY' \
---header 'x-velt-auth-token: YOUR_AUTH_TOKEN' \
---data '{
-  "data": {
-    "organizationId": "org1",
-    "documentId": "document3",
-    "verifyUserPermissions": true,
-    "notifications": [
-      {
-        "id": "1812819846795857",
-        "displayBodyMessage": "Updated body message"
-      }
-    ]
-  }
-}'
-```
 
 </Update>
 
@@ -79,7 +24,7 @@ curl --location 'https://api.velt.dev/v2/notifications/update' \
 
 ### New Features
 
-- [**Access Control**]: Added Permission Provider as a new permission configuration mode. Instead of pre-syncing users via REST API or passing details in the `identify` method, Velt now validates access requests in real-time by querying your authorization service. When a user requests access to a resource, Velt calls your provider to determine if access should be granted, then handles user syncing automatically.
+- [**Access Control**]: Added a new **Permission Provider** mechanism for simpler access control implementation. Instead of syncing users into Velt or calling the Permissions API directly, you can now configure an endpoint that Velt will call to verify user access for any resource (organization, folder, or document). When a user logs in or attempts to access a resource, Velt pings your endpoint with the request details. Your endpoint determines access, signs the result using Velt's API, and returns the response. Velt validates the signature and updates access accordingly. This provides a single, backend-controlled source of truth for permissions and can be used instead of **user sync** and **on-demand** permission approaches. [Learn more](/key-concepts/overview#3-real-time-permission-provider).
 
 <Note>
 Set your API key's `defaultDocumentAccessType` to `restricted` so access is denied by default unless explicitly granted through the provider.
@@ -203,62 +148,16 @@ Velt.setPermissionProvider({
 
 - [**Access Control**]: Added `maxDepth` parameter to [`getFolders` REST API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/get-folders). You can now retrieve nested subfolders at any depth level. The response includes `ancestors` array showing parent hierarchy and `inheritAccessFromParent` field indicating whether access is inherited.
 
-```bash
-curl --location 'https://api.velt.dev/v2/organizations/folders/get' \
---header 'x-velt-api-key: YOUR_API_KEY' \
---header 'x-velt-auth-token: YOUR_AUTH_TOKEN' \
---header 'Content-Type: application/json' \
---data '{
-    "data": {
-        "organizationId": "org1",
-        "folderId": "folder1",
-        "maxDepth": 3
-    }
-}'
-```
-
 - [**Access Control**]: Added `inheritFromParent` parameter to the [update folder access REST API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/update-folder-access). You can now configure a folder to inherit access permissions from its parent folder.
-
-```bash
-curl --location 'https://api.velt.dev/v2/organizations/folders/access/update' \
---header 'x-velt-api-key: YOUR_API_KEY' \
---header 'x-velt-auth-token: YOUR_AUTH_TOKEN' \
---header 'Content-Type: application/json' \
---data '{
-  "data": {
-    "organizationId": "org1",
-    "folderIds": ["folder1"],
-    "inheritFromParent": true
-  }
-}'
-```
 
 - [**Access Control**]: The [update folder REST API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/update-folder) now handles folder moves correctly. When a folder is moved to a different parent, its `ancestors` array and `accessType` are automatically updated, and all subfolder information is updated accordingly.
 
-- [**Access Control**]: Added `accessType` parameter to the [create folder REST API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/add-folder). You can now set a folder's access permissions during creation.
+- [**Access Control**]: Added `accessType` parameter to the [add-folder REST API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/add-folder). You can now set a folder's access permissions during creation.
 
-```bash
-curl --location 'https://api.velt.dev/v2/organizations/folders/add' \
---header 'x-velt-api-key: YOUR_API_KEY' \
---header 'x-velt-auth-token: YOUR_AUTH_TOKEN' \
---header 'Content-Type: application/json' \
---data '{
-  "data": {
-    "organizationId": "org1",
-    "folders": [
-      {
-        "folderId": "folder2025",
-        "folderName": "folder2025",
-        "accessType": "restricted"
-      }
-    ]
-  }
-}'
-```
 
-- [**Core**]: The `setDocuments` method now filters out documents the user doesn't have access to instead of failing the entire operation. Previously, if any document in the array was inaccessible, the entire query would fail.
+- [**Core**]: The `setDocuments` method now filters out documents the user doesn't have access to instead of failing the entire operation. Previously, if any document in the array was inaccessible, the entire request would fail.
 
-- [**Access Control**]: Document-level access is now prioritized over folder-level access. If the document doesn't have explicit access settings, it inherits from its folder or top parent.
+- [**Access Control**]: Resources (Organizations, Folders, and Documents) follow a hierarchical permission model. By default, **each resource inherits its access type and user permissions** from its parent. If a resource defines its own access type or user permissions, those **explicit settings override the inherited values**. This precedence applies during both **permission evaluation and access enforcement**.
 
 - [**Access Control**]: Folder document limit set to 50 when using `setDocuments` with the `allDocuments` flag. When fetching all documents from a folder, only the first 50 documents are retrieved, and any documents the user doesn't have access to are filtered out.
 

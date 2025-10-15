@@ -16,7 +16,9 @@ description: Release Notes of changes added to the core Velt SDK
 
 - [**Notifications**]: In-app notifications and APIs now only create and retrieve notifications for documents the user has access to; notifications for inaccessible documents will no longer be generated or returned (including historical ones)
 
-- [**REST APIs**]: Added `verifyUserPermissions` flag to [`Add Notifications`](https://docs.velt.dev/api-reference/rest-apis/v2/notifications/add-notifications) and [`Update Notifications`](https://docs.velt.dev/api-reference/rest-apis/v2/notifications/update-notifications) REST APIs. When enabled, notifications are only created or updated for users who have access to the specified document.
+- [**REST APIs**]: Added `verifyUserPermissions` flag to [`Add Notifications`](/api-reference/rest-apis/v2/notifications/add-notifications) and [`Update Notifications`](/api-reference/rest-apis/v2/notifications/update-notifications) REST APIs.
+When enabled, notifications are only created or updated for users who have access to the specified document.
+<Info>Note: If you are using the new `PermissionProvider` then this flag will not work, you will need to do the permissions validation on your end before adding or updating the notification.</Info>
 
 </Update>
 
@@ -24,135 +26,26 @@ description: Release Notes of changes added to the core Velt SDK
 
 ### New Features
 
-- [**Access Control**]: Added a new **Permission Provider** mechanism for simpler access control implementation. Instead of syncing users into Velt or calling the Permissions API directly, you can now configure an endpoint that Velt will call to verify user access for any resource (organization, folder, or document). When a user logs in or attempts to access a resource, Velt pings your endpoint with the request details. Your endpoint determines access, signs the result using Velt's API, and returns the response. Velt validates the signature and updates access accordingly. This provides a single, backend-controlled source of truth for permissions and can be used instead of **user sync** and **on-demand** permission approaches. [Learn more](/key-concepts/overview#3-real-time-permission-provider).
-
-<Note>
-Set your API key's `defaultDocumentAccessType` to `restricted` so access is denied by default unless explicitly granted through the provider.
-</Note>
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using API methods
-const client = useVeltClient();
-
-client.setPermissionProvider({
-  onResourceAccessRequired: async (requests) => {
-    // Implement your authorization logic
-    const data = [];
-    requests.forEach((request) => {
-      if (request.resource.type === 'document') {
-        data.push({
-          userId: request.userId,
-          resourceId: request.resource.id,
-          type: request.resource.type,
-          hasAccess: true,
-          accessRole: 'viewer',
-          expiresAt: Date.now() + 10 * 60 * 1000, // 10 mins
-        });
-      } else {
-        data.push({
-          userId: request.userId,
-          resourceId: request.resource.id,
-          type: request.resource.type,
-          hasAccess: true,
-        });
-      }
-    });
-
-    // Generate secure signature via REST API
-    const result = await fetch('https://api.velt.dev/v2/auth/generate_signature', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-velt-api-key': 'YOUR_API_KEY',
-        'x-velt-auth-token': 'YOUR_AUTH_TOKEN',
-      },
-      body: JSON.stringify({ data })
-    }).then(res => res.json());
-
-    return {
-      data,
-      success: true,
-      statusCode: 200,
-      signature: result?.result?.data?.signature
-    };
-  },
-  retryConfig: {
-    retryCount: 3,
-    retryDelay: 2000
-  },
-  // Set to true if access control changes frequently (e.g., for high-frequency notifications)
-  forceRefresh: false,
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-Velt.setPermissionProvider({
-  onResourceAccessRequired: async (requests) => {
-    // Implement your authorization logic
-    const data = [];
-    requests.forEach((request) => {
-      if (request.resource.type === 'document') {
-        data.push({
-          userId: request.userId,
-          resourceId: request.resource.id,
-          type: request.resource.type,
-          hasAccess: true,
-          accessRole: 'viewer',
-          expiresAt: Date.now() + 10 * 60 * 1000, // 10 mins
-        });
-      } else {
-        data.push({
-          userId: request.userId,
-          resourceId: request.resource.id,
-          type: request.resource.type,
-          hasAccess: true,
-        });
-      }
-    });
-
-    // Generate secure signature via REST API
-    const result = await fetch('https://api.velt.dev/v2/auth/generate_signature', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-velt-api-key': 'YOUR_API_KEY',
-        'x-velt-auth-token': 'YOUR_AUTH_TOKEN',
-      },
-      body: JSON.stringify({ data })
-    }).then(res => res.json());
-
-    return {
-      data,
-      success: true,
-      statusCode: 200,
-      signature: result?.result?.data?.signature
-    };
-  },
-  retryConfig: {
-    retryCount: 3,
-    retryDelay: 2000
-  },
-  // Set to true if access control changes frequently (e.g., for high-frequency notifications)
-  forceRefresh: false,
-});
-</script>
-```
-</Tab>
-</Tabs>
+- [**Access Control**]: Introduced a new **Permission Provider** approach for simpler, centralized access control. Key details:
+  - You no longer need to sync users into Velt or call the Permissions API directly.
+  - Configure an endpoint that Velt will call to verify user access to resources (organization, folder, or document).
+  - When a user logs in or tries to access a resource:
+    - Velt sends a request to your configured endpoint with relevant access details.
+    - Your endpoint evaluates access, signs the result using Velt's API, and returns the response.
+    - Velt validates the signature and updates access permissions accordingly.
+  - This creates a single, backend-controlled source of truth for permissions.
+  - You can use this approach instead of **user sync** and **on-demand** permission strategies.
+  - [Learn more](/key-concepts/overview#3-real-time-permission-provider).
 
 ### Improvements
 
-- [**Access Control**]: Added `maxDepth` parameter to [`getFolders` REST API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/get-folders). You can now retrieve nested subfolders at any depth level. The response includes `ancestors` array showing parent hierarchy and `inheritAccessFromParent` field indicating whether access is inherited.
+- [**Access Control**]: Added `maxDepth` parameter to [`Get Folders` REST API](/api-reference/rest-apis/v2/folders/get-folders). You can now retrieve nested subfolders at any depth level. The response includes `ancestors` array showing parent hierarchy and `inheritAccessFromParent` field indicating whether access is inherited.
 
-- [**Access Control**]: Added `inheritFromParent` parameter to the [update folder access REST API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/update-folder-access). You can now configure a folder to inherit access permissions from its parent folder.
+- [**Access Control**]: Added `inheritFromParent` parameter to the [Update Folder Access REST API](/api-reference/rest-apis/v2/folders/update-folder-access). You can now configure a folder to inherit access permissions from its parent folder.
 
-- [**Access Control**]: The [update folder REST API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/update-folder) now handles folder moves correctly. When a folder is moved to a different parent, its `ancestors` array and `accessType` are automatically updated, and all subfolder information is updated accordingly.
+- [**Access Control**]: The [Update Folder REST API](/api-reference/rest-apis/v2/folders/update-folder) now handles folder moves correctly. When a folder is moved to a different parent, its `ancestors` array and `accessType` are automatically updated, and all subfolder information is updated accordingly.
 
-- [**Access Control**]: Added `accessType` parameter to the [add-folder REST API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/add-folder). You can now set a folder's access permissions during creation.
+- [**Access Control**]: Added `accessType` parameter to the [Add Folder REST API](/api-reference/rest-apis/v2/folders/add-folder). You can now set a folder's access permissions during creation.
 
 
 - [**Core**]: The `setDocuments` method now filters out documents the user doesn't have access to instead of failing the entire operation. Previously, if any document in the array was inaccessible, the entire request would fail.
@@ -167,7 +60,7 @@ Velt.setPermissionProvider({
 
 ### Bug Fixes
 
-- [**Live State Sync**]: Fixed an issue with the `listenToNewChangesOnly` parameter in the `getLiveStateData()` method. Previously, the method was returning existing data even when `listenToNewChangesOnly` was set to `true`. Now it correctly returns only new changes that are pushed to `liveStateData` after you subscribe to the `getLiveStateData` subscription when `listenToNewChangesOnly` is set to `true`.
+- [**Live State Sync**]: Fixed `getLiveStateData()` so that with `listenToNewChangesOnly: true`, it now returns only new changes after subscribing—instead of including existing data.
 
 </Update>
 

@@ -3,48 +3,194 @@ title: "Users"
 description: "Self-host your users' PII while using Velt's collaboration features. Keep sensitive user data on your infrastructure with only user IDs stored on Velt servers."
 ---
 
+<Warning>
+  - This feature is currently in beta and is subject to change.
+  - This is currently only compatible with `setDocuments` method.
+  - Ensure that the data providers are set prior to calling `identify` method.
+  - The data provider methods must return the correct status code (e.g. 200 for success, 500 for errors) and success boolean in the response object. This ensures proper error handling and retries.
+</Warning>
+
+# Overview
 Velt supports self-hosting your users' personally identifiable information (PII):
 
-- Only the userId is stored on Velt servers, keeping sensitive user metadata on your infrastructure
-- Velt Components automatically hydrate user details in the frontend by fetching from your configured data provider
-- This gives you full control over user data while maintaining all Velt functionality
+- Only the userId is stored on Velt servers, keeping sensitive user metadata on your infrastructure.
+- Velt Components automatically hydrate user details in the frontend by fetching from your configured data provider.
+- This gives you full control over user data while maintaining all Velt functionality.
 
-## How does it work?
-- When the SDK is initialized, it will call the [`UserDataProvider`](/api-reference/sdk/models/data-models#userdataprovider) you configure with the list of userIds that it needs to fetch for the currently set user, organization, document, etc.
-- The [`UserDataProvider`](/api-reference/sdk/models/data-models#userdataprovider) takes in a list of userIds and returns a Record object with the userIds as keys and the user data as values.
+# How does it work?
+- When the SDK is initialized or when user data is needed, it will call the [`UserDataProvider`](/api-reference/sdk/models/data-models#userdataprovider) you configure with the list of userIds that it needs to fetch
+- The data provider implements a `get` method to retrieve user information from your database
+- Velt handles the data mapping and UI updates while delegating user data retrieval to your infrastructure
+- The SDK requests user data for the currently set user, organization, document, etc. based on your configuration
+- You can configure when user resolver requests are made to optimize performance
 
 Here are the methods that you need to implement on the data provider:
 ## get
-Method to fetch users from your database.
+Method to fetch users from your database. On error we will retry.
 - Param: `string[]`: Array of userIds to fetch
 - Return: `Promise<Record<string, User>>`
+
+<Tabs>
+<Tab title="Sample Request">
+```json
+[
+  "user-1",
+  "user-2",
+  "user-3"
+]
+```
+</Tab>
+
+<Tab title="Sample Response">
+```json
+{
+  "user-1": {
+    "userId": "user-1",
+    "name": "John Doe",
+    "email": "john@example.com",
+    "photoUrl": "https://example.com/photos/john.jpg"
+  },
+  "user-2": {
+    "userId": "user-2",
+    "name": "Jane Smith",
+    "email": "jane@example.com",
+    "photoUrl": "https://example.com/photos/jane.jpg"
+  },
+  "user-3": {
+    "userId": "user-3",
+    "name": "Bob Johnson",
+    "email": "bob@example.com",
+    "photoUrl": "https://example.com/photos/bob.jpg"
+  }
+}
+```
+</Tab>
+
+<Tab title="Error Response">
+```json
+{
+  "success": false,
+  "statusCode": 500,
+  "message": "Failed to fetch users from database"
+}
+```
+</Tab>
+</Tabs>
 
 ## config
 Configuration for the user data provider.
 - Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig). Relevant properties:
   - `resolveUsersConfig`: [`ResolveUsersConfig`](/api-reference/sdk/models/data-models#resolveusersconfig). Configuration to control when user resolver requests are made. This helps optimize performance by avoiding unnecessary user data requests when you have a large number of users in your organization, document, or folder. You can disable user resolver requests for specific contexts and use [custom autocomplete feature](/async-collaboration/comments/customize-behavior#customautocompletesearch) instead.
       - `organization`: boolean - Enable/disable user requests for organization users (default: true)
-      - `document`: boolean - Enable/disable user requests for document users (default: true)  
+      - `document`: boolean - Enable/disable user requests for document users (default: true)
       - `folder`: boolean - Enable/disable user requests for folder users (default: true)
 
-## Example Implementation
+# MongoDB Backend Implementation Example
+
+Here's how to implement the data provider methods with MongoDB:
+
+<Tabs>
+<Tab title="Schema Definition">
+```typescript
+// MongoDB Schema for Users
+interface UserDocument {
+  userId: string;
+  name: string;
+  email: string;
+  photoUrl?: string;
+  metadata?: Record<string, any>;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+```
+</Tab>
+
+<Tab title="Get Method">
+```typescript
+import { MongoClient, Db } from 'mongodb';
+
+const fetchUsersFromDB = async (userIds: string[]) => {
+  try {
+    const db: Db = client.db('your-database');
+    const collection = db.collection<UserDocument>('users');
+
+    // Fetch users from MongoDB
+    const users = await collection.find({
+      userId: { $in: userIds }
+    }).toArray();
+
+    // Transform to required format: Record<userId, User>
+    const data: Record<string, User> = {};
+    users.forEach(user => {
+      data[user.userId] = {
+        userId: user.userId,
+        name: user.name,
+        email: user.email,
+        photoUrl: user.photoUrl
+      };
+    });
+
+    return data;
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    throw error;
+  }
+};
+```
+</Tab>
+
+<Tab title="Complete Setup">
+```typescript
+import { MongoClient } from 'mongodb';
+
+// Initialize MongoDB connection
+const client = new MongoClient('mongodb://localhost:27017');
+await client.connect();
+
+// Create indexes for better query performance
+const db = client.db('your-database');
+const collection = db.collection('users');
+
+await collection.createIndexes([
+  { key: { userId: 1 }, unique: true },
+  { key: { email: 1 } }
+]);
+
+// Configure the data provider
+const userDataProvider: UserDataProvider = {
+  get: fetchUsersFromDB,
+  config: {
+    resolveUsersConfig: {
+      organization: false, // Disable organization user requests
+      folder: false, // Disable folder user requests
+      document: true // Enable document user requests
+    }
+  }
+};
+```
+</Tab>
+</Tabs>
+
+# Example Implementation
 
 <Tabs>
 <Tab title="React / Next.js">
-``` jsx {19-29}
+``` jsx
 const formatUsersToRecord = (users) => {
     // Format users array into a Record object with userId as key and user data as value
     return users.reduce((record, user) => {
         record[user.userId] = {
             userId: user.userId,
             name: user.name,
+            email: user.email,
+            photoUrl: user.photoUrl
             // any other fields
         };
         return record;
     }, {});
 };
 
-const fetchUsersFromDB = async (userIds) => {
+const fetchUsersFromDB = async (userIds: string[]) => {
     // Fetch users from your DB
     const usersData = await __getUsersFromYourDB__(userIds);
     return formatUsersToRecord(usersData);
@@ -61,7 +207,7 @@ const userDataProvider: UserDataProvider = {
     }
 };
 
-<VeltProvider 
+<VeltProvider
     apiKey='YOUR_API_KEY'
     dataProviders={{
         user: userDataProvider
@@ -72,13 +218,15 @@ const userDataProvider: UserDataProvider = {
 ```
 </Tab>
 <Tab title="Other Frameworks">
-``` js {19-28}
+```js
 const formatUsersToRecord = (users) => {
     // Format users array into a Record object with userId as key and user data as value
     return users.reduce((record, user) => {
         record[user.userId] = {
             userId: user.userId,
             name: user.name,
+            email: user.email,
+            photoUrl: user.photoUrl
             // any other fields
         };
         return record;
@@ -105,6 +253,45 @@ const userDataProvider = {
 Velt.setDataProviders({
     user: userDataProvider
 });
+```
+</Tab>
+</Tabs>
+
+# Sample Data
+
+<Tabs>
+<Tab title="Stored on your database">
+```json
+{
+    "user-1": {
+        "userId": "user-1",
+        "name": "John Doe",
+        "email": "john@example.com",
+        "photoUrl": "https://example.com/photos/john.jpg",
+        "metadata": {
+            "department": "Engineering",
+            "role": "Senior Developer"
+        }
+    },
+    "user-2": {
+        "userId": "user-2",
+        "name": "Jane Smith",
+        "email": "jane@example.com",
+        "photoUrl": "https://example.com/photos/jane.jpg",
+        "metadata": {
+            "department": "Product",
+            "role": "Product Manager"
+        }
+    }
+}
+```
+</Tab>
+<Tab title="Stored on Velt servers">
+```json
+{
+    "userId": "user-1"
+}
+
 ```
 </Tab>
 </Tabs>

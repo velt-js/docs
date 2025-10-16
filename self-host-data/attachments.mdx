@@ -18,26 +18,11 @@ Velt supports self-hosting your comments file attachments data:
 - This gives you full control over attachment data while maintaining the file attachment features.
 
 # How does it work?
-When users upload or delete attachments:
-
-1. The SDK uses your configured [`AttachmentDataProvider`](/api-reference/sdk/models/data-models#attachmentdataprovider) to handle storage
-2. Your data provider implements two key methods:
-   - `save`: Stores the file and returns its URL
-   - `delete`: Removes the file from storage
-
-**The process works as follows:**
-
-When an attachment operation occurs:
-
-1. The SDK first attempts to save/delete the file on your storage infrastructure
-2. If successful:
-   - The SDK updates Velt's servers with minimal metadata
-   - The [`PartialComment`](/api-reference/sdk/models/data-models#partialcomment) object is updated to reference the attachment including the attachment url, name and metadata.
-   - When the comment is saved, this information is stored on your end.
-   - Velt servers only store necessary identifiers, not the actual files or URLs
-3. If the operation fails, no changes are made to Velt's servers and the operation is retried if you have configured retries.
-
-
+- When attachments are uploaded or deleted, the SDK uses your configured [`AttachmentDataProvider`](/api-reference/sdk/models/data-models#attachmentdataprovider) to handle storage
+- The data provider implements `save` and `delete` methods to interact with your storage backend
+- Velt handles the data mapping and realtime synchronization while delegating persistence of actual files to your infrastructure
+- For write requests (save, delete), the operation is first performed on your storage backend and only if we get a success response, the SDK will perform the operation on the Velt server. If the operation fails on your storage backend, the SDK will not perform the operation on the Velt server.
+- You can configure retries, timeouts, etc. for the data provider.
 
 Here are the methods that you need to implement on the data provider:
 ## save
@@ -45,14 +30,212 @@ Save attachments to your storage backend. Return the url with a success or error
 - Param: [`SaveAttachmentResolverRequest`](/api-reference/sdk/models/data-models#saveattachmentresolverrequest)
 - Return: [`Promise<ResolverResponse<SaveAttachmentResolverData>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
+<Tabs>
+<Tab title="Sample Request">
+```json
+{
+  "file": "File object or Blob",
+  "metadata": {
+    "apiKey": "your-api-key",
+    "documentId": "doc-123",
+    "organizationId": "your-org-id",
+    "folderId": "folder-789"
+  },
+  "fileName": "screenshot.png",
+  "fileType": "image/png"
+}
+```
+</Tab>
+
+<Tab title="Sample Response">
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "data": {
+    "url": "https://your-storage.com/files/screenshot.png"
+  }
+}
+```
+</Tab>
+
+<Tab title="Error Response">
+```json
+{
+  "success": false,
+  "statusCode": 500,
+  "message": "Failed to upload attachment to storage"
+}
+```
+</Tab>
+</Tabs>
+
 ## delete
 Delete attachments from your storage backend. Return a success or error response. On error we will retry.
 - Param: [`DeleteAttachmentResolverRequest`](/api-reference/sdk/models/data-models#deleteattachmentresolverrequest)
 - Return: [`Promise<ResolverResponse<undefined>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
+<Tabs>
+<Tab title="Sample Request">
+```json
+{
+  "url": "https://your-storage.com/files/screenshot.png",
+  "metadata": {
+    "apiKey": "your-api-key",
+    "documentId": "doc-123",
+    "organizationId": "your-org-id",
+    "folderId": "folder-789"
+  }
+}
+```
+</Tab>
+
+<Tab title="Sample Response">
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "message": "Attachment deleted successfully"
+}
+```
+</Tab>
+
+<Tab title="Error Response">
+```json
+{
+  "success": false,
+  "statusCode": 500,
+  "message": "Failed to delete attachment from storage"
+}
+```
+</Tab>
+</Tabs>
+
 ## config
 Configuration for the attachment data provider.
 - Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig)
+
+# AWS S3 Storage Implementation Example
+
+Here's how to implement the data provider methods with AWS S3:
+
+<Tabs>
+<Tab title="Save Method">
+```typescript
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+
+const s3Client = new S3Client({ region: 'us-east-1' });
+
+const saveAttachmentToS3 = async (request: SaveAttachmentResolverRequest) => {
+  try {
+    const { file, fileName, metadata } = request;
+
+    // Generate unique file path
+    const fileKey = `attachments/${metadata.organizationId}/${metadata.documentId}/${Date.now()}-${fileName}`;
+
+    // Convert file to buffer
+    const fileBuffer = await file.arrayBuffer();
+
+    // Upload to S3
+    const command = new PutObjectCommand({
+      Bucket: 'your-bucket-name',
+      Key: fileKey,
+      Body: Buffer.from(fileBuffer),
+      ContentType: request.fileType
+    });
+
+    await s3Client.send(command);
+
+    // Construct public URL
+    const url = `https://your-bucket-name.s3.amazonaws.com/${fileKey}`;
+
+    return {
+      success: true,
+      statusCode: 200,
+      data: { url }
+    };
+  } catch (error) {
+    console.error('Error uploading attachment:', error);
+    return {
+      success: false,
+      statusCode: 500,
+      message: 'Failed to upload attachment to storage'
+    };
+  }
+};
+```
+</Tab>
+
+<Tab title="Delete Method">
+```typescript
+import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
+
+const deleteAttachmentFromS3 = async (request: DeleteAttachmentResolverRequest) => {
+  try {
+    const { url } = request;
+
+    // Extract file key from URL
+    const fileKey = url.replace('https://your-bucket-name.s3.amazonaws.com/', '');
+
+    // Delete from S3
+    const command = new DeleteObjectCommand({
+      Bucket: 'your-bucket-name',
+      Key: fileKey
+    });
+
+    await s3Client.send(command);
+
+    return {
+      success: true,
+      statusCode: 200,
+      message: 'Attachment deleted successfully'
+    };
+  } catch (error) {
+    console.error('Error deleting attachment:', error);
+    return {
+      success: false,
+      statusCode: 500,
+      message: 'Failed to delete attachment from storage'
+    };
+  }
+};
+```
+</Tab>
+
+<Tab title="Complete Setup">
+```typescript
+import { S3Client } from '@aws-sdk/client-s3';
+
+// Initialize S3 client
+const s3Client = new S3Client({
+  region: 'us-east-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  }
+});
+
+// Configure the data provider
+const attachmentResolverConfig: ResolverConfig = {
+  resolveTimeout: 5000,
+  saveRetryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  },
+  deleteRetryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  }
+};
+
+const attachmentDataProvider: AttachmentDataProvider = {
+  save: saveAttachmentToS3,
+  delete: deleteAttachmentFromS3,
+  config: attachmentResolverConfig
+};
+```
+</Tab>
+</Tabs>
 
 # Example Implementation
 
@@ -62,7 +245,7 @@ Configuration for the attachment data provider.
 const saveAttachmentsToDB = async (request: SaveAttachmentResolverRequest) => {
     const result = await __saveAttachmentsToYourDB__(request)
       .then((response) => {
-        return { success: true, statusCode: 200 };
+        return { success: true, statusCode: 200, data: { url: response.url } };
       })
       .catch((error) => {
         return { success: false, statusCode: 500 };
@@ -83,10 +266,6 @@ const deleteAttachmentsFromDB = async (request: DeleteAttachmentResolverRequest)
 
 const attachmentResolverConfig: ResolverConfig = {
     resolveTimeout: 2000,
-    getRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    },
     saveRetryConfig: {
         retryCount: 3,
         retryDelay: 2000
@@ -104,7 +283,7 @@ const attachmentDataProvider: AttachmentDataProvider = {
     config: attachmentResolverConfig
 };
 
-<VeltProvider 
+<VeltProvider
     apiKey='YOUR_API_KEY'
     dataProviders={{
         attachment: attachmentDataProvider
@@ -115,11 +294,11 @@ const attachmentDataProvider: AttachmentDataProvider = {
 ```
 </Tab>
 <Tab title="Other Frameworks">
-``` jsx
+```js
 const saveAttachmentsToDB = async (request) => {
     const result = await __saveAttachmentsToYourDB__(request)
       .then((response) => {
-        return { success: true, statusCode: 200 };
+        return { success: true, statusCode: 200, data: { url: response.url } };
       })
       .catch((error) => {
         return { success: false, statusCode: 500 };
@@ -163,5 +342,45 @@ Velt.setDataProviders({
 
 ```
 
+</Tab>
+</Tabs>
+
+# Sample Data
+
+<Tabs>
+<Tab title="Stored on your storage">
+```json
+{
+  "fileUrl": "https://your-storage.com/attachments/org-123/doc-456/1234567890-screenshot.png",
+  "fileName": "screenshot.png",
+  "fileType": "image/png",
+  "metadata": {
+    "organizationId": "org-123",
+    "documentId": "doc-456",
+    "folderId": "folder-789",
+    "uploadedAt": "2025-07-16T04:00:19.770Z"
+  }
+}
+```
+</Tab>
+<Tab title="Stored on Velt servers">
+```json
+{
+  "attachmentId": "attachment-abc",
+  "fileName": "screenshot.png",
+  "metadata": {
+    "apiKey": "API_KEY",
+    "documentId": "DOCUMENT_ID",
+    "organizationId": "ORGANIZATION_ID",
+    "folderId": "FOLDER_ID"
+  },
+  "from": {
+    "userId": "USER_ID"
+  },
+  "createdAt": 1752638412635,
+  "lastUpdated": 1752638419745
+}
+
+```
 </Tab>
 </Tabs>

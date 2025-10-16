@@ -4,6 +4,7 @@ description: "Self-host your reactions data while using Velt's components. Keep 
 ---
 
 <Warning>
+  - This feature is currently in beta and is subject to change.
   - This is currently only compatible with `setDocuments` method.
   - Ensure that the data providers are set prior to calling `identify` method.
   - The data provider methods must return the correct status code (e.g. 200 for success, 500 for errors) and success boolean in the response object. This ensures proper error handling and retries.
@@ -21,9 +22,9 @@ Velt supports self-hosting your reactions and related data:
 - When reactions are created, updated, deleted or requested, the SDK uses your configured [`ReactionAnnotationDataProvider`](/api-reference/sdk/models/data-models#reactionannotationdataprovider) to handle storage and retrieval
 - The data provider implements `get`, `save`, and `delete` methods to interact with your database
 - Velt handles the data mapping and realtime synchronization while delegating persistence of actual content to your infrastructure
+- The data provider works at the Reaction Annotation level.
 - For write requests (save, delete), the operation is first performed on your database and only if we get a success response, the SDK will perform the operation on the Velt server. If the operation fails on your database, the SDK will not perform the operation on the Velt server.
 - You can configure retries, timeouts, etc. for the data provider.
-
 
 Here are the methods that you need to implement on the data provider:
 ## get
@@ -31,19 +32,396 @@ Method to fetch reactions from your database. On error we will retry.
 - Param: [`GetReactionResolverRequest`](/api-reference/sdk/models/data-models#getreactionresolverrequest)
 - Return: [`Promise<ResolverResponse<Record<string, PartialReactionAnnotation>>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
+<Tabs>
+<Tab title="Sample Request">
+```json
+{
+  "organizationId": "your-org-id",
+  "documentIds": ["doc-123", "doc-456"],
+  "folderId": "folder-789"
+}
+```
+
+Or fetch specific reaction annotations:
+
+```json
+{
+  "organizationId": "your-org-id",
+  "reactionAnnotationIds": ["reaction-abc", "reaction-xyz"]
+}
+```
+</Tab>
+
+<Tab title="Sample Response">
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "data": {
+    "reaction-abc": {
+      "annotationId": "reaction-abc",
+      "metadata": {
+        "apiKey": "your-api-key",
+        "documentId": "doc-123",
+        "organizationId": "your-org-id",
+        "folderId": "folder-789"
+      },
+      "reactions": {
+        "👍": [
+          {
+            "userId": "user-1",
+            "reactionId": "reaction-1"
+          }
+        ],
+        "❤️": [
+          {
+            "userId": "user-2",
+            "reactionId": "reaction-2"
+          }
+        ]
+      }
+    }
+  }
+}
+```
+</Tab>
+
+<Tab title="Error Response">
+```json
+{
+  "success": false,
+  "statusCode": 500,
+  "message": "Failed to fetch reactions from database"
+}
+```
+</Tab>
+</Tabs>
+
 ## save
 Save reactions to your database. Return a success or error response. On error we will retry.
 - Param: [`SaveReactionResolverRequest`](/api-reference/sdk/models/data-models#savereactionresolverrequest)
+  - Note in the `SaveReactionResolverRequest` object, you will receive [the event name](/api-reference/sdk/models/data-models#resolveractions) that triggered the save.
 - Return: [`Promise<ResolverResponse<T>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="Sample Request">
+```json
+{
+  "reactionAnnotation": {
+    "reaction-abc": {
+      "annotationId": "reaction-abc",
+      "metadata": {
+        "apiKey": "your-api-key",
+        "documentId": "doc-123",
+        "organizationId": "your-org-id",
+        "folderId": "folder-789"
+      },
+      "reactions": {
+        "👍": [
+          {
+            "userId": "user-1",
+            "reactionId": "reaction-1"
+          }
+        ]
+      }
+    }
+  },
+  "metadata": {
+    "apiKey": "your-api-key",
+    "documentId": "doc-123",
+    "organizationId": "your-org-id"
+  },
+  "event": "onReactionAdd"
+}
+```
+</Tab>
+
+<Tab title="Sample Response">
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "message": "Reaction saved successfully"
+}
+```
+</Tab>
+
+<Tab title="Error Response">
+```json
+{
+  "success": false,
+  "statusCode": 500,
+  "message": "Failed to save reaction to database"
+}
+```
+</Tab>
+</Tabs>
 
 ## delete
 Delete reactions from your database. Return a success or error response. On error we will retry.
 - Param: [`DeleteReactionResolverRequest`](/api-reference/sdk/models/data-models#deletereactionresolverrequest)
 - Return: [`Promise<ResolverResponse<T>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
+<Tabs>
+<Tab title="Sample Request">
+```json
+{
+  "reactionAnnotationId": "reaction-abc",
+  "metadata": {
+    "apiKey": "your-api-key",
+    "documentId": "doc-123",
+    "organizationId": "your-org-id",
+    "folderId": "folder-789"
+  },
+  "event": "onReactionDelete"
+}
+```
+</Tab>
+
+<Tab title="Sample Response">
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "message": "Reaction deleted successfully"
+}
+```
+</Tab>
+
+<Tab title="Error Response">
+```json
+{
+  "success": false,
+  "statusCode": 500,
+  "message": "Failed to delete reaction from database"
+}
+```
+</Tab>
+</Tabs>
+
 ## config
 Configuration for the reaction data provider.
 - Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig)
+
+# MongoDB Backend Implementation Example
+
+Here's how to implement the data provider methods with MongoDB:
+
+<Tabs>
+<Tab title="Schema Definition">
+```typescript
+// MongoDB Schema for Reaction Annotations
+interface ReactionAnnotationDocument {
+  annotationId: string;
+  metadata: {
+    apiKey: string;
+    documentId: string;
+    organizationId: string;
+    folderId?: string;
+  };
+  reactions: {
+    [emoji: string]: Array<{
+      userId: string;
+      reactionId: string;
+    }>;
+  };
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+```
+</Tab>
+
+<Tab title="Get Method">
+```typescript
+import { MongoClient, Db } from 'mongodb';
+
+const fetchReactionsFromDB = async (request: GetReactionResolverRequest) => {
+  try {
+    const db: Db = client.db('your-database');
+    const collection = db.collection<ReactionAnnotationDocument>('reactionAnnotations');
+
+    // Build query based on request parameters
+    const query: any = {
+      'metadata.organizationId': request.organizationId
+    };
+
+    // Filter by specific annotation IDs
+    if (request.reactionAnnotationIds?.length) {
+      query.annotationId = { $in: request.reactionAnnotationIds };
+    }
+
+    // Filter by document IDs
+    if (request.documentIds?.length) {
+      query['metadata.documentId'] = { $in: request.documentIds };
+    }
+
+    // Filter by folder ID
+    if (request.folderId) {
+      query['metadata.folderId'] = request.folderId;
+    }
+
+    // Fetch from MongoDB
+    const annotations = await collection.find(query).toArray();
+
+    // Transform to required format: Record<annotationId, annotation>
+    const data: Record<string, PartialReactionAnnotation> = {};
+    annotations.forEach(annotation => {
+      data[annotation.annotationId] = {
+        annotationId: annotation.annotationId,
+        metadata: annotation.metadata,
+        reactions: annotation.reactions
+      };
+    });
+
+    return {
+      data,
+      success: true,
+      statusCode: 200
+    };
+  } catch (error) {
+    console.error('Error fetching reactions:', error);
+    return {
+      success: false,
+      statusCode: 500,
+      message: 'Failed to fetch reactions from database'
+    };
+  }
+};
+```
+</Tab>
+
+<Tab title="Save Method">
+```typescript
+const saveReactionsToDB = async (request: SaveReactionResolverRequest) => {
+  try {
+    const db: Db = client.db('your-database');
+    const collection = db.collection<ReactionAnnotationDocument>('reactionAnnotations');
+
+    // Get the annotation data from request
+    const annotationData = Object.values(request.reactionAnnotation)[0];
+
+    if (!annotationData) {
+      return {
+        success: false,
+        statusCode: 400,
+        message: 'No annotation data provided'
+      };
+    }
+
+    // Upsert the reaction annotation
+    await collection.updateOne(
+      { annotationId: annotationData.annotationId },
+      {
+        $set: {
+          ...annotationData,
+          updatedAt: new Date()
+        },
+        $setOnInsert: {
+          createdAt: new Date()
+        }
+      },
+      { upsert: true }
+    );
+
+    return {
+      success: true,
+      statusCode: 200,
+      message: 'Reaction saved successfully'
+    };
+  } catch (error) {
+    console.error('Error saving reaction:', error);
+    return {
+      success: false,
+      statusCode: 500,
+      message: 'Failed to save reaction to database'
+    };
+  }
+};
+```
+</Tab>
+
+<Tab title="Delete Method">
+```typescript
+const deleteReactionsFromDB = async (request: DeleteReactionResolverRequest) => {
+  try {
+    const db: Db = client.db('your-database');
+    const collection = db.collection<ReactionAnnotationDocument>('reactionAnnotations');
+
+    // Delete the reaction annotation
+    const result = await collection.deleteOne({
+      annotationId: request.reactionAnnotationId
+    });
+
+    if (result.deletedCount === 0) {
+      return {
+        success: false,
+        statusCode: 404,
+        message: 'Reaction annotation not found'
+      };
+    }
+
+    return {
+      success: true,
+      statusCode: 200,
+      message: 'Reaction deleted successfully'
+    };
+  } catch (error) {
+    console.error('Error deleting reaction:', error);
+    return {
+      success: false,
+      statusCode: 500,
+      message: 'Failed to delete reaction from database'
+    };
+  }
+};
+```
+</Tab>
+
+<Tab title="Complete Setup">
+```typescript
+import { MongoClient } from 'mongodb';
+
+// Initialize MongoDB connection
+const client = new MongoClient('mongodb://localhost:27017');
+await client.connect();
+
+// Create indexes for better query performance
+const db = client.db('your-database');
+const collection = db.collection('reactionAnnotations');
+
+await collection.createIndexes([
+  { key: { annotationId: 1 }, unique: true },
+  { key: { 'metadata.organizationId': 1 } },
+  { key: { 'metadata.documentId': 1 } },
+  { key: { 'metadata.folderId': 1 } }
+]);
+
+// Configure the data provider
+const reactionResolverConfig: ResolverConfig = {
+  resolveTimeout: 2000,
+  getRetryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  },
+  saveRetryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  },
+  deleteRetryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  }
+};
+
+const reactionAnnotationDataProvider: ReactionAnnotationDataProvider = {
+  get: fetchReactionsFromDB,
+  save: saveReactionsToDB,
+  delete: deleteReactionsFromDB,
+  config: reactionResolverConfig
+};
+```
+</Tab>
+</Tabs>
 
 # Example Implementation
 
@@ -109,7 +487,7 @@ const reactionAnnotationDataProvider: ReactionAnnotationDataProvider = {
     config: reactionResolverConfig
 };
 
-<VeltProvider 
+<VeltProvider
     apiKey='YOUR_API_KEY'
     dataProviders={{
         reaction: reactionAnnotationDataProvider
@@ -120,7 +498,7 @@ const reactionAnnotationDataProvider: ReactionAnnotationDataProvider = {
 ```
 </Tab>
 <Tab title="Other Frameworks">
-``` jsx
+```js
 const fetchReactionsFromDB = async (request) => {
     // Fetch reaction annotations from your DB
     const result = await __getReactionsFromYourDB__(request)
@@ -158,6 +536,10 @@ const deleteReactionsFromDB = async (request) => {
 
 const reactionResolverConfig = {
     resolveTimeout: 2000,
+    getRetryConfig: {
+        retryCount: 3,
+        retryDelay: 2000
+    },
     saveRetryConfig: {
         retryCount: 3,
         retryDelay: 2000
@@ -182,5 +564,55 @@ Velt.setDataProviders({
 
 ```
 
+</Tab>
+</Tabs>
+
+# Sample Data
+
+<Tabs>
+<Tab title="Stored on your database">
+```json
+{
+    "REACTION_ANNOTATION_ID": {
+        "annotationId": "REACTION_ANNOTATION_ID",
+        "metadata": {
+            "apiKey": "API_KEY",
+            "documentId": "DOCUMENT_ID",
+            "organizationId": "ORGANIZATION_ID",
+            "folderId": "FOLDER_ID"
+        },
+        "reactions": {
+            "👍": [
+                {
+                    "userId": "USER_ID_1",
+                    "reactionId": "REACTION_ID_1"
+                }
+            ],
+            "❤️": [
+                {
+                    "userId": "USER_ID_2",
+                    "reactionId": "REACTION_ID_2"
+                }
+            ]
+        }
+    }
+}
+```
+</Tab>
+<Tab title="Stored on Velt servers">
+```json
+{
+    "annotationId": "REACTION_ANNOTATION_ID",
+    "metadata": {
+        "apiKey": "API_KEY",
+        "documentId": "DOCUMENT_ID",
+        "organizationId": "ORGANIZATION_ID",
+        "folderId": "FOLDER_ID"
+    },
+    "lastUpdated": 1752638419745,
+    "createdAt": 1752638412635
+}
+
+```
 </Tab>
 </Tabs>

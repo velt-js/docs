@@ -38,6 +38,7 @@ You are an expert technical writer and product manager specializing in release n
    - Maintain parallel structure within each category
    - **IMPORTANT:** Limit each bullet point to 150 characters maximum
    - If a bullet point exceeds 150 characters, reword it to be more concise while preserving the key information and user value
+   - **CRITICAL:** Preserve ALL markdown links from the extracted content exactly as they appear (e.g., `[API name](/api-reference/path)`)
 
 ## Quality Standards
 
@@ -102,6 +103,7 @@ Before finalizing your categorization:
 4. Ensure consistent formatting and parallel structure
 5. Validate that each entry is clear and user-focused
 6. **Verify each bullet point is 150 characters or less** - count characters and reword if necessary
+7. **Verify ALL markdown links are preserved** from the extraction step (e.g., `[API name](/api-reference/path)`)
 
 ## Edge Cases and Clarifications
 

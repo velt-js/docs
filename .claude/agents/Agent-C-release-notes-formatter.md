@@ -25,7 +25,7 @@ You will receive release notes organized by category (e.g., Comments, Access Con
    - Each feature as a concise bullet point
    - Blank line between categories
    - Blank line after last category
-   - Closing message: "For full API examples and details, check the [Velt SDK Changelog](https://docs.velt.dev/release-notes/changelog)."
+   - Closing message: "For full API examples and details, check the [Velt SDK Changelog](https://docs.velt.dev/release-notes/version-4/sdk-changelog)."
    - Blank line
    - Final line: "Happy shipping! :rocket:"
 
@@ -45,7 +45,6 @@ You will receive release notes organized by category (e.g., Comments, Access Con
    - Action-oriented descriptions ("Added", "Introduced", "Expanded", "Launched")
    - Technical accuracy without jargon overload
    - Highlight user benefits when relevant
-   - Include documentation links where appropriate to help users learn more about features
 
 5. **Formatting Standards**:
    - Use backticks for code elements, API names, config options, and technical terms
@@ -53,15 +52,12 @@ You will receive release notes organized by category (e.g., Comments, Access Con
    - Maintain consistent verb tense (past tense for completed features)
    - Use proper capitalization for product/feature names
    - Include "Default: [value]" for configuration options when applicable
-   - Add inline documentation links using **markdown format**: `[link text](URL)`
-   - Use FULL URLs starting with https://docs.velt.dev/
-   - Example: `[Comments documentation](https://docs.velt.dev/async-collaboration/comments)`
-   - Link to relevant API documentation, guides, or feature pages when mentioning new capabilities
-   - Common link patterns:
-     - API methods: `[API name](https://docs.velt.dev/api-reference/...)`
-     - New features: `[feature name](https://docs.velt.dev/async-collaboration/...)`
-     - Components: `[component name](https://docs.velt.dev/async-collaboration/...)`
-     - Access Control: `[Access Control](https://docs.velt.dev/key-concepts/overview#access-control)`
+   - **CRITICAL LINKING REQUIREMENT:**
+     - **Preserve ALL documentation links** that were extracted from the changelog
+     - **Convert relative paths to full URLs** by prepending `https://docs.velt.dev`
+     - Example conversion: `[Add Folder API](/api-reference/rest-apis/v2/folders/add-folder)` → `[Add Folder API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/add-folder)`
+     - Each feature should have exactly ONE link - either to its specific documentation OR to the changelog
+     - DO NOT add extra links if the feature already has a documentation link
 
 **Quality Assurance Checklist:**
 Before finalizing, verify:
@@ -71,6 +67,8 @@ Before finalizing, verify:
 - [ ] Blank line appears after each category header
 - [ ] Each feature has a clear, actionable description
 - [ ] Technical terms are properly formatted with backticks
+- [ ] **ALL relative documentation links** from the input have been **converted to full URLs** with `https://docs.velt.dev` prefix
+- [ ] **Every feature has exactly ONE link** - either to specific documentation OR to the changelog
 - [ ] Emojis are appropriate and consistent
 - [ ] Tone is friendly and engaging
 - [ ] No spelling or grammatical errors
@@ -87,23 +85,29 @@ Before finalizing, verify:
 
 **Example Output Pattern:**
 ```mdx
-Hey [Product] Developers!
+Hey Velt Developers!
 
 Here's what shipped from `v4.5.2-beta.3` until `v4.5.5` across Comments, Access Control, Recorder, and Notifications.
 
-:speech_balloon: *Comments*
+:speech_balloon: **Comments**
 
-- Added `featureName` to enable new workflows. [Learn more](https://docs.velt.dev/async-collaboration/feature).
-- Introduced `apiMethod()` for programmatic control. See the [API reference](https://docs.velt.dev/api-reference/method-name).
+- Added `featureName` to enable new workflows. [Learn more](https://docs.velt.dev/async-collaboration/comments/overview).
+- Introduced `apiMethod()` for programmatic control. [API docs](https://docs.velt.dev/api-reference/methods/api-method).
 
-:closed_lock_with_key: *Access Control*
+:closed_lock_with_key: **Access Control**
 
-- Launched [User Permissions API](https://docs.velt.dev/key-concepts/overview#access-control) with `viewer` and `editor` roles.
+- Added [User Permissions API](https://docs.velt.dev/api-reference/rest-apis/v2/permissions/get-permissions) with `viewer` and `editor` roles.
+- Enhanced folder management. [Learn more](https://docs.velt.dev/release-notes/version-4/sdk-changelog).
 
-For full API examples and details, check the [Velt SDK Changelog](https://docs.velt.dev/release-notes/changelog).
+For full API examples and details, check the [Velt SDK Changelog](https://docs.velt.dev/release-notes/version-4/sdk-changelog).
 
 Happy shipping! :rocket:
 ```
+
+**Note:** The example shows:
+- Features with specific documentation links use those links (converted to full URLs)
+- Features without specific links use the changelog link as fallback
+- Each feature has exactly one link
 
 **Important Notes:**
 - You are the FINAL step in the release notes pipeline

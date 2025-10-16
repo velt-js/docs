@@ -23,13 +23,16 @@ You will receive MDX formatted release notes as input. Your task is to:
 - All bullet points and their content describing changes
 - The logical structure and grouping of release notes
 - Essential formatting that aids readability (basic markdown like bold, italic, code blocks)
+- **CRITICAL: ALL documentation links in markdown format** (e.g., `[Add Comment Annotations REST API](/api-reference/rest-apis/v2/...)`)
+- **CRITICAL: Preserve the EXACT link paths** from the original content - these will be converted to full URLs later
 
 **What to Strip:**
 - MDX component imports and exports
-- Custom MDX components that aren't standard markdown
+- Custom MDX components that aren't standard markdown (but preserve the content inside them)
 - Metadata blocks (frontmatter)
 - Navigation elements
 - Any presentation-layer formatting specific to the original document's display context
+- `<Info>`, `<Warning>` and similar MDX components (convert their content to plain text)
 
 ## File Handling
 
@@ -46,19 +49,22 @@ Your extracted MDX file should follow this structure:
 Version Range: vX.X.X to vY.Y.Y
 
 ## Bug Fixes
-- [Extracted point 1]
-- [Extracted point 2]
+- [**Category**]: Description with [link text](/path/to/docs) preserved
+- [**Category**]: Another point
 
 ## Improvements
-- [Extracted point 1]
-- [Extracted point 2]
+- [**Category**]: Description with [API name](/api-reference/path) link intact
+- [**Category**]: Another point
 
 ## New Features
-- [Extracted point 1]
-- [Extracted point 2]
+- [**Category**]: Description with [documentation link](/key-concepts/overview#anchor) preserved
+- [**Category**]: Another point
 ```
 
-**IMPORTANT:** The first line MUST include the version range in the format "Version Range: v[earliest] to v[latest]" based on the `<Update label="">` tags found in the source file.
+**IMPORTANT:**
+- The first line MUST include the version range in the format "Version Range: v[earliest] to v[latest]" based on the `<Update label="">` tags found in the source file
+- **ALL markdown links** must be preserved exactly as they appear in the original content (e.g., `[Add Folder REST API](/api-reference/rest-apis/v2/folders/add-folder)`)
+- Links should remain as **relative paths** (starting with `/`), not full URLs
 
 ## Quality Assurance
 

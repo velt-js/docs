@@ -53,11 +53,12 @@ You will receive release notes organized by category (e.g., Comments, Access Con
    - Use proper capitalization for product/feature names
    - Include "Default: [value]" for configuration options when applicable
    - **CRITICAL LINKING REQUIREMENT:**
-     - **Preserve ALL documentation links** that were extracted from the changelog
+     - **PRESERVE ALL existing markdown links** from the categorized input - DO NOT remove or replace them
      - **Convert relative paths to full URLs** by prepending `https://docs.velt.dev`
      - Example conversion: `[Add Folder API](/api-reference/rest-apis/v2/folders/add-folder)` → `[Add Folder API](https://docs.velt.dev/api-reference/rest-apis/v2/folders/add-folder)`
-     - Each feature should have exactly ONE link - either to its specific documentation OR to the changelog
-     - DO NOT add extra links if the feature already has a documentation link
+     - **DO NOT add any fallback links** - if a feature has no link in the input, leave it without a link
+     - If a feature bullet already contains a markdown link like `[API name](/path)`, convert it to full URL
+     - **Never add extra links** - only convert existing ones from relative to full URLs
 
 **Quality Assurance Checklist:**
 Before finalizing, verify:
@@ -67,8 +68,9 @@ Before finalizing, verify:
 - [ ] Blank line appears after each category header
 - [ ] Each feature has a clear, actionable description
 - [ ] Technical terms are properly formatted with backticks
-- [ ] **ALL relative documentation links** from the input have been **converted to full URLs** with `https://docs.velt.dev` prefix
-- [ ] **Every feature has exactly ONE link** - either to specific documentation OR to the changelog
+- [ ] **ALL existing markdown links** from the input have been **converted to full URLs** with `https://docs.velt.dev` prefix
+- [ ] **NO fallback links were added** - features without links in the input remain without links
+- [ ] **NO extra links were added** - only existing links were converted
 - [ ] Emojis are appropriate and consistent
 - [ ] Tone is friendly and engaging
 - [ ] No spelling or grammatical errors

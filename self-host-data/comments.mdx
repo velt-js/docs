@@ -37,6 +37,70 @@ Method to fetch comments from your database. On error we will retry.
 - Param: [`GetCommentResolverRequest`](/api-reference/sdk/models/data-models#getcommentresolverrequest)
 - Return: [`Promise<ResolverResponse<Record<string, PartialCommentAnnotation>>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
+<Tabs>
+<Tab title="Sample Request">
+```json
+{
+  "organizationId": "your-org-id",
+  "documentIds": ["doc-123", "doc-456"],
+  "folderId": "folder-789"
+}
+```
+
+Or fetch specific annotations:
+
+```json
+{
+  "organizationId": "your-org-id",
+  "commentAnnotationIds": ["annotation-abc", "annotation-xyz"]
+}
+```
+</Tab>
+
+<Tab title="Sample Response">
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "data": {
+    "annotation-abc": {
+      "annotationId": "annotation-abc",
+      "metadata": {
+        "apiKey": "your-api-key",
+        "documentId": "doc-123",
+        "organizationId": "your-org-id",
+        "folderId": "folder-789"
+      },
+      "comments": {
+        "comment-1": {
+          "commentId": 1,
+          "commentHtml": "<p>This is a comment</p>",
+          "commentText": "This is a comment",
+          "from": {
+            "userId": "user-1"
+          }
+        }
+      },
+      "from": {
+        "userId": "user-1"
+      }
+    }
+  }
+}
+```
+</Tab>
+
+<Tab title="Error Response">
+```json
+{
+  "success": false,
+  "statusCode": 500,
+  "message": "Failed to fetch comments from database"
+}
+```
+</Tab>
+</Tabs>
+
 ## save
 Save comments to your database. Return a success or error response. On error we will retry.
 - Param: [`SaveCommentResolverRequest`](/api-reference/sdk/models/data-models#savecommentresolverrequest)
@@ -47,14 +111,339 @@ Save comments to your database. Return a success or error response. On error we 
   If you are using REST API to add or update comments, ensure that you set `isCommentResolverUsed` and `isCommentTextAvailable` fields in the request object. [Learn more](/api-reference/rest-apis/v2/comments-feature/comment-annotations/add-comment-annotations)
 </Warning>
 
+<Tabs>
+<Tab title="Sample Request">
+```json
+{
+  "commentAnnotation": {
+    "annotation-abc": {
+      "annotationId": "annotation-abc",
+      "metadata": {
+        "apiKey": "your-api-key",
+        "documentId": "doc-123",
+        "organizationId": "your-org-id",
+        "folderId": "folder-789"
+      },
+      "comments": {
+        "comment-1": {
+          "commentId": 1,
+          "commentHtml": "<p>Updated comment text</p>",
+          "commentText": "Updated comment text",
+          "from": {
+            "userId": "user-1"
+          }
+        }
+      },
+      "from": {
+        "userId": "user-1"
+      }
+    }
+  },
+  "metadata": {
+    "apiKey": "your-api-key",
+    "documentId": "doc-123",
+    "organizationId": "your-org-id"
+  },
+  "event": "onCommentAdd",
+  "commentId": "comment-1"
+}
+```
+</Tab>
+
+<Tab title="Sample Response">
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "message": "Comment saved successfully"
+}
+```
+</Tab>
+
+<Tab title="Error Response">
+```json
+{
+  "success": false,
+  "statusCode": 500,
+  "message": "Failed to save comment to database"
+}
+```
+</Tab>
+</Tabs>
+
 ## delete
 Delete comments from your database. Return a success or error response. On error we will retry.
 - Param: [`DeleteCommentResolverRequest`](/api-reference/sdk/models/data-models#deletecommentresolverrequest)
 - Return: [`Promise<ResolverResponse<T>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
+<Tabs>
+<Tab title="Sample Request">
+```json
+{
+  "commentAnnotationId": "annotation-abc",
+  "metadata": {
+    "apiKey": "your-api-key",
+    "documentId": "doc-123",
+    "organizationId": "your-org-id",
+    "folderId": "folder-789"
+  },
+  "event": "onCommentDelete"
+}
+```
+</Tab>
+
+<Tab title="Sample Response">
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "message": "Comment deleted successfully"
+}
+```
+</Tab>
+
+<Tab title="Error Response">
+```json
+{
+  "success": false,
+  "statusCode": 500,
+  "message": "Failed to delete comment from database"
+}
+```
+</Tab>
+</Tabs>
+
 ## config
 Configuration for the comment data provider.
 - Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig)
+
+# MongoDB Backend Implementation Example
+
+Here's how to implement the data provider methods with MongoDB:
+
+<Tabs>
+<Tab title="Schema Definition">
+```typescript
+// MongoDB Schema for Comment Annotations
+interface CommentAnnotationDocument {
+  annotationId: string;
+  metadata: {
+    apiKey: string;
+    documentId: string;
+    organizationId: string;
+    folderId?: string;
+  };
+  comments: {
+    [commentId: string]: {
+      commentId: number;
+      commentHtml: string;
+      commentText: string;
+      from: {
+        userId: string;
+      };
+    };
+  };
+  from: {
+    userId: string;
+  };
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+```
+</Tab>
+
+<Tab title="Get Method">
+```typescript
+import { MongoClient, Db } from 'mongodb';
+
+const fetchCommentsFromDB = async (request: GetCommentResolverRequest) => {
+  try {
+    const db: Db = client.db('your-database');
+    const collection = db.collection<CommentAnnotationDocument>('commentAnnotations');
+    
+    // Build query based on request parameters
+    const query: any = {
+      'metadata.organizationId': request.organizationId
+    };
+    
+    // Filter by specific annotation IDs
+    if (request.commentAnnotationIds?.length) {
+      query.annotationId = { $in: request.commentAnnotationIds };
+    }
+    
+    // Filter by document IDs
+    if (request.documentIds?.length) {
+      query['metadata.documentId'] = { $in: request.documentIds };
+    }
+    
+    // Filter by folder ID
+    if (request.folderId) {
+      query['metadata.folderId'] = request.folderId;
+    }
+    
+    // Fetch from MongoDB
+    const annotations = await collection.find(query).toArray();
+    
+    // Transform to required format: Record<annotationId, annotation>
+    const data: Record<string, PartialCommentAnnotation> = {};
+    annotations.forEach(annotation => {
+      data[annotation.annotationId] = {
+        annotationId: annotation.annotationId,
+        metadata: annotation.metadata,
+        comments: annotation.comments,
+        from: annotation.from
+      };
+    });
+    
+    return { 
+      data, 
+      success: true, 
+      statusCode: 200 
+    };
+  } catch (error) {
+    console.error('Error fetching comments:', error);
+    return { 
+      success: false, 
+      statusCode: 500,
+      message: 'Failed to fetch comments from database'
+    };
+  }
+};
+```
+</Tab>
+
+<Tab title="Save Method">
+```typescript
+const saveCommentsToDB = async (request: SaveCommentResolverRequest) => {
+  try {
+    const db: Db = client.db('your-database');
+    const collection = db.collection<CommentAnnotationDocument>('commentAnnotations');
+    
+    // Get the annotation data from request
+    const annotationData = Object.values(request.commentAnnotation)[0];
+    
+    if (!annotationData) {
+      return { 
+        success: false, 
+        statusCode: 400,
+        message: 'No annotation data provided'
+      };
+    }
+    
+    // Upsert the comment annotation
+    await collection.updateOne(
+      { annotationId: annotationData.annotationId },
+      { 
+        $set: {
+          ...annotationData,
+          updatedAt: new Date()
+        },
+        $setOnInsert: {
+          createdAt: new Date()
+        }
+      },
+      { upsert: true }
+    );
+    
+    return { 
+      success: true, 
+      statusCode: 200,
+      message: 'Comment saved successfully'
+    };
+  } catch (error) {
+    console.error('Error saving comment:', error);
+    return { 
+      success: false, 
+      statusCode: 500,
+      message: 'Failed to save comment to database'
+    };
+  }
+};
+```
+</Tab>
+
+<Tab title="Delete Method">
+```typescript
+const deleteCommentsFromDB = async (request: DeleteCommentResolverRequest) => {
+  try {
+    const db: Db = client.db('your-database');
+    const collection = db.collection<CommentAnnotationDocument>('commentAnnotations');
+    
+    // Delete the comment annotation
+    const result = await collection.deleteOne({
+      annotationId: request.commentAnnotationId
+    });
+    
+    if (result.deletedCount === 0) {
+      return { 
+        success: false, 
+        statusCode: 404,
+        message: 'Comment annotation not found'
+      };
+    }
+    
+    return { 
+      success: true, 
+      statusCode: 200,
+      message: 'Comment deleted successfully'
+    };
+  } catch (error) {
+    console.error('Error deleting comment:', error);
+    return { 
+      success: false, 
+      statusCode: 500,
+      message: 'Failed to delete comment from database'
+    };
+  }
+};
+```
+</Tab>
+
+<Tab title="Complete Setup">
+```typescript
+import { MongoClient } from 'mongodb';
+
+// Initialize MongoDB connection
+const client = new MongoClient('mongodb://localhost:27017');
+await client.connect();
+
+// Create indexes for better query performance
+const db = client.db('your-database');
+const collection = db.collection('commentAnnotations');
+
+await collection.createIndexes([
+  { key: { annotationId: 1 }, unique: true },
+  { key: { 'metadata.organizationId': 1 } },
+  { key: { 'metadata.documentId': 1 } },
+  { key: { 'metadata.folderId': 1 } }
+]);
+
+// Configure the data provider
+const commentResolverConfig: ResolverConfig = {
+  resolveTimeout: 2000,
+  getRetryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  },
+  saveRetryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  },
+  deleteRetryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  }
+};
+
+const commentAnnotationDataProvider: CommentAnnotationDataProvider = {
+  get: fetchCommentsFromDB,
+  save: saveCommentsToDB,
+  delete: deleteCommentsFromDB,
+  config: commentResolverConfig
+};
+```
+</Tab>
+</Tabs>
 
 # Example Implementation
 
@@ -200,45 +589,47 @@ Velt.setDataProviders({
 
 When you self-host content, use Webhooks to trigger emails from your own system:
 
-<Steps>
-<Step title="Enable relevant webhooks">
+### Step 1: Enable relevant webhooks
+
 Subscribe to comment-related events (e.g., user mentions, replies). See [Webhooks basics](/webhooks/basic).
-</Step>
 
-<Step title="Receive webhook and fetch content from your DB">
+### Step 2: Receive webhook and fetch content from your DB
+
 Your server receives the webhook event. Use IDs from the payload (e.g., `annotationId`, `commentId`) to query your own comment and notification content from your database via your Data Provider.
-</Step>
 
-<Step title="Assemble email content and recipients">
+### Step 3: Assemble email content and recipients
+
 Combine the webhook event context with the self-hosted content to build the subject, body, and list of recipients (e.g., mentioned users).
-</Step>
 
-<Step title="Send email via your provider">
+### Step 4: Send email via your provider
+
 Use your own email service (SendGrid under your account, SES, Postmark, etc.) to send the email.
 
 <Tip>
 If you previously configured SendGrid in Velt Console, that configuration will not be used for self-hosted content. Use your own SendGrid account or another email provider from your server.
 </Tip>
-</Step>
-</Steps>
 
-<RequestExample>
-```json cURL
-POST /webhooks/velt HTTP/1.1
-Content-Type: application/json
-
+<Tabs>
+<Tab title="Webhook Payload">
+```json
 {
   "actionType": "newlyAdded",
-  "commentAnnotation": { "annotationId": "ANNOTATION_ID", "metadata": { "documentId": "DOC_ID" } },
-  "latestComment": { "commentId": 123, "from": { "userId": "USER_1" } },
+  "commentAnnotation": { 
+    "annotationId": "ANNOTATION_ID", 
+    "metadata": { "documentId": "DOC_ID" } 
+  },
+  "latestComment": { 
+    "commentId": 123, 
+    "from": { "userId": "USER_1" } 
+  },
   "fromUser": { "userId": "USER_1" },
   "documentMetadata": { "url": "https://app.example.com/doc/123" }
 }
 ```
-</RequestExample>
+</Tab>
 
-<ResponseExample>
-```javascript Node.js
+<Tab title="Backend Handler">
+```javascript
 // Pseudocode: handle webhook, fetch content, send email
 app.post('/webhooks/velt', async (req, res) => {
   const evt = req.body;
@@ -258,12 +649,17 @@ app.post('/webhooks/velt', async (req, res) => {
   const pageUrl = evt?.documentMetadata?.url;
 
   // 4) Send via your provider
-  await emailClient.send({ to: recipients, subject, html: renderTemplate({ body, pageUrl }) });
+  await emailClient.send({ 
+    to: recipients, 
+    subject, 
+    html: renderTemplate({ body, pageUrl }) 
+  });
 
   res.sendStatus(200);
 });
 ```
-</ResponseExample>
+</Tab>
+</Tabs>
 
 <Check>
 You now send email notifications from your own infrastructure while keeping content self-hosted.

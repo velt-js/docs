@@ -2557,14 +2557,20 @@ An enum that defines the different types of actions that can trigger resolver ev
 #### ResolverResponse
 ---
 
+Generic response format for backend endpoints and data providers.
+
+<Info>
+**Permission Provider Update (v4.5.8-beta.2)**: For Permission Provider backend endpoints, the `signature` field is no longer required. The SDK now handles validation internally.
+</Info>
+
 | Property           | Type           | Required | Description                                    |
 |-------------------|----------------|-----------|------------------------------------------------|
 | `data`            | `T`            | No       | Response data of generic type T                |
-| `success`         | `boolean`      | Yes      | Whether the operation was successful           |
-| `message`         | `string`       | No       | Response message                               |
-| `timestamp`       | `number`       | No       | Timestamp of the response                      |
-| `statusCode`      | `number`       | Yes      | HTTP status code of the response               |
-| `signature`       | `string`       | No       | Cryptographic signature for permission responses |
+| `success`         | `boolean`      | Yes      | Whether the operation was successful. Must be `true` for successful responses |
+| `message`         | `string`       | No       | Optional message describing the result         |
+| `timestamp`       | `number`       | No       | Optional timestamp of the response             |
+| `statusCode`      | `number`       | Yes      | HTTP status code. Must be `200` for Velt to accept the response |
+| `signature`       | `string`       | No       | Cryptographic signature (deprecated for Permission Provider as of v4.5.8-beta.2) |
 
 #### RetryConfig  
 ---
@@ -3051,16 +3057,56 @@ The `getThumbnailTag` method takes an optional `url` parameter and returns an HT
 | `retryDelay` | `number` | No       | Delay in milliseconds between retry attempts.            |
 
 
+#### RevokeAccessOnType
+---
+
+Enum specifying when to automatically revoke permissions.
+
+| Value            | Description                                                           |
+|------------------|-----------------------------------------------------------------------|
+| `DOCUMENT_UNSET` | Revoke access when user unsets or leaves a document                  |
+| `USER_LOGOUT`    | Revoke access when user logs out of the organization                 |
+
+
+#### RevokeAccessOn
+---
+
+Configuration for automatic access revocation triggers.
+
+| Property                     | Type                    | Required | Description                                                                                          |
+|------------------------------|-------------------------|----------|------------------------------------------------------------------------------------------------------|
+| `type`                       | [RevokeAccessOnType](#revokeaccessontype) | Yes | Type of trigger that will revoke access. Options: `document_unset` or `user_logout` |
+| `revokeOrganizationAccess`   | `boolean`               | No       | Whether to also revoke organization-level permissions when triggered. Default: `false`              |
+
+
+#### PermissionSource
+---
+
+Enum identifying which SDK method triggered the permission check. This helps debug and trace permission request origins.
+
+| Value                | Description                                                    |
+|----------------------|----------------------------------------------------------------|
+| `SET_DOCUMENTS`      | Permission check triggered by `setDocuments()` method          |
+| `IDENTIFY`           | Permission check triggered by `identify()` method              |
+| `GET_NOTIFICATIONS`  | Permission check triggered by notifications fetching           |
+| `SET_NOTIFICATIONS`  | Permission check triggered by notifications setting            |
+
+
 #### VeltPermissionProvider
 ---
 
-Configuration interface for Permission Provider, a permission configuration mode. Instead of pre-syncing users via REST API or passing details in the `identify` method, Velt validates access requests in real-time by querying your authorization service.
+Configuration interface for Permission Provider. Velt validates access requests in real-time by querying your backend endpoint configured in the [Velt Console](https://console.velt.dev). The SDK automatically handles permission caching, validation, and synchronization.
 
-| Property                  | Type                                                           | Required | Description                                                                                                                                                    |
-|--------------------------|----------------------------------------------------------------|----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `onResourceAccessRequired` | `(requests:` [PermissionQuery[]](#permissionquery)`) => Promise<`[ResolverResponse](#resolverresponse)`<`[PermissionResult[]](#permissionresult)`>>` | Yes | Async function that receives permission queries and returns access decisions. Velt calls this when a user requests access to a resource.                       |
-| `retryConfig`            | [AuthRetryConfig](#authretryconfig)                            | No       | Configuration for retrying failed permission requests. Defaults to 3 retries with 2000ms delay.                                                                 |
-| `forceRefresh`           | `boolean`                                                      | No       | Set to `true` if access control changes frequently (e.g., for high-frequency notifications). Forces Velt to revalidate permissions on each request. Default: `false` |
+<Warning>
+**Breaking Change in v4.5.8-beta.2**: The `onResourceAccessRequired` callback has been removed from the client SDK. Permission requests are now handled by a backend endpoint configured in the Velt Console. [Learn how to migrate →](/key-concepts/overview#c-real-time-permission-provider)
+</Warning>
+
+| Property          | Type                                      | Required | Description                                                                                                                                                    |
+|-------------------|-------------------------------------------|----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `isProviderEnabled` | `boolean`                               | No       | Enable or disable the Permission Provider. Default: `true`                                                                                                      |
+| `retryConfig`     | [AuthRetryConfig](#authretryconfig)       | No       | Configuration for retrying failed permission requests. Defaults to 3 retries with 2000ms delay.                                                                 |
+| `forceRefresh`    | `boolean`                                 | No       | Set to `true` if access control changes frequently. Forces re-validation on each access check in the current session. Default: `false`                        |
+| `revokeAccessOn`  | [RevokeAccessOn[]](#revokeaccesson)       | No       | Configure automatic access revocation triggers. Revokes permissions when specified events occur (e.g., document unset or user logout).                         |
 
 
 #### PermissionQuery
@@ -3071,7 +3117,7 @@ Request structure for permission queries sent to the Permission Provider.
 | Property   | Type                                                                      | Required | Description                                              |
 |-----------|---------------------------------------------------------------------------|----------|----------------------------------------------------------|
 | `userId`  | `string`                                                                  | Yes      | ID of the user requesting access to the resource.        |
-| `resource`| `{ type: 'document' \| 'folder' \| 'organization'; id: string; source: 'setDocuments' \| 'identify' \| 'getNotifications' \| 'setNotifications' }` | Yes | Resource the user is requesting access to. The `source` field identifies which SDK method triggered the permission check. |
+| `resource`| `{ type: 'document' \| 'folder' \| 'organization'; id: string; source:` [PermissionSource](#permissionsource)`; organizationId: string }` | Yes | Resource the user is requesting access to. The `source` field identifies which SDK method triggered the permission check. Includes `organizationId` for context. |
 
 
 #### PermissionResult
@@ -3084,6 +3130,7 @@ Individual permission decision for a user's access to a specific resource.
 | `userId`    | `string`                                   | Yes      | Unique identifier of the user requesting access.                                                            |
 | `resourceId`| `string`                                   | Yes      | Unique identifier of the resource being accessed.                                                           |
 | `type`      | `'folder'` \| `'document'` \| `'organization'` | Yes      | Type of resource being accessed.                                                                            |
+| `organizationId`| `string`                               | Yes      | Organization ID associated with the resource.                                                              |
 | `accessRole`| [UserPermissionAccessRole](#userpermissionaccessrole) | No       | Access role granted to the user for this resource.                                                          |
 | `expiresAt` | `number`                                   | No       | Unix timestamp (in milliseconds) when the permission expires.                                               |
 | `hasAccess` | `boolean`                                  | Yes      | Whether the user has access to the requested resource.                                                      |

@@ -96,6 +96,24 @@ Before executing replacements:
 - **Validate change map completeness** across all variants
 - **Test search patterns** for false positives
 
+### Linking Verification Standards
+- **Verify all data model references are linked**: Ensure types/interfaces like `Context`, `SetDocumentsContext`, `PermissionQuery` are formatted as links in prose: [`Context`](/api-reference/sdk/models/data-models#context)
+- **Verify all API method references are linked**: Ensure methods like `setDocuments()`, `setPermissionProvider()` are formatted as links in prose: [`setDocuments()`](/api-reference/sdk/api/api-methods#setdocuments)
+- **CRITICAL: Link verification scope**: Verify links ONLY in descriptive text and documentation prose. NEVER check for or require links within code examples or code comments
+- **Code comment standards**:
+  - Comments must ONLY explain the code itself (what it does, why, how)
+  - Comments must NOT reference documentation, type definitions, or include "see X for more info" language
+  - Comments must focus purely on code functionality and logic
+  - Comments must not contain markdown link syntax
+- **Validation checklist**:
+  - ✅ Prose has proper links: "The [`setDocuments()`](/api-reference/sdk/api/api-methods#setdocuments) method..."
+  - ✅ Good code comment: `// Enable context-based permission requests`
+  - ✅ Good code comment: `// Optional: Only present when isContextEnabled is true`
+  - ✅ API methods page shows only: params, returns, hook, full documentation link (NO implementation details)
+  - ❌ Bad code comment: `// see Context interface for more info` (references documentation)
+  - ❌ Bad code comment: `// see PermissionQuery for full definition` (references documentation)
+  - ❌ Bad code comment: `// Optional - see [Context](/api-reference/sdk/models/data-models#context)` (has markdown link)
+
 ### Post-Replacement Verification
 After executing replacements:
 - **Scan for missed references** using alternative patterns

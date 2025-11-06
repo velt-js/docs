@@ -147,6 +147,16 @@ Before finalizing updates:
 - **Update related UI customization pages** as needed
 - **Ensure examples work** with current SDK versions
 
+### Linking Standards
+- **Link all data model references**: When referencing types/interfaces in descriptive text, format as links: [`Context`](/api-reference/sdk/models/data-models#context)
+- **Link all API method references**: When referencing methods in descriptive text, format as links: [`setDocuments()`](/api-reference/sdk/api/api-methods#setdocuments)
+- **CRITICAL: Link placement restriction**: Add links ONLY in descriptive text and documentation prose. NEVER add links within code examples or code comments
+- **Code examples must remain clean**: Keep all code snippets free of markdown links to maintain readability and copyability
+- **Example of correct usage**:
+  - ✅ In prose: "The [`setDocuments()`](/api-reference/sdk/api/api-methods#setdocuments) method uses the [`SetDocumentsContext`](/api-reference/sdk/models/data-models#setdocumentscontext) interface"
+  - ❌ In code: `// see [Context](/api-reference/sdk/models/data-models#context) for more info`
+  - ✅ In code: `// see Context interface for more info`
+
 ## Implementation Standards
 
 ### Wireframe Documentation

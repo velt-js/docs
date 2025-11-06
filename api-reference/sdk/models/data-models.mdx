@@ -2377,7 +2377,7 @@ Each resource represents something the user can access (organization, folder, or
 | `locationId`  | `string`            | No       | Filter and subscribe to document data for a specific location |
 | `allDocuments`  | `boolean`            | No       | Subscribe to all documents in the folder. Use this when folderId is provided |
 | `rootDocumentId`  | `string`            | No       | The unique identifier of the root document. Used to specify the root document when multiple documents are subscribed. |
-| `context`         | [`Context`](#context) | No       | Filter comments by custom context fields. Fetches comments matching all provided field values (AND logic across fields). |
+| `context`         | [`SetDocumentsContext`](#setdocumentscontext) | No       | Filter comments by custom context fields. Fetches comments matching all provided field values (AND logic across fields). When Permission Provider is enabled with `isContextEnabled: true`, each context value triggers a separate permission request. |
 
 
 
@@ -3092,18 +3092,29 @@ Enum identifying which SDK method triggered the permission check. This helps deb
 | `SET_NOTIFICATIONS`  | Permission check triggered by notifications setting            |
 
 
+#### PermissionResourceType
+---
+
+Enum defining the types of resources that can be validated through Permission Provider. Used in permission queries to identify the resource type being accessed.
+
+| Value            | Description                                                                      |
+|------------------|----------------------------------------------------------------------------------|
+| `ORGANIZATION`   | Organization-level resource permissions                                          |
+| `DOCUMENT`       | Document-level resource permissions                                              |
+| `LOCATION`       | Location-specific resource permissions within a document                         |
+| `CONTEXT`        | Context-based resource permissions. Added in v4.5.8-beta.4 for granular context-level access control when `isContextEnabled: true` |
+
+
 #### VeltPermissionProvider
 ---
 
 Configuration interface for Permission Provider. Velt validates access requests in real-time by querying your backend endpoint configured in the [Velt Console](https://console.velt.dev). The SDK automatically handles permission caching, validation, and synchronization.
 
-<Warning>
-**Breaking Change in v4.5.8-beta.2**: The `onResourceAccessRequired` callback has been removed from the client SDK. Permission requests are now handled by a backend endpoint configured in the Velt Console. [Learn how to migrate →](/key-concepts/overview#c-real-time-permission-provider)
-</Warning>
 
 | Property          | Type                                      | Required | Description                                                                                                                                                    |
 |-------------------|-------------------------------------------|----------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `isProviderEnabled` | `boolean`                               | No       | Enable or disable the Permission Provider. Default: `true`                                                                                                      |
+| `isContextEnabled` | `boolean`                                | No       | Enable context-based permission requests. When enabled, the backend receives individual permission requests for each context value when using context filtering. Default: `false`. Added in v4.5.8-beta.4. |
 | `retryConfig`     | [AuthRetryConfig](#authretryconfig)       | No       | Configuration for retrying failed permission requests. Defaults to 3 retries with 2000ms delay.                                                                 |
 | `forceRefresh`    | `boolean`                                 | No       | Set to `true` if access control changes frequently. Forces re-validation on each access check in the current session. Default: `false`                        |
 | `revokeAccessOn`  | [RevokeAccessOn[]](#revokeaccesson)       | No       | Configure automatic access revocation triggers. Revokes permissions when specified events occur (e.g., document unset or user logout).                         |
@@ -3117,7 +3128,7 @@ Request structure for permission queries sent to the Permission Provider.
 | Property   | Type                                                                      | Required | Description                                              |
 |-----------|---------------------------------------------------------------------------|----------|----------------------------------------------------------|
 | `userId`  | `string`                                                                  | Yes      | ID of the user requesting access to the resource.        |
-| `resource`| `{ type: 'document' \| 'folder' \| 'organization'; id: string; source:` [PermissionSource](#permissionsource)`; organizationId: string }` | Yes | Resource the user is requesting access to. The `source` field identifies which SDK method triggered the permission check. Includes `organizationId` for context. |
+| `resource`| `{ type:` [PermissionResourceType](#permissionresourcetype)`; id: string; source:` [PermissionSource](#permissionsource)`; organizationId: string; context?:` [Context](#context) `}` | Yes | Resource the user is requesting access to. The `type` uses [`PermissionResourceType`](#permissionresourcetype) enum. The `source` field identifies which SDK method triggered the permission check. The optional `context` field is present only when `isContextEnabled: true` and contains the specific context value being validated. Includes `organizationId` for context. |
 
 
 #### PermissionResult
@@ -3129,7 +3140,7 @@ Individual permission decision for a user's access to a specific resource.
 |-------------|-------------------------------------------|----------|------------------------------------------------------------------------------------------------------------|
 | `userId`    | `string`                                   | Yes      | Unique identifier of the user requesting access.                                                            |
 | `resourceId`| `string`                                   | Yes      | Unique identifier of the resource being accessed.                                                           |
-| `type`      | `'folder'` \| `'document'` \| `'organization'` | Yes      | Type of resource being accessed.                                                                            |
+| `type`      | [PermissionResourceType](#permissionresourcetype) | Yes      | Type of resource being accessed. Can be `ORGANIZATION`, `DOCUMENT`, `LOCATION`, or `CONTEXT`.               |
 | `organizationId`| `string`                               | Yes      | Organization ID associated with the resource.                                                              |
 | `accessRole`| [UserPermissionAccessRole](#userpermissionaccessrole) | No       | Access role granted to the user for this resource.                                                          |
 | `expiresAt` | `number`                                   | No       | Unix timestamp (in milliseconds) when the permission expires.                                               |
@@ -3178,20 +3189,40 @@ Individual permission decision for a user-resource pair.
 #### Context
 ---
 
-The `Context` interface is used for filtering comments and notifications based on custom context fields. This enables precise filtering based on your application's data model.
+The `Context` interface is used in Permission Provider backend requests for context-based permission validation. Each context value is sent as an individual permission request.
 
 | Property  | Type                                       | Required | Description                                                                                                |
 |-----------|--------------------------------------------|-----------|------------------------------------------------------------------------------------------------------------|
-| `access`  | `{ [key: string]: Array<string \| number> \| null }` | Yes      | Key-value pairs for filtering. Keys are custom field names, values are arrays of strings or numbers to filter by. Use `null` to indicate no filter for that key. |
+| `access`  | `{ [key: string]: string \| number }` | Yes      | Key-value pairs for context-based permissions. Keys are custom field names, values are single strings or numbers representing the specific context value being validated. |
 
 **Usage:** The `Context` interface is used in:
-- `identify()` method to filter notifications by context
+- Backend Permission Provider requests when `isContextEnabled: true`
+- Each context value from frontend methods triggers a separate permission request with this format
+
+**Integration with Permission Provider:**
+When you enable context-based permissions (`isContextEnabled: true`), Velt automatically converts array values from [`SetDocumentsContext`](#setdocumentscontext) into individual permission requests using the `Context` interface format.
+
+
+#### SetDocumentsContext
+---
+
+The `SetDocumentsContext` interface is used for filtering comments and notifications based on custom context fields when calling frontend SDK methods. This enables precise filtering based on your application's data model.
+
+| Property  | Type                                       | Required | Description                                                                                                |
+|-----------|--------------------------------------------|-----------|------------------------------------------------------------------------------------------------------------|
+| `access`  | `{ [key: string]: Array<string \| number> }` | Yes      | Key-value pairs for filtering. Keys are custom field names, values are arrays of strings or numbers to filter by. Multiple values in an array use OR logic. |
+
+**Usage:** The `SetDocumentsContext` interface is used in:
 - `setDocuments()` method to fetch comments filtered by context
-- `addCommentAnnotation` event to add context metadata to comments
+- `identify()` method to filter notifications by context
+- Frontend SDK methods that require context filtering
 
 **Filtering Logic:**
-- **Within a field (OR logic)**: When multiple values are provided for a single field in `identify()`, notifications matching any value are returned
-- **Across fields (AND logic)**: When multiple fields are provided in `setDocuments()`, comments must match all field values
+- **Within a field (OR logic)**: When multiple values are provided for a single field, comments/notifications matching any value are returned
+- **Across fields (AND logic)**: When multiple fields are provided, comments/notifications must match all field values
+
+**Permission Provider Integration:**
+When Permission Provider is enabled with `isContextEnabled: true`, each value in the arrays is sent as a separate permission request to your backend using the [`Context`](#context) interface format. This allows granular access control at the context value level.
 
 #### Options
 ---
@@ -3199,7 +3230,7 @@ The `Context` interface is used for filtering comments and notifications based o
 |------------------------|-----------|----------|---------------------------------------------------------------------------------------------|
 | `authToken`            | `string`  | No       | The authentication token for the user.                                                      |
 | `forceReset`           | `boolean` | No       | If true, forces the user to re-login.                                                       |
-| `context`              | [`Context`](#context) | No       | Filter notifications by custom context fields. Fetches notifications matching any of the provided values (OR logic within a field). |
+| `context`              | [`SetDocumentsContext`](#setdocumentscontext) | No       | Filter notifications by custom context fields. Fetches notifications matching any of the provided values (OR logic within a field). When Permission Provider is enabled with `isContextEnabled: true`, each context value triggers a separate permission request. |
 
 
 # React Flow Collaboration

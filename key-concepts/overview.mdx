@@ -1194,7 +1194,9 @@ Velt's access control system is built around four main concepts:
 - If you explicitly set a specific Document to `restricted` access, that override takes precedence
 
 ### 1. Resources
-Velt permissions apply to these resources:
+Velt permissions apply to these resources and at the feature level using **Access Context**:
+
+**Resource-Level Permissions:**
 - **Organization** – top-level container that groups users, folders, and documents.
 - **Folder** – groups documents under an organization.
 - **Document** – individual collaborative unit (e.g., a canvas, page, or file).
@@ -1202,6 +1204,17 @@ Velt permissions apply to these resources:
 <Note>
 Most permission changes occur at the **Folder** and **Document** level, but Organizations can set defaults that flow down hierarchically.
 </Note>
+
+**Feature-Level Permissions (Access Context):**
+
+Access Context enables granular, feature-level permissions using custom metadata. Unlike resource-level permissions that control access to entire organizations, folders, or documents, Access Context allows you to control access to specific features (like individual comments or notifications) based on custom metadata fields you define.
+
+**When to use Access Context:**
+- **Fine-grained control**: When you need to restrict visibility of specific features within a document rather than the entire document. For example, in a multi-tenant dashboard, different users might access the same document but see comments on different widgets based on their `widgetId` access.
+- **Data-driven permissions**: When access needs to be determined by dynamic metadata such as entity IDs, project codes, section identifiers, or other custom fields specific to your application's data model.
+- **Complex scenarios**: When resource-level permissions alone are too broad and you need feature-specific isolation within the same collaborative space.
+
+Access Context is currently available with [Real-time Permission Provider](#c-real-time-permission-provider) and will soon be supported with [On-Demand Permissions](#a-on-demand-permissions) and [Synced Permissions](#b-synced-permissions). Learn more about [configuring Access Context](#set-feature-level-permissions-using-access-context-custom-metadata).
 
 ### 2. Access Types
 Access types define **who** can access a resource:
@@ -1452,94 +1465,164 @@ With this approach, Velt pings your defined endpoint to verify whether a user sh
 ##### **How it works**
 1. Configure your backend endpoint in the [Velt Console](https://console.velt.dev/dashboard/config/permission-provider) under Permission Provider settings
 2. Add your POST endpoint URL and optional auth token
-3. Configure Permission Provider in your frontend using [`setPermissionProvider()`](/api-reference/sdk/api/api-methods#setpermissionprovider)
+3. Configure Permission Provider in your frontend using VeltProvider or using [`setPermissionProvider()`](/api-reference/sdk/api/api-methods#setpermissionprovider)
 4. When users access resources, Velt automatically queries your endpoint
-5. When context filtering is enabled with `isContextEnabled: true`, Velt sends individual permission requests for each context value
-6. Your backend determines access and returns permission decisions
-7. Velt validates and caches the response internally
+5. Your backend determines access and returns permission decisions
+6. Velt uses the response to grant or revoke permissions.
+7. Optionally, when the user switches documents or logs out, you can configure the permission provider to auto-revoke permissions.
 
 ##### **When to use**
 - Your app has complex, dynamic permissions that change frequently
 - You want to avoid syncing permission data to an external system
 - You need real-time permission validation without backend synchronization overhead
-- You want automatic permission revocation based on user actions
-- You need granular access control at the context level (e.g., filtering which specific data points or entities users can access within a document)
 
-##### **Backend Configuration**
+**How to Setup:**
 
 **Step 1: Configure Endpoint in Velt Console**
 
-1. Go to [Velt Console](https://console.velt.dev)
-2. Navigate to Permission Provider tab
-3. Enable Permission Provider
-4. Add your POST endpoint URL (e.g., `https://yourdomain.com/api/check-permissions`)
-5. (Optional) Add auth token for request authentication
+1. Enable [Permission Provider in Velt Console](https://console.velt.dev/dashboard/config/permission-provider)
+2. Add your POST endpoint URL (e.g., https://yourdomain.com/api/check-permissions)
+3. (Optional) Add auth token for request authentication
 
-**Step 2: Implement Backend Endpoint**
+**Step 2: Implement Your Backend Endpoint**
 
 Your backend receives permission requests from Velt, checks your authorization system, and returns access decisions.
 
-**Request Format Velt Sends:**
-```typescript
+**Request Schema**
+
+See the full request schema: [PermissionQuery](/api-reference/sdk/models/data-models#permissionquery)
+
+**Expected Response Schema**
+
+See the full response schema: [PermissionResult](/api-reference/sdk/models/data-models#permissionresult)
+
+**Sample Example**
+
+<Tabs>
+<Tab title="Sample Request from Velt">
+
+```json
 // Headers
 {
-  'Content-Type': 'application/json',
-  'Authorization': 'Basic ${permissionProviderToken}' // If auth token configured
+  "Content-Type": "application/json",
+  "Authorization": "Basic ${permissionProviderToken}"
 }
 
 // Body
 {
-  data: {
-    requests: PermissionQuery[] // Array of permission queries
-  }
-}
-
-// PermissionQuery structure
-{
-  userId: string,
-  resource: {
-    id: string,
-    type: PermissionResourceType, // 'organization', 'document', 'folder', 'location', or 'context'
-    source: string,
-    organizationId: string,
-    context?: Context // Optional: Only present when isContextEnabled is true
+  "data": {
+    "requests": [
+      {
+        "userId": "user123",
+        "resource": {
+          "id": "org456",
+          "type": "organization",
+          "source": "your-app",
+          "organizationId": "org456"
+        }
+      },
+      {
+        "userId": "user123",
+        "resource": {
+          "id": "doc789",
+          "type": "document",
+          "source": "your-app",
+          "organizationId": "org456"
+        }
+      },
+      {
+        "userId": "user123",
+        "resource": {
+          "id": "folder101",
+          "type": "folder",
+          "source": "your-app",
+          "organizationId": "org456"
+        }
+      },
+      {
+        "userId": "user123",
+        "resource": {
+          "id": "doc789",
+          "type": "context",
+          "source": "your-app",
+          "organizationId": "org456",
+          "context": {
+            "access": {
+              "entityId": "numberOfVisitors"
+            }
+          }
+        }
+      }
+    ]
   }
 }
 ```
 
-**Expected Response Format:**
-```typescript
+</Tab>
+
+<Tab title="Expected Response from Your Endpoint">
+
+```json
 {
-  data: PermissionResult[], // Array of permission results - see [PermissionResult](/api-reference/sdk/models/data-models#permissionresult)
-  success: boolean,         // Must be true for successful requests
-  message?: string,         // Optional message
-  timestamp?: number,       // Optional timestamp
-  statusCode: number        // Must be 200 for Velt to accept
+  "data": [
+    {
+      "userId": "user123",
+      "resourceId": "org456",
+      "type": "organization",
+      "organizationId": "org456",
+      "hasAccess": true
+    },
+    {
+      "userId": "user123",
+      "resourceId": "doc789",
+      "type": "document",
+      "organizationId": "org456",
+      "hasAccess": true,
+      "accessRole": "editor",
+      "expiresAt": 1699876543210
+    },
+    {
+      "userId": "user123",
+      "resourceId": "folder101",
+      "type": "folder",
+      "organizationId": "org456",
+      "hasAccess": true
+    },
+    {
+      "userId": "user123",
+      "resourceId": "doc789",
+      "type": "context",
+      "organizationId": "org456",
+      "hasAccess": true
+    }
+  ],
+  "success": true,
+  "statusCode": 200,
+  "message": "Permissions validated successfully"
 }
 ```
 
-**Backend Implementation Examples:**
+</Tab>
 
-<CodeGroup>
+<Tab title="Node.js / Express Implementation">
 
-```javascript Node.js / Express
+```javascript
 app.post('/api/check-permissions', async (req, res) => {
-  // Step 1: Receive requests from frontend
+  // Receive requests from Velt
   const { requests } = req.body.data;
 
-  // Step 2: Find user access - Check your authorization system and build permissions array
+  // Check your authorization system and build permissions array
   const permissions = [];
 
   for (const request of requests) {
     let permission;
 
-    // Handle context-based permission requests (when isContextEnabled is true)
+    // Handle context-based permission requests
     if (request.resource.type === 'context') {
-      // Validate access for specific context values
       const hasAccess = await yourAuthSystem.checkContextAccess(
         request.userId,
-        request.resource.id,  // documentId
-        request.resource.context.access  // e.g., { entityId: 'numberOfVisitors' }
+        request.resource.id,
+        request.resource.context.access
       );
 
       permission = {
@@ -1552,7 +1635,6 @@ app.post('/api/check-permissions', async (req, res) => {
     }
     // Handle standard resource permission requests
     else {
-      // Query your authorization system (database, auth service, etc.)
       const hasAccess = await yourAuthSystem.checkUserAccess(
         request.userId,
         request.resource.id,
@@ -1580,7 +1662,7 @@ app.post('/api/check-permissions', async (req, res) => {
     permissions.push(permission);
   }
 
-  // Step 3: Return response in expected format
+  // Return response in expected format
   res.json({
     data: permissions,
     success: true,
@@ -1590,24 +1672,27 @@ app.post('/api/check-permissions', async (req, res) => {
 });
 ```
 
-```python Python / Flask
+</Tab>
+
+<Tab title="Python / Flask Implementation">
+
+```python
 @app.route('/api/check-permissions', methods=['POST'])
 def check_permissions():
-    # Step 1: Receive requests from Velt
+    # Receive requests from Velt
     request_data = request.json
     requests_list = request_data.get('data', {}).get('requests', [])
 
-    # Step 2: Check authorization and build permissions array
+    # Check your authorization system and build permissions array
     permissions = []
 
     for req in requests_list:
-        # Handle context-based permission requests (when isContextEnabled is true)
+        # Handle context-based permission requests
         if req['resource']['type'] == 'context':
-            # Validate access for specific context values
             has_access = your_auth_system.check_context_access(
                 req['userId'],
-                req['resource']['id'],  # documentId
-                req['resource']['context']['access']  # e.g., { 'entityId': 'numberOfVisitors' }
+                req['resource']['id'],
+                req['resource']['context']['access']
             )
 
             permission = {
@@ -1619,7 +1704,6 @@ def check_permissions():
             }
         # Handle standard resource permission requests
         else:
-            # Query your authorization system (database, auth service, etc.)
             has_access = your_auth_system.check_user_access(
                 req['userId'],
                 req['resource']['id'],
@@ -1644,7 +1728,7 @@ def check_permissions():
 
         permissions.append(permission)
 
-    # Step 3: Return response in expected format
+    # Return response in expected format
     return jsonify({
         'data': permissions,
         'success': True,
@@ -1653,83 +1737,10 @@ def check_permissions():
     })
 ```
 
-</CodeGroup>
+</Tab>
+</Tabs>
 
-<Note>
-Replace `yourAuthSystem.checkUserAccess()`, `yourAuthSystem.getUserRole()`, and `yourAuthSystem.checkContextAccess()` with your actual authorization system calls (e.g., database queries, third-party auth services like Auth0, Clerk, etc.).
-</Note>
 
-**Example Context Permission Request:**
-
-When `isContextEnabled: true` and a user accesses a document with context filtering, your backend receives individual requests for each context value:
-
-```javascript
-// Frontend: User sets documents with context filtering
-client.setDocuments(documents, {
-    context: {
-        access: {
-            entityId: ['numberOfVisitors', 'numberOfAccounts'],
-            dashboardId: ['sales-dashboard']
-        }
-    }
-});
-
-// Backend receives separate permission requests for each context value:
-
-// Request 1:
-{
-  userId: "user123",
-  resource: {
-    id: "doc456",
-    type: "context",
-    source: "setDocuments",
-    organizationId: "org789",
-    context: {
-      access: {
-        entityId: "numberOfVisitors"
-      }
-    }
-  }
-}
-
-// Request 2:
-{
-  userId: "user123",
-  resource: {
-    id: "doc456",
-    type: "context",
-    source: "setDocuments",
-    organizationId: "org789",
-    context: {
-      access: {
-        entityId: "numberOfAccounts"
-      }
-    }
-  }
-}
-
-// Your backend validates each context value individually and returns:
-{
-  data: [
-    {
-      userId: "user123",
-      resourceId: "doc456",
-      type: "context",
-      organizationId: "org789",
-      hasAccess: true  // User can access 'numberOfVisitors'
-    },
-    {
-      userId: "user123",
-      resourceId: "doc456",
-      type: "context",
-      organizationId: "org789",
-      hasAccess: false  // User cannot access 'numberOfAccounts'
-    }
-  ],
-  success: true,
-  statusCode: 200
-}
-```
 
 <Info>
 **Context to Permission Conversion:** When you pass arrays of context values in `setDocuments()`, Velt automatically converts them to individual permission requests. For example, `entityId: ['value1', 'value2']` becomes two separate requests with `entityId: 'value1'` and `entityId: 'value2'`.
@@ -1737,7 +1748,20 @@ client.setDocuments(documents, {
 
 **Step 3: Configure Frontend**
 
-Use [`setPermissionProvider()`](/api-reference/sdk/api/api-methods#setpermissionprovider) to enable and configure Permission Provider behavior in your frontend.
+Configure Permission Provider behavior in your frontend using [`setPermissionProvider()`](/api-reference/sdk/api/api-methods#setpermissionprovider).
+
+**Configuration Options:**
+
+View the complete [`VeltPermissionProvider` schema](/api-reference/sdk/models/data-models#veltpermissionprovider) for all available options.
+
+- `isContextEnabled`: Enable context-based permission requests for granular access control per context value. Default: `false`
+- `retryConfig`: Configure retry attempts and delays for failed permission requests. Default: 3 retries with 2000ms delay. See [`AuthRetryConfig`](/api-reference/sdk/models/data-models#authretryconfig)
+- `forceRefresh`: Force re-validation on each access check when permissions change frequently. Default: `false`
+- `revokeAccessOn`: Configure automatic access revocation on specific events (e.g., document unset, user logout). See [Revoke Access Functionality](##revoke-access-automatically) below
+
+<Note>
+When using `setPermissionProvider()` method, call it before `identify()`, `setAuthProvider()`, and `setDocument()` methods to ensure proper initialization.
+</Note>
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -1750,8 +1774,7 @@ You can configure the Permission Provider in two ways:
 <VeltProvider
   apiKey="YOUR_API_KEY"
   permissionProvider={{
-    isProviderEnabled: true,
-    isContextEnabled: true,  // Enable context-based permission requests
+    isContextEnabled: true,
     retryConfig: { retryCount: 3, retryDelay: 2000 },
     forceRefresh: false,
   }}
@@ -1765,9 +1788,9 @@ You can configure the Permission Provider in two ways:
 ```jsx
 const { client } = useVeltClient();
 
+// Call before identify(), setAuthProvider(), and setDocument()
 client.setPermissionProvider({
-  isProviderEnabled: true,
-  isContextEnabled: true,  // Enable context-based permission requests
+  isContextEnabled: true,
   retryConfig: { retryCount: 3, retryDelay: 2000 },
   forceRefresh: false,
 });
@@ -1776,137 +1799,44 @@ client.setPermissionProvider({
 </Tab>
 <Tab title="Other Frameworks">
 ```javascript
+// Call before identify(), setAuthProvider(), and setDocument()
 Velt.setPermissionProvider({
-  isProviderEnabled: true,
-  isContextEnabled: true,  // Enable context-based permission requests
+  isContextEnabled: true,
   retryConfig: { retryCount: 3, retryDelay: 2000 },
   forceRefresh: false,
 });
 ```
 </Tab>
 </Tabs>
-
-**Configuration Options:**
-- `isProviderEnabled`: Enable or disable the Permission Provider. Default: `true`
-- `isContextEnabled`: Enable context-based permission requests. When enabled, the backend receives individual permission requests for each context value when using context filtering. Default: `false`
-- `retryConfig`: Configuration for retrying failed permission requests. See [`AuthRetryConfig`](/api-reference/sdk/models/data-models#authretryconfig)
-- `forceRefresh`: Set to `true` if access control changes frequently. Forces re-validation on each access check in the current session. Default: `false`
-- `revokeAccessOn`: Configure automatic access revocation triggers. See [Revoke Access Functionality](#revoke-access-functionality) below
 
 <Note>
 **Context-Based Permissions:** When `isContextEnabled` is true, the Permission Provider will receive individual requests for each context value. This happens automatically when you use context filtering with `setDocuments()`. Each context value becomes a separate permission request, allowing you to control access at a granular level. [Learn more about context filtering →](/async-collaboration/comments/customize-behavior#filter-comments-and-notifications-by-context)
 </Note>
 
-<Note>
-**Prerequisites:**
-1. Set your API key's `defaultDocumentAccessType` to `restricted` in the [console](https://console.velt.dev/dashboard/config/appconfig) to ensure access is denied by default unless explicitly granted
-2. Configure your Permission Provider endpoint in the [console](https://console.velt.dev/dashboard/config/permission-provider) under Permission Provider tab
-3. Add your POST endpoint URL and optional auth token
-</Note>
+#### **Revoke Access Automatically**
 
-##### **Revoke Access Functionality**
-
-Automatically revoke permissions when specific events occur, providing better control over user access and security.
-
-**Configure Revocation Triggers:**
-
-<Tabs>
-<Tab title="React / Next.js">
-
-**Option 1: In VeltProvider**
-```jsx
-<VeltProvider
-  apiKey="YOUR_API_KEY"
-  permissionProvider={{
-    isProviderEnabled: true,
-    isContextEnabled: true,  // Enable context-based permission requests
-    forceRefresh: false,
-    retryConfig: {
-      retryCount: 3,
-      retryDelay: 2000
-    },
-    revokeAccessOn: [
-      {
-        type: RevokeAccessOnType.DOCUMENT_UNSET,
-        revokeOrganizationAccess: false
-      },
-      {
-        type: RevokeAccessOnType.USER_LOGOUT,
-        revokeOrganizationAccess: true
-      }
-    ]
-  }}
->
-  {/* Your app */}
-</VeltProvider>
-```
-
-**Option 2: Using setPermissionProvider()**
-```jsx
-const { client } = useVeltClient();
-
-client.setPermissionProvider({
-  isProviderEnabled: true,
-  isContextEnabled: true,  // Enable context-based permission requests
-  forceRefresh: false,
-  retryConfig: {
-    retryCount: 3,
-    retryDelay: 2000
-  },
-  revokeAccessOn: [
-    {
-      type: RevokeAccessOnType.DOCUMENT_UNSET,
-      revokeOrganizationAccess: false
-    },
-    {
-      type: RevokeAccessOnType.USER_LOGOUT,
-      revokeOrganizationAccess: true
-    }
-  ]
-});
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-```javascript
-Velt.setPermissionProvider({
-  isProviderEnabled: true,
-  isContextEnabled: true,  // Enable context-based permission requests
-  forceRefresh: false,
-  retryConfig: {
-    retryCount: 3,
-    retryDelay: 2000
-  },
-  revokeAccessOn: [
-    {
-      type: RevokeAccessOnType.DOCUMENT_UNSET,
-      revokeOrganizationAccess: false
-    },
-    {
-      type: RevokeAccessOnType.USER_LOGOUT,
-      revokeOrganizationAccess: true
-    }
-  ]
-});
-```
-</Tab>
-</Tabs>
+- Automatically revoke permissions when specific events occur, providing better control over user access and security.
+- Access is automatically revoked from both cache and backend when triggered. This ensures immediate permission removal without requiring manual cleanup.
+- Context access is only revoked when the user logs out and not at document unset
 
 **Available Revoke Triggers:**
-- `document_unset`: Revokes access when user unsets or leaves a document
-- `user_logout`: Revokes access when user logs out
+  - `document_unset`: Revokes access when user unsets or leaves a document
+  - `user_logout`: Revokes access when user logs out
 
 **Configuration Options:**
 - `type`: Type of trigger (`RevokeAccessOnType.DOCUMENT_UNSET` or `RevokeAccessOnType.USER_LOGOUT`). See [`RevokeAccessOnType`](/api-reference/sdk/models/data-models#revokeaccessontype)
 - `revokeOrganizationAccess`: Set to `true` to also revoke organization-level permissions (default: `false`)
 
-<Info>
-Access is automatically revoked from both cache and backend when triggered. This ensures immediate permission removal without requiring manual cleanup.
-</Info>
+**Event Subscription:**
 
-##### **Track Revocation Events**
+[**RevokeAccessOn**](/api-reference/sdk/models/data-models#revokeaccesson)
 
-Subscribe to analytics events to monitor permission revocation workflows:
+Subscribe to revocation events to monitor when access is automatically removed. Here is the list of events you can subscribe to and the event objects you will receive.
+
+| Event Type | Description | Event Object |
+|------------|-------------|--------------|
+| `revokeAccessOnDocumentUnsetTriggered` | Triggered when permissions are automatically revoked due to document unset trigger | [RevokeAccessOnType](/api-reference/sdk/models/data-models#revokeaccessontype) |
+| `revokeAccessOnUserLogoutTriggered` | Triggered when permissions are automatically revoked due to user logout trigger | [RevokeAccessOnType](/api-reference/sdk/models/data-models#revokeaccessontype) |
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -1939,44 +1869,51 @@ Velt.on('revokeAccessOnUserLogoutTriggered').subscribe(event => {
 </Tab>
 </Tabs>
 
-<Warning>
-The signature generation step has been removed. Velt now handles all validation internally through the backend endpoint configuration.
-</Warning>
-
-### Subscribe to Permission Provider Events
-
-Subscribe to Permission Provider events to monitor the sequence of permission check events. This is useful for debugging, analytics, and tracking access control flows in your application.
+**Event Payload Examples:**
 
 <Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using Hooks
-const { client } = useVeltClient();
-
-client.on('permissionProvider').subscribe(e => {
-  console.log('Permission Provider Event:', e);
-});
-
-// Using API methods
-client.on('permissionProvider').subscribe(e => {
-  console.log('Permission Provider Event:', e);
-});
+<Tab title="revokeAccessOnDocumentUnsetTriggered">
+```json
+{
+  "event": "revokeAccessOnDocumentUnsetTriggered",
+  "timestamp": 1761580810137,
+  "payload": {
+    "userId": "user_123",
+    "documentId": "doc_456",
+    "organizationId": "org_789",
+    "revokeOrganizationAccess": false
+  }
+}
 ```
 </Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-Velt.on('permissionProvider').subscribe(e => {
-  console.log('Permission Provider Event:', e);
-});
-</script>
+<Tab title="revokeAccessOnUserLogoutTriggered">
+```json
+{
+  "event": "revokeAccessOnUserLogoutTriggered",
+  "timestamp": 1761580810137,
+  "payload": {
+    "userId": "user_123",
+    "organizationId": "org_789",
+    "revokeOrganizationAccess": true
+  }
+}
 ```
 </Tab>
 </Tabs>
 
-#### Available Event Types
+<Info>
+Access is automatically revoked from both cache and backend when triggered. This ensures immediate permission removal without requiring manual cleanup.
+</Info>
 
-The Permission Provider emits the following event types to track the lifecycle of permission checks:
+<Warning>
+The signature generation step has been removed. Velt now handles all validation internally through the backend endpoint configuration.
+</Warning>
+
+#### Permission Provider events
+
+**on()**
+
+Subscribe to Permission Provider events to monitor the sequence of permission check events. Here is the list of events you can subscribe to.
 
 | Event Type | Description |
 |-----------|-------------|
@@ -1985,14 +1922,40 @@ The Permission Provider emits the following event types to track the lifecycle o
 | `resourceAccessResult` | Fired when a permission check result is received from your server |
 | `resourceAccessError` | Fired when an error occurs during permission checking |
 | `resourceAccessResultFromCache` | Fired when a permission result is retrieved from cache instead of making a new request |
-| `revokeAccessOnDocumentUnsetTriggered` | Fired when permissions are automatically revoked due to document unset trigger (Available from v4.5.8-beta.2) |
-| `revokeAccessOnUserLogoutTriggered` | Fired when permissions are automatically revoked due to user logout trigger (Available from v4.5.8-beta.2) |
+| `revokeAccessOnDocumentUnsetTriggered` | Fired when permissions are automatically revoked due to document unset trigger |
+| `revokeAccessOnUserLogoutTriggered` | Fired when permissions are automatically revoked due to user logout trigger |
 
-#### Event Payload Examples
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const { client } = useVeltClient();
 
-Each event contains structured data about the permission check process:
+client.on('permissionProvider').subscribe(e => console.log(e));
+```
+</Tab>
+<Tab title="Other Frameworks">
+```javascript
+Velt.on('permissionProvider').subscribe(e => console.log(e));
+```
+</Tab>
+</Tabs>
 
-**resourceAccessRequestFormed**
+**Event Names:**
+
+```javascript
+{
+  RESOURCE_ACCESS_REQUEST_FORMED: 'resourceAccessRequestFormed',
+  RESOURCE_ACCESS_REQUEST_TRIGGERED: 'resourceAccessRequestTriggered',
+  RESOURCE_ACCESS_RESULT: 'resourceAccessResult',
+  RESOURCE_ACCESS_ERROR: 'resourceAccessError',
+  RESOURCE_ACCESS_RESULT_FROM_CACHE: 'resourceAccessResultFromCache',
+}
+```
+
+**Event Payload Examples:**
+
+<Tabs>
+<Tab title="resourceAccessRequestFormed">
 ```json
 {
   "event": "resourceAccessRequestFormed",
@@ -2013,13 +1976,13 @@ Each event contains structured data about the permission check process:
   }
 }
 ```
-
-**resourceAccessRequestTriggered**
+</Tab>
+<Tab title="resourceAccessRequestTriggered">
 ```json
 {
   "event": "resourceAccessRequestTriggered",
   "timestamp": 1761580810137,
-  "methodName": "permissionProvider",
+  "methodName": "onResourceAccessRequired",
   "source": "internal",
   "payload": {
     "requests": [
@@ -2028,8 +1991,7 @@ Each event contains structured data about the permission check process:
         "resource": {
           "id": "org1",
           "type": "organization",
-          "source": "identify",
-          "organizationId": "org1"
+          "source": "identify"
         }
       }
     ],
@@ -2037,13 +1999,13 @@ Each event contains structured data about the permission check process:
   }
 }
 ```
-
-**resourceAccessResult**
+</Tab>
+<Tab title="resourceAccessResult">
 ```json
 {
   "event": "resourceAccessResult",
   "timestamp": 1761580811228,
-  "methodName": "permissionProvider",
+  "methodName": "onResourceAccessRequired",
   "source": "internal",
   "payload": {
     "result": {
@@ -2052,31 +2014,317 @@ Each event contains structured data about the permission check process:
           "userId": "1.1",
           "resourceId": "org1",
           "type": "organization",
-          "organizationId": "org1",
           "hasAccess": true
         }
       ],
       "success": true,
-      "statusCode": 200
+      "statusCode": 200,
+      "signature": "811824052c1ea76f22fc67b36ca5dd867b89d4efeb85cf648bbbc0d2c0675545"
+    }
+  }
+}
+```
+</Tab>
+</Tabs>
+
+#### Set feature level permissions using Access Context (custom metadata)
+
+Access Context allows you to set granular, feature-level permissions using custom metadata. When configured, new feature data is added and existing feature data is fetched only for the access context values the current user has access to.
+
+##### **How it works**
+Access Context enables you to control access to specific features (like comments, notifications) based on custom metadata fields. For example, you could restrict comment visibility based on `widgetId`, `dashboardId`, or any custom field relevant to your application.
+
+**Matching Logic:**
+- When multiple fields are present in the context, Velt checks access for each field combination
+- When multiple array values exist in each field, each value creates a separate permission request
+- A user must have access to **all** fields in a context to view the associated feature data
+- The access context supports up to **200 items** total
+
+##### **Configuration Steps**
+
+**Step 1: Add Access Context to Features**
+
+You need to add access context metadata to your features on both frontend and backend.
+
+**Frontend:**
+
+<Note>
+If you add access context to comments, other features associated with it (like notifications) will automatically inherit the same access context.
+</Note>
+
+When a comment annotation is added, attach the access context using the `addContext()` method. Pass a **string or number** for each context field:
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const commentElement = client.getCommentElement();
+
+commentElement.on('addCommentAnnotation').subscribe((event) => {
+  event.addContext({
+    access: {
+      widgetId: 2  // Pass string or number, not array
+    }
+  });
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+
+commentElement.on('addCommentAnnotation').subscribe((event) => {
+  event.addContext({
+    access: {
+      widgetId: 2  // Pass string or number, not array
+    }
+  });
+});
+```
+</Tab>
+</Tabs>
+
+**Backend**
+
+**Comments Example:**
+
+Use the REST API to add access context when creating comments programmatically:
+
+```json
+POST /v2/comments
+{
+  "data": {
+    "organizationId": "org1",
+    "documentId": "document1",
+    "commentText": "This is a comment",
+    "context": {
+      "access": {
+        "widgetId": 2
+      }
     }
   }
 }
 ```
 
-#### Use Cases
+**Notifications Example:**
 
-Monitor Permission Provider events to:
-- **Debug access control issues**: Track the sequence of permission checks to identify where access is being granted or denied
-- **Analytics and monitoring**: Measure permission check latency and cache hit rates
-- **Access auditing**: Log all permission requests for security and compliance purposes
-- **Performance optimization**: Identify opportunities to optimize caching or reduce redundant permission checks
+Use the REST API to add access context when creating notifications:
 
+```json
+POST /v2/notifications
+{
+  "data": {
+    "organizationId": "org1",
+    "documentId": "document1",
+    "notificationText": "New update available",
+    "context": {
+      "access": {
+        "dashboardId": "dashboard1"
+      }
+    }
+  }
+}
+```
 
-<Check>
-### Quick sanity test
-Use this short flow to validate your end-to-end access control setup (roles and access types):
-1. Change a user's role to **viewer** for a document on the backend.
-2. Refresh the client and confirm they can read but not write comments/annotations.
-3. Switch the document's access type to **restricted** and remove the user's explicit permission.
-4. Confirm the user can no longer access collaboration data for that document.
-</Check>
+**Step 2: Add Access Context Permission Check**
+
+**Notifications:**
+
+Enable access context permission validation by setting `isContextEnabled: true` in your Permission Provider configuration:
+
+<Tabs>
+<Tab title="React / Next.js">
+
+**Option 1: In VeltProvider (Recommended)**
+
+```jsx
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  permissionProvider={{
+    isContextEnabled: true, // Enable context-based permissions for notifications
+    retryConfig: {
+      retryCount: 3,
+      retryDelay: 2000
+    },
+    forceRefresh: false,
+    revokeAccessOn: [
+      {
+        type: "document_unset",
+        revokeOrganizationAccess: false
+      },
+      {
+        type: "user_logout",
+        revokeOrganizationAccess: true
+      }
+    ]
+  }}
+>
+  {/* Your app */}
+</VeltProvider>
+```
+
+**Option 2: Using setPermissionProvider()**
+
+```jsx
+const { client } = useVeltClient();
+
+client.setPermissionProvider({
+  isContextEnabled: true, // Enable context-based permissions for notifications
+  retryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  },
+  forceRefresh: false,
+  revokeAccessOn: [
+    {
+      type: "document_unset",
+      revokeOrganizationAccess: false
+    },
+    {
+      type: "user_logout",
+      revokeOrganizationAccess: true
+    }
+  ]
+});
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setPermissionProvider({
+  isContextEnabled: true, // Enable context-based permissions for notifications
+  retryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  },
+  forceRefresh: false,
+  revokeAccessOn: [
+    {
+      type: "document_unset",
+      revokeOrganizationAccess: false
+    },
+    {
+      type: "user_logout",
+      revokeOrganizationAccess: true
+    }
+  ]
+});
+```
+</Tab>
+</Tabs>
+
+<Note>
+Context has been removed from `authProvider`. Use `setPermissionProvider()` instead with the `isContextEnabled` option.
+</Note>
+
+**Comments:**
+
+Add access context when subscribing to documents. Pass the access context values as arrays in `setDocuments()`. Each value will generate a separate permission request:
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const { client } = useVeltClient();
+
+client.setDocuments(documents, {
+  context: {
+    access: {
+      widgetId: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] // Up to 200 items total
+    }
+  }
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setDocuments(documents, {
+  context: {
+    access: {
+      widgetId: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] // Up to 200 items total
+    }
+  }
+});
+```
+</Tab>
+</Tabs>
+
+##### **Permission Request Structure**
+
+When you use access context with multiple items in `setDocuments()`, Velt sends a single request with an array of access request objects:
+
+**Example Request to Your Permission Provider Endpoint:**
+
+```json
+{
+  "data": {
+    "requests": [
+      {
+        "userId": "1.1",
+        "resource": {
+          "id": "document1",
+          "type": "document",
+          "source": "setDocuments",
+          "organizationId": "org1"
+        }
+      },
+      {
+        "userId": "1.1",
+        "resource": {
+          "id": "{\"widgetId\":1}",
+          "type": "context",
+          "source": "setDocuments",
+          "organizationId": "org1",
+          "context": {
+            "access": { "widgetId": 1 }
+          }
+        }
+      },
+      {
+        "userId": "1.1",
+        "resource": {
+          "id": "{\"widgetId\":2}",
+          "type": "context",
+          "source": "setDocuments",
+          "organizationId": "org1",
+          "context": {
+            "access": { "widgetId": 2 }
+          }
+        }
+      }
+      // ... more context items
+    ]
+  }
+}
+```
+
+**Example Response from Your Endpoint:**
+
+```json
+{
+  "data": [
+    {
+      "userId": "1.1",
+      "resourceId": "document1",
+      "type": "document",
+      "hasAccess": true,
+      "organizationId": "org1"
+    },
+    {
+      "userId": "1.1",
+      "resourceId": "{\"widgetId\":1}",
+      "type": "context",
+      "hasAccess": true,
+      "organizationId": "org1"
+    },
+    {
+      "userId": "1.1",
+      "resourceId": "{\"widgetId\":2}",
+      "type": "context",
+      "hasAccess": false,
+      "organizationId": "org1"
+    }
+    // ... more context results
+  ],
+  "success": true,
+  "statusCode": 200
+}
+```

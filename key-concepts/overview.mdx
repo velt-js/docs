@@ -1456,7 +1456,7 @@ When you include `organizationId` in the identify/auth payload, Velt automatical
 </Note>
 
 #### c. Real-time Permission Provider
-Permission Provider enables real-time access control by querying your backend whenever a user attempts to access a resource. Instead of syncing permissions to Velt, your backend remains the single source of truth for all access decisions.
+With this approach, Velt pings your defined endpoint to verify whether a user should be granted access to a resource (organization, folder, or document). This ensures that your backend is still the source of truth and you don't have to sync the permissions into Velt directly.
 
 ##### **How it works**
 1. **Configure endpoint**: Set up your backend endpoint URL and optional auth token in the [Velt Console](https://console.velt.dev/dashboard/config/permission-provider).
@@ -1486,10 +1486,6 @@ Your backend receives permission requests from Velt, checks your authorization s
 - **Request (Velt → your endpoint)**: [PermissionQuery](/api-reference/sdk/models/data-models#permissionquery)
 - **Response (your endpoint → Velt)**: [PermissionResult](/api-reference/sdk/models/data-models#permissionresult)
 
-
-<Info>
-**Context to Permission Conversion:** When you pass arrays of context values in `setDocuments()`, Velt automatically converts them to individual permission requests. For example, `entityId: ['value1', 'value2']` becomes two separate requests with `entityId: 'value1'` and `entityId: 'value2'`.
-</Info>
 
 **Example**
 
@@ -1752,11 +1748,6 @@ View the complete [`VeltPermissionProvider` schema](/api-reference/sdk/models/da
 <Tabs>
 <Tab title="React / Next.js">
 
-<Note>
-When using `setPermissionProvider()` method, call it before `identify()`, `setAuthProvider()`, and `setDocument()` methods to ensure proper initialization.
-</Note>
-
-
 You can configure the Permission Provider in two ways:
 
 **Option 1: In VeltProvider (Recommended)**
@@ -1784,6 +1775,10 @@ client.setPermissionProvider({
   forceRefresh: false,
 });
 ```
+
+<Note>
+When using `setPermissionProvider()` method, call it before `identify()`, `setAuthProvider()`, and `setDocument()` methods to ensure proper initialization.
+</Note>
 </Tab>
 <Tab title="Other Frameworks">
 <Note>
@@ -1806,10 +1801,6 @@ Velt.setPermissionProvider({
 - Access is automatically revoked from both cache and backend when triggered. This ensures immediate permission removal without requiring manual cleanup.
 - Context access is only revoked when the user logs out and not at document unset
 
-**Available Revoke Triggers:**
-  - `document_unset`: Revokes access when user unsets or leaves a document
-  - `user_logout`: Revokes access when user logs out
-
 **Configuration Options:**
 
 - `type`: [`RevokeAccessOnType`](/api-reference/sdk/models/data-models#revokeaccessontype)
@@ -1818,9 +1809,81 @@ Velt.setPermissionProvider({
 
 - `revokeOrganizationAccess`: Set to `true` to also revoke organization-level permissions (default: `false`)
 
+<Tabs>
+<Tab title="React / Next.js">
+
+**Option 1: In VeltProvider (Recommended)**
+
+```jsx
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  permissionProvider={{
+    isContextEnabled: true,
+    revokeAccessOn: {
+      type: 'document_unset', // Revoke access when user leaves document
+      revokeOrganizationAccess: false // Keep organization access
+    }
+  }}
+>
+  {/* Your app */}
+</VeltProvider>
+```
+
+**Option 2: Using setPermissionProvider()**
+
+```jsx
+const { client } = useVeltClient();
+
+// Example 1: Revoke access on document unset only
+client.setPermissionProvider({
+  revokeAccessOn: {
+    type: 'document_unset',
+    revokeOrganizationAccess: false
+  }
+});
+
+// Example 2: Revoke all access including organization on user logout
+client.setPermissionProvider({
+  revokeAccessOn: {
+    type: 'user_logout',
+    revokeOrganizationAccess: true // Also revoke organization permissions
+  }
+});
+```
+
+<Note>
+Context-level access is only revoked on user logout, not on document unset.
+</Note>
+</Tab>
+<Tab title="Other Frameworks">
+
+```javascript
+// Example 1: Revoke access on document unset only
+Velt.setPermissionProvider({
+  revokeAccessOn: {
+    type: 'document_unset',
+    revokeOrganizationAccess: false
+  }
+});
+
+// Example 2: Revoke all access including organization on user logout
+Velt.setPermissionProvider({
+  revokeAccessOn: {
+    type: 'user_logout',
+    revokeOrganizationAccess: true // Also revoke organization permissions
+  }
+});
+```
+
+<Note>
+Context-level access is only revoked on user logout, not on document unset.
+</Note>
+</Tab>
+</Tabs>
+
 **Permission Provider Events**
 
-[**On()**](/api-reference/sdk/models/data-models#revokeaccesson)
+[**On()**](/api-reference/sdk/api/api-methods#on-5)
 
 Subscribe to Permission Provider events to monitor the sequence of permission check events. Here is the list of events you can subscribe to and the event objects you will receive.
 
@@ -1831,11 +1894,144 @@ Subscribe to Permission Provider events to monitor the sequence of permission ch
 | `resourceAccessResult` | Triggered when a permission check result is received from your server | [PermissionProviderEvent](/api-reference/sdk/models/data-models#permissionproviderevent) |
 | `resourceAccessError` | Triggered when an error occurs during permission checking | [PermissionProviderEvent](/api-reference/sdk/models/data-models#permissionproviderevent) |
 | `resourceAccessResultFromCache` | Triggered when a permission result is retrieved from cache instead of making a new request | [PermissionProviderEvent](/api-reference/sdk/models/data-models#permissionproviderevent) |
-| `revokeAccessOnDocumentUnsetTriggered` | Triggered when permissions are automatically revoked due to document unset trigger | [RevokeAccessOnEvent](/api-reference/sdk/models/data-models#revokeaccessonevent) |
-| `revokeAccessOnUserLogoutTriggered` | Triggered when permissions are automatically revoked due to user logout trigger | [RevokeAccessOnEvent](/api-reference/sdk/models/data-models#revokeaccessonevent) |
+| `revokeAccessOnDocumentUnsetTriggered` | Triggered when permissions are automatically revoked due to document unset trigger | [RevokeAccessEvent](/api-reference/sdk/models/data-models#revokeaccessevent) |
+| `revokeAccessOnUserLogoutTriggered` | Triggered when permissions are automatically revoked due to user logout trigger | [RevokeAccessEvent](/api-reference/sdk/models/data-models#revokeaccessevent) |
 
 <Tabs>
 <Tab title="React / Next.js">
+
+**Using React Hook**
+
+```jsx
+import { useVeltEventCallback } from '@veltdev/react';
+
+function PermissionMonitor() {
+  // Subscribe to all permission provider events
+  useVeltEventCallback('permissionProvider', (event) => {
+    console.log('Permission provider event:', event);
+  });
+
+  // Event payload example for resourceAccessRequestFormed:
+  // {
+  //   "event": "resourceAccessRequestFormed",
+  //   "methodName": "identify",
+  //   "timestamp": 1761580810137,
+  //   "source": "internal",
+  //   "payload": {
+  //     "requests": [
+  //       {
+  //         "userId": "1.1",
+  //         "resource": {
+  //           "id": "org1",
+  //           "type": "organization",
+  //           "source": "identify"
+  //         }
+  //       }
+  //     ]
+  //   }
+  // }
+
+  useVeltEventCallback('resourceAccessRequestFormed', (event) => {
+    console.log('Permission request formed:', event);
+  });
+
+  // Event payload example for resourceAccessRequestTriggered:
+  // {
+  //   "event": "resourceAccessRequestTriggered",
+  //   "timestamp": 1761580810137,
+  //   "methodName": "onResourceAccessRequired",
+  //   "source": "internal",
+  //   "payload": {
+  //     "requests": [
+  //       {
+  //         "userId": "1.1",
+  //         "resource": {
+  //           "id": "org1",
+  //           "type": "organization",
+  //           "source": "identify"
+  //         }
+  //       }
+  //     ],
+  //     "fromCache": false
+  //   }
+  // }
+
+  useVeltEventCallback('resourceAccessRequestTriggered', (event) => {
+    console.log('Permission request triggered:', event);
+  });
+
+  // Event payload example for resourceAccessResult:
+  // {
+  //   "event": "resourceAccessResult",
+  //   "timestamp": 1761580811228,
+  //   "methodName": "onResourceAccessRequired",
+  //   "source": "internal",
+  //   "payload": {
+  //     "result": {
+  //       "data": [
+  //         {
+  //           "userId": "1.1",
+  //           "resourceId": "org1",
+  //           "type": "organization",
+  //           "hasAccess": true
+  //         }
+  //       ],
+  //       "success": true,
+  //       "statusCode": 200,
+  //       "signature": "811824052c1ea76f22fc67b36ca5dd867b89d4efeb85cf648bbbc0d2c0675545"
+  //     }
+  //   }
+  // }
+
+  useVeltEventCallback('resourceAccessResult', (event) => {
+    console.log('Permission result received:', event);
+  });
+
+  useVeltEventCallback('resourceAccessError', (event) => {
+    console.error('Permission error:', event);
+  });
+
+  useVeltEventCallback('resourceAccessResultFromCache', (event) => {
+    console.log('Permission result from cache:', event);
+  });
+
+  // Event payload example for revokeAccessOnDocumentUnsetTriggered:
+  // {
+  //   "event": "revokeAccessOnDocumentUnsetTriggered",
+  //   "timestamp": 1761580810137,
+  //   "payload": {
+  //     "userId": "user_123",
+  //     "documentId": "doc_456",
+  //     "organizationId": "org_789",
+  //     "revokeOrganizationAccess": false
+  //   }
+  // }
+
+  useVeltEventCallback('revokeAccessOnDocumentUnsetTriggered', (event) => {
+    console.log('Document unset revocation:', event);
+  });
+
+  // Event payload example for revokeAccessOnUserLogoutTriggered:
+  // {
+  //   "event": "revokeAccessOnUserLogoutTriggered",
+  //   "timestamp": 1761580810137,
+  //   "payload": {
+  //     "userId": "user_123",
+  //     "organizationId": "org_789",
+  //     "revokeOrganizationAccess": true
+  //   }
+  // }
+
+  useVeltEventCallback('revokeAccessOnUserLogoutTriggered', (event) => {
+    console.log('Logout revocation:', event);
+  });
+
+  return <div>Monitoring permission events...</div>;
+}
+```
+
+**Using Client Method**
+
 ```jsx
 const { client } = useVeltClient();
 
@@ -2127,9 +2323,10 @@ commentElement.on('addCommentAnnotation').subscribe((event) => {
 </Tab>
 </Tabs>
 
-**Backend**
+**Backend:**
 
-**Comments Example:**
+<Tabs>
+<Tab title="Comments">
 
 Use the REST API to add access context when creating comments programmatically:
 
@@ -2149,7 +2346,8 @@ POST /v2/comments
 }
 ```
 
-**Notifications Example:**
+</Tab>
+<Tab title="Notifications">
 
 Use the REST API to add access context when creating notifications:
 
@@ -2169,15 +2367,12 @@ POST /v2/notifications
 }
 ```
 
-**Step 2: Add Access Context Permission Check**
+</Tab>
+</Tabs>
 
-<Note>
-**Context-Based Permissions:** When `isContextEnabled` is true, the Permission Provider will receive individual requests for each context value. This happens automatically when you use context filtering with `setDocuments()`. Each context value becomes a separate permission request, allowing you to control access at a granular level. [Learn more about context filtering →](/async-collaboration/comments/customize-behavior#filter-comments-and-notifications-by-context)
-</Note>
+**Step 2: Enable Context-Based Permissions**
 
-**Notifications:**
-
-Enable access context permission validation by setting `isContextEnabled: true` in your Permission Provider configuration:
+Enable access context permission validation by setting `isContextEnabled: true` in your Permission Provider configuration. When enabled, the Permission Provider will receive individual requests for each context value, allowing you to control access at a granular level for features like comments and notifications.
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -2263,6 +2458,10 @@ Velt.setPermissionProvider({
 **Comments:**
 
 Add access context when subscribing to documents. Pass the access context values as arrays in `setDocuments()`. Each value will generate a separate permission request:
+
+<Info>
+**Context to Permission Conversion:** When you pass arrays of context values in `setDocuments()`, Velt automatically converts them to individual permission requests. For example, `entityId: ['value1', 'value2']` becomes two separate requests with `entityId: 'value1'` and `entityId: 'value2'`.
+</Info>
 
 <Tabs>
 <Tab title="React / Next.js">

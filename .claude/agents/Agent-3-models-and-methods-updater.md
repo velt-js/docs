@@ -39,9 +39,15 @@ When adding or updating API methods:
 2. **Categorize appropriately** (hooks vs REST APIs vs SDK methods)
 3. **Follow established parameter documentation** patterns
 4. **Include return type information** with links to data-models.mdx - **verify return types are accurate** (e.g., `requestScreenPermission` returns `Promise<MediaStream | null>`)
-5. **Provide usage examples** following React-first, Other Frameworks-second pattern
-6. **Document all parameters** with types, required/optional status, and descriptions
-7. **Include error handling** and edge case information where relevant
+5. **CRITICAL: API methods page format** - NEVER include implementation details, code examples, or configuration options on the api-methods.mdx page. Only show:
+   - Brief description (1-2 sentences)
+   - Params: with link to data model definition (e.g., [`VeltPermissionProvider`](/api-reference/sdk/models/data-models#veltpermissionprovider))
+   - Returns: return type
+   - React Hook: hook name or `n/a`
+   - [Full Documentation →] link to comprehensive implementation guide
+6. **All implementation details** (code examples, configuration options, prerequisites, usage notes) belong in the linked full documentation page, NOT on api-methods.mdx
+7. **Document all parameters** with types, required/optional status, and descriptions
+8. **Include error handling** and edge case information where relevant
 
 ## Quality Assurance Framework
 
@@ -72,6 +78,13 @@ Before finalizing updates:
 - Include JSDoc-style comments for complex types
 - Specify default values and constraints clearly
 - Group related types logically within sections
+
+### Linking Standards
+- **Link all data model references**: When referencing types/interfaces in descriptions, format as links: [`Context`](/api-reference/sdk/models/data-models#context)
+- **Link all API method references**: When referencing methods, format as links: [`setDocuments()`](/api-reference/sdk/api/api-methods#setdocuments)
+- **Link placement**: Add links in descriptive text and documentation prose, but NEVER in code examples or code comments
+- **Parameter types**: Always link parameter types to their data model definitions (e.g., `Params: [`VeltPermissionProvider`](/api-reference/sdk/models/data-models#veltpermissionprovider)`)
+- **Cross-references**: Link between related types and methods throughout the documentation
 
 ### API Documentation
 - Document all parameters with complete type information

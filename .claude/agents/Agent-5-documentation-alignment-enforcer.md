@@ -81,6 +81,21 @@ Avoid changes in:
 - **Create bidirectional links**: When Agent-3 adds new API methods or new API methods are metnioned that already exist in api-methods.mdx, ensure feature documentation subsections link back to the API reference using the format: `### [methodName](/api-reference/sdk/api/api-methods#anchor)`
   - Example: `### [enableHeartbeat](/api-reference/sdk/api/api-methods#enableheartbeat)`
 
+### Linking Verification Standards
+- **Verify all data model references are linked**: Check that types/interfaces like `Context`, `SetDocumentsContext`, `PermissionQuery` are formatted as links: [`Context`](/api-reference/sdk/models/data-models#context)
+- **Verify all API method references are linked**: Check that methods like `setDocuments()`, `setPermissionProvider()` are formatted as links: [`setDocuments()`](/api-reference/sdk/api/api-methods#setdocuments)
+- **CRITICAL: Link verification scope**: Verify links ONLY in descriptive text and documentation prose. NEVER check for or add links within code examples or code comments
+- **Code comments standards**:
+  - Comments should ONLY explain the code itself (what it does, why, how)
+  - Comments should NOT reference documentation, type definitions, or "see X for more info"
+  - Comments should focus purely on code functionality and logic
+- **Validation approach**:
+  - ✅ Verify prose has links: "The [`setDocuments()`](/api-reference/sdk/api/api-methods#setdocuments) method..."
+  - ✅ Good code comment: `// Enable context-based permission requests`
+  - ✅ Good code comment: `// Optional: Only present when isContextEnabled is true`
+  - ❌ Bad code comment: `// see Context interface for more info`
+  - ❌ Bad code comment: `// Optional - see [Context](/api-reference/sdk/models/data-models#context)`
+
 ## Quality Assurance Framework
 
 ### Comprehensive Validation

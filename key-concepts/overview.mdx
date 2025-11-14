@@ -372,7 +372,7 @@ await Velt.setDocuments(documents);
 </Tab>
 </Tabs>
 
-##### Read/Write data from multiple documents on the same page
+##### **Read/Write data from multiple documents on the same page**
 - If you want to display data (eg: comments) from multiple documents on the same page, add `data-velt-document-id` attribute to the container that contains the `document`.
 - It will be used to identify which part of the DOM belongs to which document.
 
@@ -389,6 +389,42 @@ await Velt.setDocuments(documents);
   ...
 </div>
 ```
+
+#### Filter comments by context
+
+You can filter which comments are loaded when subscribing to documents by passing a `context.access` parameter to `setDocuments()`. This is useful when you only want to fetch specific comments **within a document** that the user has access to.
+
+Learn more about the [Feature Level Access Control](/key-concepts/overview#aset-feature-level-permissions-using-access-context-custom-metadata).
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const { client } = useVeltClient();
+
+client.setDocuments(documents, {
+    context: {
+        access: {
+            entityId: ['numberOfVisitors'],
+            dashboardId: ['myDashboard'],
+        }
+    },
+});
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+Velt.setDocuments(documents, {
+    context: {
+        access: {
+            entityId: ['numberOfVisitors'],
+            dashboardId: ['myDashboard'],
+        }
+    },
+});
+```
+</Tab>
+</Tabs>
 
 #### Subscribe to Documents from Other Organizations
 - By default, users can only access documents within their own organization.
@@ -1150,7 +1186,9 @@ Velt's access control system is built around four main concepts:
 - If you explicitly set a specific Document to `restricted` access, that override takes precedence
 
 ### 1. Resources
-Velt permissions apply to these resources:
+Velt permissions apply to these resources and at the feature level using **Access Context**:
+
+**Resource-Level Permissions:**
 - **Organization** – top-level container that groups users, folders, and documents.
 - **Folder** – groups documents under an organization.
 - **Document** – individual collaborative unit (e.g., a canvas, page, or file).
@@ -1158,6 +1196,15 @@ Velt permissions apply to these resources:
 <Note>
 Most permission changes occur at the **Folder** and **Document** level, but Organizations can set defaults that flow down hierarchically.
 </Note>
+
+**Feature-Level Permissions (Access Context):**
+
+Access Context enables granular, feature-level permissions using custom metadata. Unlike resource-level permissions that control access to entire organizations, folders, or documents, Access Context allows you to control access to specific features data (like individual comments or notifications) based on custom metadata fields you define.
+
+**When to use Access Context:**
+- **Fine-grained control**: When you need to restrict visibility of specific features data within a document rather than the entire document. For example, in a multi-tenant dashboard, users may access the same dashboard (document) but only see comments for widgets they’re authorized to view (scoped by widgetId).
+- **Data-driven permissions**: When access needs to be determined by dynamic metadata such as entity IDs, project codes, section identifiers, or other custom fields specific to your application's data model.
+- **Complex scenarios**: When resource-level permissions alone are too broad and you need feature-specific isolation within the same collaborative space.
 
 ### 2. Access Types
 Access types define **who** can access a resource:
@@ -1406,38 +1453,291 @@ When you include `organizationId` in the identify/auth payload, Velt automatical
 With this approach, Velt pings your defined endpoint to verify whether a user should be granted access to a resource (organization, folder, or document). This ensures that your backend is still the source of truth and you don't have to sync the permissions into Velt directly.
 
 ##### **How it works**
-1. You define a permission provider in your frontend that calls an endpoint in your backend.
-2. When a user logs in with an organization ID or accesses a folder or document, Velt calls your permission provider with the requested resource details.
-3. Your endpoint determines whether the user should be allowed access and generates a signed response using Velt's [Generate Signature API](/api-reference/rest-apis/v2/auth/generate-signature).
-4. Velt validates the signature in the backend and updates the user's access accordingly.
+1. **Configure endpoint**: Set up your backend endpoint URL and optional auth token in the [Velt Console](https://console.velt.dev/dashboard/config/permission-provider).
+2. **Initialize frontend**: Configure Permission Provider in your app using VeltProvider or [`setPermissionProvider()`](/api-reference/sdk/api/api-methods#setpermissionprovider).
+3. **Automatic validation**: When users access resources (organizations, folders, documents, or contexts), Velt automatically queries your endpoint.
+4. **Backend response**: Your backend checks permissions and returns access decisions.
+5. **Instant enforcement**: Velt enforces the permissions immediately based on your response.
+6. **Auto-revocation** (optional): Configure automatic permission cleanup when users switch documents or log out.
 
 ##### **When to use**
 - Your app has complex, dynamic permissions that change frequently
 - You want to avoid syncing permission data to an external system
 - You need real-time permission validation without backend synchronization overhead
 
-##### **Implementation**
+**How to Setup:**
 
-Use [`setPermissionProvider()`](/api-reference/sdk/api/api-methods#setpermissionprovider) to configure the permission provider in your frontend.
+**Step 1: Configure Endpoint in Velt Console**
 
-**Params:**
-- `onResourceAccessRequired`:
-  - Params: [`PermissionQuery[]`](/api-reference/sdk/models/data-models#permissionquery)
-  - Returns: [`Promise<ResolverResponse<PermissionResult[]>>`](/api-reference/sdk/models/data-models#permissionresult). In the response, we expect `statusCode` to be `200` and `success` to be `true` as shown in the example response below otherwise we will retry the request.
-- `retryConfig`: [`AuthRetryConfig`](/api-reference/sdk/models/data-models#authretryconfig) - Configuration for retry behavior on failures
-- `forceRefresh`: `boolean` - Set to true if access control changes frequently. This forces re-validation on each access check in the current session only. Default: `false`
+1. Enable [Permission Provider in Velt Console](https://console.velt.dev/dashboard/config/permission-provider)
+2. Add your POST endpoint URL (e.g., https://yourdomain.com/api/check-permissions)
+3. (Optional) Add auth token for request authentication
+
+**Step 2: Implement Your Backend Endpoint**
+
+Your backend receives permission requests from Velt, checks your authorization system, and returns access decisions.
+
+- **Request (Velt → your endpoint)**: [PermissionQuery](/api-reference/sdk/models/data-models#permissionquery)
+- **Response (your endpoint → Velt)**: [PermissionResult](/api-reference/sdk/models/data-models#permissionresult)
 
 
-<Warning>
-Never expose your Velt API key or Auth Token on the frontend. Always call the [Generate Signature API](/api-reference/rest-apis/v2/auth/generate-signature) from your backend to ensure the security and integrity of permission responses.
-</Warning>
-
-<Warning>
-If you are using the [identify() method](#2-use-identify-with-jwt-token) for Velt authentication, you **must call the Permission Provider before the `identify()` method is invoked**.
-</Warning>
+**Example**
 
 <Tabs>
-<Tab title="Frontend">
+<Tab title="Sample Request from Velt">
+
+```javascript
+// Velt sends a POST request to your configured endpoint
+fetch('https://yourdomain.com/api/check-permissions', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Basic ${permissionProviderToken}'
+  },
+  body: JSON.stringify({
+    data: {
+      requests: [
+        {
+          userId: 'user123',
+          resource: {
+            id: 'org456',
+            type: 'organization',
+            source: 'identify',
+            organizationId: 'org456'
+          }
+        },
+        {
+          userId: 'user123',
+          resource: {
+            id: 'doc789',
+            type: 'document',
+            source: 'setDocuments',
+            organizationId: 'org456'
+          }
+        },
+        {
+          userId: 'user123',
+          resource: {
+            id: 'folder101',
+            type: 'folder',
+            source: 'setDocuments',
+            organizationId: 'org456'
+          }
+        },
+        {
+          userId: 'user123',
+          resource: {
+            id: 'doc789',
+            type: 'context',
+            source: 'setDocuments',
+            organizationId: 'org456',
+            context: {
+              access: {
+                entityId: 'numberOfVisitors'
+              }
+            }
+          }
+        }
+      ]
+    }
+  })
+});
+```
+
+</Tab>
+
+<Tab title="Expected Response from Your Endpoint">
+
+```json
+{
+  "data": [
+    {
+      "userId": "user123",
+      "resourceId": "org456",
+      "type": "organization",
+      "organizationId": "org456",
+      "hasAccess": true
+    },
+    {
+      "userId": "user123",
+      "resourceId": "doc789",
+      "type": "document",
+      "organizationId": "org456",
+      "hasAccess": true,
+      "accessRole": "editor",
+      "expiresAt": 1699876543210
+    },
+    {
+      "userId": "user123",
+      "resourceId": "folder101",
+      "type": "folder",
+      "organizationId": "org456",
+      "hasAccess": true
+    },
+    {
+      "userId": "user123",
+      "resourceId": "doc789",
+      "type": "context",
+      "organizationId": "org456",
+      "hasAccess": true
+    }
+  ],
+  "success": true,
+  "statusCode": 200,
+  "message": "Permissions validated successfully"
+}
+```
+
+</Tab>
+
+<Tab title="Your endpoint sample (Node.js / Express)">
+
+```javascript
+app.post('/api/check-permissions', async (req, res) => {
+  // Receive requests from Velt
+  const { requests } = req.body.data;
+
+  // Check your authorization system and build permissions array
+  const permissions = [];
+
+  for (const request of requests) {
+    let permission;
+
+    // Handle context-based permission requests
+    if (request.resource.type === 'context') {
+      const hasAccess = await yourAuthSystem.checkContextAccess(
+        request.userId,
+        request.resource.id,
+        request.resource.context.access
+      );
+
+      permission = {
+        userId: request.userId,
+        resourceId: request.resource.id,
+        type: 'context',
+        organizationId: request.resource.organizationId,
+        hasAccess: hasAccess,
+      };
+    }
+    // Handle standard resource permission requests
+    else {
+      const hasAccess = await yourAuthSystem.checkUserAccess(
+        request.userId,
+        request.resource.id,
+        request.resource.type
+      );
+
+      permission = {
+        userId: request.userId,
+        resourceId: request.resource.id,
+        type: request.resource.type,
+        organizationId: request.resource.organizationId,
+        hasAccess: hasAccess,
+      };
+
+      // For documents, add access role
+      if (request.resource.type === 'document' && hasAccess) {
+        permission.accessRole = await yourAuthSystem.getUserRole(
+          request.userId,
+          request.resource.id
+        ); // 'viewer' or 'editor'
+        permission.expiresAt = Date.now() + 10 * 60 * 1000; // Optional: 10 min expiry
+      }
+    }
+
+    permissions.push(permission);
+  }
+
+  // Return response in expected format
+  res.json({
+    data: permissions,
+    success: true,
+    statusCode: 200,
+    message: 'Permissions validated successfully'
+  });
+});
+```
+
+</Tab>
+
+<Tab title="Your endpoint sample (Python / Flask)">
+
+```python
+@app.route('/api/check-permissions', methods=['POST'])
+def check_permissions():
+    # Receive requests from Velt
+    request_data = request.json
+    requests_list = request_data.get('data', {}).get('requests', [])
+
+    # Check your authorization system and build permissions array
+    permissions = []
+
+    for req in requests_list:
+        # Handle context-based permission requests
+        if req['resource']['type'] == 'context':
+            has_access = your_auth_system.check_context_access(
+                req['userId'],
+                req['resource']['id'],
+                req['resource']['context']['access']
+            )
+
+            permission = {
+                'userId': req['userId'],
+                'resourceId': req['resource']['id'],
+                'type': 'context',
+                'organizationId': req['resource']['organizationId'],
+                'hasAccess': has_access
+            }
+        # Handle standard resource permission requests
+        else:
+            has_access = your_auth_system.check_user_access(
+                req['userId'],
+                req['resource']['id'],
+                req['resource']['type']
+            )
+
+            permission = {
+                'userId': req['userId'],
+                'resourceId': req['resource']['id'],
+                'type': req['resource']['type'],
+                'organizationId': req['resource']['organizationId'],
+                'hasAccess': has_access
+            }
+
+            # For documents, add access role
+            if req['resource']['type'] == 'document' and has_access:
+                permission['accessRole'] = your_auth_system.get_user_role(
+                    req['userId'],
+                    req['resource']['id']
+                )  # 'viewer' or 'editor'
+                permission['expiresAt'] = int(time.time() * 1000) + 10 * 60 * 1000  # Optional: 10 min expiry
+
+        permissions.append(permission)
+
+    # Return response in expected format
+    return jsonify({
+        'data': permissions,
+        'success': True,
+        'statusCode': 200,
+        'message': 'Permissions validated successfully'
+    })
+```
+
+</Tab>
+</Tabs>
+
+**Step 3: Configure Permission Provider Behavior in your Frontend**
+
+Configure Permission Provider behavior in your frontend using [`setPermissionProvider()`](/api-reference/sdk/api/api-methods#setpermissionprovider).
+
+**Configuration Options:**
+
+View the complete [`VeltPermissionProvider` schema](/api-reference/sdk/models/data-models#veltpermissionprovider) for all available options.
+
+- `isContextEnabled`: Enable context-based permission requests for granular access control per context value. Default: `false`
+- `retryConfig`: Configure retry attempts and delays for failed permission requests. Default: 3 retries with 2000ms delay. See [`AuthRetryConfig`](/api-reference/sdk/models/data-models#authretryconfig)
+- `forceRefresh`: Force re-validation on each access check when permissions change frequently. Default: `false`
+- `revokeAccessOn`: Configure automatic access revocation on specific events (e.g., document unset, user logout).
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -1447,62 +1747,10 @@ You can configure the Permission Provider in two ways:
 **Option 1: In VeltProvider (Recommended)**
 
 ```jsx
-<VeltProvider 
+<VeltProvider
   apiKey="YOUR_API_KEY"
   permissionProvider={{
-    onResourceAccessRequired: async (requests) => {
-      // Example requests array received from Velt:
-      // [
-      //   {
-      //     userId: "user_123",
-      //     resource: { type: "document", id: "doc_456" }
-      //   },
-      //   {
-      //     userId: "user_123",
-      //     resource: { type: "folder", id: "folder_789" }
-      //   }
-      // ]
-      
-      // Call your backend endpoint
-      const response = await fetch('/api/check-permissions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ requests })
-      });
-      
-      const result = await response.json();
-      
-      // Return format expected by Velt
-      return {
-        data: result.permissions,
-        success: result.success,
-        statusCode: result.statusCode,
-        signature: result.signature
-      };
-      
-      // Example response:
-      // {
-      //   data: [
-      //     {
-      //       userId: "user_123",
-      //       resourceId: "doc_456",
-      //       type: "document",
-      //       hasAccess: true,
-      //       accessRole: "editor",
-      //       expiresAt: 1735689600
-      //     },
-      //     {
-      //       userId: "user_123",
-      //       resourceId: "folder_789",
-      //       type: "folder",
-      //       hasAccess: true
-      //     }
-      //   ],
-      //   success: true,
-      //   statusCode: 200,
-      //   signature: "03638f2191bf59c0e536e5b31cbde86df5f44b03fc8e82ee9a8bed7eb324f252"
-      // }
-    },
+    isContextEnabled: true,
     retryConfig: { retryCount: 3, retryDelay: 2000 },
     forceRefresh: false,
   }}
@@ -1515,63 +1763,661 @@ You can configure the Permission Provider in two ways:
 
 ```jsx
 const { client } = useVeltClient();
-
 client.setPermissionProvider({
-  onResourceAccessRequired: async (requests) => {
-    // Example requests array received from Velt:
-    // [
-    //   {
-    //     userId: "user_123",
-    //     resource: { type: "document", id: "doc_456" }
-    //   },
-    //   {
-    //     userId: "user_123",
-    //     resource: { type: "folder", id: "folder_789" }
-    //   }
-    // ]
-    
-    // Call your backend endpoint
-    const response = await fetch('/api/check-permissions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requests })
-    });
-    
-    const result = await response.json();
-    
-    // Return format expected by Velt
-    return {
-      data: result.permissions,
-      success: result.success,
-      statusCode: result.statusCode,
-      signature: result.signature
-    };
-    
-    // Example response:
-    // {
-    //   data: [
-    //     {
-    //       userId: "user_123",
-    //       resourceId: "doc_456",
-    //       type: "document",
-    //       hasAccess: true,
-    //       accessRole: "editor",
-    //       expiresAt: 1735689600
-    //     },
-    //     {
-    //       userId: "user_123",
-    //       resourceId: "folder_789",
-    //       type: "folder",
-    //       hasAccess: true
-    //     }
-    //   ],
-    //   success: true,
-    //   statusCode: 200,
-    //   signature: "03638f2191bf59c0e536e5b31cbde86df5f44b03fc8e82ee9a8bed7eb324f252"
-    // }
-  },
+  isContextEnabled: true,
   retryConfig: { retryCount: 3, retryDelay: 2000 },
   forceRefresh: false,
+});
+```
+
+<Note>
+When using `setPermissionProvider()` method, call it before `identify()`, `setAuthProvider()`, and `setDocument()` methods to ensure proper initialization.
+</Note>
+</Tab>
+<Tab title="Other Frameworks">
+<Note>
+When using `setPermissionProvider()` method, call it before `identify()`, `setAuthProvider()`, and `setDocument()` methods to ensure proper initialization.
+</Note>
+
+```javascript
+Velt.setPermissionProvider({
+  isContextEnabled: true,
+  retryConfig: { retryCount: 3, retryDelay: 2000 },
+  forceRefresh: false,
+});
+```
+</Tab>
+</Tabs>
+
+**Step 4: Configure Auto Revoke Access (optional)**
+
+- Automatically revoke permissions when specific events occur, providing better control over user access and security.
+- Access is automatically revoked from both cache and backend when triggered. This ensures immediate permission removal without requiring manual cleanup.
+- Context access is only revoked when the user logs out and not at document unset.
+
+**Configuration Options:**
+
+- `type`: [`RevokeAccessOnType`](/api-reference/sdk/models/data-models#revokeaccessontype)
+  - `document_unset`: Revokes access when user unsets or leaves a document
+  - `user_logout`: Revokes access when user logs out
+
+- `revokeOrganizationAccess`: Set to `true` to also revoke organization-level permissions (default: `false`)
+
+<Tabs>
+<Tab title="React / Next.js">
+
+**Option 1: In VeltProvider (Recommended)**
+
+```jsx
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  permissionProvider={{
+    isContextEnabled: true,
+    revokeAccessOn: {
+      type: 'document_unset', // Revoke access when user leaves document
+      revokeOrganizationAccess: false // Keep organization access
+    }
+  }}
+>
+  {/* Your app */}
+</VeltProvider>
+```
+
+**Option 2: Using setPermissionProvider()**
+
+```jsx
+const { client } = useVeltClient();
+
+// Example 1: Revoke access on document unset only
+client.setPermissionProvider({
+  revokeAccessOn: {
+    type: 'document_unset',
+    revokeOrganizationAccess: false
+  }
+});
+
+// Example 2: Revoke all access including organization on user logout
+client.setPermissionProvider({
+  revokeAccessOn: {
+    type: 'user_logout',
+    revokeOrganizationAccess: true // Also revoke organization permissions
+  }
+});
+```
+
+<Note>
+Context-level access is only revoked on user logout, not on document unset.
+</Note>
+</Tab>
+<Tab title="Other Frameworks">
+
+```javascript
+// Example 1: Revoke access on document unset only
+Velt.setPermissionProvider({
+  revokeAccessOn: {
+    type: 'document_unset',
+    revokeOrganizationAccess: false
+  }
+});
+
+// Example 2: Revoke all access including organization on user logout
+Velt.setPermissionProvider({
+  revokeAccessOn: {
+    type: 'user_logout',
+    revokeOrganizationAccess: true // Also revoke organization permissions
+  }
+});
+```
+</Tab>
+</Tabs>
+
+**Permission Provider Events**
+
+[**On()**](/api-reference/sdk/api/api-methods#on-5)
+
+Subscribe to Permission Provider events to monitor the sequence of permission check events. Here is the list of events you can subscribe to and the event objects you will receive.
+
+| Event Type | Description | Event Object |
+|------------|-------------|--------------|
+| `resourceAccessRequestFormed` | Triggered when a permission request is formed internally before being sent | [PermissionProviderEvent](/api-reference/sdk/models/data-models#permissionproviderevent) |
+| `resourceAccessRequestTriggered` | Triggered when a permission request is actually triggered and sent | [PermissionProviderEvent](/api-reference/sdk/models/data-models#permissionproviderevent) |
+| `resourceAccessResult` | Triggered when a permission check result is received from your server | [PermissionProviderEvent](/api-reference/sdk/models/data-models#permissionproviderevent) |
+| `resourceAccessError` | Triggered when an error occurs during permission checking | [PermissionProviderEvent](/api-reference/sdk/models/data-models#permissionproviderevent) |
+| `resourceAccessResultFromCache` | Triggered when a permission result is retrieved from cache instead of making a new request | [PermissionProviderEvent](/api-reference/sdk/models/data-models#permissionproviderevent) |
+| `revokeAccessOnDocumentUnsetTriggered` | Triggered when permissions are automatically revoked due to document unset trigger | [RevokeAccessEvent](/api-reference/sdk/models/data-models#revokeaccessevent) |
+| `revokeAccessOnUserLogoutTriggered` | Triggered when permissions are automatically revoked due to user logout trigger | [RevokeAccessEvent](/api-reference/sdk/models/data-models#revokeaccessevent) |
+
+<Tabs>
+<Tab title="React / Next.js">
+
+**Using React Hook**
+
+```jsx
+import { useVeltEventCallback } from '@veltdev/react';
+
+function PermissionMonitor() {
+  // Subscribe to all permission provider events
+  useVeltEventCallback('permissionProvider', (event) => {
+    console.log('Permission provider event:', event);
+  });
+
+  // Event payload example for resourceAccessRequestFormed:
+  // {
+  //   "event": "resourceAccessRequestFormed",
+  //   "methodName": "identify",
+  //   "timestamp": 1761580810137,
+  //   "source": "internal",
+  //   "payload": {
+  //     "requests": [
+  //       {
+  //         "userId": "1.1",
+  //         "resource": {
+  //           "id": "org1",
+  //           "type": "organization",
+  //           "source": "identify"
+  //         }
+  //       }
+  //     ]
+  //   }
+  // }
+
+  useVeltEventCallback('resourceAccessRequestFormed', (event) => {
+    console.log('Permission request formed:', event);
+  });
+
+  // Event payload example for resourceAccessRequestTriggered:
+  // {
+  //   "event": "resourceAccessRequestTriggered",
+  //   "timestamp": 1761580810137,
+  //   "methodName": "onResourceAccessRequired",
+  //   "source": "internal",
+  //   "payload": {
+  //     "requests": [
+  //       {
+  //         "userId": "1.1",
+  //         "resource": {
+  //           "id": "org1",
+  //           "type": "organization",
+  //           "source": "identify"
+  //         }
+  //       }
+  //     ],
+  //     "fromCache": false
+  //   }
+  // }
+
+  useVeltEventCallback('resourceAccessRequestTriggered', (event) => {
+    console.log('Permission request triggered:', event);
+  });
+
+  // Event payload example for resourceAccessResult:
+  // {
+  //   "event": "resourceAccessResult",
+  //   "timestamp": 1761580811228,
+  //   "methodName": "onResourceAccessRequired",
+  //   "source": "internal",
+  //   "payload": {
+  //     "result": {
+  //       "data": [
+  //         {
+  //           "userId": "1.1",
+  //           "resourceId": "org1",
+  //           "type": "organization",
+  //           "hasAccess": true
+  //         }
+  //       ],
+  //       "success": true,
+  //       "statusCode": 200,
+  //       "signature": "811824052c1ea76f22fc67b36ca5dd867b89d4efeb85cf648bbbc0d2c0675545"
+  //     }
+  //   }
+  // }
+
+  useVeltEventCallback('resourceAccessResult', (event) => {
+    console.log('Permission result received:', event);
+  });
+
+  useVeltEventCallback('resourceAccessError', (event) => {
+    console.error('Permission error:', event);
+  });
+
+  useVeltEventCallback('resourceAccessResultFromCache', (event) => {
+    console.log('Permission result from cache:', event);
+  });
+
+  // Event payload example for revokeAccessOnDocumentUnsetTriggered:
+  // {
+  //   "event": "revokeAccessOnDocumentUnsetTriggered",
+  //   "timestamp": 1761580810137,
+  //   "payload": {
+  //     "userId": "user_123",
+  //     "documentId": "doc_456",
+  //     "organizationId": "org_789",
+  //     "revokeOrganizationAccess": false
+  //   }
+  // }
+
+  useVeltEventCallback('revokeAccessOnDocumentUnsetTriggered', (event) => {
+    console.log('Document unset revocation:', event);
+  });
+
+  // Event payload example for revokeAccessOnUserLogoutTriggered:
+  // {
+  //   "event": "revokeAccessOnUserLogoutTriggered",
+  //   "timestamp": 1761580810137,
+  //   "payload": {
+  //     "userId": "user_123",
+  //     "organizationId": "org_789",
+  //     "revokeOrganizationAccess": true
+  //   }
+  // }
+
+  useVeltEventCallback('revokeAccessOnUserLogoutTriggered', (event) => {
+    console.log('Logout revocation:', event);
+  });
+
+  return <div>Monitoring permission events...</div>;
+}
+```
+
+**Using Client Method**
+
+```jsx
+const { client } = useVeltClient();
+
+// Subscribe to all permission provider events
+client.on('permissionProvider').subscribe(e => console.log(e));
+
+// Event payload example for resourceAccessRequestFormed:
+// {
+//   "event": "resourceAccessRequestFormed",
+//   "methodName": "identify",
+//   "timestamp": 1761580810137,
+//   "source": "internal",
+//   "payload": {
+//     "requests": [
+//       {
+//         "userId": "1.1",
+//         "resource": {
+//           "id": "org1",
+//           "type": "organization",
+//           "source": "identify"
+//         }
+//       }
+//     ]
+//   }
+// }
+
+// Subscribe to specific permission events
+client.on('resourceAccessRequestFormed').subscribe(event => {
+  console.log('Permission request formed:', event);
+});
+
+// Event payload example for resourceAccessRequestTriggered:
+// {
+//   "event": "resourceAccessRequestTriggered",
+//   "timestamp": 1761580810137,
+//   "methodName": "onResourceAccessRequired",
+//   "source": "internal",
+//   "payload": {
+//     "requests": [
+//       {
+//         "userId": "1.1",
+//         "resource": {
+//           "id": "org1",
+//           "type": "organization",
+//           "source": "identify"
+//         }
+//       }
+//     ],
+//     "fromCache": false
+//   }
+// }
+
+client.on('resourceAccessRequestTriggered').subscribe(event => {
+  console.log('Permission request triggered:', event);
+});
+
+// Event payload example for resourceAccessResult:
+// {
+//   "event": "resourceAccessResult",
+//   "timestamp": 1761580811228,
+//   "methodName": "onResourceAccessRequired",
+//   "source": "internal",
+//   "payload": {
+//     "result": {
+//       "data": [
+//         {
+//           "userId": "1.1",
+//           "resourceId": "org1",
+//           "type": "organization",
+//           "hasAccess": true
+//         }
+//       ],
+//       "success": true,
+//       "statusCode": 200,
+//       "signature": "811824052c1ea76f22fc67b36ca5dd867b89d4efeb85cf648bbbc0d2c0675545"
+//     }
+//   }
+// }
+
+client.on('resourceAccessResult').subscribe(event => {
+  console.log('Permission result received:', event);
+});
+
+// Event payload example for revokeAccessOnDocumentUnsetTriggered:
+// {
+//   "event": "revokeAccessOnDocumentUnsetTriggered",
+//   "timestamp": 1761580810137,
+//   "payload": {
+//     "userId": "user_123",
+//     "documentId": "doc_456",
+//     "organizationId": "org_789",
+//     "revokeOrganizationAccess": false
+//   }
+// }
+
+// Track document unset revocations
+client.on('revokeAccessOnDocumentUnsetTriggered').subscribe(event => {
+  console.log('Document unset revocation:', event);
+});
+
+// Event payload example for revokeAccessOnUserLogoutTriggered:
+// {
+//   "event": "revokeAccessOnUserLogoutTriggered",
+//   "timestamp": 1761580810137,
+//   "payload": {
+//     "userId": "user_123",
+//     "organizationId": "org_789",
+//     "revokeOrganizationAccess": true
+//   }
+// }
+
+// Track logout revocations
+client.on('revokeAccessOnUserLogoutTriggered').subscribe(event => {
+  console.log('Logout revocation:', event);
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```javascript
+// Subscribe to all permission provider events
+Velt.on('permissionProvider').subscribe(e => console.log(e));
+
+// Event payload example for resourceAccessRequestFormed:
+// {
+//   "event": "resourceAccessRequestFormed",
+//   "methodName": "identify",
+//   "timestamp": 1761580810137,
+//   "source": "internal",
+//   "payload": {
+//     "requests": [
+//       {
+//         "userId": "1.1",
+//         "resource": {
+//           "id": "org1",
+//           "type": "organization",
+//           "source": "identify"
+//         }
+//       }
+//     ]
+//   }
+// }
+
+// Subscribe to specific permission events
+Velt.on('resourceAccessRequestFormed').subscribe(event => {
+  console.log('Permission request formed:', event);
+});
+
+// Event payload example for resourceAccessRequestTriggered:
+// {
+//   "event": "resourceAccessRequestTriggered",
+//   "timestamp": 1761580810137,
+//   "methodName": "onResourceAccessRequired",
+//   "source": "internal",
+//   "payload": {
+//     "requests": [
+//       {
+//         "userId": "1.1",
+//         "resource": {
+//           "id": "org1",
+//           "type": "organization",
+//           "source": "identify"
+//         }
+//       }
+//     ],
+//     "fromCache": false
+//   }
+// }
+
+Velt.on('resourceAccessRequestTriggered').subscribe(event => {
+  console.log('Permission request triggered:', event);
+});
+
+// Event payload example for resourceAccessResult:
+// {
+//   "event": "resourceAccessResult",
+//   "timestamp": 1761580811228,
+//   "methodName": "onResourceAccessRequired",
+//   "source": "internal",
+//   "payload": {
+//     "result": {
+//       "data": [
+//         {
+//           "userId": "1.1",
+//           "resourceId": "org1",
+//           "type": "organization",
+//           "hasAccess": true
+//         }
+//       ],
+//       "success": true,
+//       "statusCode": 200,
+//       "signature": "811824052c1ea76f22fc67b36ca5dd867b89d4efeb85cf648bbbc0d2c0675545"
+//     }
+//   }
+// }
+
+Velt.on('resourceAccessResult').subscribe(event => {
+  console.log('Permission result received:', event);
+});
+
+// Event payload example for revokeAccessOnDocumentUnsetTriggered:
+// {
+//   "event": "revokeAccessOnDocumentUnsetTriggered",
+//   "timestamp": 1761580810137,
+//   "payload": {
+//     "userId": "user_123",
+//     "documentId": "doc_456",
+//     "organizationId": "org_789",
+//     "revokeOrganizationAccess": false
+//   }
+// }
+
+// Track document unset revocations
+Velt.on('revokeAccessOnDocumentUnsetTriggered').subscribe(event => {
+  console.log('Document unset revocation:', event);
+});
+
+// Event payload example for revokeAccessOnUserLogoutTriggered:
+// {
+//   "event": "revokeAccessOnUserLogoutTriggered",
+//   "timestamp": 1761580810137,
+//   "payload": {
+//     "userId": "user_123",
+//     "organizationId": "org_789",
+//     "revokeOrganizationAccess": true
+//   }
+// }
+
+// Track logout revocations
+Velt.on('revokeAccessOnUserLogoutTriggered').subscribe(event => {
+  console.log('Logout revocation:', event);
+});
+```
+</Tab>
+</Tabs>
+
+#### Set feature level permissions using Access Context (custom metadata)
+
+Access Context allows you to set granular, feature-level permissions using custom metadata. When configured, new feature data is added and existing feature data is fetched only for the access context values the current user has access to.
+
+##### **How it works**
+Access Context enables you to control access to specific features (like comments, notifications) based on custom metadata fields. For example, you could restrict comment visibility based on `widgetId`, `dashboardId`, or any custom field relevant to your application.
+
+**Matching Logic:**
+- When multiple fields are present in the context, Velt checks access for each field combination
+- When multiple array values exist in each field, each value creates a separate permission request
+- A user must have access to **all** fields in a context to view the associated feature data
+- The access context supports up to **200 items** total
+
+##### **Configuration Steps**
+
+**Step 1: Add Access Context to Features**
+
+You need to add access context metadata to your features on both frontend and backend.
+
+**Frontend:**
+
+<Note>
+If you add access context to comments, other features associated with it (like notifications) will automatically inherit the same access context.
+</Note>
+
+When a comment annotation is added, attach the access context using the `addContext()` method. Pass a **string or number** for each context field:
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const commentElement = client.getCommentElement();
+
+commentElement.on('addCommentAnnotation').subscribe((event) => {
+  event.addContext({
+    access: {
+      widgetId: 2  // Pass string or number, not array
+    }
+  });
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+
+commentElement.on('addCommentAnnotation').subscribe((event) => {
+  event.addContext({
+    access: {
+      widgetId: 2  // Pass string or number, not array
+    }
+  });
+});
+```
+</Tab>
+</Tabs>
+
+**Backend:**
+If you are adding comments or notifications using REST APIs, you can use the following:
+
+<Tabs>
+<Tab title="Comments">
+
+Use the REST API to add access context when creating comments programmatically:
+
+```json
+POST /v2/comments
+{
+  "data": {
+    "organizationId": "org1",
+    "documentId": "document1",
+    "commentText": "This is a comment",
+    "context": {
+      "access": {
+        "widgetId": 2
+      }
+    }
+  }
+}
+```
+
+</Tab>
+<Tab title="Notifications">
+
+Use the REST API to add access context when creating notifications:
+
+```json
+POST /v2/notifications
+{
+  "data": {
+    "organizationId": "org1",
+    "documentId": "document1",
+    "notificationText": "New update available",
+    "context": {
+      "access": {
+        "dashboardId": "dashboard1"
+      }
+    }
+  }
+}
+```
+
+</Tab>
+</Tabs>
+
+**Step 2: Enable Context-Based Permissions**
+
+Enable access context permission validation by setting `isContextEnabled: true` in your Permission Provider configuration. When enabled, the Permission Provider will receive individual requests for each context value, allowing you to control access at a granular level for features like comments and notifications.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+**Option 1: In VeltProvider (Recommended)**
+
+```jsx
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  permissionProvider={{
+    isContextEnabled: true, // Enable context-based permissions for notifications
+    retryConfig: {
+      retryCount: 3,
+      retryDelay: 2000
+    },
+    forceRefresh: false,
+    revokeAccessOn: [
+      {
+        type: "document_unset",
+        revokeOrganizationAccess: false
+      },
+      {
+        type: "user_logout",
+        revokeOrganizationAccess: true
+      }
+    ]
+  }}
+>
+  {/* Your app */}
+</VeltProvider>
+```
+
+**Option 2: Using setPermissionProvider()**
+
+```jsx
+const { client } = useVeltClient();
+
+client.setPermissionProvider({
+  isContextEnabled: true, // Enable context-based permissions for notifications
+  retryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
+  },
+  forceRefresh: false,
+  revokeAccessOn: [
+    {
+      type: "document_unset",
+      revokeOrganizationAccess: false
+    },
+    {
+      type: "user_logout",
+      revokeOrganizationAccess: true
+    }
+  ]
 });
 ```
 
@@ -1579,238 +2425,147 @@ client.setPermissionProvider({
 <Tab title="Other Frameworks">
 ```js
 Velt.setPermissionProvider({
-  onResourceAccessRequired: async (requests) => {
-    // Example requests array received from Velt:
-    // [
-    //   {
-    //     userId: "user_123",
-    //     resource: { type: "document", id: "doc_456" }
-    //   },
-    //   {
-    //     userId: "user_123",
-    //     resource: { type: "folder", id: "folder_789" }
-    //   }
-    // ]
-    
-    // Call your backend endpoint
-    const response = await fetch('/api/check-permissions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requests })
-    });
-    
-    const result = await response.json();
-    
-    // Return format expected by Velt
-    return {
-      data: result.permissions,
-      success: result.success,
-      statusCode: result.statusCode,
-      signature: result.signature
-    };
-    
-    // Example response:
-    // {
-    //   data: [
-    //     {
-    //       userId: "user_123",
-    //       resourceId: "doc_456",
-    //       type: "document",
-    //       hasAccess: true,
-    //       accessRole: "editor",
-    //       expiresAt: 1735689600
-    //     },
-    //     {
-    //       userId: "user_123",
-    //       resourceId: "folder_789",
-    //       type: "folder",
-    //       hasAccess: true
-    //     }
-    //   ],
-    //   success: true,
-    //   statusCode: 200,
-    //   signature: "03638f2191bf59c0e536e5b31cbde86df5f44b03fc8e82ee9a8bed7eb324f252"
-    // }
+  isContextEnabled: true, // Enable context-based permissions for notifications
+  retryConfig: {
+    retryCount: 3,
+    retryDelay: 2000
   },
-  retryConfig: { retryCount: 3, retryDelay: 2000 },
   forceRefresh: false,
-});
-```
-</Tab>
-</Tabs>
-
-</Tab>
-<Tab title="Backend">
-
-Your backend endpoint receives permission requests, checks your authorization system, generates a cryptographic signature, and returns the access decision.
-
-**Flow:**
-1. **Receive requests:** Frontend sends permission queries for resources
-2. **Find user access:** Check your authorization system to determine if user should have access
-3. **Create signature:** Call Velt's [Generate Signature API](/api-reference/rest-apis/v2/auth/generate-signature) with the permissions
-4. **Return result:** Send back permissions with signature to frontend
-
-<CodeGroup>
-
-```javascript Node.js / Express
-app.post('/api/check-permissions', async (req, res) => {
-  // Step 1: Receive requests from frontend
-  const { requests } = req.body;
-  
-  // Step 2: Find user access - Check your authorization system and build permissions array
-  const permissions = [];
-  
-  for (const request of requests) {
-    // Query your authorization system (database, auth service, etc.)
-    const hasAccess = await yourAuthSystem.checkUserAccess(
-      request.userId, 
-      request.resource.id, 
-      request.resource.type
-    );
-    
-    const permission = {
-      userId: request.userId,
-      resourceId: request.resource.id,
-      type: request.resource.type,
-      hasAccess: hasAccess,
-    };
-    
-    // For documents, add access role
-    if (request.resource.type === 'document' && hasAccess) {
-      permission.accessRole = await yourAuthSystem.getUserRole(
-        request.userId, 
-        request.resource.id
-      ); // 'viewer' or 'editor'
-      permission.expiresAt = Date.now() + 10 * 60 * 1000; // Optional: 10 min expiry
-    }
-    
-    permissions.push(permission);
-  }
-
-  // Step 3: Create signature using Velt's API
-  const signatureResponse = await fetch('https://api.velt.dev/v2/auth/generate_signature', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-velt-api-key': process.env.VELT_API_KEY,
-      'x-velt-auth-token': process.env.VELT_AUTH_TOKEN,
+  revokeAccessOn: [
+    {
+      type: "document_unset",
+      revokeOrganizationAccess: false
     },
-    body: JSON.stringify({ 
-      data: { 
-        permissions 
-      } 
-    })
-  });
-
-  const signatureResult = await signatureResponse.json();
-  
-  // Example signatureResult:
-  // {
-  //   "result": {
-  //     "status": "success",
-  //     "message": "Signature generated successfully.",
-  //     "data": {
-  //       "signature": "03638f2191bf59c0e536e5b31cbde86df5f44b03fc8e82ee9a8bed7eb324f252"
-  //     }
-  //   }
-  // }
-  
-  // Step 4: Return result - Send back permissions with signature
-  res.json({
-    permissions: permissions,
-    success: true,
-    statusCode: 200,
-    signature: signatureResult?.result?.data?.signature
-  });
+    {
+      type: "user_logout",
+      revokeOrganizationAccess: true
+    }
+  ]
 });
 ```
-
-```python Python / Flask
-@app.route('/api/check-permissions', methods=['POST'])
-def check_permissions():
-    # Step 1: Receive requests from frontend
-    requests_data = request.json.get('requests', [])
-    
-    # Step 2: Find user access - Check your authorization system and build permissions array
-    permissions = []
-    
-    for req in requests_data:
-        # Query your authorization system (database, auth service, etc.)
-        has_access = your_auth_system.check_user_access(
-            req['userId'], 
-            req['resource']['id'], 
-            req['resource']['type']
-        )
-        
-        permission = {
-            'userId': req['userId'],
-            'resourceId': req['resource']['id'],
-            'type': req['resource']['type'],
-            'hasAccess': has_access
-        }
-        
-        # For documents, add access role
-        if req['resource']['type'] == 'document' and has_access:
-            permission['accessRole'] = your_auth_system.get_user_role(
-                req['userId'], 
-                req['resource']['id']
-            )  # 'viewer' or 'editor'
-            permission['expiresAt'] = int(time.time() * 1000) + 10 * 60 * 1000  # Optional: 10 min expiry
-        
-        permissions.append(permission)
-    
-    # Step 3: Create signature using Velt's API
-    signature_response = requests.post(
-        'https://api.velt.dev/v2/auth/generate_signature',
-        headers={
-            'Content-Type': 'application/json',
-            'x-velt-api-key': os.getenv('VELT_API_KEY'),
-            'x-velt-auth-token': os.getenv('VELT_AUTH_TOKEN'),
-        },
-        json={
-            'data': {
-                'permissions': permissions
-            }
-        }
-    )
-    
-    signature_result = signature_response.json()
-    
-    # Example signature_result:
-    # {
-    #   "result": {
-    #     "status": "success",
-    #     "message": "Signature generated successfully.",
-    #     "data": {
-    #       "signature": "03638f2191bf59c0e536e5b31cbde86df5f44b03fc8e82ee9a8bed7eb324f252"
-    #     }
-    #   }
-    # }
-    
-    # Step 4: Return result - Send back permissions with signature
-    return jsonify({
-        'permissions': permissions,
-        'success': True,
-        'statusCode': 200,
-        'signature': signature_result.get('result', {}).get('data', {}).get('signature')
-    })
-```
-
-</CodeGroup>
-
-<Note>
-Replace `yourAuthSystem.checkUserAccess()` and `yourAuthSystem.getUserRole()` with your actual authorization system calls (e.g., database queries, third-party auth services like Auth0, Clerk, etc.).
-</Note>
-
 </Tab>
 </Tabs>
 
+**Comments:**
 
-<Check>
-### Quick sanity test
-Use this short flow to validate your end-to-end access control setup (roles and access types):
-1. Change a user’s role to **viewer** for a document on the backend.
-2. Refresh the client and confirm they can read but not write comments/annotations.
-3. Switch the document’s access type to **restricted** and remove the user’s explicit permission.
-4. Confirm the user can no longer access collaboration data for that document.
-</Check>
+Add access context when subscribing to documents. Pass the access context values as arrays in `setDocuments()`. Each value will generate a separate permission request:
+
+<Info>
+**Context to Permission Conversion:** When you pass arrays of context values in `setDocuments()`, Velt automatically converts them to individual permission requests. For example, `entityId: ['value1', 'value2']` becomes two separate requests with `entityId: 'value1'` and `entityId: 'value2'`.
+</Info>
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const { client } = useVeltClient();
+
+client.setDocuments(documents, {
+  context: {
+    access: {
+      widgetId: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] // Up to 200 items total
+    }
+  }
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setDocuments(documents, {
+  context: {
+    access: {
+      widgetId: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] // Up to 200 items total
+    }
+  }
+});
+```
+</Tab>
+</Tabs>
+
+**Permission Request Structure**
+
+When you use access context with multiple items in `setDocuments()`, Velt sends a single request with an array of access request objects:
+
+<Tabs>
+<Tab title="Request Example">
+
+**Example Request to Your Permission Provider Endpoint:**
+
+```json
+{
+  "data": {
+    "requests": [
+      {
+        "userId": "1.1",
+        "resource": {
+          "id": "document1",
+          "type": "document",
+          "source": "setDocuments",
+          "organizationId": "org1"
+        }
+      },
+      {
+        "userId": "1.1",
+        "resource": {
+          "id": "{\"widgetId\":1}",
+          "type": "context",
+          "source": "setDocuments",
+          "organizationId": "org1",
+          "context": {
+            "access": { "widgetId": 1 }
+          }
+        }
+      },
+      {
+        "userId": "1.1",
+        "resource": {
+          "id": "{\"widgetId\":2}",
+          "type": "context",
+          "source": "setDocuments",
+          "organizationId": "org1",
+          "context": {
+            "access": { "widgetId": 2 }
+          }
+        }
+      }
+      // ... more context items
+    ]
+  }
+}
+```
+</Tab>
+<Tab title="Response Example">
+
+**Example Response from Your Endpoint:**
+
+```json
+{
+  "data": [
+    {
+      "userId": "1.1",
+      "resourceId": "document1",
+      "type": "document",
+      "hasAccess": true,
+      "organizationId": "org1"
+    },
+    {
+      "userId": "1.1",
+      "resourceId": "{\"widgetId\":1}",
+      "type": "context",
+      "hasAccess": true,
+      "organizationId": "org1"
+    },
+    {
+      "userId": "1.1",
+      "resourceId": "{\"widgetId\":2}",
+      "type": "context",
+      "hasAccess": false,
+      "organizationId": "org1"
+    }
+    // ... more context results
+  ],
+  "success": true,
+  "statusCode": 200
+}
+```
+</Tab>
+</Tabs>

@@ -94,6 +94,13 @@ You must structure all release notes with exactly these three sections in this e
 - **Explicitly mention when new wireframes are introduced** (e.g., "preview wireframes")
 - Never include deprecated API code blocks to avoid confusion
 
+### Linking Standards
+- **Add "Learn More" links** after each major feature bullet point linking to the relevant full documentation section
+- **Link all data model references**: When mentioning interface/type names like `Context`, `SetDocumentsContext`, `PermissionQuery`, etc., format as links: [`Context`](/api-reference/sdk/models/data-models#context)
+- **Link all API method references**: When mentioning methods like `setDocuments()`, `setPermissionProvider()`, format as links: [`setDocuments()`](/api-reference/sdk/api/api-methods#setdocuments)
+- **Link placement**: Add links in descriptive text, but NEVER in code examples or code comments
+- **Example**: "Enhanced Permission Provider to support context-based permission requests. [Learn more about Permission Provider →](/key-concepts/overview#c-real-time-permission-provider)"
+
 ### Terminology Standards
 - **React Code Examples**: Always use `client` for API methods (e.g., `const recorderElement = client.getRecorderElement()`)
 - **HTML Code Examples**: Never use the word "client"; always replace with "Velt" (e.g., `const recorderElement = Velt.getRecorderElement()`)

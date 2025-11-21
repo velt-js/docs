@@ -86,6 +86,7 @@ You must structure all release notes with exactly these three sections in this e
 - Use consistent tab names: `React / Next.js` and `Other Frameworks`
 - Create code examples immediately after relevant descriptions
 - Include both hook and API method examples in React tabs, separated by comments
+- **Only add hooks examples when real hooks are available for the feature** - do not fabricate or assume hooks exist; verify hook availability before including hook examples
 - **Verify all API methods are documented in both React and HTML code blocks**
 - Add missing code blocks for features (e.g., PiP, maxLength, preview features)
 - Add parent wireframe wrapper (`<VeltWireframe>`) for wireframe examples

@@ -31,156 +31,359 @@ Method to fetch reactions from your database. On error we will retry.
 - Param: [`GetReactionResolverRequest`](/api-reference/sdk/models/data-models#getreactionresolverrequest)
 - Return: [`Promise<ResolverResponse<Record<string, PartialReactionAnnotation>>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
+<Tabs>
+<Tab title="Frontend">
+```jsx
+const fetchReactionsFromDB = async (request) => {
+  const response = await fetch('/api/velt/reactions/get', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  const data = await response.json();
+  return { data: data.result || {}, success: true, statusCode: 200 };
+};
+```
+</Tab>
+<Tab title="Backend (MongoDB)">
+```javascript
+// Build query from request filters
+const query = {};
+if (filters.reactionAnnotationIds?.length) {
+  query.annotationId = { $in: filters.reactionAnnotationIds };
+}
+if (filters.documentIds?.length) {
+  query.documentId = { $in: filters.documentIds };
+}
+if (filters.organizationId) {
+  query.organizationId = filters.organizationId;
+}
+
+const annotations = await collection.find(query).toArray();
+
+// Convert to Record<annotationId, annotation>
+const result = {};
+for (const annotation of annotations) {
+  result[annotation.annotationId] = annotation;
+}
+return result;
+```
+</Tab>
+<Tab title="Backend (PostgreSQL)">
+```javascript
+// Build parameterized query from filters
+const conditions = [];
+const values = [];
+let paramIndex = 1;
+
+if (filters.reactionAnnotationIds?.length) {
+  conditions.push(`annotation_id = ANY($${paramIndex++})`);
+  values.push(filters.reactionAnnotationIds);
+}
+if (filters.documentIds?.length) {
+  conditions.push(`document_id = ANY($${paramIndex++})`);
+  values.push(filters.documentIds);
+}
+if (filters.organizationId) {
+  conditions.push(`organization_id = $${paramIndex++}`);
+  values.push(filters.organizationId);
+}
+
+const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+const { rows } = await client.query(
+  `SELECT annotation_id, data FROM reaction_annotations ${whereClause}`,
+  values
+);
+
+// Convert to Record<annotationId, annotation>
+const result = {};
+for (const row of rows) {
+  result[row.annotation_id] = row.data;
+}
+return result;
+```
+</Tab>
+</Tabs>
+
 ## save
 Save reactions to your database. Return a success or error response. On error we will retry.
 - Param: [`SaveReactionResolverRequest`](/api-reference/sdk/models/data-models#savereactionresolverrequest)
 - Return: [`Promise<ResolverResponse<T>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="Frontend">
+```jsx
+const saveReactionsToDB = async (request) => {
+  const response = await fetch('/api/velt/reactions/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
+};
+```
+</Tab>
+<Tab title="Backend (MongoDB)">
+```javascript
+// Bulk upsert annotations
+const operations = Object.entries(annotations).map(([id, annotation]) => ({
+  updateOne: {
+    filter: { annotationId: id },
+    update: {
+      $set: {
+        ...annotation,
+        annotationId: id,
+        documentId: context?.documentId || annotation.documentId,
+        organizationId: context?.organizationId || annotation.organizationId,
+      }
+    },
+    upsert: true
+  }
+}));
+
+if (operations.length > 0) {
+  await collection.bulkWrite(operations);
+}
+```
+</Tab>
+<Tab title="Backend (PostgreSQL)">
+```javascript
+// Transaction-based upsert
+await client.query('BEGIN');
+
+for (const [id, annotation] of Object.entries(annotations)) {
+  const data = { ...annotation, annotationId: id };
+
+  await client.query(
+    `INSERT INTO reaction_annotations (annotation_id, document_id, organization_id, data, updated_at)
+     VALUES ($1, $2, $3, $4, NOW())
+     ON CONFLICT (annotation_id)
+     DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
+    [id, annotation.documentId, annotation.organizationId, JSON.stringify(data)]
+  );
+}
+
+await client.query('COMMIT');
+```
+</Tab>
+</Tabs>
 
 ## delete
 Delete reactions from your database. Return a success or error response. On error we will retry.
 - Param: [`DeleteReactionResolverRequest`](/api-reference/sdk/models/data-models#deletereactionresolverrequest)
 - Return: [`Promise<ResolverResponse<T>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
+<Tabs>
+<Tab title="Frontend">
+```jsx
+const deleteReactionsFromDB = async (request) => {
+  const response = await fetch('/api/velt/reactions/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
+};
+```
+</Tab>
+<Tab title="Backend (MongoDB)">
+```javascript
+await collection.deleteOne({ annotationId });
+```
+</Tab>
+<Tab title="Backend (PostgreSQL)">
+```javascript
+await client.query(
+  'DELETE FROM reaction_annotations WHERE annotation_id = $1',
+  [annotationId]
+);
+```
+</Tab>
+</Tabs>
+
 ## config
 Configuration for the reaction data provider.
 - Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig)
+
+```jsx
+const reactionResolverConfig = {
+  resolveTimeout: 2000,
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+};
+```
 
 # Example Implementation
 
 <Tabs>
 <Tab title="React / Next.js">
 ``` jsx
-const fetchReactionsFromDB = async (request: GetReactionResolverRequest) => {
-    // Fetch reaction annotations from your DB
-    const result = await __getReactionsFromYourDB__(request)
-      .then((response) => {
-        return { data: response, success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-      });
-
-    return result;
+const fetchReactionsFromDB = async (request) => {
+  const response = await fetch('/api/velt/reactions/get', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  const data = await response.json();
+  return { data: data.result || {}, success: true, statusCode: 200 };
 };
 
-const saveReactionsToDB = async (request: SaveReactionResolverRequest) => {
-    const result = await __saveReactionsToYourDB__(request)
-      .then((response) => {
-        return { success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-    });
-    return result;
+const saveReactionsToDB = async (request) => {
+  const response = await fetch('/api/velt/reactions/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
 };
 
-const deleteReactionsFromDB = async (request: DeleteReactionResolverRequest) => {
-    const result = await __deleteReactionsFromYourDB__(request)
-      .then((response) => {
-        return { success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-    });
-    return result;
+const deleteReactionsFromDB = async (request) => {
+  const response = await fetch('/api/velt/reactions/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
 };
 
-const reactionResolverConfig: ResolverConfig = {
-    resolveTimeout: 2000,
-    getRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    },
-    saveRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    },
-    deleteRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    }
+const reactionResolverConfig = {
+  resolveTimeout: 2000,
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
 };
 
-
-const reactionAnnotationDataProvider: ReactionAnnotationDataProvider = {
-    get: fetchReactionsFromDB,
-    save: saveReactionsToDB,
-    delete: deleteReactionsFromDB,
-    config: reactionResolverConfig
+const reactionDataProvider = {
+  get: fetchReactionsFromDB,
+  save: saveReactionsToDB,
+  delete: deleteReactionsFromDB,
+  config: reactionResolverConfig
 };
 
-<VeltProvider 
-    apiKey='YOUR_API_KEY'
-    dataProviders={{
-        reaction: reactionAnnotationDataProvider
-    }}
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ reaction: reactionDataProvider }}
 >
 </VeltProvider>
-
 ```
 </Tab>
 <Tab title="Other Frameworks">
 ``` jsx
 const fetchReactionsFromDB = async (request) => {
-    // Fetch reaction annotations from your DB
-    const result = await __getReactionsFromYourDB__(request)
-      .then((response) => {
-        return { data: response, success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-      });
-
-    return result;
+  const response = await fetch('/api/velt/reactions/get', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  const data = await response.json();
+  return { data: data.result || {}, success: true, statusCode: 200 };
 };
 
 const saveReactionsToDB = async (request) => {
-    const result = await __saveReactionsToYourDB__(request)
-      .then((response) => {
-        return { success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-    });
-    return result;
+  const response = await fetch('/api/velt/reactions/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
 };
 
 const deleteReactionsFromDB = async (request) => {
-    const result = await __deleteReactionsFromYourDB__(request)
-      .then((response) => {
-        return { success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-    });
-    return result;
+  const response = await fetch('/api/velt/reactions/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
 };
 
 const reactionResolverConfig = {
-    resolveTimeout: 2000,
-    saveRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    },
-    deleteRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    }
+  resolveTimeout: 2000,
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
 };
 
-
-const reactionAnnotationDataProvider = {
-    get: fetchReactionsFromDB,
-    save: saveReactionsToDB,
-    delete: deleteReactionsFromDB,
-    config: reactionResolverConfig
+const reactionDataProvider = {
+  get: fetchReactionsFromDB,
+  save: saveReactionsToDB,
+  delete: deleteReactionsFromDB,
+  config: reactionResolverConfig
 };
 
-Velt.setDataProviders({
-    reaction: reactionAnnotationDataProvider
-});
-
+Velt.setDataProviders({ reaction: reactionDataProvider });
 ```
+</Tab>
+</Tabs>
 
+# Sample Data
+
+<Tabs>
+<Tab title="Stored on your database">
+```json
+{
+    "ANNOTATION_ID": {
+        "annotationId": "ANNOTATION_ID",
+        "metadata": {
+            "apiKey": "API_KEY",
+            "documentId": "DOCUMENT_ID",
+            "organizationId": "ORGANIZATION_ID",
+            "folderId": "FOLDER_ID"
+        },
+        "reactions": {
+            "REACTION_ID": {
+                "reactionId": "REACTION_ID",
+                "emoji": "thumbsup",
+                "from": {
+                    "userId": "USER_ID"
+                },
+                "createdAt": 1752638419744
+            }
+        },
+        "from": {
+            "userId": "USER_ID"
+        }
+    }
+}
+```
+</Tab>
+<Tab title="Stored on Velt servers">
+```json
+{
+    "reactions": [
+        {
+            "reactionId": "REACTION_ID",
+            "type": "emoji",
+            "lastUpdated": "2025-07-16T04:00:19.770Z",
+            "createdAt": 1752638419744,
+            "from": {
+                "userId": "USER_ID"
+            }
+        }
+    ],
+    "from": {
+        "userId": "USER_ID"
+    },
+    "lastUpdated": 1752638419745,
+    "createdAt": 1752638412635,
+    "annotationId": "ANNOTATION_ID",
+    "metadata": {
+        "apiKey": "API_KEY",
+        "documentId": "DOCUMENT_ID",
+        "organizationId": "ORGANIZATION_ID",
+        "folderId": "FOLDER_ID"
+    }
+}
+```
 </Tab>
 </Tabs>

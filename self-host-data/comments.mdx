@@ -36,6 +36,80 @@ Method to fetch comments from your database. On error we will retry.
 - Param: [`GetCommentResolverRequest`](/api-reference/sdk/models/data-models#getcommentresolverrequest)
 - Return: [`Promise<ResolverResponse<Record<string, PartialCommentAnnotation>>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
+<Tabs>
+<Tab title="Frontend">
+```jsx
+const fetchCommentsFromDB = async (request) => {
+  const response = await fetch('/api/velt/comments/get', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  const data = await response.json();
+  return { data: data.result || {}, success: true, statusCode: 200 };
+};
+```
+</Tab>
+<Tab title="Backend (MongoDB)">
+```javascript
+// Build query from request filters
+const query = {};
+if (filters.commentAnnotationIds?.length) {
+  query.annotationId = { $in: filters.commentAnnotationIds };
+}
+if (filters.documentIds?.length) {
+  query.documentId = { $in: filters.documentIds };
+}
+if (filters.organizationId) {
+  query.organizationId = filters.organizationId;
+}
+
+const annotations = await collection.find(query).toArray();
+
+// Convert to Record<annotationId, annotation>
+const result = {};
+for (const annotation of annotations) {
+  result[annotation.annotationId] = annotation;
+}
+return result;
+```
+</Tab>
+<Tab title="Backend (PostgreSQL)">
+```javascript
+// Build parameterized query from filters
+const conditions = [];
+const values = [];
+let paramIndex = 1;
+
+if (filters.commentAnnotationIds?.length) {
+  conditions.push(`annotation_id = ANY($${paramIndex++})`);
+  values.push(filters.commentAnnotationIds);
+}
+if (filters.documentIds?.length) {
+  conditions.push(`document_id = ANY($${paramIndex++})`);
+  values.push(filters.documentIds);
+}
+if (filters.organizationId) {
+  conditions.push(`organization_id = $${paramIndex++}`);
+  values.push(filters.organizationId);
+}
+
+const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+const { rows } = await client.query(
+  `SELECT annotation_id, data FROM comment_annotations ${whereClause}`,
+  values
+);
+
+// Convert to Record<annotationId, annotation>
+const result = {};
+for (const row of rows) {
+  result[row.annotation_id] = row.data;
+}
+return result;
+```
+</Tab>
+</Tabs>
+
 ## save
 Save comments to your database. Return a success or error response. On error we will retry.
 - Param: [`SaveCommentResolverRequest`](/api-reference/sdk/models/data-models#savecommentresolverrequest)
@@ -46,152 +120,219 @@ Save comments to your database. Return a success or error response. On error we 
   If you are using REST API to add or update comments, ensure that you set `isCommentResolverUsed` and `isCommentTextAvailable` fields in the request object. [Learn more](/api-reference/rest-apis/v2/comments-feature/comment-annotations/add-comment-annotations)
 </Warning>
 
+<Tabs>
+<Tab title="Frontend">
+```jsx
+const saveCommentsToDB = async (request) => {
+  const response = await fetch('/api/velt/comments/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
+};
+```
+</Tab>
+<Tab title="Backend (MongoDB)">
+```javascript
+// Bulk upsert annotations
+const operations = Object.entries(annotations).map(([id, annotation]) => ({
+  updateOne: {
+    filter: { annotationId: id },
+    update: {
+      $set: {
+        ...annotation,
+        annotationId: id,
+        documentId: context?.documentId || annotation.documentId,
+        organizationId: context?.organizationId || annotation.organizationId,
+      }
+    },
+    upsert: true
+  }
+}));
+
+if (operations.length > 0) {
+  await collection.bulkWrite(operations);
+}
+```
+</Tab>
+<Tab title="Backend (PostgreSQL)">
+```javascript
+// Transaction-based upsert
+await client.query('BEGIN');
+
+for (const [id, annotation] of Object.entries(annotations)) {
+  const data = { ...annotation, annotationId: id };
+
+  await client.query(
+    `INSERT INTO comment_annotations (annotation_id, document_id, organization_id, data, updated_at)
+     VALUES ($1, $2, $3, $4, NOW())
+     ON CONFLICT (annotation_id)
+     DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
+    [id, annotation.documentId, annotation.organizationId, JSON.stringify(data)]
+  );
+}
+
+await client.query('COMMIT');
+```
+</Tab>
+</Tabs>
+
 ## delete
 Delete comments from your database. Return a success or error response. On error we will retry.
 - Param: [`DeleteCommentResolverRequest`](/api-reference/sdk/models/data-models#deletecommentresolverrequest)
 - Return: [`Promise<ResolverResponse<T>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
+<Tabs>
+<Tab title="Frontend">
+```jsx
+const deleteCommentsFromDB = async (request) => {
+  const response = await fetch('/api/velt/comments/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
+};
+```
+</Tab>
+<Tab title="Backend (MongoDB)">
+```javascript
+await collection.deleteOne({ annotationId });
+```
+</Tab>
+<Tab title="Backend (PostgreSQL)">
+```javascript
+await client.query(
+  'DELETE FROM comment_annotations WHERE annotation_id = $1',
+  [annotationId]
+);
+```
+</Tab>
+</Tabs>
+
 ## config
 Configuration for the comment data provider.
 - Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig)
+
+```jsx
+const commentResolverConfig = {
+  resolveTimeout: 2000,
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+};
+```
 
 # Example Implementation
 
 <Tabs>
 <Tab title="React / Next.js">
 ``` jsx
-const fetchCommentsFromDB = async (request: GetCommentResolverRequest) => {
-    // Fetch comment annotations from your DB
-    const result = await __getCommentsFromYourDB__(request)
-      .then((response) => {
-        return { data: response, success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-      });
-
-    return result;
+const fetchCommentsFromDB = async (request) => {
+  const response = await fetch('/api/velt/comments/get', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  const data = await response.json();
+  return { data: data.result || {}, success: true, statusCode: 200 };
 };
 
-const saveCommentsToDB = async (request: SaveCommentResolverRequest) => {
-    const result = await __saveCommentsToYourDB__(request)
-      .then((response) => {
-        return { success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-    });
-    return result;
+const saveCommentsToDB = async (request) => {
+  const response = await fetch('/api/velt/comments/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
 };
 
-const deleteCommentsFromDB = async (request: DeleteCommentResolverRequest) => {
-    const result = await __deleteCommentsFromYourDB__(request)
-      .then((response) => {
-        return { success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-    });
-    return result;
+const deleteCommentsFromDB = async (request) => {
+  const response = await fetch('/api/velt/comments/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
 };
 
-const commentResolverConfig: ResolverConfig = {
-    resolveTimeout: 2000,
-    getRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    },
-    saveRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    },
-    deleteRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    }
+const commentResolverConfig = {
+  resolveTimeout: 2000,
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
 };
 
-
-const commentAnnotationDataProvider: CommentAnnotationDataProvider = {
-    get: fetchCommentsFromDB,
-    save: saveCommentsToDB,
-    delete: deleteCommentsFromDB,
-    config: commentResolverConfig
+const commentDataProvider = {
+  get: fetchCommentsFromDB,
+  save: saveCommentsToDB,
+  delete: deleteCommentsFromDB,
+  config: commentResolverConfig
 };
 
-<VeltProvider 
-    apiKey='YOUR_API_KEY'
-    dataProviders={{
-        comment: commentAnnotationDataProvider
-    }}
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ comment: commentDataProvider }}
 >
 </VeltProvider>
-
 ```
 </Tab>
 <Tab title="Other Frameworks">
 ```js
 const fetchCommentsFromDB = async (request) => {
-    // Fetch comment annotations from your DB
-    const result = await __getCommentsFromYourDB__(request)
-      .then((response) => {
-        return { data: response, success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-      });
-
-    return result;
+  const response = await fetch('/api/velt/comments/get', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  const data = await response.json();
+  return { data: data.result || {}, success: true, statusCode: 200 };
 };
 
 const saveCommentsToDB = async (request) => {
-    const result = await __saveCommentsToYourDB__(request)
-      .then((response) => {
-        return { success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-    });
-    return result;
+  const response = await fetch('/api/velt/comments/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
 };
 
 const deleteCommentsFromDB = async (request) => {
-    const result = await __deleteCommentsFromYourDB__(request)
-      .then((response) => {
-        return { success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-    });
-    return result;
+  const response = await fetch('/api/velt/comments/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
 };
 
 const commentResolverConfig = {
-    resolveTimeout: 2000,
-    saveRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    },
-    deleteRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    }
+  resolveTimeout: 2000,
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
 };
 
-
-const commentAnnotationDataProvider = {
-    get: fetchCommentsFromDB,
-    save: saveCommentsToDB,
-    delete: deleteCommentsFromDB,
-    config: commentResolverConfig
+const commentDataProvider = {
+  get: fetchCommentsFromDB,
+  save: saveCommentsToDB,
+  delete: deleteCommentsFromDB,
+  config: commentResolverConfig
 };
 
-Velt.setDataProviders({
-    comment: commentAnnotationDataProvider
-});
+Velt.setDataProviders({ comment: commentDataProvider });
 ```
-
-
 </Tab>
 </Tabs>
 

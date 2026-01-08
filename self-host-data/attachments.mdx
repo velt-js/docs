@@ -45,7 +45,7 @@ Save attachments to your storage backend. Return the url with a success or error
 - Return: [`Promise<ResolverResponse<SaveAttachmentResolverData>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
 <Tabs>
-<Tab title="Frontend">
+<Tab title="Frontend Example">
 ```jsx
 const saveAttachmentsToDB = async (request) => {
   const formData = new FormData();
@@ -61,12 +61,26 @@ const saveAttachmentsToDB = async (request) => {
     ? { data: { url: data.url }, success: true, statusCode: 200 }
     : { success: false, statusCode: response.status };
 };
+
+const attachmentDataProvider = {
+  save: saveAttachmentsToDB,
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ attachment: attachmentDataProvider }}
+>
+</VeltProvider>
 ```
 </Tab>
-<Tab title="Backend (S3)">
+<Tab title="Backend Endpoint Example (S3)">
 ```javascript
-// Upload file to S3 and return URL
-const key = `attachments/${Date.now()}-${file.originalname}`;
+const file = req.file;
+const metadata = JSON.parse(req.body.metadata);
+
+// Use metadata to organize files by organization and document
+const { organizationId, documentId } = metadata;
+const key = `attachments/${organizationId}/${documentId}/${Date.now()}-${file.originalname}`;
 
 await s3Client.send(new PutObjectCommand({
   Bucket: process.env.S3_BUCKET,
@@ -76,7 +90,9 @@ await s3Client.send(new PutObjectCommand({
 }));
 
 const url = `https://${process.env.S3_BUCKET}.s3.amazonaws.com/${key}`;
-res.json({ url });
+
+// Return response in required format
+res.json({ data: { url }, success: true, statusCode: 200 });
 ```
 </Tab>
 </Tabs>
@@ -87,7 +103,7 @@ Delete attachments from your storage backend. Return a success or error response
 - Return: [`Promise<ResolverResponse<undefined>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
 <Tabs>
-<Tab title="Frontend">
+<Tab title="Frontend Example">
 ```jsx
 const deleteAttachmentsFromDB = async (request) => {
   const response = await fetch('/api/velt/attachments/delete', {
@@ -99,10 +115,22 @@ const deleteAttachmentsFromDB = async (request) => {
     ? { success: true, statusCode: 200 }
     : { success: false, statusCode: response.status };
 };
+
+const attachmentDataProvider = {
+  delete: deleteAttachmentsFromDB,
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ attachment: attachmentDataProvider }}
+>
+</VeltProvider>
 ```
 </Tab>
-<Tab title="Backend (S3)">
+<Tab title="Backend Endpoint Example (S3)">
 ```javascript
+const { url } = req.body;
+
 // Delete file from S3
 const key = url.split('.s3.amazonaws.com/')[1];
 
@@ -111,7 +139,8 @@ await s3Client.send(new DeleteObjectCommand({
   Key: key
 }));
 
-res.json({ success: true });
+// Return response in required format
+res.json({ success: true, statusCode: 200 });
 ```
 </Tab>
 </Tabs>
@@ -226,11 +255,11 @@ Velt.setDataProviders({ attachment: attachmentDataProvider });
 # Sample Data
 
 <Tabs>
-<Tab title="Stored on your storage (e.g., S3)">
+<Tab title="File stored on your storage (e.g., S3)">
 ```json
 {
-    "key": "attachments/1752638419744-document.pdf",
-    "url": "https://your-bucket.s3.amazonaws.com/attachments/1752638419744-document.pdf",
+    "key": "attachments/ORGANIZATION_ID/DOCUMENT_ID/1752638419744-document.pdf",
+    "url": "https://your-bucket.s3.amazonaws.com/attachments/ORGANIZATION_ID/DOCUMENT_ID/1752638419744-document.pdf",
     "metadata": {
         "documentId": "DOCUMENT_ID",
         "organizationId": "ORGANIZATION_ID",
@@ -243,6 +272,37 @@ Velt.setDataProviders({ attachment: attachmentDataProvider });
     "createdAt": "2025-07-16T04:00:19.770Z"
 }
 ```
+</Tab>
+<Tab title="Comment object stored on your database">
+```json
+{
+    "annotationId": "ANNOTATION_ID",
+    "comments": {
+        "COMMENT_ID": {
+            "commentId": 123,
+            "commentHtml": "<p>Here is the document you requested</p>",
+            "commentText": "Here is the document you requested",
+            "from": {
+                "userId": "USER_ID"
+            },
+            "attachments": [
+                {
+                    "attachmentId": "ATTACHMENT_ID",
+                    "name": "document.pdf",
+                    "url": "https://your-bucket.s3.amazonaws.com/attachments/ORGANIZATION_ID/DOCUMENT_ID/1752638419744-document.pdf",
+                    "mimeType": "application/pdf",
+                    "size": 102400
+                }
+            ]
+        }
+    },
+    "metadata": {
+        "documentId": "DOCUMENT_ID",
+        "organizationId": "ORGANIZATION_ID"
+    }
+}
+```
+When an attachment is added, the comment object is updated with the attachment details including the URL from your storage.
 </Tab>
 <Tab title="Stored on Velt servers">
 ```json

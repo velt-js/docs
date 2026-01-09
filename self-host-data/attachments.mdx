@@ -44,123 +44,296 @@ Save attachments to your storage backend. Return the url with a success or error
 - Param: [`SaveAttachmentResolverRequest`](/api-reference/sdk/models/data-models#saveattachmentresolverrequest)
 - Return: [`Promise<ResolverResponse<SaveAttachmentResolverData>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
+<Tabs>
+<Tab title="Frontend Example">
+```jsx
+const saveAttachmentsToDB = async (request) => {
+  const formData = new FormData();
+  formData.append('file', request.file);
+  formData.append('metadata', JSON.stringify(request.metadata));
+
+  const response = await fetch('/api/velt/attachments/save', {
+    method: 'POST',
+    body: formData
+  });
+  const data = await response.json();
+  return response.ok
+    ? { data: { url: data.url }, success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
+};
+
+const attachmentDataProvider = {
+  save: saveAttachmentsToDB,
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ attachment: attachmentDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Backend Endpoint Example (S3)">
+```javascript
+const file = req.file;
+const metadata = JSON.parse(req.body.metadata);
+
+// Use metadata to organize files by organization and document
+const { organizationId, documentId } = metadata;
+const key = `attachments/${organizationId}/${documentId}/${Date.now()}-${file.originalname}`;
+
+await s3Client.send(new PutObjectCommand({
+  Bucket: process.env.S3_BUCKET,
+  Key: key,
+  Body: file.buffer,
+  ContentType: file.mimetype
+}));
+
+const url = `https://${process.env.S3_BUCKET}.s3.amazonaws.com/${key}`;
+
+// Return response in required format
+res.json({ data: { url }, success: true, statusCode: 200 });
+```
+</Tab>
+</Tabs>
+
 ## delete
 Delete attachments from your storage backend. Return a success or error response. On error we will retry.
 - Param: [`DeleteAttachmentResolverRequest`](/api-reference/sdk/models/data-models#deleteattachmentresolverrequest)
 - Return: [`Promise<ResolverResponse<undefined>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
+<Tabs>
+<Tab title="Frontend Example">
+```jsx
+const deleteAttachmentsFromDB = async (request) => {
+  const response = await fetch('/api/velt/attachments/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
+};
+
+const attachmentDataProvider = {
+  delete: deleteAttachmentsFromDB,
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ attachment: attachmentDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Backend Endpoint Example (S3)">
+```javascript
+const { url } = req.body;
+
+// Delete file from S3
+const key = url.split('.s3.amazonaws.com/')[1];
+
+await s3Client.send(new DeleteObjectCommand({
+  Bucket: process.env.S3_BUCKET,
+  Key: key
+}));
+
+// Return response in required format
+res.json({ success: true, statusCode: 200 });
+```
+</Tab>
+</Tabs>
+
 ## config
 Configuration for the attachment data provider.
 - Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig)
+
+```jsx
+const attachmentResolverConfig = {
+  resolveTimeout: 5000,
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+};
+```
 
 # Example Implementation
 
 <Tabs>
 <Tab title="React / Next.js">
 ``` jsx
-const saveAttachmentsToDB = async (request: SaveAttachmentResolverRequest) => {
-    const result = await __saveAttachmentsToYourDB__(request)
-      .then((response) => {
-        return { success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-    });
-    return result;
+const saveAttachmentsToDB = async (request) => {
+  const formData = new FormData();
+  formData.append('file', request.file);
+  formData.append('metadata', JSON.stringify(request.metadata));
+
+  const response = await fetch('/api/velt/attachments/save', {
+    method: 'POST',
+    body: formData
+  });
+  const data = await response.json();
+  return response.ok
+    ? { data: { url: data.url }, success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
 };
 
-const deleteAttachmentsFromDB = async (request: DeleteAttachmentResolverRequest) => {
-    const result = await __deleteAttachmentsFromYourDB__(request)
-      .then((response) => {
-        return { success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-    });
-    return result;
+const deleteAttachmentsFromDB = async (request) => {
+  const response = await fetch('/api/velt/attachments/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
 };
 
-const attachmentResolverConfig: ResolverConfig = {
-    resolveTimeout: 2000,
-    getRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    },
-    saveRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    },
-    deleteRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    }
+const attachmentResolverConfig = {
+  resolveTimeout: 5000,
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
 };
 
-
-const attachmentDataProvider: AttachmentDataProvider = {
-    save: saveAttachmentsToDB,
-    delete: deleteAttachmentsFromDB,
-    config: attachmentResolverConfig
+const attachmentDataProvider = {
+  save: saveAttachmentsToDB,
+  delete: deleteAttachmentsFromDB,
+  config: attachmentResolverConfig
 };
 
-<VeltProvider 
-    apiKey='YOUR_API_KEY'
-    dataProviders={{
-        attachment: attachmentDataProvider
-    }}
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ attachment: attachmentDataProvider }}
 >
 </VeltProvider>
-
 ```
 </Tab>
 <Tab title="Other Frameworks">
 ``` jsx
 const saveAttachmentsToDB = async (request) => {
-    const result = await __saveAttachmentsToYourDB__(request)
-      .then((response) => {
-        return { success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-    });
-    return result;
+  const formData = new FormData();
+  formData.append('file', request.file);
+  formData.append('metadata', JSON.stringify(request.metadata));
+
+  const response = await fetch('/api/velt/attachments/save', {
+    method: 'POST',
+    body: formData
+  });
+  const data = await response.json();
+  return response.ok
+    ? { data: { url: data.url }, success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
 };
 
 const deleteAttachmentsFromDB = async (request) => {
-    const result = await __deleteAttachmentsFromYourDB__(request)
-      .then((response) => {
-        return { success: true, statusCode: 200 };
-      })
-      .catch((error) => {
-        return { success: false, statusCode: 500 };
-    });
-    return result;
+  const response = await fetch('/api/velt/attachments/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return response.ok
+    ? { success: true, statusCode: 200 }
+    : { success: false, statusCode: response.status };
 };
 
 const attachmentResolverConfig = {
-    resolveTimeout: 2000,
-    saveRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    },
-    deleteRetryConfig: {
-        retryCount: 3,
-        retryDelay: 2000
-    }
+  resolveTimeout: 5000,
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
 };
-
 
 const attachmentDataProvider = {
-    save: saveAttachmentsToDB,
-    delete: deleteAttachmentsFromDB,
-    config: attachmentResolverConfig
+  save: saveAttachmentsToDB,
+  delete: deleteAttachmentsFromDB,
+  config: attachmentResolverConfig
 };
 
-Velt.setDataProviders({
-    attachment: attachmentDataProvider
-});
-
+Velt.setDataProviders({ attachment: attachmentDataProvider });
 ```
+</Tab>
+</Tabs>
 
+# Sample Data
+
+<Tabs>
+<Tab title="File stored on your storage (e.g., S3)">
+```json
+{
+    "key": "attachments/ORGANIZATION_ID/DOCUMENT_ID/1752638419744-document.pdf",
+    "url": "https://your-bucket.s3.amazonaws.com/attachments/ORGANIZATION_ID/DOCUMENT_ID/1752638419744-document.pdf",
+    "metadata": {
+        "documentId": "DOCUMENT_ID",
+        "organizationId": "ORGANIZATION_ID",
+        "annotationId": "ANNOTATION_ID",
+        "commentId": "COMMENT_ID",
+        "fileName": "document.pdf",
+        "fileType": "application/pdf",
+        "fileSize": 102400
+    },
+    "createdAt": "2025-07-16T04:00:19.770Z"
+}
+```
+</Tab>
+<Tab title="Comment object stored on your database">
+```json
+{
+    "annotationId": "ANNOTATION_ID",
+    "comments": {
+        "COMMENT_ID": {
+            "commentId": 123,
+            "commentHtml": "<p>Hey @Jane, here is the document you requested</p>",
+            "commentText": "Hey @Jane, here is the document you requested",
+            "from": {
+                "userId": "USER_ID"
+            },
+            "to": [
+                {
+                    "userId": "JANE_USER_ID"
+                }
+            ],
+            "taggedUserContacts": [
+                {
+                    "userId": "JANE_USER_ID",
+                    "contact": {
+                        "userId": "JANE_USER_ID"
+                    },
+                    "text": "@Jane"
+                }
+            ],
+            "attachments": [
+                {
+                    "attachmentId": "ATTACHMENT_ID",
+                    "name": "document.pdf",
+                    "url": "https://your-bucket.s3.amazonaws.com/attachments/ORGANIZATION_ID/DOCUMENT_ID/1752638419744-document.pdf",
+                    "mimeType": "application/pdf",
+                    "size": 102400
+                }
+            ]
+        }
+    },
+    "metadata": {
+        "documentId": "DOCUMENT_ID",
+        "organizationId": "ORGANIZATION_ID"
+    }
+}
+```
+When an attachment is added, the comment object is updated with the attachment details including the URL from your storage.
+</Tab>
+<Tab title="Stored on Velt servers">
+```json
+{
+    "attachmentId": "ATTACHMENT_ID",
+    "annotationId": "ANNOTATION_ID",
+    "commentId": "COMMENT_ID",
+    "from": {
+        "userId": "USER_ID"
+    },
+    "createdAt": 1752638419744,
+    "metadata": {
+        "documentId": "DOCUMENT_ID",
+        "organizationId": "ORGANIZATION_ID"
+    }
+}
+```
+Only attachment identifiers and metadata are stored on Velt servers. The actual file content and URL remain on your storage infrastructure.
 </Tab>
 </Tabs>

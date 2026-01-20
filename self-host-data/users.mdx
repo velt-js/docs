@@ -18,11 +18,147 @@ Velt supports self-hosting your users' personally identifiable information (PII)
 - When the SDK is initialized, it will call the [`UserDataProvider`](/api-reference/sdk/models/data-models#userdataprovider) you configure with the list of userIds that it needs to fetch for the currently set user, organization, document, etc.
 - The [`UserDataProvider`](/api-reference/sdk/models/data-models#userdataprovider) takes in a list of userIds and returns a Record object with the userIds as keys and the user data as values.
 
+# Implementation Approaches
+
+You can implement user self-hosting using either of these approaches:
+
+1. **Config-Based**: Provide an endpoint URL and let the SDK handle HTTP requests
+2. **Custom Methods**: Implement the `get` method yourself
+
+Both approaches are fully backward compatible and can be used together.
+
+## Config-Based Approach
+
+Instead of implementing custom methods, you can configure an endpoint directly and let the SDK handle HTTP requests.
+
+### getConfig
+Config-based endpoint for fetching users. The SDK automatically makes HTTP POST requests with the request body.
+- Type: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig)
+- Request body format: [`GetUserResolverRequest`](/api-reference/sdk/models/data-models#getuserresolverrequest) - `{ organizationId: string, userIds: string[] }`
+- Response format: [`ResolverResponse<Record<string, User>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Note>
+The config-based approach uses a different request format than the custom methods approach. It passes `{ organizationId, userIds }` instead of just `userIds`.
+</Note>
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const userConfig = {
+  getConfig: {
+    url: '/api/velt/users/get',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  },
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  resolveUsersConfig: {
+    organization: false,
+    folder: false,
+    document: true
+  }
+};
+
+const userDataProvider = {
+  config: userConfig
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ user: userDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const userConfig = {
+  getConfig: {
+    url: '/api/velt/users/get',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  },
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  resolveUsersConfig: {
+    organization: false,
+    folder: false,
+    document: true
+  }
+};
+
+const userDataProvider = {
+  config: userConfig
+};
+
+Velt.setDataProviders({ user: userDataProvider });
+```
+</Tab>
+</Tabs>
+
+### Config-Based Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const userConfig = {
+  getConfig: {
+    url: '/api/velt/users/get',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  },
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  resolveUsersConfig: {
+    organization: false,
+    folder: false,
+    document: true
+  }
+};
+
+const userDataProvider = {
+  config: userConfig
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ user: userDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const userConfig = {
+  getConfig: {
+    url: '/api/velt/users/get',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  },
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  resolveUsersConfig: {
+    organization: false,
+    folder: false,
+    document: true
+  }
+};
+
+const userDataProvider = {
+  config: userConfig
+};
+
+Velt.setDataProviders({ user: userDataProvider });
+```
+</Tab>
+</Tabs>
+
+## Custom Methods Approach
+
 Here are the methods that you need to implement on the data provider:
-## get
+
+### get
 Method to fetch users from your database.
 - Param: `string[]`: Array of userIds to fetch
-- Return: `Promise<Record<string, User>>`
+- Return: `Promise<Record<string, User>>` or [`Promise<ResolverResponse<Record<string, User>>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Note>
+Both response formats are supported for backward compatibility:
+- **Old format**: `Record<string, User>` - Returns user data directly
+- **New format**: [`ResolverResponse<Record<string, User>>`](/api-reference/sdk/models/data-models#resolverresponse) - Returns `{ data, success, statusCode, message?, timestamp? }`
+</Note>
 
 <Tabs>
 <Tab title="Frontend Example">
@@ -110,9 +246,10 @@ res.json(result);
 </Tab>
 </Tabs>
 
-## config
+### config
 Configuration for the user data provider.
 - Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig). Relevant properties:
+  - `getRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for get operations.
   - `resolveUsersConfig`: [`ResolveUsersConfig`](/api-reference/sdk/models/data-models#resolveusersconfig). Controls whether Velt issues user-resolver requests during initialization to fetch contact lists at the organization, folder, and document levels. Use this to optimize performance in environments with a large number of users by preventing unnecessary user-data fetches. You can selectively disable user-resolver requests for specific scopes and instead provide your own user data via the [custom autocomplete feature](/async-collaboration/comments/customize-behavior#customautocompletesearch) instead.
       - `organization`: boolean - Enable/disable user requests for organization users (default: true)
       - `document`: boolean - Enable/disable user requests for document users (default: true)
@@ -120,6 +257,7 @@ Configuration for the user data provider.
 
 ```jsx
 const userConfig = {
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
   resolveUsersConfig: {
     organization: false,
     folder: false,
@@ -128,7 +266,7 @@ const userConfig = {
 };
 ```
 
-# Example Implementation
+### Custom Methods Complete Example
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -145,6 +283,7 @@ const fetchUsersFromDB = async (userIds) => {
 const userDataProvider = {
   get: fetchUsersFromDB,
   config: {
+    getRetryConfig: { retryCount: 3, retryDelay: 2000 },
     resolveUsersConfig: {
       organization: false,
       folder: false,
@@ -174,6 +313,7 @@ const fetchUsersFromDB = async (userIds) => {
 const userDataProvider = {
   get: fetchUsersFromDB,
   config: {
+    getRetryConfig: { retryCount: 3, retryDelay: 2000 },
     resolveUsersConfig: {
       organization: false,
       folder: false,
@@ -260,3 +400,8 @@ subscription?.unsubscribe();
 ```
 </Tab>
 </Tabs>
+
+# API Reference
+
+### [setDataProviders()](/api-reference/sdk/api/api-methods#setdataproviders)
+Configure data providers for self-hosting user data.

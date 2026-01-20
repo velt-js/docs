@@ -998,6 +998,10 @@ There are two ways to authenticate a user in Velt.
 1. Using an Auth Provider (recommended)
 2. Using Identify method
 
+<Info>
+**Error Handling**: By default, authentication methods return `null` on failure. You can configure them to throw errors instead by setting `throwError: true`. [Learn more about error handling](/get-started/advanced#error-handling-in-authentication).
+</Info>
+
 
 ##### **1. Use Auth Provider**
 - With this approach, you configure an authentication provider by specifying the user you want to authenticate and a function that returns a Velt JWT token. 
@@ -1198,10 +1202,10 @@ You can add/delete users from your backend and save the list in Velt.
 ### Overview
 Velt's access control system is built around four main concepts:
 
-1. **Resources** - The hierarchical structure of your app (Organizations → Folders → Documents)
-2. **Access Types** - This is applied to a resource to determine who can access it (public, organizationPrivate, or restricted)
-3. **Roles** - This is applied to a user to determine what they can do on a resource (editor or viewer)
-4. **Permissions** – Define whether a user can access a resource, based on the resource's access type, the user's role, and explicit permission grants. Access can be temporary or permanent.
+1. [**Resources**](#1-resources) - The hierarchical structure of your app (Organizations → Folders → Documents)
+2. [**Access Types**](#2-access-types) - This is applied to a resource to determine who can access it (public, organizationPrivate, or restricted)
+3. [**Roles**](#3-roles) - This is applied to a user to determine what they can do on a resource (editor or viewer)
+4. [**Permissions**](#4-permissions) – Define whether a user can access a resource, based on the resource's access type, the user's role, and explicit permission grants. Access can be temporary or permanent.
 
 ### Access Control Model
 - **Inheritance (default)**:  Similar to Google Drive, Velt Resources (Organizations, Folders, and Documents) follow a hierarchical permission model. By default, child resources inherit access control settings from their parents.
@@ -1290,201 +1294,45 @@ b. [Synced Permissions](#b-synced-permissions): Periodically or event‑driven s
 
 c. [Real-time Permission Provider](#c-real-time-permission-provider): With this approach, Velt pings your defined endpoint to verify whether a user should be granted access to a resource (organization, folder, or document). This ensures that your backend is still the source of truth and you don't have to sync the permissions into Velt directly.
 
-#### a. On-Demand Permissions
+### a. On-Demand Permissions
 Grant or revoke permissions **at runtime** when a user logs in or navigates to a resource.
 - Best when your app has a very complex and granular permissioning system and you want to keep your system as the source of truth.
 - Supports temporary (time-bound) access and permanent access, enabling ad‑hoc sharing and expiring invites.
 
-##### **Temporary vs. Permanent Access**
+#### Temporary vs. Permanent Access
 - **Temporary access**: Grant permissions with an expiry or revoke after session/end of task (e.g., guest reviewers, contractors). Use this when access should automatically end or be short‑lived.
 - **Permanent access**: Grant durable permissions for members or long‑term collaborators. Use this when roles rarely change and should persist across sessions.
 
-##### **APIs**
+#### APIs
 - [**Add Permissions**](/api-reference/rest-apis/v2/auth/add-permissions)
   - **When user logs in**: Use an auth provider with JWT token to grant permissions to the organization present in the `User` object in the auth provider. ([Generate token](/api-reference/rest-apis/v2/auth/generate-token)).
   - **When user sets documents**: Call [Add Permissions API](/api-reference/rest-apis/v2/auth/add-permissions) to grant or adjust access for the set of documents or folders in the `setDocuments` method.
 - [**Remove Permissions**](/api-reference/rest-apis/v2/auth/remove-permissions)
   - Revoke access when the user signs out, loses membership, or navigates away from folder/document using [Remove Permissions API](/api-reference/rest-apis/v2/auth/remove-permissions).
-- [**Get Permissions**](/api-reference/rest-apis/v2/auth/get-permissions)
-  - [**Backend API:**](/api-reference/rest-apis/v2/auth/get-permissions) Used to query a user’s effective permissions/roles for the given resources. This returns what permissions your user has according to Velt.
-  - **Frontend API:** Use `getUserPermissions` to return the current logged-in user’s permissions on the currently set resources in Velt (e.g., organization, folder, documents).
-
-- **Params:**
-  - `request?`: [GetUserPermissionsRequest](/api-reference/sdk/models/data-models#getuserpermissionsrequest)
-  - Returns: [GetUserPermissionsResponse](/api-reference/sdk/models/data-models#getuserpermissionsresponse)
-
-<Tabs>
-<Tab title="React / Next.js">
-
-**Using API:**
-```ts expandable
-// Build the request (all fields optional)
-const request = {
-  organizationId: 'org_123',
-  folderIds: ['folder_1', 'folder_2'],
-  documentIds: ['doc_1', 'doc_2']
-};
-
-// Fetch effective permissions for the current user
-const permissions = await client.getUserPermissions(request);
-
-console.log(permissions)
-
-// Example Output:
-// {
-//   "user_123": {
-//     "organization": {
-//       "org_123": { "accessRole": "editor", "expiresAt": 1735689600 }
-//     },
-//     "folders": {
-//       "folder_1": { "accessRole": "viewer" },
-//       "folder_2": { "errorCode": "permission_denied", "error": "User does not have access to Folder." }
-//     },
-//     "documents": {
-//       "doc_1": { "accessRole": "editor" },
-//       "doc_2": { "errorCode": "does_not_exist", "error": "Document does not exist." }
-//     }
-//   }
-// }
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-  **Using API:**
-```js expandable
-// Build the request (all fields optional)
-const request = {
-  organizationId: 'org_123',
-  folderIds: ['folder_1', 'folder_2'],
-  documentIds: ['doc_1', 'doc_2']
-};
-
-// Fetch effective permissions for the current user
-const permissions = await Velt.getUserPermissions(request);
-
-console.log(permissions)
-
-// Example Output:
-// {
-//   "user_123": {
-//     "organization": {
-//       "org_123": { "accessRole": "editor", "expiresAt": 1735689600 }
-//     },
-//     "folders": {
-//       "folder_1": { "accessRole": "viewer" },
-//       "folder_2": { "errorCode": "permission_denied", "error": "User does not have access to Folder." }
-//     },
-//     "documents": {
-//       "doc_1": { "accessRole": "editor" },
-//       "doc_2": { "errorCode": "does_not_exist", "error": "Document does not exist." }
-//     }
-//   }
-// }
-```
-</Tab>
-</Tabs>
 
 <Note>
 When you include `organizationId` in the identify/auth payload, Velt automatically creates and associates the user with that organization. This happens because the "Auto-create Organization Users" console setting is **enabled by default**. To change this default behavior, [go to Console under App Configuration -> Auto-create Organization User](https://console.velt.dev/dashboard/config/appconfig)
 </Note>
 
-#### b. Synced Permissions
+### b. Synced Permissions
 - Periodically or event‑driven sync between your app and Velt.
 - Do an initial bulk load, then keep up with adds/removes/role changes.
 
-##### **APIs (backend)**
+#### APIs
 - [**Add users**](/api-reference/rest-apis/v2/users/add-users)
   - **Initial sync:** Bulk add existing users so they appear in mentions and can be permissioned.
   - **Ongoing sync:** When a user is added or granted permissions to additional resources in your app, call this API to sync that change in Velt.
 - [**Remove users**](/api-reference/rest-apis/v2/users/delete-users)
   - **Ongoing sync:** When a user is removed or their permissions are revoked to resources in your app, call this API to sync that change in Velt.
-- [**Get Permissions**](/api-reference/rest-apis/v2/auth/get-permissions)
-  - [**Backend API:**](/api-reference/rest-apis/v2/auth/get-permissions) Used to query a user’s effective permissions/roles for the given resources. This returns what permissions your user has according to Velt.
-  - **Frontend API:** Use `getUserPermissions` to return the current logged-in user’s permissions on the currently set resources in Velt (e.g., organization, folder, documents).
-
-- **Params:**
-  - `request?`: [GetUserPermissionsRequest](/api-reference/sdk/models/data-models#getuserpermissionsrequest)
-  - Returns: [GetUserPermissionsResponse](/api-reference/sdk/models/data-models#getuserpermissionsresponse)
-
-<Tabs>
-<Tab title="React / Next.js">
-
-**Using API:**
-```ts expandable
-// Build the request (all fields optional)
-const request = {
-  organizationId: 'org_123',
-  folderIds: ['folder_1', 'folder_2'],
-  documentIds: ['doc_1', 'doc_2']
-};
-
-// Fetch effective permissions for the current user
-const permissions = await client.getUserPermissions(request);
-
-console.log(permissions)
-
-// Example Output:
-// {
-//   "user_123": {
-//     "organization": {
-//       "org_123": { "accessRole": "editor", "expiresAt": 1735689600 }
-//     },
-//     "folders": {
-//       "folder_1": { "accessRole": "viewer" },
-//       "folder_2": { "errorCode": "permission_denied", "error": "User does not have access to Folder." }
-//     },
-//     "documents": {
-//       "doc_1": { "accessRole": "editor" },
-//       "doc_2": { "errorCode": "does_not_exist", "error": "Document does not exist." }
-//     }
-//   }
-// }
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-  **Using API:**
-```js expandable
-// Build the request (all fields optional)
-const request = {
-  organizationId: 'org_123',
-  folderIds: ['folder_1', 'folder_2'],
-  documentIds: ['doc_1', 'doc_2']
-};
-
-// Fetch effective permissions for the current user
-const permissions = await Velt.getUserPermissions(request);
-
-console.log(permissions)
-
-// Example Output:
-// {
-//   "user_123": {
-//     "organization": {
-//       "org_123": { "accessRole": "editor", "expiresAt": 1735689600 }
-//     },
-//     "folders": {
-//       "folder_1": { "accessRole": "viewer" },
-//       "folder_2": { "errorCode": "permission_denied", "error": "User does not have access to Folder." }
-//     },
-//     "documents": {
-//       "doc_1": { "accessRole": "editor" },
-//       "doc_2": { "errorCode": "does_not_exist", "error": "Document does not exist." }
-//     }
-//   }
-// }
-```
-</Tab>
-</Tabs>
 
 <Note>
 When you include `organizationId` in the identify/auth payload, Velt automatically creates and associates the user with that organization. The Auto-create Organization Users console setting is **enabled by default**, so you don't need to pre-create users for on-demand flows. [Go to Console under App Configuration -> Auto-create Organization User](https://console.velt.dev/dashboard/config/appconfig)
 </Note>
 
-#### c. Real-time Permission Provider
+### c. Real-time Permission Provider
 With this approach, Velt pings your defined endpoint to verify whether a user should be granted access to a resource (organization, folder, or document). This ensures that your backend is still the source of truth and you don't have to sync the permissions into Velt directly.
 
-##### **How it works**
+#### How it works
 1. **Configure endpoint**: Set up your backend endpoint URL and optional auth token in the [Velt Console](https://console.velt.dev/dashboard/config/permission-provider).
 2. **Initialize frontend**: Configure Permission Provider in your app using VeltProvider or [`setPermissionProvider()`](/api-reference/sdk/api/api-methods#setpermissionprovider).
 3. **Automatic validation**: When users access resources (organizations, folders, documents, or contexts), Velt automatically queries your endpoint.
@@ -1492,7 +1340,7 @@ With this approach, Velt pings your defined endpoint to verify whether a user sh
 5. **Instant enforcement**: Velt enforces the permissions immediately based on your response.
 6. **Auto-revocation** (optional): Configure automatic permission cleanup when users switch documents or log out.
 
-##### **When to use**
+#### When to use
 - Your app has complex, dynamic permissions that change frequently
 - You want to avoid syncing permission data to an external system
 - You need real-time permission validation without backend synchronization overhead
@@ -1776,7 +1624,7 @@ View the complete [`VeltPermissionProvider` schema](/api-reference/sdk/models/da
 
 You can configure the Permission Provider in two ways:
 
-**Option 1: In VeltProvider (Recommended)**
+Option 1: In VeltProvider (Recommended)
 ```jsx expandable
 <VeltProvider
   apiKey="YOUR_API_KEY"
@@ -1790,7 +1638,7 @@ You can configure the Permission Provider in two ways:
 </VeltProvider>
 ```
 
-**Option 2: Using setPermissionProvider()**
+Option 2: Using setPermissionProvider()
 ```jsx expandable
 const { client } = useVeltClient();
 client.setPermissionProvider({
@@ -2191,11 +2039,11 @@ Velt.on('permissionProvider').subscribe(event => console.log(event));
 </Tab>
 </Tabs>
 
-#### Set feature level permissions using Access Context (custom metadata)
+### d. Set Feature Level Permissions using Access Context
 
 Access Context allows you to set granular, feature-level permissions using custom metadata. When configured, new feature data is added and existing feature data is fetched only for the access context values the current user has access to.
 
-##### **How it works**
+#### How it works
 Access Context enables you to control access to specific features (like comments, notifications) based on custom metadata fields. For example, you could restrict comment visibility based on `widgetId`, `dashboardId`, or any custom field relevant to your application.
 
 **Matching Logic:**
@@ -2204,7 +2052,7 @@ Access Context enables you to control access to specific features (like comments
 - A user must have access to **all** fields in a context to view the associated feature data
 - The access context supports up to **200 items** total
 
-##### **Configuration Steps**
+#### Configuration Steps
 
 **Step 1: Add Access Context to Features**
 
@@ -2500,3 +2348,109 @@ Velt.setDocuments(documents, {
 
 
 </Tabs>
+
+### Query Permissions
+
+The following APIs can be used to query user permissions regardless of which permission approach you're using (On-Demand, Synced, or Real-time Permission Provider).
+
+#### Backend API
+
+[**Get Permissions**](/api-reference/rest-apis/v2/auth/get-permissions): Query a user's effective permissions/roles for the given resources. This returns what permissions your user has according to Velt.
+
+#### Frontend APIs
+
+##### getUserPermissions()
+
+One-time fetch that returns a promise with the current user's permissions.
+
+- **Params:** `request?`: [GetUserPermissionsRequest](/api-reference/sdk/models/data-models#getuserpermissionsrequest)
+- **Returns:** `Promise<`[GetUserPermissionsResponse](/api-reference/sdk/models/data-models#getuserpermissionsresponse)`>`
+
+<Tabs>
+<Tab title="React / Next.js">
+```ts
+const request = {
+  organizationId: 'org_123',
+  folderIds: ['folder_1', 'folder_2'],
+  documentIds: ['doc_1', 'doc_2']
+};
+
+const permissions = await client.getUserPermissions(request);
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const request = {
+  organizationId: 'org_123',
+  folderIds: ['folder_1', 'folder_2'],
+  documentIds: ['doc_1', 'doc_2']
+};
+
+const permissions = await Velt.getUserPermissions(request);
+```
+</Tab>
+</Tabs>
+
+##### getCurrentUserPermissions()
+
+Subscribe to real-time permission updates for the current authenticated user. Returns an observable that emits whenever permissions change.
+
+- **Params:** None
+- **Returns:** `Observable<`[GetUserPermissionsResponse](/api-reference/sdk/models/data-models#getuserpermissionsresponse)`>`
+
+<Tabs>
+<Tab title="React / Next.js">
+```ts
+const subscription = client.getCurrentUserPermissions().subscribe((permissions) => {
+  console.log('Current user permissions:', permissions);
+});
+
+// Cleanup when done
+subscription.unsubscribe();
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const subscription = Velt.getCurrentUserPermissions().subscribe((permissions) => {
+  console.log('Current user permissions:', permissions);
+});
+
+// Cleanup when done
+subscription.unsubscribe();
+```
+</Tab>
+</Tabs>
+
+**Response Structure:**
+
+Both APIs return the same response format:
+
+```json
+{
+  "result": {
+    "status": "success",
+    "message": "User permissions retrieved successfully.",
+    "data": {
+      "user_123": {
+        "documents": {
+          "document1": {
+            "accessRole": "editor"
+          }
+        },
+        "organization": {
+          "org1": {
+            "accessRole": "editor"
+          }
+        },
+        "context": {
+          "accessFields": ["widgetId:1", "widgetId:2", "widgetId:3"]
+        }
+      }
+    }
+  }
+}
+```
+
+<Note>
+See the [API Reference](/api-reference/sdk/api/api-methods#getcurrentuserpermissions) for detailed method documentation.
+</Note>

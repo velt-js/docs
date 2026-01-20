@@ -39,6 +39,7 @@
 | `customList`             | `CustomAnnotationDropdownItem[]`                                    | No       | Custom list of items for the comment annotation                                               |
 | `targetElementId`        | `string`                                                            | No       | ID of the target element for the comment annotation if available                                            |
 | `viewedBy`               | [`Users[]`](#user)                                                   | No       | List of users who have viewed/read this comment annotation                                     |
+| `unread`                 | `boolean`                                                           | No       | Whether the annotation is unread by current user                                              |
 
 
 #### Enum
@@ -66,6 +67,15 @@
 | `annotationId`      | `string`              | Yes      | ID of the annotation             |
 | `commentAnnotation` | `CommentAnnotation`   | Yes      | Comment annotation object        |
 | `metadata`          | `VeltEventMetadata`   | Yes      | Event metadata                   |
+
+#### CommentBubbleClickedEvent
+---
+
+| Property           | Type                | Required | Description                      |
+|-------------------|---------------------|----------|----------------------------------|
+| `annotationId`      | `string`              | Yes      | ID of the annotation             |
+| `commentAnnotation` | `CommentAnnotation`   | Yes      | Comment annotation object        |
+| `metadata`          | `VeltEventMetadata`   | No       | Event metadata                   |
 
 #### CommentAnnotationSubscribedUsers
 ---
@@ -1186,6 +1196,7 @@ Error codes returned when permission resolution fails:
 | `expiresAt`  | `number`                    | No       | Expiry (Unix ms) for temporary access, if applicable. |
 | `error`      | `string`                    | No       | Error message if permission resolution failed.        |
 | `errorCode`  | `UserPermissionAccessRoleResult` | No  | Error code indicating the type of permission resolution failure. |
+| `context`    | `{ accessFields?: string[] }` | No     | Context access information with accessFields array.   |
 
 
 #### GetUserPermissionsResponse
@@ -1225,6 +1236,15 @@ Map of user IDs to their resolved permissions across organization, folders, and 
 
 
 ### Comment Sidebar
+
+#### CommentCountType
+---
+Union type for specifying comment count display mode.
+```typescript
+type CommentCountType = 'total' | 'unread';
+```
+- `'total'`: Shows total count of all comments
+- `'unread'`: Shows count of unread comments only
 
 #### ENUMs
 | Enum Name | Event Type | Description |
@@ -2060,6 +2080,7 @@ This event object is related to editor/viewer assignments and editor status chan
 | `ERROR`             | `error`           | Error events emitted by the SDK (e.g., token issues, retry limits).         | [ErrorEvent](#errorevent)                                 |
 | `VELT_BUTTON_CLICK` | `veltButtonClick` | Fired when a Velt Button is clicked.                                        | [VeltButtonClickEvent](#veltbuttonclickevent)             |
 | `PERMISSION_PROVIDER` | `permissionProvider` | Permission Provider events for access requests, results, and errors.     | [PermissionProviderEvent](#permissionproviderevent)       |
+| `DATA_PROVIDER` | `dataProvider` | Data Provider events for debugging get, save, and delete operations.     | [DataProviderEvent](#dataproviderevent)       |
 
 
 #### InitUpdateEvent
@@ -2089,6 +2110,19 @@ This event object is related to editor/viewer assignments and editor status chan
 | `revokeAccessOnDocumentUnsetTriggered` | Triggered when permissions are automatically revoked due to document unset trigger                |
 | `revokeAccessOnUserLogoutTriggered`    | Triggered when permissions are automatically revoked due to user logout trigger                   |
 
+
+#### DataProviderEvent
+| Sub-Event Type                         | Description                                                                                      |
+|----------------------------------------|--------------------------------------------------------------------------------------------------|
+| `getTriggered`                         | Triggered when a data provider get operation is initiated                                         |
+| `saveTriggered`                        | Triggered when a data provider save operation is initiated                                        |
+| `deleteTriggered`                      | Triggered when a data provider delete operation is initiated                                      |
+| `getResult`                            | Triggered when a get operation returns successfully                                               |
+| `saveResult`                           | Triggered when a save operation completes successfully                                            |
+| `deleteResult`                         | Triggered when a delete operation completes successfully                                          |
+| `getError`                             | Triggered when an error occurs during a get operation                                             |
+| `saveError`                            | Triggered when an error occurs during a save operation                                            |
+| `deleteError`                          | Triggered when an error occurs during a delete operation                                          |
 
 
 #### Error Codes
@@ -2219,7 +2253,7 @@ This event object is related to editor/viewer assignments and editor status chan
 |-------------------|---------------------|----------|----------------------------------|
 | `type`            | `string`            | Yes      | Event type: `'request'`, `'result'`, or `'error'` |
 | `userId`          | `string`            | Yes      | User ID making the permission request |
-| `resource`        | `object`            | Yes      | Resource being accessed (organization, folder, or document) |
+| `resource`        | `{ id: string; type: string; context?: { access: { [key: string]: string \| number } } }` | Yes | Resource being accessed. Includes optional `context` field with access information set during setDocuments. |
 | `result`          | `boolean`           | No       | Permission result (present when type is `'result'`) |
 | `error`           | `string`            | No       | Error message (present when type is `'error'`) |
 
@@ -3066,6 +3100,7 @@ The `getThumbnailTag` method takes an optional `url` parameter and returns an HT
 |------------------|---------|----------|-----------------------------------------------------------------------------------|
 | `replaceContacts`| boolean | No       | If set to true, it will replace the user's personal and group contacts with the ones provided. |
 | `authToken`      | string  | No       | The authentication token of the user.                                             |
+| `throwError`     | boolean | No       | If true, throws error if user authentication fails. Default: false.               |
 
 
 #### UserContactSelectedPayload
@@ -3220,7 +3255,7 @@ Request structure for permission queries sent to the Permission Provider.
 | Property   | Type                                                                      | Required | Description                                              |
 |-----------|---------------------------------------------------------------------------|----------|----------------------------------------------------------|
 | `userId`  | `string`                                                                  | Yes      | ID of the user requesting access to the resource.        |
-| `resource`| `{ type:` [PermissionResourceType](#permissionresourcetype)`; id: string; source:` [PermissionSource](#permissionsource)`; organizationId: string; context?:` [Context](#context) `}` | Yes | Resource the user is requesting access to. The `type` uses [`PermissionResourceType`](#permissionresourcetype) enum. The `source` field identifies which SDK method triggered the permission check. The optional `context` field is present only when `isContextEnabled: true` and contains the specific context value being validated. Includes `organizationId` for context. |
+| `resource`| `{ type:` [PermissionResourceType](#permissionresourcetype)`; id: string; source:` [PermissionSource](#permissionsource)`; organizationId: string; context?:` [Context](#context) `}` | Yes | Resource the user is requesting access to. The `type` uses [`PermissionResourceType`](#permissionresourcetype) enum. The `source` field identifies which SDK method triggered the permission check. The optional `context` field is present only when `isContextEnabled: true` and contains context values set during setDocuments. Includes `organizationId` for context. |
 
 
 #### PermissionResult
@@ -3322,6 +3357,7 @@ When Permission Provider is enabled with `isContextEnabled: true`, each value in
 |------------------------|-----------|----------|---------------------------------------------------------------------------------------------|
 | `authToken`            | `string`  | No       | The authentication token for the user.                                                      |
 | `forceReset`           | `boolean` | No       | If true, forces the user to re-login.                                                       |
+| `throwError`           | `boolean` | No       | If true, throws error if user authentication fails. Default: false.                         |
 | `context`              | [`SetDocumentsContext`](#setdocumentscontext) | No       | Filter notifications by custom context fields. Fetches notifications matching any of the provided values (OR logic within a field). When Permission Provider is enabled with `isContextEnabled: true`, each context value triggers a separate permission request. |
 
 
@@ -3620,3 +3656,27 @@ Factory method that constructs a `VeltTipTapStore`, calls `initialize()`, and re
 |-----------|-----------------------------------------------------------|----------|-----------------------------------------------------------------------------|
 | `encrypt` | `(config: EncryptConfig<T>) => Promise<R>`                | Yes      | Asynchronous function that encrypts data and returns the encrypted result.   |
 | `decrypt` | `(config: DecryptConfig<R>) => Promise<T>`                | Yes      | Asynchronous function that decrypts data and returns the original value.     |
+
+#### CrdtUpdateDataEvent
+---
+Event emitted when CRDT data changes occur, triggered by webhook notifications.
+
+| Property      | Type                      | Required | Description                                    |
+|---------------|---------------------------|----------|------------------------------------------------|
+| `methodName`  | `string`                  | Yes      | Method that triggered the update               |
+| `uniqueId`    | `string`                  | Yes      | Unique identifier for the event                |
+| `timestamp`   | `number`                  | Yes      | Unix timestamp of the event                    |
+| `source`      | `string`                  | Yes      | Source of the data change                      |
+| `payload`     | [`CrdtUpdateDataPayload`](#crdtupdatedatapayload) | Yes | Data change payload                            |
+
+#### CrdtUpdateDataPayload
+---
+Payload containing details of the CRDT data update.
+
+| Property         | Type                  | Required | Description                                    |
+|------------------|-----------------------|----------|------------------------------------------------|
+| `id`             | `string`              | Yes      | Store identifier                               |
+| `data`           | `unknown`             | Yes      | Updated data value                             |
+| `lastUpdatedBy`  | `string`              | Yes      | User ID who made the last update               |
+| `sessionId`      | `string \| null`      | Yes      | Session ID or null                             |
+| `lastUpdate`     | `string`              | Yes      | ISO timestamp of last update                   |

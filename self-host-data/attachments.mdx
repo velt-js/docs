@@ -36,10 +36,236 @@ When an attachment operation occurs:
    - Velt servers only store necessary identifiers, not the actual files or URLs
 3. If the operation fails, no changes are made to Velt's servers and the operation is retried if you have configured retries.
 
+# Implementation Approaches
 
+You can implement attachment self-hosting using either of these approaches:
 
-Here are the methods that you need to implement on the data provider:
-## save
+1. **Config-Based**: Provide endpoint URLs and let the SDK handle HTTP requests
+2. **Custom Methods**: Implement `save` and `delete` methods yourself
+
+Both approaches are fully backward compatible and can be used together.
+
+## Config-Based Approach
+
+Instead of implementing custom methods, you can configure endpoints directly and let the SDK handle HTTP requests.
+
+<Note>
+Unlike comments and reactions, attachment upload uses `multipart/form-data` format to avoid base64 conversion overhead. The browser automatically manages the Content-Type header with the proper boundary parameter.
+</Note>
+
+### saveConfig
+Config-based endpoint for saving attachments. The SDK automatically makes HTTP POST requests with multipart/form-data.
+- Type: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig)
+- Request format: `multipart/form-data` with two fields:
+  - `file`: File object (binary)
+  - `request`: JSON string containing [`SaveAttachmentResolverRequest`](/api-reference/sdk/models/data-models#saveattachmentresolverrequest)
+- Response format: [`ResolverResponse<SaveAttachmentResolverData>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const attachmentResolverConfig = {
+  saveConfig: {
+    url: '/api/velt/attachments/save',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    // Note: Content-Type is automatically set by browser
+  }
+};
+
+const attachmentDataProvider = {
+  config: attachmentResolverConfig
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ attachment: attachmentDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const attachmentResolverConfig = {
+  saveConfig: {
+    url: '/api/velt/attachments/save',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    // Note: Content-Type is automatically set by browser
+  }
+};
+
+const attachmentDataProvider = {
+  config: attachmentResolverConfig
+};
+
+Velt.setDataProviders({ attachment: attachmentDataProvider });
+```
+</Tab>
+</Tabs>
+
+<Tabs>
+<Tab title="Backend Endpoint Example (S3)">
+```javascript
+// Backend handler for /api/velt/attachments/save
+const file = req.file;
+const request = JSON.parse(req.body.request);
+
+// Use metadata to organize files
+const { metadata } = request;
+const { organizationId, documentId } = metadata;
+const key = `attachments/${organizationId}/${documentId}/${Date.now()}-${file.originalname}`;
+
+await s3Client.send(new PutObjectCommand({
+  Bucket: process.env.S3_BUCKET,
+  Key: key,
+  Body: file.buffer,
+  ContentType: file.mimetype
+}));
+
+const url = `https://${process.env.S3_BUCKET}.s3.amazonaws.com/${key}`;
+
+// Return response in required format
+res.json({ data: { url }, success: true, statusCode: 200 });
+```
+</Tab>
+</Tabs>
+
+### deleteConfig
+Config-based endpoint for deleting attachments. The SDK automatically makes HTTP POST requests with the request body.
+- Type: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig)
+- Request body format: [`DeleteAttachmentResolverRequest`](/api-reference/sdk/models/data-models#deleteattachmentresolverrequest)
+- Response format: [`ResolverResponse<undefined>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const attachmentResolverConfig = {
+  deleteConfig: {
+    url: '/api/velt/attachments/delete',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer YOUR_TOKEN'
+    }
+  }
+};
+
+const attachmentDataProvider = {
+  config: attachmentResolverConfig
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ attachment: attachmentDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const attachmentResolverConfig = {
+  deleteConfig: {
+    url: '/api/velt/attachments/delete',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer YOUR_TOKEN'
+    }
+  }
+};
+
+const attachmentDataProvider = {
+  config: attachmentResolverConfig
+};
+
+Velt.setDataProviders({ attachment: attachmentDataProvider });
+```
+</Tab>
+</Tabs>
+
+<Tabs>
+<Tab title="Backend Endpoint Example (S3)">
+```javascript
+// Backend handler for /api/velt/attachments/delete
+const { url } = req.body;
+
+// Delete file from S3
+const key = url.split('.s3.amazonaws.com/')[1];
+
+await s3Client.send(new DeleteObjectCommand({
+  Bucket: process.env.S3_BUCKET,
+  Key: key
+}));
+
+// Return response in required format
+res.json({ success: true, statusCode: 200 });
+```
+</Tab>
+</Tabs>
+
+### Config-Based Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const attachmentResolverConfig = {
+  saveConfig: {
+    url: '/api/velt/attachments/save',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  },
+  deleteConfig: {
+    url: '/api/velt/attachments/delete',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer YOUR_TOKEN'
+    }
+  },
+  resolveTimeout: 5000,
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+};
+
+const attachmentDataProvider = {
+  config: attachmentResolverConfig
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ attachment: attachmentDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const attachmentResolverConfig = {
+  saveConfig: {
+    url: '/api/velt/attachments/save',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  },
+  deleteConfig: {
+    url: '/api/velt/attachments/delete',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer YOUR_TOKEN'
+    }
+  },
+  resolveTimeout: 5000,
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+};
+
+const attachmentDataProvider = {
+  config: attachmentResolverConfig
+};
+
+Velt.setDataProviders({ attachment: attachmentDataProvider });
+```
+</Tab>
+</Tabs>
+
+## Custom Methods Approach
+
+Implement custom methods to handle data operations yourself.
+
+### save
 Save attachments to your storage backend. Return the url with a success or error response. On error we will retry.
 - Param: [`SaveAttachmentResolverRequest`](/api-reference/sdk/models/data-models#saveattachmentresolverrequest)
 - Return: [`Promise<ResolverResponse<SaveAttachmentResolverData>>`](/api-reference/sdk/models/data-models#resolverresponse)
@@ -116,7 +342,7 @@ res.json({ data: { url }, success: true, statusCode: 200 });
 </Tab>
 </Tabs>
 
-## delete
+### delete
 Delete attachments from your storage backend. Return a success or error response. On error we will retry.
 - Param: [`DeleteAttachmentResolverRequest`](/api-reference/sdk/models/data-models#deleteattachmentresolverrequest)
 - Return: [`Promise<ResolverResponse<undefined>>`](/api-reference/sdk/models/data-models#resolverresponse)
@@ -181,9 +407,12 @@ res.json({ success: true, statusCode: 200 });
 </Tab>
 </Tabs>
 
-## config
+### config
 Configuration for the attachment data provider.
-- Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig)
+- Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig). Relevant properties:
+  - `resolveTimeout`: Timeout duration (in milliseconds) for resolver operations
+  - `saveRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for save operations.
+  - `deleteRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for delete operations.
 
 ```jsx
 const attachmentResolverConfig = {
@@ -193,7 +422,7 @@ const attachmentResolverConfig = {
 };
 ```
 
-# Example Implementation
+### Custom Methods Complete Example
 
 <Tabs>
 <Tab title="React / Next.js">

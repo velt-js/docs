@@ -215,12 +215,14 @@ Ensure api-methods.mdx shows ONLY:
 - [ ] Feature names as subsection headings (not generic labels)
 - [ ] CRDT vs SDK separation maintained
 
-### Handoff to Agent-1
+### Handoff to Agent-7 (Skills Delta Extractor)
 
 After completing QA:
 - Provide concise change summary
 - Confirm documentation consistency
-- Signal Agent-1 readiness to process next release note
+- Trigger Agent-7 to extract skill-relevant deltas for the Velt agent-skills library
+- If Agent-7 finds no skill-relevant deltas, pipeline returns to Agent-1 for next release note
+- If Agent-7 finds deltas, Agent-8 applies patches before returning to Agent-1
 - QA log remains at `.claude/logs/agent-6-qa-[version].md` for reference
 
-**Pipeline Flow**: Agent-1 → Agent-2 → Agent-3 → Agent-4 → Agent-5 → Agent-6 (current) → **Return to Agent-1 (next release note)**
+**Pipeline Flow**: Agent-1 → Agent-2 → Agent-3 → Agent-4 → Agent-5 → Agent-6 (current) → **Agent-7 → Agent-8 → Return to Agent-1 (next release note)**

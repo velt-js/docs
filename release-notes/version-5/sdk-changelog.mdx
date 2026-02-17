@@ -9,6 +9,130 @@ description: Release Notes of changes added to the core Velt SDK
 - `@veltdev/client`
 - `@veltdev/sdk`
 
+
+<Update label="5.0.1-beta.4" description="February 17, 2026">
+
+### New Features
+
+<Warning>
+**Breaking Change: `CommentVisibilityType` Values Renamed**
+
+Two string literal values in `CommentVisibilityType` have been renamed. Update any code passing `type: 'organization'` or `type: 'self'` to `CommentVisibilityConfig`.
+
+| Old value | New value |
+|---|---|
+| `'organization'` | `'organizationPrivate'` |
+| `'self'` | `'restricted'` |
+
+<Steps>
+<Step title="Find usages">
+Search your codebase for `type: 'organization'` and `type: 'self'` within any `CommentVisibilityConfig` objects.
+</Step>
+<Step title="Update values">
+Replace `type: 'organization'` with `type: 'organizationPrivate'` and `type: 'self'` with `type: 'restricted'`.
+
+```ts
+// Before
+commentElement.updateVisibility({ annotationId: 'id', type: 'organization', organizationId: 'org-123' });
+commentElement.updateVisibility({ annotationId: 'id', type: 'self', userIds: ['user-1'] });
+
+// After
+commentElement.updateVisibility({ annotationId: 'id', type: 'organizationPrivate' }); // organizationId auto-resolved
+commentElement.updateVisibility({ annotationId: 'id', type: 'restricted', userIds: ['user-1'] });
+```
+</Step>
+</Steps>
+</Warning>
+
+- [**Comments**]: Added `enablePrivateMode(config)` and `disablePrivateMode()` methods to set a global visibility policy for all newly created comments. Supports `restricted` (user-list), `organizationPrivate`, and `public` visibility types via the new [`PrivateModeConfig`](/api-reference/sdk/models/data-models#privatemodeconfig) type.
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// Using API methods
+const commentElement = client.getCommentElement();
+
+// Restrict all new comments to specific users
+commentElement.enablePrivateMode({ type: 'restricted', userIds: ['user-1', 'user-2'] });
+
+// Restrict all new comments to the current organization
+commentElement.enablePrivateMode({ type: 'organizationPrivate' });
+
+// Revert to default public visibility
+commentElement.disablePrivateMode();
+```
+</Tab>
+<Tab title="Other Frameworks">
+```ts
+const commentElement = Velt.getCommentElement();
+
+// Restrict all new comments to specific users
+commentElement.enablePrivateMode({ type: 'restricted', userIds: ['user-1', 'user-2'] });
+
+// Restrict all new comments to the current organization
+commentElement.enablePrivateMode({ type: 'organizationPrivate' });
+
+// Revert to default public visibility
+commentElement.disablePrivateMode();
+```
+</Tab>
+</Tabs>
+
+- [**Comments**]: Added a `commentSaved` event that fires after a comment is persisted to the database, providing a reliable signal for triggering downstream actions. The payload includes the annotation ID, full [`CommentAnnotation`](/api-reference/sdk/models/data-models#commentannotation), and [`VeltEventMetadata`](/api-reference/sdk/models/data-models#velteventmetadata).
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// Using Hooks
+import { useCommentEventCallback } from '@veltdev/react';
+import { useEffect } from 'react';
+
+const commentSavedData = useCommentEventCallback('commentSaved');
+
+useEffect(() => {
+  if (commentSavedData) {
+    console.log('Comment saved:', commentSavedData.annotationId);
+    console.log('Annotation:', commentSavedData.commentAnnotation);
+  }
+}, [commentSavedData]);
+
+// Using API methods
+const commentElement = client.getCommentElement();
+commentElement.on('commentSaved').subscribe((event) => {
+  console.log('Comment saved:', event.annotationId);
+  console.log('Annotation:', event.commentAnnotation);
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```ts
+const commentElement = Velt.getCommentElement();
+commentElement.on('commentSaved').subscribe((event) => {
+  console.log('Comment saved:', event.annotationId);
+  console.log('Annotation:', event.commentAnnotation);
+});
+```
+</Tab>
+</Tabs>
+
+### Improvements
+
+- [**Comments**]: Moved the comment dialog assign-user dropdown to render via Angular CDK Overlay, placing it outside the dialog DOM subtree. This fixes clipping caused by `overflow: hidden` containers and incorrect z-index stacking.
+
+- [**Comments**]: Added auto-resolution of the organization ID from the current org configuration when `updateVisibility()` or `enablePrivateMode()` is called with `type: 'organizationPrivate'` and no `organizationId` is provided.
+
+### Bug Fixes
+
+- [**Comments**]: Fixed global dark mode toggling not affecting open comment dialogs. Dialog initialization no longer sets a component-level dark mode override that would block `ThemeService` propagation.
+
+- [**Comments**]: Fixed composer placeholder text not reappearing after a user typed and deleted all text. The contenteditable element is now cleared with `innerHTML = ''` to ensure the CSS `:empty::before` placeholder renders correctly.
+
+- [**Comments**]: Fixed SVG gradient, clip-path, and filter rendering for duplicate emoji reactions. Each emoji SVG instance now receives unique internal IDs via `EmojiService.uniquifySvgIds()`.
+
+- [**Comments**]: Fixed priority dropdown showing an incorrect background color in dark mode when no priority was set.
+
+</Update>
+
 <Update label="5.0.1-beta.3" description="February 16, 2026">
 
 ### Improvements
@@ -358,7 +482,7 @@ const countsWithDebounce = commentElement.getCommentAnnotationsCount({
 
 ### New Features
 
-- [**Comments**]: Introducing Private Comments feature: Added `updateVisibility()` method to programmatically set comment access (public, organization, or private). [Learn more](/async-collaboration/comments/customize-behavior#updatevisibility)
+- [**Comments**]: Introducing Private Comments feature: Added `updateVisibility()` method to programmatically set comment access (public, organizationPrivate, or restricted). [Learn more](/async-collaboration/comments/customize-behavior#updatevisibility)
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -369,14 +493,14 @@ const commentElement = useCommentUtils();
 // Set comment to organization-only
 commentElement.updateVisibility({
   annotationId: "annotationId",
-  type: 'organization',
+  type: 'organizationPrivate',
   organizationId: 'org-123'
 });
 
 // Set comment to private (specific users)
 commentElement.updateVisibility({
   annotationId: "annotationId",
-  type: 'self',
+  type: 'restricted',
   userIds: ['user-1', 'user-2']
 });
 
@@ -391,7 +515,7 @@ const client = useVeltClient();
 const commentElement = client.getCommentElement();
 commentElement.updateVisibility({
   annotationId: "annotationId",
-  type: 'organization',
+  type: 'organizationPrivate',
   organizationId: 'org-123'
 });
 ```
@@ -404,14 +528,14 @@ const commentElement = Velt.getCommentElement();
 // Set comment to organization-only
 commentElement.updateVisibility({
   annotationId: "annotationId",
-  type: 'organization',
+  type: 'organizationPrivate',
   organizationId: 'org-123'
 });
 
 // Set comment to private (specific users)
 commentElement.updateVisibility({
   annotationId: "annotationId",
-  type: 'self',
+  type: 'restricted',
   userIds: ['user-1', 'user-2']
 });
 

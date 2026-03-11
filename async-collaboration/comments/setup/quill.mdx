@@ -1,0 +1,431 @@
+---
+title: "Quill Setup"
+---
+
+![](/gifs/Add-Text-Comments.gif)
+
+## Setup
+
+#### Step 1: Add Comment components
+
+- Add the `Velt Comments` component to the root of your app.
+- This component is required to render comments in your app.
+- Set the `text mode` prop to `false` to hide the default text comment tool.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```js
+    <VeltProvider apiKey="API_KEY">
+      <VeltComments textMode={false} />
+    </VeltProvider>
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```html
+    <body>
+      <velt-comments text-mode="false"></velt-comments>
+    </body>
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 2: Install the Velt Quill extension
+
+```bash
+npm i @veltdev/quill-velt-comments
+```
+
+#### Step 3: Configure the Quill editor with the Velt Comments module
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```js
+    import { useEffect, useRef, useState } from 'react';
+    import Quill from 'quill';
+    import { QuillVeltComments } from '@veltdev/quill-velt-comments';
+
+    // Register the module with Quill (once, outside component)
+    Quill.register('modules/veltComments', QuillVeltComments);
+
+    function QuillEditor() {
+      const editorRef = useRef(null);
+      const [quill, setQuill] = useState(null);
+
+      useEffect(() => {
+        if (!editorRef.current) return;
+
+        const quillInstance = new Quill(editorRef.current, {
+          theme: 'snow',
+          modules: {
+            veltComments: {
+              persistVeltMarks: true,
+            },
+          },
+        });
+
+        setQuill(quillInstance);
+      }, []);
+
+      return <div ref={editorRef} />;
+    }
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```js
+    import Quill from 'quill';
+    import { QuillVeltComments } from '@veltdev/quill-velt-comments';
+
+    // Register the module with Quill
+    Quill.register('modules/veltComments', QuillVeltComments);
+
+    // Create editor with the module enabled
+    const quill = new Quill('#editor', {
+      theme: 'snow',
+      modules: {
+        veltComments: {
+          persistVeltMarks: true,
+        },
+      },
+    });
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 4: Add a comment button to your Quill editor
+
+Add a button that users can click to add comments after selecting text.
+
+<Warning>
+When clicking a button, the browser moves focus to the button which clears the editor selection. You must save the selection on `mousedown` (before focus changes) and restore it before adding the comment.
+</Warning>
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```js
+    import { useCallback, useRef } from 'react';
+    import { addComment } from '@veltdev/quill-velt-comments';
+
+    // Inside your QuillEditor component from Step 3:
+    const savedSelectionRef = useRef(null);
+
+    const handleAddComment = useCallback(() => {
+      if (quill) {
+        if (savedSelectionRef.current) {
+          quill.setSelection(savedSelectionRef.current.index, savedSelectionRef.current.length);
+        }
+        addComment({ editor: quill });
+        savedSelectionRef.current = null;
+      }
+    }, [quill]);
+
+    // In your JSX:
+    <button
+      onMouseDown={(e) => {
+        e.preventDefault();
+        const sel = quill?.getSelection();
+        if (sel?.length > 0) savedSelectionRef.current = sel;
+      }}
+      onClick={handleAddComment}
+    >
+      Add Comment
+    </button>
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```html
+    <button id="add-comment-btn">Add Comment</button>
+    <div id="editor"></div>
+    ```
+
+    ```js
+    import { addComment } from '@veltdev/quill-velt-comments';
+
+    let savedSelection = null;
+    const btn = document.getElementById('add-comment-btn');
+
+    btn.addEventListener('mousedown', () => {
+      const sel = quill.getSelection();
+      if (sel && sel.length > 0) savedSelection = sel;
+    });
+
+    btn.addEventListener('click', () => {
+      if (savedSelection) quill.setSelection(savedSelection.index, savedSelection.length);
+      addComment({ editor: quill });
+      savedSelection = null;
+    });
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+Unlike Tiptap, Quill does not have a built-in bubble menu. You will need to create your own comment button or toolbar item.
+</Tip>
+
+#### Step 5: Call `addComment` to add a comment
+
+- Call this method to add a comment to selected text in the Quill editor. You can use this when the user clicks on the comment button or presses a keyboard shortcut.
+- Params: [`AddCommentRequest`](/api-reference/sdk/models/data-models#addcommentrequest-6). It has the following properties:
+  - `editor`: Instance of the Quill editor.
+  - `editorId`: Id of the Quill editor. Use this if you have multiple Quill editors on the same page. (optional)
+  - `context`: Add any custom metadata to the Comment Annotation. [Learn more](/async-collaboration/comments/customize-behavior#metadata). (optional)
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```js
+    import { addComment } from '@veltdev/quill-velt-comments';
+
+    const addCommentRequest = {
+      editor: quill,
+      editorId: 'EDITOR_ID',
+      context: {
+        storyId: 'story-id',
+        storyName: 'story-name',
+      },
+    };
+
+    addComment(addCommentRequest);
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```js
+    import { addComment } from '@veltdev/quill-velt-comments';
+
+    const addCommentRequest = {
+      editor: quill,
+      editorId: 'EDITOR_ID',
+      context: {
+        storyId: 'story-id',
+        storyName: 'story-name',
+      },
+    };
+
+    addComment(addCommentRequest);
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 6: Render comments in Quill editor
+
+- Get the comment data from Velt SDK and render it in the Quill editor.
+- Params: [`RenderCommentsRequest`](/api-reference/sdk/models/data-models#rendercommentsrequest-6). It has the following properties:
+  - `editor`: Instance of the Quill editor.
+  - `editorId`: Id of the Quill editor. Use this if you have multiple Quill editors on the same page. (optional)
+  - `commentAnnotations`: Array of Comment Annotation objects.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```js
+    import { renderComments } from '@veltdev/quill-velt-comments';
+    import { useCommentAnnotations } from '@veltdev/react';
+
+    const annotations = useCommentAnnotations();
+
+    useEffect(() => {
+      if (quill && annotations?.length) {
+        const renderCommentsRequest = {
+          editor: quill,
+          editorId: 'EDITOR_ID',
+          commentAnnotations: annotations,
+        };
+        renderComments(renderCommentsRequest);
+      }
+    }, [quill, annotations]);
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```js
+    import { renderComments } from '@veltdev/quill-velt-comments';
+
+    const commentElement = Velt.getCommentElement();
+    commentElement.getAllCommentAnnotations().subscribe((annotations) => {
+      if (quill && annotations?.length) {
+        const renderCommentsRequest = {
+          editor: quill,
+          editorId: 'EDITOR_ID',
+          commentAnnotations: annotations,
+        };
+        renderComments(renderCommentsRequest);
+      }
+    });
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 7: Persist Velt Comment Marks (optional)
+
+- By default, Velt comment marks (`<velt-comment-text>`) are persisted by the Velt SDK. When the editor loads and the Velt SDK initializes, the marks will be automatically added to the editor.
+- If you plan to store the contents of the Quill editor on your end with the comment marks already included, you can disable this feature.
+- Default: `true`
+
+```js
+const quill = new Quill(editorRef.current, {
+  theme: 'snow',
+  modules: {
+    veltComments: {
+      persistVeltMarks: false,
+    },
+  },
+});
+```
+
+#### Step 8: Style the commented text
+
+- You can style the commented text by adding CSS for the `velt-comment-text` element.
+
+```css
+velt-comment-text {
+  background-color: rgba(255, 255, 0, 0.3);
+  border-bottom: 2px solid #ffcc00;
+  cursor: pointer;
+}
+
+velt-comment-text:hover {
+  background-color: rgba(255, 255, 0, 0.5);
+}
+
+velt-comment-text.velt-comment-selected {
+  background-color: rgba(255, 255, 0, 0.5);
+}
+```
+
+## APIs
+
+#### [QuillVeltComments](/api-reference/sdk/api/api-methods#quillveltcomments)
+
+The Velt Comments module for Quill. Register it with Quill before creating the editor.
+
+- Params: `options?:` [QuillVeltCommentsConfig](/api-reference/sdk/models/data-models#quillveltcommentsconfig)
+  - `editorId?: string` - Unique identifier for this editor instance (for multi-editor scenarios)
+  - `persistVeltMarks?: boolean` - Whether to persist Velt marks. Default: `true`
+- Returns: `Quill Module`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import Quill from 'quill';
+    import { QuillVeltComments } from '@veltdev/quill-velt-comments';
+
+    Quill.register('modules/veltComments', QuillVeltComments);
+
+    const quillInstance = new Quill(editorRef.current, {
+      theme: 'snow',
+      modules: {
+        veltComments: {
+          editorId: 'my-editor',
+          persistVeltMarks: true,
+        },
+      },
+    });
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```tsx
+    import Quill from 'quill';
+    import { QuillVeltComments } from '@veltdev/quill-velt-comments';
+
+    Quill.register('modules/veltComments', QuillVeltComments);
+
+    const quill = new Quill('#editor', {
+      theme: 'snow',
+      modules: {
+        veltComments: {
+          editorId: 'my-editor',
+          persistVeltMarks: true,
+        },
+      },
+    });
+    ```
+  </Tab>
+</Tabs>
+
+#### [addComment()](/api-reference/sdk/api/api-methods#addcomment-6)
+
+Creates a comment annotation for the currently selected text in the editor.
+
+- Params:
+  - `request:` [AddCommentRequest](/api-reference/sdk/models/data-models#addcommentrequest-6)
+    - `editor: Quill`
+    - `editorId?: string`
+    - `context?: object`
+- Returns: `Promise<void>`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from '@veltdev/quill-velt-comments';
+
+    <button
+      onMouseDown={(e) => {
+        e.preventDefault();
+        addComment({
+          editor: quill,
+          editorId: 'my-editor',
+          context: { customData: 'value' }
+        });
+      }}
+    >
+      Comment
+    </button>
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```tsx
+    import { addComment } from '@veltdev/quill-velt-comments';
+
+    addComment({
+      editor: quill,
+      editorId: 'my-editor',
+      context: { customData: 'value' },
+    });
+    ```
+  </Tab>
+</Tabs>
+
+#### [renderComments()](/api-reference/sdk/api/api-methods#rendercomments-6)
+
+Renders and highlights comment annotations in the editor.
+
+- Params:
+  - `request:` [RenderCommentsRequest](/api-reference/sdk/models/data-models#rendercommentsrequest-6)
+    - `editor: Quill`
+    - `editorId?: string`
+    - `commentAnnotations?:` [CommentAnnotation[]](/api-reference/sdk/models/data-models#commentannotation)
+- Returns: `void`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect } from 'react';
+    import { renderComments } from '@veltdev/quill-velt-comments';
+    import { useCommentAnnotations } from '@veltdev/react';
+
+    const annotations = useCommentAnnotations();
+
+    useEffect(() => {
+      if (quill && annotations) {
+        renderComments({
+          editor: quill,
+          editorId: 'my-editor',
+          commentAnnotations: annotations,
+        });
+      }
+    }, [quill, annotations]);
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```tsx
+    import { renderComments } from '@veltdev/quill-velt-comments';
+
+    const commentElement = Velt.getCommentElement();
+    commentElement.getAllCommentAnnotations().subscribe((annotations) => {
+      if (quill && annotations) {
+        renderComments({
+          editor: quill,
+          editorId: 'my-editor',
+          commentAnnotations: annotations,
+        });
+      }
+    });
+    ```
+  </Tab>
+</Tabs>

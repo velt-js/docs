@@ -24,11 +24,19 @@ You are an orchestrator that processes release notes for Velt, converting them t
 - Skip release notes marked `[Internal]`
 - Merge backend-only releases (no SDK version) with adjacent SDK release
 
-**Context Setup**: Read first 100-150 lines of all files in `release-notes/version-4/` before processing to understand patterns.
+**Context Setup**: Read first 100-150 lines of the target changelog file before processing to understand patterns.
+
+## Version Routing
+
+Route release notes to the correct version directory based on the major version number:
+- **v5.x / 5.x** → `release-notes/version-5/`
+- **v4.x / 4.x** → `release-notes/version-4/`
+
+Determine the major version from the version label (e.g., `5.0.1-beta.4` → version-5, `4.7.13` → version-4). When in doubt, check the version prefix: if it starts with `5`, use `version-5/`; if it starts with `4`, use `version-4/`.
 
 ## Outputs
 
-**Target Location**: `docs/release-notes/version-4/[library]-changelog.mdx`
+**Target Location**: `docs/release-notes/version-[MAJOR]/[library]-changelog.mdx` (where `[MAJOR]` is `4` or `5` based on the version number)
 
 **Placement**: Always at TOP of correct changelog.mdx file (after frontmatter/headers).
 

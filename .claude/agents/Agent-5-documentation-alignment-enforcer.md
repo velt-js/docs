@@ -14,6 +14,11 @@ You are a Documentation Alignment Specialist. After Agent-4 completes all update
 
 **Scope**: Do NOT re-review data-models.mdx, api-methods.mdx, or wireframes. Agent-3/4 already handled those. Focus on aligning what was added/changed with existing documentation.
 
+**Version Routing**: When aligning release note changelogs, use the correct version directory based on the major version number:
+- **v5.x / 5.x** → `release-notes/version-5/`
+- **v4.x / 4.x** → `release-notes/version-4/`
+Do NOT place v5.x entries in the v4 changelog or vice versa.
+
 **Paths to Scan**:
 - `release-notes/**`, `docs/**`, `guide/**`, `handbook/**`, `content/**`, `pages/**`
 - `ui-customization/**`, `realtime-collaboration/**`, `api-reference/**`

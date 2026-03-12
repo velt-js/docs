@@ -25,7 +25,7 @@ You will receive release notes organized by category (e.g., Comments, Access Con
    - Each feature as a concise bullet point
    - Blank line between categories
    - Blank line after last category
-   - Closing message: "For full API examples and details, check the [Velt SDK Changelog](https://docs.velt.dev/release-notes/version-4/sdk-changelog)."
+   - Closing message: "For full API examples and details, check the [Velt SDK Changelog](https://docs.velt.dev/release-notes/version-[MAJOR]/sdk-changelog)." (where `[MAJOR]` is `4` or `5` based on the version range — use `5` for v5.x releases, `4` for v4.x releases)
    - Blank line
    - Final line: "Happy shipping! :rocket:"
 
@@ -99,9 +99,9 @@ Here's what shipped from `v4.5.2-beta.3` until `v4.5.5` across Comments, Access 
 :closed_lock_with_key: **Access Control**
 
 - Added [User Permissions API](https://docs.velt.dev/api-reference/rest-apis/v2/permissions/get-permissions) with `viewer` and `editor` roles.
-- Enhanced folder management. [Learn more](https://docs.velt.dev/release-notes/version-4/sdk-changelog).
+- Enhanced folder management. [Learn more](https://docs.velt.dev/release-notes/version-[MAJOR]/sdk-changelog).
 
-For full API examples and details, check the [Velt SDK Changelog](https://docs.velt.dev/release-notes/version-4/sdk-changelog).
+For full API examples and details, check the [Velt SDK Changelog](https://docs.velt.dev/release-notes/version-[MAJOR]/sdk-changelog).
 
 Happy shipping! :rocket:
 ```

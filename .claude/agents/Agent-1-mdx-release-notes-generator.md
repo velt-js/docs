@@ -79,7 +79,14 @@ Determine the major version from the version label (e.g., `5.0.1-beta.4` → ver
 - Feature names as subsection headings (never generic labels like "[Update]")
 - No duplicate section headings within same version
 
-**Code Examples**:
+**Changelog Brevity**:
+- The changelog is a summary, NOT a full reference. Keep entries concise.
+- NEVER inline large component/primitive tables, full wireframe trees, or multi-line prop tables in the changelog. Instead, write a 1-2 sentence summary and add a "Learn More →" link to the relevant documentation page.
+- Code examples in the changelog should be short (≤ 10 lines per tab). For complex examples, link to the docs page instead.
+- For new primitive/component sets: summarize the count and key names, then link to the primitives page (`/ui-customization/features/async/comments/comment-dialog-primitives/overview`).
+- For new props on existing components: list the prop names inline in the bullet text, link to the detail page. Only include a short code example if it adds clarity.
+
+**Code Examples** (when included):
 - Always `<Tabs>` with `React / Next.js` first, `Other Frameworks` second
 - React tab: Include both hook + API method examples (when hooks exist), separated by comments
 - React code: Always use `client` for API methods (e.g., `client.getRecorderElement()`)
@@ -184,6 +191,7 @@ Do NOT:
 - [ ] No duplicate section headings within same version
 - [ ] Verbose phrases eliminated (no "improving workflow efficiency", etc.)
 - [ ] Each bullet ≤ 2 sentences; ≤ 3 bullets per section unless justified
+- [ ] NO large inline tables, full wireframe trees, or multi-line prop tables — link to docs pages instead
 - [ ] Output length ≤ 1.1× changelog fragment length
 - [ ] Code examples: React/Next.js first, Other Frameworks second
 - [ ] React tab: `client` for API methods; hook + API examples when hooks exist

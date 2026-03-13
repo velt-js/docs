@@ -2303,6 +2303,8 @@ Available filter criteria for sidebar filtering.
 | `pageInfo`                | PageInfo                | No       | Information about the page where the annotation is made.                     |
 | `recordedTime`            | Object                  | No       | Recorded time details.                                                      |
 | `transcription`           | Transcription           | No       | Transcription of the recorded media.                                        |
+| `isRecorderResolverUsed`  | `boolean`               | No       | True while PII is being fetched from the recorder resolver; use for loading states. |
+| `isUrlAvailable`          | `boolean`               | No       | True once the recording URL is available (not a local blob); use for upload progress. |
 
 
 #### RecorderDataTranscriptSegment
@@ -2888,6 +2890,26 @@ The `dataProvider` event emits different resolver event types depending on the d
 | `setDocuments`           | From setDocuments call                     |
 | `getReactionAnnotations` | From getting reaction annotations          |
 
+---
+
+#### RecorderResolverEvent
+
+| Event Type                                   | Description                                                              |
+|----------------------------------------------|--------------------------------------------------------------------------|
+| `recorderResolutionRequestFormed`            | Triggered when a recorder get request is formed internally               |
+| `recorderResolutionRequestTriggered`         | Triggered when a recorder get request is sent                            |
+| `recorderResolutionResult`                   | Triggered when recorder get completes successfully                       |
+| `recorderResolutionError`                    | Triggered when an error occurs during recorder get                       |
+| `recorderResolutionResultFromCache`          | Triggered when a recorder get result is retrieved from cache             |
+| `recorderSaveRequestFormed`                  | Triggered when a recorder save request is formed internally              |
+| `recorderSaveRequestTriggered`               | Triggered when a recorder save request is sent                           |
+| `recorderSaveResult`                         | Triggered when recorder save completes successfully                      |
+| `recorderSaveError`                          | Triggered when an error occurs during recorder save                      |
+| `recorderDeleteRequestFormed`                | Triggered when a recorder delete request is formed internally            |
+| `recorderDeleteRequestTriggered`             | Triggered when a recorder delete request is sent                         |
+| `recorderDeleteResult`                       | Triggered when recorder delete completes successfully                    |
+| `recorderDeleteError`                        | Triggered when an error occurs during recorder delete                    |
+
 
 #### Error Codes
 
@@ -3350,6 +3372,9 @@ An enum that defines the different types of actions that can trigger resolver ev
 | `REACTION_DELETE` | `'reaction.delete'` | Triggered when a reaction is removed from a comment |
 | `ATTACHMENT_ADD` | `'attachment.add'` | Triggered when an attachment is added to a comment |
 | `ATTACHMENT_DELETE` | `'attachment.delete'` | Triggered when an attachment is deleted from a comment |
+| `RECORDER_ANNOTATION_ADD` | `'recorder_annotation.add'` | Triggered when a recorder annotation is added |
+| `RECORDER_ANNOTATION_UPDATE` | `'recorder_annotation.update'` | Triggered when a recorder annotation is updated |
+| `RECORDER_ANNOTATION_DELETE` | `'recorder_annotation.delete'` | Triggered when a recorder annotation is deleted |
 
 
 #### UserResolverModuleName
@@ -3394,6 +3419,57 @@ Enum defining module names for reaction-related resolver operations. Used in dat
 | `SET_DOCUMENTS` | `'setDocuments'` | Resolver module for setting reaction documents |
 | `GET_REACTION_ANNOTATIONS` | `'getReactionAnnotations'` | Resolver module for fetching reaction annotations |
 
+
+#### RecorderResolverModuleName
+---
+
+Enum defining module names for recorder-related resolver operations. Used in data provider events to identify which module triggered the resolver call.
+
+[Self-Host Recording Data →](/self-host-data/recordings#debugging)
+
+| Name | Value | Description |
+|-------|------------|-------------|
+| `GET_RECORDER_ANNOTATIONS` | `'getRecorderAnnotations'` | Resolver module for fetching recorder annotations |
+
+#### RecorderResolverSource
+---
+
+Enum defining the source of a recorder resolver lifecycle event.
+
+```typescript
+enum RecorderResolverSource {
+  RESOLVE_RECORDER_ANNOTATIONS = 'resolveRecorderAnnotations',
+  SAVE_RECORDER_ANNOTATION = 'saveRecorderAnnotation',
+  DELETE_RECORDER_ANNOTATION = 'deleteRecorderAnnotation',
+  FORMAT_RESPONSE = 'formatResponse',
+  INIT_DOCUMENTS = 'initDocuments',
+  SET_DATA = 'setData',
+  UPDATE_DATA = 'updateData',
+  DELETE_DATA = 'deleteData',
+}
+```
+
+#### RecorderResolverEventType
+---
+
+Union type for all recorder resolver lifecycle event type strings.
+
+```typescript
+type RecorderResolverEventType =
+  | 'recorderResolutionRequestFormed'
+  | 'recorderResolutionRequestTriggered'
+  | 'recorderResolutionResult'
+  | 'recorderResolutionError'
+  | 'recorderResolutionResultFromCache'
+  | 'recorderSaveRequestFormed'
+  | 'recorderSaveRequestTriggered'
+  | 'recorderSaveResult'
+  | 'recorderSaveError'
+  | 'recorderDeleteRequestFormed'
+  | 'recorderDeleteRequestTriggered'
+  | 'recorderDeleteResult'
+  | 'recorderDeleteError';
+```
 
 #### PartialComment
 ---
@@ -3469,7 +3545,8 @@ Enum defining module names for reaction-related resolver operations. Used in dat
 | `comment`         | `CommentAnnotationDataProvider` | No       | Provider for comment annotation data           |
 | `user`            | `UserDataProvider`              | No       | Provider for user data                         |
 | `reaction`        | `ReactionAnnotationDataProvider`| No       | Provider for reaction annotation data          |
-| `attachment`        | `AttachmentDataProvider`| No       | Provider for file attachment data          |
+| `attachment`      | `AttachmentDataProvider`        | No       | Provider for file attachment data              |
+| `recorder`        | `RecorderAnnotationDataProvider`| No       | Provider for recording annotation PII data     |
 
 #### ResolverEndpointConfig
 ---
@@ -3494,6 +3571,7 @@ Config-based resolver endpoint configuration. SDK handles HTTP requests, headers
 | `getConfig`       | `ResolverEndpointConfig` | No       | Config-based endpoint for fetch operations     |
 | `saveConfig`      | `ResolverEndpointConfig` | No       | Config-based endpoint for save operations      |
 | `deleteConfig`    | `ResolverEndpointConfig` | No       | Config-based endpoint for delete operations    |
+| `additionalFields` | `string[]`              | No       | Custom fields to include in resolver payloads  |
 
 #### ResolverResponse
 ---
@@ -3538,9 +3616,9 @@ Generic response format for backend endpoints and data providers.
 
 | Property           | Type                                                                                                | Required | Description                                    |
 |-------------------|-----------------------------------------------------------------------------------------------------|-----------|------------------------------------------------|
-| `get`             | `(request: GetCommentResolverRequest) => Promise<ResolverResponse<Record<string, PartialCommentAnnotation>>>` | Yes       | Function to fetch comment annotations           |
-| `save`            | `(request: SaveCommentResolverRequest) => Promise<ResolverResponse<T>>`                               | Yes       | Function to save comment annotations            |
-| `delete`          | `(request: DeleteCommentResolverRequest) => Promise<ResolverResponse<undefined>>`                             | Yes       | Function to delete comment annotations          |
+| `get`             | `(request: GetCommentResolverRequest) => Promise<ResolverResponse<Record<string, PartialCommentAnnotation>>>` | No       | Function to fetch comment annotations           |
+| `save`            | `(request: SaveCommentResolverRequest) => Promise<ResolverResponse<T>>`                               | No       | Function to save comment annotations            |
+| `delete`          | `(request: DeleteCommentResolverRequest) => Promise<ResolverResponse<undefined>>`                             | No       | Function to delete comment annotations          |
 | `config`          | `ResolverConfig`                                                                                      | No        | Configuration for the data provider             |
 
 
@@ -3549,9 +3627,9 @@ Generic response format for backend endpoints and data providers.
 
 | Property           | Type                                                                                                | Required | Description                                    |
 |-------------------|-----------------------------------------------------------------------------------------------------|-----------|------------------------------------------------|
-| `get`             | `(request: GetReactionResolverRequest) => Promise<ResolverResponse<Record<string, PartialReactionAnnotation>>>` | Yes       | Function to fetch reaction annotations           |
-| `save`            | `(request: SaveReactionResolverRequest) => Promise<ResolverResponse<T>>`                               | Yes       | Function to save reaction annotations            |
-| `delete`          | `(request: DeleteReactionResolverRequest) => Promise<ResolverResponse<undefined>>`                             | Yes       | Function to delete reaction annotations          |
+| `get`             | `(request: GetReactionResolverRequest) => Promise<ResolverResponse<Record<string, PartialReactionAnnotation>>>` | No       | Function to fetch reaction annotations           |
+| `save`            | `(request: SaveReactionResolverRequest) => Promise<ResolverResponse<T>>`                               | No       | Function to save reaction annotations            |
+| `delete`          | `(request: DeleteReactionResolverRequest) => Promise<ResolverResponse<undefined>>`                             | No       | Function to delete reaction annotations          |
 | `config`          | `ResolverConfig`                                                                                      | No        | Configuration for the data provider             |
 
 
@@ -3579,8 +3657,8 @@ Request format used by config-based user resolver endpoints.
 
 | Property           | Type                                                                                                | Required | Description                                    |
 |-------------------|-----------------------------------------------------------------------------------------------------|-----------|------------------------------------------------|
-| `save`            | `(request: SaveAttachmentResolverRequest) => Promise<ResolverResponse<SaveAttachmentResolverData>>` | Yes       | Function to save attachment data                |
-| `delete`          | `(request: DeleteAttachmentResolverRequest) => Promise<ResolverResponse<undefined>>`                | Yes       | Function to delete attachment data              |
+| `save`            | `(request: SaveAttachmentResolverRequest) => Promise<ResolverResponse<SaveAttachmentResolverData>>` | No       | Function to save attachment data                |
+| `delete`          | `(request: DeleteAttachmentResolverRequest) => Promise<ResolverResponse<undefined>>`                | No       | Function to delete attachment data              |
 | `config`          | `ResolverConfig`                                                                                     | No        | Configuration for the data provider             |
 
 
@@ -3590,6 +3668,98 @@ Request format used by config-based user resolver endpoints.
 | Property | Type     | Required | Description                                    |
 |----------|----------|----------|------------------------------------------------|
 | `url`    | `string` | Yes      | URL of the saved attachment                    |
+
+#### UploadFileOptions
+---
+
+| Property             | Type      | Required | Description                                                                 |
+|---------------------|-----------|----------|-----------------------------------------------------------------------------|
+| `file`              | `File`    | Yes      | File object to upload                                                       |
+| `useAttachmentResolver` | `boolean` | No   | Whether to route upload through the attachment resolver                     |
+| `metadata`          | `any`     | No       | Custom metadata to pass to the upload handler                               |
+| `attachmentScope`   | `string`  | No       | Routes upload to the named `AttachmentDataProvider` scope (e.g., `'default'`, `'recorder'`) |
+
+#### RecorderAnnotationDataProvider
+---
+
+| Property        | Type                                                                                                                 | Required | Description                                             |
+|----------------|----------------------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------|
+| `get`           | `(request: GetRecorderResolverRequest) => Promise<ResolverResponse<Record<string, PartialRecorderAnnotation>>>`      | No       | Function to fetch recorder annotation PII data          |
+| `save`          | `(request: SaveRecorderResolverRequest) => Promise<ResolverResponse<SaveRecorderResolverData \| undefined>>`         | No       | Function to save recorder annotation PII data           |
+| `delete`        | `(request: DeleteRecorderResolverRequest) => Promise<ResolverResponse<undefined>>`                                   | No       | Function to delete recorder annotation PII data         |
+| `config`        | `ResolverConfig`                                                                                                     | No       | Configuration for the data provider                     |
+| `uploadChunks`  | `boolean`                                                                                                            | No       | Whether to upload recording in chunks                   |
+| `storage`       | `AttachmentDataProvider`                                                                                             | No       | Storage provider for recording media files              |
+
+#### GetRecorderResolverRequest
+---
+
+| Property               | Type       | Required | Description                                          |
+|-----------------------|------------|----------|------------------------------------------------------|
+| `organizationId`       | `string`   | Yes      | ID of the organization                               |
+| `recorderAnnotationIds`| `string[]` | No       | Recorder annotation IDs to fetch                     |
+| `documentIds`          | `string[]` | No       | Document IDs to filter annotations by                |
+
+#### SaveRecorderResolverRequest
+---
+
+| Property             | Type                                          | Required | Description                                          |
+|---------------------|-----------------------------------------------|----------|------------------------------------------------------|
+| `recorderAnnotation` | `Record<string, PartialRecorderAnnotation>`   | Yes      | Map of annotation IDs to partial recorder annotation data |
+| `event`             | `ResolverActions`                             | No       | Resolver action that triggered the save              |
+| `metadata`          | `BaseMetadata`                                | No       | Additional metadata                                  |
+
+#### SaveRecorderResolverData
+---
+
+| Property       | Type                   | Required | Description                                          |
+|---------------|------------------------|----------|------------------------------------------------------|
+| `transcription`| `Transcription`        | No       | Updated transcription for the recording              |
+| `attachment`   | `Attachment \| null`   | No       | Primary attachment (deprecated; use `attachments`)   |
+| `attachments`  | `Attachment[]`         | No       | List of updated attachments for the recording        |
+
+#### DeleteRecorderResolverRequest
+---
+
+| Property             | Type             | Required | Description                                          |
+|---------------------|------------------|----------|------------------------------------------------------|
+| `recorderAnnotationId`| `string`        | Yes      | ID of the recorder annotation to delete              |
+| `metadata`           | `BaseMetadata`   | No       | Additional metadata                                  |
+| `event`              | `ResolverActions`| No       | Resolver action that triggered the delete            |
+
+#### PartialRecorderAnnotation
+---
+
+| Property                  | Type                                                  | Required | Description                                            |
+|--------------------------|-------------------------------------------------------|----------|--------------------------------------------------------|
+| `annotationId`            | `string`                                              | Yes      | ID of the recorder annotation                          |
+| `metadata`                | `BaseMetadata`                                        | No       | Additional metadata                                    |
+| `from`                    | `User`                                                | No       | User who created the recorder annotation               |
+| `transcription`           | `Transcription`                                       | No       | Transcription of the recorded media                    |
+| `attachment`              | `Attachment \| null`                                  | No       | Primary attachment (deprecated; use `attachments`)     |
+| `attachments`             | `Attachment[]`                                        | No       | List of attachments for the recording                  |
+| `chunkUrls`               | `Record<number, string>`                              | No       | Map of chunk index to chunk URL for chunked uploads    |
+| `recordingEditVersions`   | `Record<number, PartialRecorderAnnotationEditVersion>`| No       | Map of edit version index to edit version data         |
+| `[key: string]`           | `any`                                                 | No       | Additional custom fields                               |
+
+#### PartialRecorderAnnotationEditVersion
+---
+
+| Property       | Type                   | Required | Description                                          |
+|---------------|------------------------|----------|------------------------------------------------------|
+| `from`         | `User`                 | No       | User who created this edit version                   |
+| `attachment`   | `Attachment \| null`   | No       | Attachment for this edit version                     |
+| `attachments`  | `Attachment[]`         | No       | List of attachments for this edit version            |
+| `transcription`| `Transcription`        | No       | Transcription for this edit version                  |
+
+#### PartialRecorderAnnotationResult
+---
+
+| Property       | Type                                                   | Required | Description                                          |
+|---------------|--------------------------------------------------------|----------|------------------------------------------------------|
+| `strippedData` | `Record<string, PartialRecorderAnnotation> \| null`    | Yes      | Annotation data with PII stripped                    |
+| `originalData` | `RecorderAnnotation \| null`                           | Yes      | Original annotation data before PII stripping        |
+| `eventType`    | `ResolverActions`                                      | No       | Resolver action that produced this result            |
 
 # Presence
 
@@ -4518,3 +4688,87 @@ Payload containing details of the CRDT data update.
 | `lastUpdatedBy`  | `string`              | Yes      | User ID who made the last update               |
 | `sessionId`      | `string \| null`      | Yes      | Session ID or null                             |
 | `lastUpdate`     | `string`              | Yes      | ISO timestamp of last update                   |
+
+#### CrdtPushMessageQuery
+---
+Query to push a raw Yjs message into the unified message stream for a given document.
+
+| Property       | Type                            | Required | Description                                                  |
+|---------------|---------------------------------|----------|--------------------------------------------------------------|
+| `id`           | `string`                        | Yes      | Document or store identifier                                 |
+| `data`         | `number[]`                      | Yes      | Raw Yjs message bytes                                        |
+| `yjsClientId`  | `number`                        | Yes      | Yjs client ID of the sender                                  |
+| `messageType`  | `'sync' \| 'awareness'`         | No       | Message type; defaults to `'sync'`                           |
+| `eventData`    | `unknown`                       | No       | Optional arbitrary event payload                             |
+| `type`         | `string`                        | No       | Custom type label for the message                            |
+| `contentKey`   | `string`                        | No       | Key identifying a sub-section of the document content        |
+| `source`       | `string`                        | No       | Identifies the sender or origin of the message               |
+
+#### CrdtOnMessageQuery
+---
+Query to subscribe to incoming messages on the unified message stream.
+
+| Property    | Type                                       | Required | Description                                            |
+|------------|--------------------------------------------|----------|--------------------------------------------------------|
+| `id`        | `string`                                   | Yes      | Document or store identifier                           |
+| `callback`  | `(message: CrdtMessageData) => void`       | Yes      | Called with each received message                      |
+| `afterTs`   | `number`                                   | No       | Only deliver messages with timestamp after this value  |
+
+#### CrdtMessageData
+---
+Data object representing a single message received from the unified message stream.
+
+| Property       | Type      | Required | Description                                    |
+|---------------|-----------|----------|------------------------------------------------|
+| `data`         | `number[]`| Yes      | Raw Yjs message bytes                          |
+| `yjsClientId`  | `number`  | Yes      | Yjs client ID of the sender                    |
+| `timestamp`    | `number`  | Yes      | Unix timestamp when the message was persisted  |
+
+#### CrdtGetMessagesQuery
+---
+Query to retrieve historical messages from the unified message stream.
+
+| Property   | Type     | Required | Description                                              |
+|-----------|----------|----------|----------------------------------------------------------|
+| `id`       | `string` | Yes      | Document or store identifier                             |
+| `afterTs`  | `number` | No       | Only return messages with timestamp after this value     |
+
+#### CrdtGetSnapshotQuery
+---
+Query to retrieve the latest CRDT state snapshot for a document.
+
+| Property | Type     | Required | Description                  |
+|---------|----------|----------|------------------------------|
+| `id`     | `string` | Yes      | Document or store identifier |
+
+#### CrdtSnapshotData
+---
+Snapshot of the CRDT document state at a point in time.
+
+| Property    | Type                        | Required | Description                                          |
+|------------|------------------------------|----------|------------------------------------------------------|
+| `state`     | `Uint8Array \| number[]`    | No       | Encoded Yjs document state                           |
+| `vector`    | `Uint8Array \| number[]`    | No       | Encoded Yjs state vector                             |
+| `timestamp` | `number`                    | No       | Unix timestamp when the snapshot was saved           |
+
+#### CrdtSaveSnapshotQuery
+---
+Query to persist a CRDT state snapshot for a document.
+
+| Property     | Type                        | Required | Description                                          |
+|-------------|------------------------------|----------|------------------------------------------------------|
+| `id`         | `string`                    | Yes      | Document or store identifier                         |
+| `state`      | `Uint8Array \| number[]`    | Yes      | Encoded Yjs document state to persist                |
+| `vector`     | `Uint8Array \| number[]`    | Yes      | Encoded Yjs state vector to persist                  |
+| `type`       | `string`                    | No       | Custom type label for the snapshot                   |
+| `contentKey` | `string`                    | No       | Key identifying a sub-section of the document content|
+| `source`     | `string`                    | No       | Identifies the origin of this snapshot               |
+
+#### CrdtPruneMessagesQuery
+---
+Query to delete historical messages older than a given timestamp from the message stream.
+
+| Property   | Type     | Required | Description                                              |
+|-----------|----------|----------|----------------------------------------------------------|
+| `id`       | `string` | Yes      | Document or store identifier                             |
+| `beforeTs` | `number` | Yes      | Delete all messages with timestamp before this value     |

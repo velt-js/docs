@@ -1,0 +1,183 @@
+---
+title: "Recordings"
+description: "Self-host your recording annotation PII data while using Velt's components. Keep identity, transcription, and attachment URLs on your infrastructure with only minimal identifiers stored on Velt servers."
+---
+
+<Warning>
+  - This is currently only compatible with `setDocuments` method.
+  - Ensure that the data providers are set prior to calling `identify` method.
+  - The data provider methods must return the correct status code (e.g. 200 for success, 500 for errors) and success boolean in the response object. This ensures proper error handling and retries.
+</Warning>
+
+# Overview
+Velt supports self-hosting your recording annotation PII data:
+
+- Recording annotation identity (user `from` field), transcription, and attachment URLs can be stored on your own infrastructure, with only necessary identifiers on Velt servers.
+- Velt Components automatically hydrate recording data in the frontend by fetching from your configured data provider.
+- This gives you full control over recording PII while maintaining all Velt recorder features.
+
+# How does it work?
+When recorder annotations are created, updated, or deleted:
+
+1. The SDK uses your configured [`RecorderAnnotationDataProvider`](/api-reference/sdk/models/data-models#recorderannotationdataprovider) to handle storage and retrieval.
+2. Your data provider implements three optional methods:
+   - `get`: Fetches recording annotation PII from your database
+   - `save`: Stores PII fields and returns updated transcription/attachments
+   - `delete`: Removes PII fields from your database
+
+**The process works as follows:**
+
+When a recording annotation operation occurs:
+
+1. The SDK first attempts the operation on your storage infrastructure
+2. If successful:
+   - The SDK updates Velt's servers with minimal identifiers
+   - The [`RecorderAnnotation`](/api-reference/sdk/models/data-models#recorderannotation) object is updated with `isRecorderResolverUsed: true` while PII is being fetched
+   - Once PII is available, the annotation is hydrated with identity, transcription, and attachment data
+3. If the operation fails, no changes are made to Velt's servers and the operation is retried if you have configured retries.
+
+# Setup
+
+Configure the recorder data provider via `setDataProviders`:
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const recorderDataProvider = {
+  get: async (request) => {
+    const response = await fetch('/api/velt/recordings/get', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request)
+    });
+    return await response.json();
+  },
+  save: async (request) => {
+    const response = await fetch('/api/velt/recordings/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request)
+    });
+    return await response.json();
+  },
+  delete: async (request) => {
+    const response = await fetch('/api/velt/recordings/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request)
+    });
+    return await response.json();
+  },
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ recorder: recorderDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const recorderDataProvider = {
+  get: async (request) => {
+    const response = await fetch('/api/velt/recordings/get', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request)
+    });
+    return await response.json();
+  },
+  save: async (request) => {
+    const response = await fetch('/api/velt/recordings/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request)
+    });
+    return await response.json();
+  },
+  delete: async (request) => {
+    const response = await fetch('/api/velt/recordings/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request)
+    });
+    return await response.json();
+  },
+};
+
+Velt.setDataProviders({ recorder: recorderDataProvider });
+```
+</Tab>
+</Tabs>
+
+## Methods
+
+### get
+Fetch recording annotation PII data from your database. Called when annotations need to be hydrated in the frontend.
+- Param: [`GetRecorderResolverRequest`](/api-reference/sdk/models/data-models#getrecorderresolverrequest)
+- Return: [`Promise<ResolverResponse<Record<string, PartialRecorderAnnotation>>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+### save
+Store recording annotation PII fields. Called when a recorder annotation is created or updated.
+- Param: [`SaveRecorderResolverRequest`](/api-reference/sdk/models/data-models#saverecorderresolverrequest)
+- Return: [`Promise<ResolverResponse<SaveRecorderResolverData>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+### delete
+Remove recording annotation PII from your database. Called when a recorder annotation is deleted.
+- Param: [`DeleteRecorderResolverRequest`](/api-reference/sdk/models/data-models#deleterecorderresolverrequest)
+- Return: [`Promise<ResolverResponse<undefined>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+### config
+Configuration for the recorder data provider.
+- Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig). Relevant properties:
+  - `resolveTimeout`: Timeout duration (in milliseconds) for resolver operations
+  - `getRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for get operations.
+  - `saveRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for save operations.
+  - `deleteRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for delete operations.
+
+# Loading and Upload State Fields
+
+Two fields on [`RecorderAnnotation`](/api-reference/sdk/models/data-models#recorderannotation) indicate recorder resolver status:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `isRecorderResolverUsed` | `boolean` | `true` while PII is being fetched from the recorder resolver. Use this field to show a loading state in your UI. |
+| `isUrlAvailable` | `boolean` | `true` once the recording URL has been uploaded and is available (not a local blob URL). Use this field to indicate upload progress. |
+
+# Debugging
+
+You can subscribe to `dataProvider` events to monitor and debug recorder resolver operations. Filter for the `RecorderResolverModuleName.GET_RECORDER_ANNOTATIONS` module name to isolate recorder-specific events.
+
+[`RecorderResolverModuleName`](/api-reference/sdk/models/data-models#recorderresolvermodulename) — Enum of module names for recorder resolver events.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useVeltClient } from '@veltdev/react';
+
+const { client } = useVeltClient();
+
+useEffect(() => {
+  if (!client) return;
+
+  const subscription = client.on('dataProvider').subscribe((event) => {
+    console.log('Data Provider Event:', event);
+  });
+
+  return () => subscription?.unsubscribe();
+}, [client]);
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```javascript
+const subscription = Velt.on('dataProvider').subscribe((event) => {
+  console.log('Data Provider Event:', event);
+});
+
+// Unsubscribe when done
+subscription?.unsubscribe();
+```
+</Tab>
+</Tabs>

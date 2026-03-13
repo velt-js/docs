@@ -1,0 +1,129 @@
+---
+title: "Core CRDT Library"
+rss: true
+description: Release Notes of Changes Affecting All CRDT Libraries
+---
+
+### Libraries
+- `@veltdev/crdt`
+- `@veltdev/crdt-react`
+
+
+<Update label="5.0.2-beta.8" description="March 12, 2026">
+
+### New Features
+
+- [**Core**]: Added six methods on `CrdtElement` implementing a unified message stream for Yjs-backed collaborative editors. The stream carries both sync and awareness messages over a single Firebase RTDB channel per document, with encryption at rest, ordered serialization, and automatic pruning after snapshot checkpoints.
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+const crdtElement = client.getCrdtElement();
+
+// --- Initial load (y-redis pattern) ---
+const snapshot = await crdtElement.getSnapshot({ id: 'my-doc' });
+if (snapshot?.state) {
+  Y.applyUpdate(ydoc, new Uint8Array(snapshot.state));
+}
+const afterTs = snapshot?.timestamp ?? 0;
+const messages = await crdtElement.getMessages({ id: 'my-doc', afterTs });
+for (const msg of messages) {
+  Y.applyUpdate(ydoc, new Uint8Array(msg.data));
+}
+
+// --- Real-time streaming ---
+const unsubscribe = crdtElement.onMessage({
+  id: 'my-doc',
+  callback: (msg) => {
+    Y.applyUpdate(ydoc, new Uint8Array(msg.data));
+  },
+});
+
+// --- Sending updates ---
+ydoc.on('update', async (update, origin) => {
+  await crdtElement.pushMessage({
+    id: 'my-doc',
+    data: Array.from(update),
+    yjsClientId: ydoc.clientID,
+    messageType: 'sync',
+    source: 'tiptap',
+  });
+});
+
+// --- Periodic snapshot + pruning ---
+await crdtElement.saveSnapshot({
+  id: 'my-doc',
+  state: Y.encodeStateAsUpdate(ydoc),
+  vector: Y.encodeStateVector(ydoc),
+  source: 'tiptap',
+});
+await crdtElement.pruneMessages({
+  id: 'my-doc',
+  beforeTs: Date.now() - 24 * 60 * 60 * 1000,
+});
+
+// --- Cleanup ---
+unsubscribe();
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const crdtElement = Velt.getCrdtElement();
+
+// --- Initial load (y-redis pattern) ---
+const snapshot = await crdtElement.getSnapshot({ id: 'my-doc' });
+if (snapshot?.state) {
+  Y.applyUpdate(ydoc, new Uint8Array(snapshot.state));
+}
+const afterTs = snapshot?.timestamp ?? 0;
+const messages = await crdtElement.getMessages({ id: 'my-doc', afterTs });
+for (const msg of messages) {
+  Y.applyUpdate(ydoc, new Uint8Array(msg.data));
+}
+
+// --- Real-time streaming ---
+const unsubscribe = crdtElement.onMessage({
+  id: 'my-doc',
+  callback: (msg) => {
+    Y.applyUpdate(ydoc, new Uint8Array(msg.data));
+  },
+});
+
+// --- Sending updates ---
+ydoc.on('update', async (update, origin) => {
+  await crdtElement.pushMessage({
+    id: 'my-doc',
+    data: Array.from(update),
+    yjsClientId: ydoc.clientID,
+    messageType: 'sync',
+    source: 'tiptap',
+  });
+});
+
+// --- Periodic snapshot + pruning ---
+await crdtElement.saveSnapshot({
+  id: 'my-doc',
+  state: Y.encodeStateAsUpdate(ydoc),
+  vector: Y.encodeStateVector(ydoc),
+  source: 'tiptap',
+});
+await crdtElement.pruneMessages({
+  id: 'my-doc',
+  beforeTs: Date.now() - 24 * 60 * 60 * 1000,
+});
+
+// --- Cleanup ---
+unsubscribe();
+```
+</Tab>
+</Tabs>
+
+  The six new methods are:
+  - `pushMessage(query)` — push a lib0-encoded sync or awareness message to the stream
+  - `onMessage(query)` — subscribe to real-time messages; returns an unsubscribe function
+  - `getMessages(query)` — fetch all messages after a given timestamp (one-time read for replay)
+  - `getSnapshot(query)` — retrieve the latest full-state snapshot as a baseline for replay
+  - `saveSnapshot(query)` — checkpoint the current Y.Doc state and vector clock
+  - `pruneMessages(query)` — remove messages older than a given timestamp to keep storage bounded
+
+</Update>

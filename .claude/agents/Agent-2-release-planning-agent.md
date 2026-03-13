@@ -58,10 +58,16 @@ You are a Release Planning Specialist. After Agent-1 generates a release note, y
 - Changes: [Description]
 - Priority: [High/Medium/Low]
 
-### 4. UI Customization (ONLY if new wireframes)
-- Files: [Specific paths]
+### 4a. UI Customization — Wireframes (ONLY if new wireframes)
+- File: `ui-customization/features/async/comments/comment-dialog-components.mdx`
 - Changes: [Description]
 - Priority: [High/Medium/Low]
+
+### 4b. UI Customization — Primitives (ONLY if new primitive components or props)
+- File: `ui-customization/features/async/comments/comment-dialog-primitives/overview.mdx`
+- Changes: [Description]
+- Priority: [High/Medium/Low]
+- NOTE: Primitives and component props belong ONLY in the primitives overview page, NEVER in comment-dialog-components.mdx
 
 ### 5. Upgrade Guide (ONLY for breaking changes)
 - File: `release-notes/version-[MAJOR]/upgrade-guide.mdx`
@@ -95,7 +101,8 @@ For each area, ask:
 - **Data Models**: Are there new types, interfaces, enums? → Update `data-models.mdx`
 - **API Methods**: Are there new methods/hooks? Changed parameters? → Update `api-methods.mdx`
 - **Documentation**: Is this a completely new feature without existing docs? → Plan new documentation
-- **UI Customization**: Are there new wireframes or UI components? → Update `ui-customization/**`
+- **UI Customization — Wireframes**: Are there new wireframes? → Update `ui-customization/features/async/comments/comment-dialog-components.mdx` (wireframe customization only)
+- **UI Customization — Primitives**: Are there new standalone primitive components or new props on existing primitives? → Update `ui-customization/features/async/comments/comment-dialog-primitives/overview.mdx` (NEVER put primitives in comment-dialog-components.mdx)
 - **Upgrade Guide**: Are there breaking changes? → Update `upgrade-guide.mdx` ONLY (never add breaking changes to the changelog)
 
 ### 3. Write Planning Log

@@ -9,6 +9,168 @@ description: Release Notes of changes added to the core Velt SDK
 - `@veltdev/client`
 - `@veltdev/sdk`
 
+<Update label="5.0.2-beta.2" description="February 24, 2026">
+
+### New Features
+
+- [**Comments**]: Added a `commentSaveTriggered` event that fires immediately when a user clicks the save button, before the async save completes. Use it for immediate pre-save feedback alongside the existing `commentSaved` event, which continues to fire after the save finishes.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+// Using hook
+const event = useCommentEventCallback('commentSaveTriggered');
+
+useEffect(() => {
+  if (event) {
+    console.log('Save triggered for annotation:', event.annotationId);
+  }
+}, [event]);
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<script>
+const commentElement = Velt.getCommentElement();
+commentElement.on('commentSaveTriggered').subscribe((event) => {
+  console.log('Save triggered for annotation:', event.annotationId);
+});
+</script>
+```
+</Tab>
+</Tabs>
+
+The exported [`CommentSaveTriggeredEvent`](/api-reference/sdk/models/data-models#commentsavetriggeredevent) interface has the following shape:
+
+```ts
+interface CommentSaveTriggeredEvent {
+  annotationId: string;
+  metadata: VeltEventMetadata;
+}
+```
+
+- [**Comments**]: Added `commentToolClicked` and `sidebarButtonClicked` as past-tense aliases for the existing `commentToolClick` and `sidebarButtonClick` events. Both aliases fire alongside their counterparts with identical payloads. No breaking changes.
+
+```ts
+interface CommentToolClickedEvent extends CommentToolClickEvent {}
+interface SidebarButtonClickedEvent extends SidebarButtonClickEvent {}
+```
+
+### Improvements
+
+- [**Comments**]: Added Angular 20+ compatibility for comment context discovery using a three-tier priority strategy. Velt comments now work with Angular 20+ without any configuration changes.
+
+- [**Comments**]: The sidebar now automatically returns to the full comment list when all annotations are deselected while in focused thread mode.
+
+- [**Comments**]: Page scroll position is now preserved when navigating to a highlighted annotation from the sidebar.
+
+- [**Comments**]: Extracted `triggerAddCommentEvent` as a dedicated reusable method on `CommentActionsService`. The `addComment` path now uses it internally, ensuring consistent event emission across all code paths that add a comment.
+
+- [**Comments**]: Moved annotation filter helpers (`filterAnnotationsByPeople`, `filterAnnotationsByStatus`, `filterAnnotationsByTagged`) from `CommentsSidebarComponent` to `CommentService`. Added `getCustomContextFilterEntries` and `matchAnnotationsByContext` methods for filtering annotations by arbitrary context key-value pairs without requiring the sidebar component.
+
+- [**Comments**]: Annotation filtering now uses a `Set` for O(1) membership lookups instead of repeated array scans, improving performance when filtering large annotation lists.
+
+- [**Comments**]: `componentConfigSignal` in the comment dialog base now uses `.update()` instead of direct signal reassignment, reducing unnecessary change-detection cycles when multiple comment dialogs are open.
+
+### Bug Fixes
+
+- [**Comments**]: Fixed boolean attribute handling for `comment-pin-selected` and `full-expanded` so both `'true'` and `''` (empty string) are treated as truthy, matching standard HTML boolean attribute syntax.
+
+- [**Comments**]: Added a null guard after `triggerAddCommentEvent` in `CommentActionsService` so the `addComment` flow exits immediately if event creation fails, preventing partially inconsistent state.
+
+</Update>
+
+<Update label="5.0.1-beta.4" description="February 17, 2026">
+
+### New Features
+
+- [**Comments**]: Added `enablePrivateMode(config)` and `disablePrivateMode()` methods to set a global visibility policy for all newly created comments. Supports `restricted` (user-list), `organizationPrivate`, and `public` visibility types via the new [`PrivateModeConfig`](/api-reference/sdk/models/data-models#privatemodeconfig) type.
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// Using API methods
+const commentElement = client.getCommentElement();
+
+// Restrict all new comments to specific users
+commentElement.enablePrivateMode({ type: 'restricted', userIds: ['user-1', 'user-2'] });
+
+// Restrict all new comments to the current organization
+commentElement.enablePrivateMode({ type: 'organizationPrivate' });
+
+// Revert to default public visibility
+commentElement.disablePrivateMode();
+```
+</Tab>
+<Tab title="Other Frameworks">
+```ts
+const commentElement = Velt.getCommentElement();
+
+// Restrict all new comments to specific users
+commentElement.enablePrivateMode({ type: 'restricted', userIds: ['user-1', 'user-2'] });
+
+// Restrict all new comments to the current organization
+commentElement.enablePrivateMode({ type: 'organizationPrivate' });
+
+// Revert to default public visibility
+commentElement.disablePrivateMode();
+```
+</Tab>
+</Tabs>
+
+- [**Comments**]: Added a `commentSaved` event that fires after a comment is persisted to the database, providing a reliable signal for triggering downstream actions. The payload includes the annotation ID, full [`CommentAnnotation`](/api-reference/sdk/models/data-models#commentannotation), and [`VeltEventMetadata`](/api-reference/sdk/models/data-models#velteventmetadata).
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// Using Hooks
+import { useCommentEventCallback } from '@veltdev/react';
+import { useEffect } from 'react';
+
+const commentSavedData = useCommentEventCallback('commentSaved');
+
+useEffect(() => {
+  if (commentSavedData) {
+    console.log('Comment saved:', commentSavedData.annotationId);
+    console.log('Annotation:', commentSavedData.commentAnnotation);
+  }
+}, [commentSavedData]);
+
+// Using API methods
+const commentElement = client.getCommentElement();
+commentElement.on('commentSaved').subscribe((event) => {
+  console.log('Comment saved:', event.annotationId);
+  console.log('Annotation:', event.commentAnnotation);
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```ts
+const commentElement = Velt.getCommentElement();
+commentElement.on('commentSaved').subscribe((event) => {
+  console.log('Comment saved:', event.annotationId);
+  console.log('Annotation:', event.commentAnnotation);
+});
+```
+</Tab>
+</Tabs>
+
+### Improvements
+
+- [**Comments**]: Added auto-resolution of the organization ID from the current org configuration when `updateVisibility()` or `enablePrivateMode()` is called with `type: 'organizationPrivate'` and no `organizationId` is provided.
+
+### Bug Fixes
+
+- [**Comments**]: Fixed global dark mode toggling not affecting open comment dialogs. Dialog initialization no longer sets a component-level dark mode override that would block `ThemeService` propagation.
+
+- [**Comments**]: Fixed composer placeholder text not reappearing after a user typed and deleted all text. The contenteditable element is now cleared with `innerHTML = ''` to ensure the CSS `:empty::before` placeholder renders correctly.
+
+- [**Comments**]: Fixed SVG gradient, clip-path, and filter rendering for duplicate emoji reactions. Each emoji SVG instance now receives unique internal IDs via `EmojiService.uniquifySvgIds()`.
+
+- [**Comments**]: Fixed priority dropdown showing an incorrect background color in dark mode when no priority was set.
+
+</Update>
+
 <Update label="5.0.1-beta.3" description="February 16, 2026">
 
 ### Improvements
@@ -852,99 +1014,6 @@ import { VeltCommentComposer } from '@veltdev/react';
 - [**Comments**]: Fixed `reactionId` prop on `VeltCommentDialogWireframe.ThreadCard.ReactionPin` to properly convert to dashed-case in React.
 
 </Update>
-
-
-<Update label="5.0.1-beta.4" description="February 17, 2026">
-
-### New Features
-
-- [**Comments**]: Added `enablePrivateMode(config)` and `disablePrivateMode()` methods to set a global visibility policy for all newly created comments. Supports `restricted` (user-list), `organizationPrivate`, and `public` visibility types via the new [`PrivateModeConfig`](/api-reference/sdk/models/data-models#privatemodeconfig) type.
-
-<Tabs>
-<Tab title="React / Next.js">
-```tsx
-// Using API methods
-const commentElement = client.getCommentElement();
-
-// Restrict all new comments to specific users
-commentElement.enablePrivateMode({ type: 'restricted', userIds: ['user-1', 'user-2'] });
-
-// Restrict all new comments to the current organization
-commentElement.enablePrivateMode({ type: 'organizationPrivate' });
-
-// Revert to default public visibility
-commentElement.disablePrivateMode();
-```
-</Tab>
-<Tab title="Other Frameworks">
-```ts
-const commentElement = Velt.getCommentElement();
-
-// Restrict all new comments to specific users
-commentElement.enablePrivateMode({ type: 'restricted', userIds: ['user-1', 'user-2'] });
-
-// Restrict all new comments to the current organization
-commentElement.enablePrivateMode({ type: 'organizationPrivate' });
-
-// Revert to default public visibility
-commentElement.disablePrivateMode();
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added a `commentSaved` event that fires after a comment is persisted to the database, providing a reliable signal for triggering downstream actions. The payload includes the annotation ID, full [`CommentAnnotation`](/api-reference/sdk/models/data-models#commentannotation), and [`VeltEventMetadata`](/api-reference/sdk/models/data-models#velteventmetadata).
-
-<Tabs>
-<Tab title="React / Next.js">
-```tsx
-// Using Hooks
-import { useCommentEventCallback } from '@veltdev/react';
-import { useEffect } from 'react';
-
-const commentSavedData = useCommentEventCallback('commentSaved');
-
-useEffect(() => {
-  if (commentSavedData) {
-    console.log('Comment saved:', commentSavedData.annotationId);
-    console.log('Annotation:', commentSavedData.commentAnnotation);
-  }
-}, [commentSavedData]);
-
-// Using API methods
-const commentElement = client.getCommentElement();
-commentElement.on('commentSaved').subscribe((event) => {
-  console.log('Comment saved:', event.annotationId);
-  console.log('Annotation:', event.commentAnnotation);
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```ts
-const commentElement = Velt.getCommentElement();
-commentElement.on('commentSaved').subscribe((event) => {
-  console.log('Comment saved:', event.annotationId);
-  console.log('Annotation:', event.commentAnnotation);
-});
-```
-</Tab>
-</Tabs>
-
-### Improvements
-
-- [**Comments**]: Added auto-resolution of the organization ID from the current org configuration when `updateVisibility()` or `enablePrivateMode()` is called with `type: 'organizationPrivate'` and no `organizationId` is provided.
-
-### Bug Fixes
-
-- [**Comments**]: Fixed global dark mode toggling not affecting open comment dialogs. Dialog initialization no longer sets a component-level dark mode override that would block `ThemeService` propagation.
-
-- [**Comments**]: Fixed composer placeholder text not reappearing after a user typed and deleted all text. The contenteditable element is now cleared with `innerHTML = ''` to ensure the CSS `:empty::before` placeholder renders correctly.
-
-- [**Comments**]: Fixed SVG gradient, clip-path, and filter rendering for duplicate emoji reactions. Each emoji SVG instance now receives unique internal IDs via `EmojiService.uniquifySvgIds()`.
-
-- [**Comments**]: Fixed priority dropdown showing an incorrect background color in dark mode when no priority was set.
-
-</Update>
-
 
 <Update label="5.0.0-beta.13" description="February 10, 2026">
 

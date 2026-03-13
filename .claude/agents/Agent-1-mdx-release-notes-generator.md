@@ -41,11 +41,13 @@ Determine the major version from the version label (e.g., `5.0.1-beta.4` → ver
 **Placement**: Always at TOP of correct changelog.mdx file (after frontmatter/headers).
 
 **Structure**: Exactly three sections in order:
-1. **New Features** (breaking changes first)
+1. **New Features**
 2. **Improvements**
 3. **Bug Fixes**
 
-**Component Wrapping**: Each version wrapped in `<Update>`, use `<Warning>` for breaking changes, `<Check>` for confirmations, `<Steps>` for upgrade instructions.
+**Breaking Changes**: NEVER include a `### Breaking Changes` section or `<Warning>` block in the changelog. Breaking changes go ONLY in the upgrade guide (`release-notes/version-[MAJOR]/upgrade-guide.mdx`). The changelog should document what changed as features/improvements; the upgrade guide documents what developers need to migrate.
+
+**Component Wrapping**: Each version wrapped in `<Update>`, use `<Check>` for confirmations, `<Steps>` for upgrade instructions.
 
 ## Step-by-Step Workflow
 
@@ -98,12 +100,21 @@ Determine the major version from the version label (e.g., `5.0.1-beta.4` → ver
 - Never mention client names; use "host app" or generic terms
 - Client-level APIs (setDocuments, locations) → classify under [Core], not [React Integration]
 
-### 4. Place & Validate
+### 4. Write Breaking Changes to Upgrade Guide (If Applicable)
+If the release note contains breaking changes:
+- Open `release-notes/version-[MAJOR]/upgrade-guide.mdx` and read it to understand the existing format
+- Add each breaking change to the `## Breaking Changes` section, BEFORE the `## How to Upgrade` section
+- Use `<Tabs>` with **Before:** / **After:** code examples in `React / Next.js` and `Other Frameworks` tabs
+- Follow the exact formatting pattern of existing entries in the upgrade guide
+- Do NOT add any breaking change content to the changelog — the changelog only gets New Features, Improvements, and Bug Fixes
+
+### 5. Place & Validate Changelog
 - Insert at TOP of target changelog.mdx
 - Reorder existing entries if chronological order is broken (newest → oldest)
 - **Read first 500 lines** of updated changelog to verify correctness
+- Verify NO `### Breaking Changes` section or `<Warning>` block exists in the changelog entry
 
-### 5. Hand Off to Agent-2
+### 6. Hand Off to Agent-2
 Trigger Agent-2 with the generated release note for planning analysis.
 
 ## Verbosity & Anti-Fluff Guardrails
@@ -167,6 +178,8 @@ Do NOT:
 - [ ] Correct changelog.mdx file selected based on library classification logic
 - [ ] Placed at TOP of file (after frontmatter/headers)
 - [ ] Three-section structure: New Features → Improvements → Bug Fixes
+- [ ] NO `### Breaking Changes` section or `<Warning>` block in the changelog entry
+- [ ] Breaking changes (if any) added ONLY to `upgrade-guide.mdx` with Before/After examples
 - [ ] Subsection headings use feature names, not generic labels
 - [ ] No duplicate section headings within same version
 - [ ] Verbose phrases eliminated (no "improving workflow efficiency", etc.)

@@ -63,10 +63,11 @@ You are a Release Planning Specialist. After Agent-1 generates a release note, y
 - Changes: [Description]
 - Priority: [High/Medium/Low]
 
-### 5. Migration Guides (ONLY for breaking changes)
-- Files: [Specific paths]
+### 5. Upgrade Guide (ONLY for breaking changes)
+- File: `release-notes/version-[MAJOR]/upgrade-guide.mdx`
 - Changes: [Description]
 - Priority: [High/Medium/Low]
+- NOTE: Breaking changes belong ONLY in upgrade-guide.mdx, NEVER in the changelog
 
 ## Implementation Sequence
 1. [Task in dependency order]
@@ -95,7 +96,7 @@ For each area, ask:
 - **API Methods**: Are there new methods/hooks? Changed parameters? → Update `api-methods.mdx`
 - **Documentation**: Is this a completely new feature without existing docs? → Plan new documentation
 - **UI Customization**: Are there new wireframes or UI components? → Update `ui-customization/**`
-- **Migration**: Are there breaking changes? → Update migration guide
+- **Upgrade Guide**: Are there breaking changes? → Update `upgrade-guide.mdx` ONLY (never add breaking changes to the changelog)
 
 ### 3. Write Planning Log
 Create `.claude/logs/agent-2-planning-[version].md` with:
@@ -178,7 +179,7 @@ Do NOT plan:
 - [ ] Task descriptions are concise (≤ 20-25 words each)
 - [ ] Planning output word count is ≤ 1.3× release note summary length
 - [ ] No vague or generic statements
-- [ ] Breaking changes flagged if present
+- [ ] Breaking changes flagged for upgrade-guide.mdx ONLY (never the changelog)
 - [ ] New documentation areas identified with structure specs
 - [ ] "Customize behavior" placement planned for main feature docs (not UI customization)
 

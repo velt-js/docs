@@ -210,7 +210,8 @@ Ensure api-methods.mdx shows ONLY:
 - [ ] "Comments / Wireframes" → "UI Customization"
 - [ ] "Added group support" → "Grouped lists"
 - [ ] Client names replaced with generic terms
-- [ ] New Features → Improvements → Bug Fixes order maintained
+- [ ] New Features → Improvements → Bug Fixes order maintained (NO Breaking Changes section in changelog)
+- [ ] Breaking changes exist ONLY in upgrade-guide.mdx, not in changelog
 - [ ] No duplicate section headings
 - [ ] Feature names as subsection headings (not generic labels)
 - [ ] CRDT vs SDK separation maintained

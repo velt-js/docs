@@ -1,9 +1,9 @@
 # Release Update Plan for v5.0.1-beta.4
 
 ## Overview
-- Release Type: Patch
-- Key Changes: Private Mode API (2 new methods + 2 new types); `commentSaved` event (1 new type); `CommentVisibilityType` value renames
-- Breaking Changes: Yes — `CommentVisibilityType` values `'organization'` → `'organizationPrivate'` and `'self'` → `'restricted'`
+- Release Type: Minor (new opt-in feature)
+- Key Changes: Notification delay + batching pipeline; two new org-scoped config types (`DelayConfig`, `BatchConfig`) placed under `notificationServiceConfig` in workspace settings
+- Breaking Changes: No
 
 ---
 
@@ -11,63 +11,47 @@
 
 ### 1. Data Models
 - File: `/Users/yoenzhang/Downloads/docs/api-reference/sdk/models/data-models.mdx`
-- Anchors to update/add:
-  - `#commentvisibilitytype` (line 113–125): Update type string to `'public' | 'organizationPrivate' | 'restricted'`; rename table rows `'organization'` → `'organizationPrivate'` and `'self'` → `'restricted'`
-  - `#commentvisibilityconfig` (line 127–135): Update `type` column description to reference new value names; the `annotationId` `Required` column should remain `Yes` per existing doc
-  - Add new section `#### PrivateModeConfig` after `CommentVisibilityConfig`: one-line description + TypeScript type alias showing `Omit<CommentVisibilityConfig, 'annotationId' | 'organizationId'>`; note it accepts `type` and `userIds` only
-  - Add new section `#### CommentSavedEvent` near the existing `AddCommentAnnotationEvent` block (around line 53): table with `annotationId: string (Yes)`, `commentAnnotation: CommentAnnotation (Yes)`, `metadata: VeltEventMetadata (Yes)`
-- Priority: High
-
-### 2. API Methods
-- File: `/Users/yoenzhang/Downloads/docs/api-reference/sdk/api/api-methods.mdx`
 - Changes:
-  - Add `#### enablePrivateMode()` entry in the Comments section (near `updateVisibility()` at line 138): `Params: PrivateModeConfig`, `Returns: void`, `React Hook: n/a`, link to customize-behavior anchor `#enableprivatemode`
-  - Add `#### disablePrivateMode()` entry directly after: `Params: none`, `Returns: void`, `React Hook: n/a`, link to `#disableprivatemode`
-  - Update `#### updateVisibility()` param link to `CommentVisibilityConfig` — no signature change needed, but verify the description still reads correctly after the `CommentVisibilityType` rename
+  - Add `#### NotificationServiceConfig` after the existing `#### NotificationSettingsLayout` block (line 2556). Contains two optional fields: `delayConfig: DelayConfig` and `batchConfig: BatchConfig`.
+  - Add `#### DelayConfig` directly after: two fields — `isEnabled: boolean` (No, default false), `delaySeconds: number` (No).
+  - Add `#### BatchConfig` directly after: two fields — `document: BatchWindowConfig` (No) and `user: BatchWindowConfig` (No).
+  - Add `#### BatchWindowConfig` directly after: three fields — `isEnabled: boolean` (No), `batchWindowSeconds: number` (No), `maxActivities: number` (No).
 - Priority: High
 
-### 3. Comments Customize Behavior Doc
-- File: `/Users/yoenzhang/Downloads/docs/async-collaboration/comments/customize-behavior.mdx`
+### 2. Documentation
+- File: `/Users/yoenzhang/Downloads/docs/async-collaboration/notifications/customize-behavior.mdx`
 - Changes:
-  - Under `# Private Comments` (around line 2552), add new subsections `#### enablePrivateMode` and `#### disablePrivateMode` before or after `updateVisibility`. Each subsection must include: description, params table (for `enablePrivateMode`: `type`, `userIds`), and React/Other Frameworks code tabs.
-  - Update the existing `updateVisibility` section (lines 2556–2616): rename `'organization'` → `'organizationPrivate'` and `'self'` → `'restricted'` in both prose descriptions and all code examples (6 call sites at lines 2571–2614).
-  - Add `commentSaved` row to the Event Subscription table (line 2964–2999) under a new or existing category (e.g., "Threads"): event type `commentSaved`, description "Triggered after a comment is successfully persisted to the database", event object `CommentSavedEvent` with link to `#commentsavedevent`.
-- Priority: High
-
-### 4. Migration Guide
-- File: `/Users/yoenzhang/Downloads/docs/release-notes/version-5/upgrade-guide.mdx`
-- Changes: Add a new breaking-change entry for `CommentVisibilityType` rename. Format: two-column table mapping old values to new values (`'organization'` → `'organizationPrivate'`, `'self'` → `'restricted'`). Direct users to update any `updateVisibility()` calls and any conditional logic that checks the `type` field.
+  - Add new section `#### configureDelayAndBatching` at end of page (after `#### getSettings`). Include: description of the delay-then-batch chain, note that webhooks/workflow triggers are unaffected, params referencing `NotificationServiceConfig`, and JSON config example matching the release note snippet.
+  - The section must use a `<Tabs>` block with `React / Next.js` first and `Other Frameworks` second, both showing how to pass `notificationServiceConfig` in workspace settings (console-only config — note it is set in the Velt Console, not via SDK methods).
 - Priority: High
 
 ---
 
 ## Areas Confirmed NOT Requiring Updates
 
-- **Assign Dropdown CDK Overlay** — internal rendering change; no API or wireframe surface change.
-- **Auto-resolution of `organizationId`** — internal behavior; no new API params.
-- **Bug Fixes (4 items)** — dark mode toggle, composer placeholder, emoji SVG, priority dropdown — all internal; no API changes.
-- **UI Customization docs** — no new wireframes or component primitives introduced.
+- **api-methods.mdx** — no new SDK methods or changed signatures; `notificationServiceConfig` is a workspace-level console setting, not a client API call.
+- **UI Customization docs** — no new wireframes or component primitives.
+- **Migration Guide** — no breaking changes.
+- **REST API docs** — no new REST endpoints introduced.
 
 ---
 
 ## Implementation Sequence
 
-1. Update `data-models.mdx`: rename `CommentVisibilityType` values; update `CommentVisibilityConfig` description; add `PrivateModeConfig` type; add `CommentSavedEvent` type. (High effort anchor: lines 113–135)
-2. Update `api-methods.mdx`: add `enablePrivateMode()` and `disablePrivateMode()` method entries near `updateVisibility()`.
-3. Update `customize-behavior.mdx`: rename old type values in `updateVisibility` section; add `enablePrivateMode`/`disablePrivateMode` subsections with code tabs; add `commentSaved` row to the event subscription table.
-4. Update `upgrade-guide.mdx`: add `CommentVisibilityType` rename entry under Breaking Changes.
+1. Update `data-models.mdx`: add `NotificationServiceConfig`, `DelayConfig`, `BatchConfig`, `BatchWindowConfig` types after the `NotificationSettingsLayout` block. (High effort)
+2. Update `customize-behavior.mdx`: add `configureDelayAndBatching` section with description, chain behavior note, webhook exclusion note, and JSON config example. (Medium effort)
 
 ---
 
 ## Quality Checklist
-- [ ] `CommentVisibilityType` updated to `'public' | 'organizationPrivate' | 'restricted'` in `data-models.mdx`
-- [ ] `CommentVisibilityConfig` description updated to use new value names in `data-models.mdx`
-- [ ] `PrivateModeConfig` type alias added to `data-models.mdx`
-- [ ] `CommentSavedEvent` interface added to `data-models.mdx`
-- [ ] `enablePrivateMode()` and `disablePrivateMode()` added to `api-methods.mdx`
-- [ ] `enablePrivateMode` and `disablePrivateMode` subsections with React/Other Frameworks tabs added to `customize-behavior.mdx`
-- [ ] Old `'organization'` / `'self'` values renamed throughout `customize-behavior.mdx` `updateVisibility` section
-- [ ] `commentSaved` row added to event subscription table in `customize-behavior.mdx`
-- [ ] Breaking change entry added to `release-notes/version-5/upgrade-guide.mdx`
-- [ ] Code examples follow React / Next.js first, Other Frameworks second tab order
+- [ ] `NotificationServiceConfig` type added to `data-models.mdx` with links to `DelayConfig` and `BatchConfig`
+- [ ] `DelayConfig` type added to `data-models.mdx` (`isEnabled`, `delaySeconds`)
+- [ ] `BatchConfig` type added to `data-models.mdx` (`document`, `user` referencing `BatchWindowConfig`)
+- [ ] `BatchWindowConfig` type added to `data-models.mdx` (`isEnabled`, `batchWindowSeconds`, `maxActivities`)
+- [ ] `configureDelayAndBatching` section added to `customize-behavior.mdx`
+- [ ] Section notes that webhooks and workflow triggers always fire immediately
+- [ ] Section notes the chain order: delay → seen check → batch → deliver
+- [ ] JSON example in `customize-behavior.mdx` matches the release note schema
+- [ ] Code examples include React / Next.js tab first, Other Frameworks tab second
+- [ ] `data-models.mdx` links use anchor pattern `/api-reference/sdk/models/data-models#<anchor>`
 - [ ] Log file written to `.claude/logs/agent-2-planning-5.0.1-beta.4.md`

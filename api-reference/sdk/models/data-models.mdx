@@ -41,6 +41,7 @@
 | `targetElementId`        | `string`                                                            | No       | ID of the target element for the comment annotation if available                                            |
 | `viewedBy`               | [`Users[]`](#user)                                                   | No       | List of users who have viewed/read this comment annotation                                     |
 | `unread`                 | `boolean`                                                           | No       | Whether the annotation is unread by current user                                              |
+| `visibilityConfig`       | [`CommentAnnotationVisibilityConfig`](#commentannotationvisibilityconfig) | No  | Human-readable visibility configuration for the annotation. Contains type, organizationId, and userIds. Defaults to `{ type: 'public' }` for new annotations without explicit visibility. |
 
 
 #### Enum
@@ -49,6 +50,8 @@
 | `ADD_COMMENT_ANNOTATION` | `addCommentAnnotation` | Add a new comment annotation |
 | `ADD_COMMENT_ANNOTATION_DRAFT` | `addCommentAnnotationDraft` | Triggered when comment annotation draft is created |
 | `DELETE_COMMENT_ANNOTATION` | `deleteCommentAnnotation` | Delete a comment annotation |
+| `VISIBILITY_OPTION_CLICKED` | `visibilityOptionClicked` | Triggered when user selects a visibility option from the banner |
+| `COMMENT_SAVE_TRIGGERED` | `commentSaveTriggered` | Triggered when comment save is initiated |
 
 #### AddCommentAnnotationEvent
 ---
@@ -94,6 +97,26 @@
 | `annotationId`      | `string`                                    | Yes      | ID of the saved annotation                    |
 | `commentAnnotation` | [`CommentAnnotation`](#commentannotation)   | Yes      | The saved comment annotation object           |
 | `metadata`          | `VeltEventMetadata`                         | Yes      | Event metadata                                |
+
+#### VisibilityOptionClickedEvent
+---
+
+| Property            | Type                                                                          | Required | Description                                              |
+|--------------------|-------------------------------------------------------------------------------|----------|----------------------------------------------------------|
+| `annotationId`      | `string`                                                                      | Yes      | ID of the annotation whose visibility was changed        |
+| `commentAnnotation` | [`CommentAnnotation`](#commentannotation)                                     | Yes      | Full annotation at the time of the visibility selection  |
+| `visibility`        | [`CommentVisibilityOptionType`](#commentvisibilityoptiontype)                 | Yes      | Selected visibility level                                |
+| `users`             | `any[]`                                                                       | No       | Populated only when `visibility === 'restricted'`        |
+| `metadata`          | `VeltEventMetadata`                                                           | No       | Event metadata                                           |
+
+#### CommentSaveTriggeredEvent
+---
+
+| Property            | Type                                                    | Required | Description                                 |
+|--------------------|---------------------------------------------------------|----------|---------------------------------------------|
+| `annotationId`      | `string`                                                | Yes      | ID of the annotation being saved            |
+| `commentAnnotation` | [`CommentAnnotation`](#commentannotation)               | Yes      | Full annotation at save time                |
+| `metadata`          | `VeltEventMetadata`                                     | Yes      | Event metadata                              |
 
 #### CommentContext
 ---
@@ -167,7 +190,6 @@ String union type derived from [`CommentVisibilityOption`](#commentvisibilityopt
 export type CommentVisibilityOptionType = `${CommentVisibilityOption}`;
 // = 'restrictedSelf' | 'restrictedSelectedPeople' | 'organizationPrivate' | 'public'
 ```
-
 #### CommentVisibilityConfig
 ---
 Configuration object for **API methods** that update comment visibility. Uses [`CommentVisibilityType`](#commentvisibilitytype) values — not [`CommentVisibilityOption`](#commentvisibilityoption) values.
@@ -177,7 +199,7 @@ Configuration object for **API methods** that update comment visibility. Uses [`
 | `type`           | [`CommentVisibilityType`](#commentvisibilitytype)                 | Yes      | Visibility level: `'public'`, `'organizationPrivate'`, or `'restricted'`.                         |
 | `annotationId`   | `string`                                                          | Yes      | Annotation ID of the comment to update visibility.                                                |
 | `organizationId` | `string`                                                          | No       | Organization ID. Required when `type` is `'organizationPrivate'`.                                 |
-| `userIds`        | `string[]`                                                        | No       | User IDs who can see the comment. Used when `type` is `'restricted'`.                             |
+| `userIds`        | `string[]`                                                        | No       | User IDs who can see the comment. Used when `type` is `'restricted'`. The current user is automatically appended if not present. |
 
 #### PrivateModeConfig
 ---
@@ -190,8 +212,18 @@ type PrivateModeConfig = Omit<CommentVisibilityConfig, 'annotationId' | 'organiz
 | Property  | Type                                                              | Required | Description                                                       |
 |-----------|-------------------------------------------------------------------|----------|-------------------------------------------------------------------|
 | `type`    | [`CommentVisibilityType`](#commentvisibilitytype)                 | Yes      | Visibility level applied when private mode is active.             |
-| `userIds` | `string[]`                                                        | No       | User IDs who can see comments. Used when `type` is `'restricted'`. |
+| `userIds` | `string[]`                                                        | No       | User IDs who can see comments. Used when `type` is `'restricted'`. The current user is automatically appended if not present. |
 
+
+#### CommentAnnotationVisibilityConfig
+---
+Human-readable visibility configuration stored on a comment annotation.
+
+| Property         | Type                                                              | Required | Description                                                                                               |
+|------------------|-------------------------------------------------------------------|----------|-----------------------------------------------------------------------------------------------------------|
+| `type`           | [`CommentVisibilityType`](#commentvisibilitytype)                 | Yes      | The visibility type for the comment annotation.                                                           |
+| `organizationId` | `string`                                                          | No       | The organization ID for organization-private visibility.                                                  |
+| `userIds`        | `string[]`                                                        | No       | The user IDs for restricted visibility. Always includes the current user when type is `'restricted'`.     |
 
 #### CommentAnnotationSubscribedUsers
 ---
@@ -765,6 +797,8 @@ Configuration options for the `QuillVeltComments` module.
 | `annotationId` | `string`        | Yes      | ID of the annotation |
 | `comment`      | `Comment`       | Yes      | Comment object       |
 | `assignedTo`   | `User`          | No       | Assigned user        |
+| `assigned`     | `boolean`       | No       | Whether the comment is assigned |
+| `visibility`   | [`CommentVisibilityConfig`](#commentvisibilityconfig) | No | Set visibility at comment creation time |
 | `options`      | `RequestOptions` | No       | Request options      |
 
 #### UpdateCommentRequest
@@ -1786,8 +1820,9 @@ type AssignToType = 'dropdown' | 'checkbox';
 | `COMPOSER_CLICKED` | `composerClicked` | Triggered when comment composer is clicked |
 | `COMMENT_PIN_CLICKED` | `commentPinClicked` | Triggered when a comment pin is clicked |
 | `COMPOSER_TEXT_CHANGE` | `composerTextChange` | Triggered when text changes in a comment composer |
-| `COMMENT_TOOL_CLICK` | `commentToolClick` | Triggered when comment tool button is clicked |
-| `SIDEBAR_BUTTON_CLICK` | `sidebarButtonClick` | Triggered when sidebar button is clicked |
+| `COMMENT_TOOL_CLICKED` | `commentToolClicked` | Past-tense alias for `commentToolClick` |
+| `SIDEBAR_BUTTON_CLICKED` | `sidebarButtonClicked` | Past-tense alias for `sidebarButtonClick` |
+| `COMMENT_SAVE_TRIGGERED` | `commentSaveTriggered` | Triggered immediately when save button is clicked, before async save |
 
 #### ComposerClickedEvent
 ---
@@ -1816,7 +1851,7 @@ type AssignToType = 'dropdown' | 'checkbox';
 | `commentAnnotation` | `CommentAnnotation`   | Yes      | Comment annotation object        |
 | `metadata`          | `VeltEventMetadata`   | No       | Event metadata                   |
 
-#### CommentToolClickEvent
+#### CommentToolClickedEvent
 ---
 
 | Property           | Type                | Required | Description                      |
@@ -1825,7 +1860,7 @@ type AssignToType = 'dropdown' | 'checkbox';
 | `metadata`         | `VeltEventMetadata`   | No       | Event metadata                   |
 | `targetElementId`  | `string`            | No       | ID of the target element if available |
 
-#### SidebarButtonClickEvent
+#### SidebarButtonClickedEvent
 ---
 
 | Property           | Type                | Required | Description                      |
@@ -2594,6 +2629,44 @@ Type: `'accordion' | 'dropdown'`
 **Description:**
 - `accordion`: Settings displayed in expandable accordion (default)
 - `dropdown`: Settings displayed in dropdown menu
+
+
+#### NotificationServiceConfig
+---
+Top-level org-scoped config for notification delay and batching. Set in the Velt Console under workspace notification settings.
+
+| Property      | Type                                          | Required | Description                                                       |
+|---------------|-----------------------------------------------|----------|-------------------------------------------------------------------|
+| `delayConfig` | [`DelayConfig`](#delayconfig)                 | No       | Controls whether notifications are held before delivery.          |
+| `batchConfig` | [`BatchConfig`](#batchconfig)                 | No       | Controls grouping of notifications into batched digests.          |
+
+#### DelayConfig
+---
+Controls the hold period applied to notifications before they are evaluated for batching or delivery.
+
+| Property       | Type      | Required | Default | Description                                                        |
+|----------------|-----------|----------|---------|--------------------------------------------------------------------|
+| `isEnabled`    | `boolean` | No       | `false` | Enables the delay pipeline for this organization.                  |
+| `delaySeconds` | `number`  | No       | —       | Seconds to hold a notification before proceeding to batch or send. |
+
+#### BatchConfig
+---
+Configures batching windows per grouping scope. Each scope is independently configured via [`BatchWindowConfig`](#batchwindowconfig).
+
+| Property   | Type                                                  | Required | Description                                              |
+|------------|-------------------------------------------------------|----------|----------------------------------------------------------|
+| `document` | [`BatchWindowConfig`](#batchwindowconfig)             | No       | Batching window applied per document.                    |
+| `user`     | [`BatchWindowConfig`](#batchwindowconfig)             | No       | Batching window applied per user across all documents.   |
+
+#### BatchWindowConfig
+---
+Defines the time window and activity cap for a single batching scope.
+
+| Property             | Type      | Required | Description                                                                       |
+|----------------------|-----------|----------|-----------------------------------------------------------------------------------|
+| `isEnabled`          | `boolean` | No       | Enables batching for this scope.                                                  |
+| `batchWindowSeconds` | `number`  | No       | Duration in seconds to collect activities before flushing the batch.              |
+| `maxActivities`      | `number`  | No       | Maximum activities per batch; flush triggers early when this count is reached.    |
 
 
 # Single Editor Mode
@@ -3512,6 +3585,7 @@ Enum defining module names for reaction-related resolver operations. Used in dat
 | `user`            | `UserDataProvider`              | No       | Provider for user data                         |
 | `reaction`        | `ReactionAnnotationDataProvider`| No       | Provider for reaction annotation data          |
 | `attachment`        | `AttachmentDataProvider`| No       | Provider for file attachment data          |
+| `anonymousUser`     | [`AnonymousUserDataProvider`](#anonymoususerdataprovider) | No | Provider to resolve email → userId mappings for anonymous users tagged by email in comments. |
 
 #### ResolverEndpointConfig
 ---
@@ -3633,6 +3707,33 @@ Request format used by config-based user resolver endpoints.
 |----------|----------|----------|------------------------------------------------|
 | `url`    | `string` | Yes      | URL of the saved attachment                    |
 
+
+#### AnonymousUserDataProvider
+---
+
+| Property               | Type                                                                                                          | Required | Description                                                                |
+|------------------------|---------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------------------------------|
+| `resolveUserIdsByEmail` | `(request:` [`ResolveUserIdsByEmailRequest`](#resolveuseridsbyemailrequest)`) => Promise<ResolverResponse<Record<string, string>>>` | Yes | Callback to resolve email addresses to user IDs. |
+| `config`               | [`AnonymousUserDataProviderConfig`](#anonymoususerdataproviderconfig)                                          | No       | Optional configuration for timeout and retry.                              |
+
+#### AnonymousUserDataProviderConfig
+---
+
+| Property         | Type                              | Required | Description                                                     |
+|------------------|-----------------------------------|----------|-----------------------------------------------------------------|
+| `resolveTimeout` | `number`                          | No       | Timeout in milliseconds for the resolve call.                   |
+| `getRetryConfig` | [`RetryConfig`](#retryconfig)     | No       | Retry configuration with `retryCount` and `retryDelay`.         |
+
+#### ResolveUserIdsByEmailRequest
+---
+
+| Property         | Type       | Required | Description                                  |
+|------------------|------------|----------|----------------------------------------------|
+| `organizationId` | `string`   | Yes      | The organization ID.                         |
+| `documentId`     | `string`   | No       | The document ID.                             |
+| `folderId`       | `string`   | No       | The folder ID.                               |
+| `emails`         | `string[]` | Yes      | Array of email addresses to resolve.         |
+
 # Presence
 
 #### PresenceUser
@@ -3713,8 +3814,10 @@ This event object is emitted when a user's online status changes to online.
 | `event`      | `string`                               | Yes      | The event type that triggered the webhook.                                  |
 | `actionType` | `string`                               | Yes      | The specific action that occurred.                                          |
 | `source`     | `string`                               | Yes      | The source of the event.                                                    |
-| `data`       | `CommentPayload \| HuddlePayload`      | Yes      | The payload data containing event-specific information.                     |
+| `data`       | `CommentPayload \| HuddlePayload \| CRDTPayload` | Yes | The payload data containing event-specific information.                     |
 | `webhookId`  | `string`                               | Yes      | Unique identifier for the webhook.                                          |
+| `usersOrganizationNotificationsConfig` | [`Record<string, NotificationChannelConfig>`](#notificationchannelconfig) | No | Per-user org-level notification preferences keyed by userId. |
+| `usersDocumentNotificationsConfig`     | [`Record<string, NotificationChannelConfig>`](#notificationchannelconfig) | No | Per-user document-level notification preferences keyed by userId. |
 
 #### WebhookV2PayloadEncoded
 ---
@@ -3729,25 +3832,6 @@ This event object is emitted when a user's online status changes to online.
 | `encryptedData` | `string` | Yes      | Encrypted webhook data.                                                     |
 | `encryptedKey`  | `string` | Yes      | Encrypted encryption key.                                                   |
 | `iv`            | `string` | Yes      | Initialization vector for decryption.                                       |
-
-
-#### WebhookV1Payload (Comment Events)
----
-| Property            | Type                    | Required | Description                                                                                           |
-|---------------------|-------------------------|----------|-------------------------------------------------------------------------------------------------------|
-| `webhookId`         | `string`                | Yes      | Unique identifier for the webhook.                                                                     |
-| `commentAnnotation` | `CommentAnnotation`     | Yes      | The comment annotation associated with the event.                                                      |
-| `targetComment`     | `Comment`               | No       | The target comment for the event.                                                                      |
-| `actionType`        | `string`                | No       | The specific action that occurred in the event.                                                        |
-| `notificationSource`| `string`                | No       | Indicates the source of the notification (if applicable).                                              |
-| `metadata`          | `Metadata`              | No       | Additional metadata providing context for the event.                                                   |
-| `actionUser`        | `User`                  | No       | The user who performed the action.                                                                     |
-| `newPriority`       | `CommentPriority`       | No       | New priority of the comment, provided for priority change events.                                      |
-| `platform`          | `'sdk'`                 | No       | Set to `'sdk'` if the event originated from SDK actions.                                               |
-| `oldStatus`         | `CommentStatus`         | No       | Previous status of the comment, used for status change events.                                         |
-| `newStatus`         | `CommentStatus`         | No       | New status of the comment, used for status change events.                                              |
-| `assigned`          | `boolean`               | No       | Indicates whether the comment is currently assigned to a user (`true` or `false`).                     |
-
 
 #### CommentPayload
 ---
@@ -3767,6 +3851,109 @@ This event object is emitted when a user's online status changes to online.
 |--------------|------------------------------------------|----------|-----------------------------------------------------------------------------|
 | `actionUser` | `User`                                   | No       | The user who performed the action.                                          |
 | `metadata`   | `Metadata`   | No       | Additional metadata about the event context.                               |
+
+#### CRDTPayload
+---
+| Property                  | Type             | Required | Description                                                                 |
+|---------------------------|------------------|----------|-----------------------------------------------------------------------------|
+| `actionUser`              | `User`           | No       | The user who performed the action.                                           |
+| `metadata`                | `Metadata`       | No       | Additional metadata about the event context.                                 |
+| `crdtData`                | `object`         | Yes      | Contains the CRDT data and update information.                               |
+| `crdtData.id`             | `string`         | Yes      | The editor/store ID for the CRDT instance.                                   |
+| `crdtData.data`           | `unknown`        | Yes      | The CRDT data. Can be any supported type: array, map, text, xml, or xmltext. |
+| `crdtData.lastUpdatedBy`  | `string`         | Yes      | User ID who made the update.                                                 |
+| `crdtData.sessionId`      | `string \| null` | No       | Session ID if available.                                                     |
+| `crdtData.lastUpdate`     | `string`         | Yes      | Timestamp of the last update.                                                |
+
+
+#### WebhookV1Payload
+---
+All basic webhook payloads share these common fields:
+
+| Property            | Type                    | Required | Description                                                                 |
+|---------------------|-------------------------|----------|-----------------------------------------------------------------------------|
+| `webhookId`         | `string`                | Yes      | Unique identifier for the webhook.                                           |
+| `actionType`        | `string`                | Yes      | The specific action that occurred in the event.                              |
+| `notificationSource`| `string`                | Yes      | Source of the notification: `comment`, `huddle`, or `crdt`.                  |
+| `actionUser`        | `User`                  | No       | The user who performed the action.                                           |
+| `metadata`          | `Metadata`              | No       | Additional metadata providing context for the event.                         |
+| `platform`          | `'sdk'`                 | No       | Set to `'sdk'` if the event originated from SDK actions.                     |
+| `usersOrganizationNotificationsConfig` | [`Record<string, NotificationChannelConfig>`](#notificationchannelconfig) | No | Per-user org-level notification preferences keyed by userId. |
+| `usersDocumentNotificationsConfig`     | [`Record<string, NotificationChannelConfig>`](#notificationchannelconfig) | No | Per-user document-level notification preferences keyed by userId. |
+
+
+#### WebhookV1PayloadEncoded
+---
+| Property         | Type     | Required | Description                                                                 |
+|------------------|----------|----------|-----------------------------------------------------------------------------|
+| `encodedPayload` | `string` | Yes      | Base64 encoded webhook payload.                                             |
+
+#### WebhookV1PayloadEncrypted
+---
+| Property        | Type     | Required | Description                                                                 |
+|-----------------|----------|----------|-----------------------------------------------------------------------------|
+| `encryptedData` | `string` | Yes      | Encrypted webhook data.                                                     |
+| `encryptedKey`  | `string` | Yes      | Encrypted encryption key.                                                   |
+| `iv`            | `string` | Yes      | Initialization vector for decryption.                                       |
+
+**Comment Basic Webhook Payload**
+
+Additional fields present when `notificationSource` is `comment`:
+
+| Property            | Type                    | Required | Description                                                                 |
+|---------------------|-------------------------|----------|-----------------------------------------------------------------------------|
+| `commentAnnotation` | `CommentAnnotation`     | Yes      | The comment annotation associated with the event.                            |
+| `targetComment`     | `Comment`               | No       | The target comment. Not present for annotation-level events (e.g., resolve, delete thread). |
+| `newPriority`       | `CommentPriority`       | No       | New priority. Present on `priorityChanged` events.                           |
+| `oldStatus`         | `CommentStatus`         | No       | Previous status. Present on `statusChanged` events.                          |
+| `newStatus`         | `CommentStatus`         | No       | New status. Present on `statusChanged` events.                               |
+| `assigned`          | `boolean`               | No       | Whether the comment is assigned. Present on `assigned` events.               |
+
+**Huddle Basic Webhook Payload**
+
+No additional fields beyond the common fields when `notificationSource` is `huddle`.
+
+**CRDT Basic Webhook Payload**
+
+Additional fields present when `notificationSource` is `crdt`:
+
+| Property                  | Type             | Required | Description                                                                 |
+|---------------------------|------------------|----------|-----------------------------------------------------------------------------|
+| `crdtData`                | `object`         | Yes      | Contains the CRDT data and update information.                               |
+| `crdtData.id`             | `string`         | Yes      | The editor/store ID for the CRDT instance.                                   |
+| `crdtData.data`           | `unknown`        | Yes      | The CRDT data. Can be any supported type: array, map, text, xml, or xmltext. |
+| `crdtData.lastUpdatedBy`  | `string`         | Yes      | User ID who made the update.                                                 |
+| `crdtData.sessionId`      | `string \| null` | No       | Session ID if available.                                                     |
+| `crdtData.lastUpdate`     | `string`         | Yes      | Timestamp of the last update.                                                |
+| `accessDeniedUsers`       | `array`          | No       | List of users denied access.                                                 |
+
+#### UserNotificationsConfig
+---
+Per-user notification preferences included in webhook payloads when a notification config scope is active. Exactly one of the two fields is present per payload depending on whether org-level or document-level config is in use.
+
+| Property                               | Type                                                                                   | Required | Description                                                                                  |
+|----------------------------------------|----------------------------------------------------------------------------------------|----------|----------------------------------------------------------------------------------------------|
+| `usersOrganizationNotificationsConfig` | [`Record<string, NotificationChannelConfig>`](#notificationchannelconfig)              | No       | Per-user org-level notification preferences, keyed by userId.                                |
+| `usersDocumentNotificationsConfig`     | [`Record<string, NotificationChannelConfig>`](#notificationchannelconfig)              | No       | Per-user document-level notification preferences, keyed by userId.                           |
+
+#### NotificationChannelConfig
+---
+Per-channel notification preference map for a single user. Keys are channel identifiers; values are the preference level for that channel.
+
+```typescript
+type NotificationChannelConfig = Record<string, 'ALL' | 'MINE' | 'NONE'>;
+```
+
+| Key (channel) | Value | Description |
+|---------------|-------|-------------|
+| `inbox` | `'ALL' \| 'MINE' \| 'NONE'` | In-app inbox notification preference. |
+| `email` | `'ALL' \| 'MINE' \| 'NONE'` | Email notification preference. |
+
+| Value  | Description                                                        |
+|--------|--------------------------------------------------------------------|
+| `ALL`  | Receive notifications for all activity.                            |
+| `MINE` | Receive notifications only for activity directly involving the user. |
+| `NONE` | Receive no notifications for this channel.                         |
 
 
 # Misc

@@ -1,0 +1,133 @@
+{
+  "version": "5.0.1-beta.4",
+  "timestamp": "2026-03-12T00:00:00Z",
+  "skillSet": "notifications",
+  "hasDeltas": true,
+  "deltas": [
+    {
+      "id": "delta-001",
+      "type": "new_feature",
+      "releaseNoteText": "Per-user notification config added to webhook payloads — `usersOrganizationNotificationsConfig` and `usersDocumentNotificationsConfig` fields",
+      "releaseNoteVersion": "5.0.1-beta.4",
+      "skillTarget": "notifications",
+      "action": "update_rule",
+      "targetFile": "rules/shared/delivery/delivery-webhooks.md",
+      "targetSection": "Webhook Payload Structure",
+      "summary": "Extend the webhook payload structure in delivery-webhooks.md to document the two new optional fields: `usersOrganizationNotificationsConfig` (org-level per-user preferences) and `usersDocumentNotificationsConfig` (doc-level per-user preferences), both of type `Record<string, NotificationChannelConfig>`. Exactly one field is present per payload depending on the config scope in use. Reference the `UserNotificationsConfig` and `NotificationChannelConfig` data model types.",
+      "details": {
+        "apiName": "usersOrganizationNotificationsConfig / usersDocumentNotificationsConfig",
+        "apiType": "prop",
+        "signature": "usersOrganizationNotificationsConfig?: Record<string, NotificationChannelConfig>\nusersDocumentNotificationsConfig?: Record<string, NotificationChannelConfig>",
+        "parameters": [
+          {
+            "name": "usersOrganizationNotificationsConfig",
+            "type": "Record<string, NotificationChannelConfig>",
+            "required": false,
+            "description": "Per-user notification preferences keyed by userId at the organization level. Present when an org-level config is active for the users. Exactly one of this field or usersDocumentNotificationsConfig is present per payload."
+          },
+          {
+            "name": "usersDocumentNotificationsConfig",
+            "type": "Record<string, NotificationChannelConfig>",
+            "required": false,
+            "description": "Per-user notification preferences keyed by userId at the document level. Present when a document-level config is active for the users. Exactly one of this field or usersOrganizationNotificationsConfig is present per payload."
+          }
+        ],
+        "returnType": null,
+        "types": {
+          "NotificationChannelConfig": "Record<string, string> — key is channel ID (e.g. 'inbox', 'email'), value is preference string ('ALL' | 'MINE' | 'NONE')",
+          "UserNotificationsConfig": "{ usersOrganizationNotificationsConfig?: Record<string, NotificationChannelConfig>; usersDocumentNotificationsConfig?: Record<string, NotificationChannelConfig>; }"
+        },
+        "codeExample": "// Webhook payload now includes per-user notification config\n// Org-level config example:\n{\n  \"event\": \"notification.created\",\n  \"data\": {\n    \"id\": \"notification-id\",\n    \"organizationId\": \"org-id\",\n    \"documentId\": \"doc-id\",\n    \"usersOrganizationNotificationsConfig\": {\n      \"user-123\": { \"inbox\": \"ALL\", \"email\": \"MINE\" },\n      \"user-456\": { \"inbox\": \"NONE\", \"email\": \"NONE\" }\n    }\n  }\n}\n\n// Doc-level config example:\n{\n  \"event\": \"notification.created\",\n  \"data\": {\n    \"id\": \"notification-id\",\n    \"organizationId\": \"org-id\",\n    \"documentId\": \"doc-id\",\n    \"usersDocumentNotificationsConfig\": {\n      \"user-123\": { \"inbox\": \"MINE\", \"email\": \"ALL\" }\n    }\n  }\n}\n\n// Accessing in your webhook handler\napp.post('/webhooks/velt', async (req, res) => {\n  const { event, data } = req.body;\n\n  if (event === 'notification.created') {\n    // Exactly one config field is present per payload\n    const userConfigs =\n      data.usersOrganizationNotificationsConfig ||\n      data.usersDocumentNotificationsConfig;\n\n    if (userConfigs) {\n      // userConfigs is keyed by userId\n      // each value is a map of channel ID → 'ALL' | 'MINE' | 'NONE'\n      Object.entries(userConfigs).forEach(([userId, channelPrefs]) => {\n        console.log(`User ${userId} email pref: ${channelPrefs.email}`);\n      });\n    }\n  }\n\n  res.status(200).send('OK');\n});"
+      },
+      "confidence": "high",
+      "ambiguityNote": null
+    },
+    {
+      "id": "delta-002",
+      "type": "new_feature",
+      "releaseNoteText": "`getOrganizationConfig` option added to getConfig notification API, `documentIds` now optional in setConfig for org-level config",
+      "releaseNoteVersion": "5.0.1-beta.4",
+      "skillTarget": "notifications",
+      "action": "create_rule",
+      "targetFile": "rules/shared/settings/settings-config-rest-api.md",
+      "targetSection": null,
+      "summary": "Create a new rule documenting the notification preference config REST API endpoints (getConfig and setConfig). Document the `getOrganizationConfig` boolean param on getConfig (when true, fetches org-level config; documentIds not required). Document that documentIds is optional on setConfig — when omitted, config is applied at the organization level as the user's default for all documents. Include separate code examples for document-level and org-level config operations.",
+      "details": {
+        "apiName": "getConfig / setConfig",
+        "apiType": "endpoint",
+        "signature": "POST https://api.velt.dev/v1/notifications/config/get\nPOST https://api.velt.dev/v2/notifications/config/get\nPOST https://api.velt.dev/v1/notifications/config/set\nPOST https://api.velt.dev/v2/notifications/config/set",
+        "parameters": [
+          {
+            "name": "getOrganizationConfig",
+            "type": "boolean",
+            "required": false,
+            "description": "When true, fetches the org-level notification config for the specified user. documentIds is not required in this mode. Applies to getConfig endpoint only."
+          },
+          {
+            "name": "documentIds",
+            "type": "string[]",
+            "required": false,
+            "description": "Document IDs to get or set config for. Optional in both getConfig (when getOrganizationConfig is true) and setConfig (when omitted, config is applied at the organization level as the user's default for all documents)."
+          },
+          {
+            "name": "organizationId",
+            "type": "string",
+            "required": true,
+            "description": "Your organization ID."
+          },
+          {
+            "name": "userId",
+            "type": "string",
+            "required": true,
+            "description": "The user whose notification config is being read or set."
+          },
+          {
+            "name": "config",
+            "type": "NotificationChannelConfig",
+            "required": true,
+            "description": "Channel preference map for setConfig. Keys are channel IDs (e.g. 'inbox', 'email'), values are 'ALL' | 'MINE' | 'NONE'."
+          }
+        ],
+        "returnType": null,
+        "types": {
+          "NotificationChannelConfig": "Record<string, string> — key: channel ID ('inbox' | 'email' | ...), value: 'ALL' | 'MINE' | 'NONE'"
+        },
+        "codeExample": "// GET CONFIG — Document-level\nconst response = await fetch('https://api.velt.dev/v2/notifications/config/get', {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    'x-velt-api-key': 'YOUR_API_KEY',\n    'x-velt-auth-token': 'YOUR_AUTH_TOKEN'\n  },\n  body: JSON.stringify({\n    data: {\n      organizationId: 'your-org-id',\n      userId: 'user-123',\n      documentIds: ['doc-id-1', 'doc-id-2']\n    }\n  })\n});\n\n// GET CONFIG — Org-level (documentIds not required when getOrganizationConfig: true)\nconst orgConfigResponse = await fetch('https://api.velt.dev/v2/notifications/config/get', {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    'x-velt-api-key': 'YOUR_API_KEY',\n    'x-velt-auth-token': 'YOUR_AUTH_TOKEN'\n  },\n  body: JSON.stringify({\n    data: {\n      organizationId: 'your-org-id',\n      userId: 'user-123',\n      getOrganizationConfig: true\n    }\n  })\n});\n\n// SET CONFIG — Document-level\nconst setDocResponse = await fetch('https://api.velt.dev/v2/notifications/config/set', {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    'x-velt-api-key': 'YOUR_API_KEY',\n    'x-velt-auth-token': 'YOUR_AUTH_TOKEN'\n  },\n  body: JSON.stringify({\n    data: {\n      organizationId: 'your-org-id',\n      userId: 'user-123',\n      documentIds: ['doc-id-1'],\n      config: { inbox: 'MINE', email: 'NONE' }\n    }\n  })\n});\n\n// SET CONFIG — Org-level default (documentIds omitted)\n// When documentIds is omitted, config is stored as the user's default for all documents\nconst setOrgResponse = await fetch('https://api.velt.dev/v2/notifications/config/set', {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    'x-velt-api-key': 'YOUR_API_KEY',\n    'x-velt-auth-token': 'YOUR_AUTH_TOKEN'\n  },\n  body: JSON.stringify({\n    data: {\n      organizationId: 'your-org-id',\n      userId: 'user-123',\n      config: { inbox: 'ALL', email: 'MINE' }\n    }\n  })\n});"
+      },
+      "confidence": "high",
+      "ambiguityNote": null
+    }
+  ],
+  "itemsEvaluated": [
+    {
+      "text": "Per-user notification config added to webhook payloads — `usersOrganizationNotificationsConfig` and `usersDocumentNotificationsConfig` fields",
+      "category": "Notifications",
+      "qualifies": true,
+      "rationale": "New optional fields added to the webhook payload data object. The existing delivery-webhooks.md documents the payload structure but does not include these two fields. A developer handling webhook events needs to know these fields exist and how to interpret them (one present per payload based on config scope; each is a map from userId to NotificationChannelConfig). Update to the Webhook Payload Structure section is warranted."
+    },
+    {
+      "text": "New types added: UserNotificationsConfig and NotificationChannelConfig",
+      "category": "Notifications",
+      "qualifies": false,
+      "rationale": "Type definitions alone are not standalone skill deltas. Both types are fully documented within delta-001 (payload field descriptions and code example) and delta-002 (parameter type annotations and code example). No separate delta needed."
+    },
+    {
+      "text": "`getOrganizationConfig` option added to getConfig notification API, `documentIds` now optional in setConfig for org-level config",
+      "category": "Notifications",
+      "qualifies": true,
+      "rationale": "New REST API capabilities for managing user notification preferences. Neither data-rest-api.md nor settings-channels.md covers getConfig/setConfig endpoints — data-rest-api.md covers notification object get/update/create, and settings-channels.md covers SDK-level channel configuration. A new rule in the settings category is warranted to document these server-side preference management endpoints, including the new org-level config mode (getOrganizationConfig flag on getConfig; omitting documentIds on setConfig)."
+    },
+    {
+      "text": "REST API: get-config v1 and v2 — getOrganizationConfig param added, documentIds now optional",
+      "category": "Notifications",
+      "qualifies": false,
+      "rationale": "Covered by delta-002. The parameter-level changes to get-config and set-config REST endpoints are fully described in the new settings-config-rest-api.md rule. No additional delta needed."
+    },
+    {
+      "text": "BUG FIX: Comment annotation user migration for userId patterns in commentText/commentHtml",
+      "category": "Comments",
+      "qualifies": false,
+      "rationale": "Internal migration bug fix. No new API methods, props, hooks, events, parameters, or documented behavior changed. Guardrails explicitly exclude bug fixes unless they change documented behavior taught by a skill rule. Item 3 as stated by the task prompt is a Comments bug fix with no API surface."
+    }
+  ]
+}

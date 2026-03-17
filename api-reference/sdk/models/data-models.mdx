@@ -2570,6 +2570,44 @@ Type: `'accordion' | 'dropdown'`
 - `dropdown`: Settings displayed in dropdown menu
 
 
+#### NotificationServiceConfig
+---
+Top-level org-scoped config for notification delay and batching. Set in the Velt Console under workspace notification settings.
+
+| Property      | Type                                          | Required | Description                                                       |
+|---------------|-----------------------------------------------|----------|-------------------------------------------------------------------|
+| `delayConfig` | [`DelayConfig`](#delayconfig)                 | No       | Controls whether notifications are held before delivery.          |
+| `batchConfig` | [`BatchConfig`](#batchconfig)                 | No       | Controls grouping of notifications into batched digests.          |
+
+#### DelayConfig
+---
+Controls the hold period applied to notifications before they are evaluated for batching or delivery.
+
+| Property       | Type      | Required | Default | Description                                                        |
+|----------------|-----------|----------|---------|--------------------------------------------------------------------|
+| `isEnabled`    | `boolean` | No       | `false` | Enables the delay pipeline for this organization.                  |
+| `delaySeconds` | `number`  | No       | —       | Seconds to hold a notification before proceeding to batch or send. |
+
+#### BatchConfig
+---
+Configures batching windows per grouping scope. Each scope is independently configured via [`BatchWindowConfig`](#batchwindowconfig).
+
+| Property   | Type                                                  | Required | Description                                              |
+|------------|-------------------------------------------------------|----------|----------------------------------------------------------|
+| `document` | [`BatchWindowConfig`](#batchwindowconfig)             | No       | Batching window applied per document.                    |
+| `user`     | [`BatchWindowConfig`](#batchwindowconfig)             | No       | Batching window applied per user across all documents.   |
+
+#### BatchWindowConfig
+---
+Defines the time window and activity cap for a single batching scope.
+
+| Property             | Type      | Required | Description                                                                       |
+|----------------------|-----------|----------|-----------------------------------------------------------------------------------|
+| `isEnabled`          | `boolean` | No       | Enables batching for this scope.                                                  |
+| `batchWindowSeconds` | `number`  | No       | Duration in seconds to collect activities before flushing the batch.              |
+| `maxActivities`      | `number`  | No       | Maximum activities per batch; flush triggers early when this count is reached.    |
+
+
 # Single Editor Mode
 
 #### AccessRequestEvent
@@ -3681,8 +3719,10 @@ This event object is emitted when a user's online status changes to online.
 | `event`      | `string`                               | Yes      | The event type that triggered the webhook.                                  |
 | `actionType` | `string`                               | Yes      | The specific action that occurred.                                          |
 | `source`     | `string`                               | Yes      | The source of the event.                                                    |
-| `data`       | `CommentPayload \| HuddlePayload`      | Yes      | The payload data containing event-specific information.                     |
+| `data`       | `CommentPayload \| HuddlePayload \| CRDTPayload` | Yes | The payload data containing event-specific information.                     |
 | `webhookId`  | `string`                               | Yes      | Unique identifier for the webhook.                                          |
+| `usersOrganizationNotificationsConfig` | [`Record<string, NotificationChannelConfig>`](#notificationchannelconfig) | No | Per-user org-level notification preferences keyed by userId. |
+| `usersDocumentNotificationsConfig`     | [`Record<string, NotificationChannelConfig>`](#notificationchannelconfig) | No | Per-user document-level notification preferences keyed by userId. |
 
 #### WebhookV2PayloadEncoded
 ---
@@ -3697,25 +3737,6 @@ This event object is emitted when a user's online status changes to online.
 | `encryptedData` | `string` | Yes      | Encrypted webhook data.                                                     |
 | `encryptedKey`  | `string` | Yes      | Encrypted encryption key.                                                   |
 | `iv`            | `string` | Yes      | Initialization vector for decryption.                                       |
-
-
-#### WebhookV1Payload (Comment Events)
----
-| Property            | Type                    | Required | Description                                                                                           |
-|---------------------|-------------------------|----------|-------------------------------------------------------------------------------------------------------|
-| `webhookId`         | `string`                | Yes      | Unique identifier for the webhook.                                                                     |
-| `commentAnnotation` | `CommentAnnotation`     | Yes      | The comment annotation associated with the event.                                                      |
-| `targetComment`     | `Comment`               | No       | The target comment for the event.                                                                      |
-| `actionType`        | `string`                | No       | The specific action that occurred in the event.                                                        |
-| `notificationSource`| `string`                | No       | Indicates the source of the notification (if applicable).                                              |
-| `metadata`          | `Metadata`              | No       | Additional metadata providing context for the event.                                                   |
-| `actionUser`        | `User`                  | No       | The user who performed the action.                                                                     |
-| `newPriority`       | `CommentPriority`       | No       | New priority of the comment, provided for priority change events.                                      |
-| `platform`          | `'sdk'`                 | No       | Set to `'sdk'` if the event originated from SDK actions.                                               |
-| `oldStatus`         | `CommentStatus`         | No       | Previous status of the comment, used for status change events.                                         |
-| `newStatus`         | `CommentStatus`         | No       | New status of the comment, used for status change events.                                              |
-| `assigned`          | `boolean`               | No       | Indicates whether the comment is currently assigned to a user (`true` or `false`).                     |
-
 
 #### CommentPayload
 ---
@@ -3735,6 +3756,109 @@ This event object is emitted when a user's online status changes to online.
 |--------------|------------------------------------------|----------|-----------------------------------------------------------------------------|
 | `actionUser` | `User`                                   | No       | The user who performed the action.                                          |
 | `metadata`   | `Metadata`   | No       | Additional metadata about the event context.                               |
+
+#### CRDTPayload
+---
+| Property                  | Type             | Required | Description                                                                 |
+|---------------------------|------------------|----------|-----------------------------------------------------------------------------|
+| `actionUser`              | `User`           | No       | The user who performed the action.                                           |
+| `metadata`                | `Metadata`       | No       | Additional metadata about the event context.                                 |
+| `crdtData`                | `object`         | Yes      | Contains the CRDT data and update information.                               |
+| `crdtData.id`             | `string`         | Yes      | The editor/store ID for the CRDT instance.                                   |
+| `crdtData.data`           | `unknown`        | Yes      | The CRDT data. Can be any supported type: array, map, text, xml, or xmltext. |
+| `crdtData.lastUpdatedBy`  | `string`         | Yes      | User ID who made the update.                                                 |
+| `crdtData.sessionId`      | `string \| null` | No       | Session ID if available.                                                     |
+| `crdtData.lastUpdate`     | `string`         | Yes      | Timestamp of the last update.                                                |
+
+
+#### WebhookV1Payload
+---
+All basic webhook payloads share these common fields:
+
+| Property            | Type                    | Required | Description                                                                 |
+|---------------------|-------------------------|----------|-----------------------------------------------------------------------------|
+| `webhookId`         | `string`                | Yes      | Unique identifier for the webhook.                                           |
+| `actionType`        | `string`                | Yes      | The specific action that occurred in the event.                              |
+| `notificationSource`| `string`                | Yes      | Source of the notification: `comment`, `huddle`, or `crdt`.                  |
+| `actionUser`        | `User`                  | No       | The user who performed the action.                                           |
+| `metadata`          | `Metadata`              | No       | Additional metadata providing context for the event.                         |
+| `platform`          | `'sdk'`                 | No       | Set to `'sdk'` if the event originated from SDK actions.                     |
+| `usersOrganizationNotificationsConfig` | [`Record<string, NotificationChannelConfig>`](#notificationchannelconfig) | No | Per-user org-level notification preferences keyed by userId. |
+| `usersDocumentNotificationsConfig`     | [`Record<string, NotificationChannelConfig>`](#notificationchannelconfig) | No | Per-user document-level notification preferences keyed by userId. |
+
+
+#### WebhookV1PayloadEncoded
+---
+| Property         | Type     | Required | Description                                                                 |
+|------------------|----------|----------|-----------------------------------------------------------------------------|
+| `encodedPayload` | `string` | Yes      | Base64 encoded webhook payload.                                             |
+
+#### WebhookV1PayloadEncrypted
+---
+| Property        | Type     | Required | Description                                                                 |
+|-----------------|----------|----------|-----------------------------------------------------------------------------|
+| `encryptedData` | `string` | Yes      | Encrypted webhook data.                                                     |
+| `encryptedKey`  | `string` | Yes      | Encrypted encryption key.                                                   |
+| `iv`            | `string` | Yes      | Initialization vector for decryption.                                       |
+
+**Comment Basic Webhook Payload**
+
+Additional fields present when `notificationSource` is `comment`:
+
+| Property            | Type                    | Required | Description                                                                 |
+|---------------------|-------------------------|----------|-----------------------------------------------------------------------------|
+| `commentAnnotation` | `CommentAnnotation`     | Yes      | The comment annotation associated with the event.                            |
+| `targetComment`     | `Comment`               | No       | The target comment. Not present for annotation-level events (e.g., resolve, delete thread). |
+| `newPriority`       | `CommentPriority`       | No       | New priority. Present on `priorityChanged` events.                           |
+| `oldStatus`         | `CommentStatus`         | No       | Previous status. Present on `statusChanged` events.                          |
+| `newStatus`         | `CommentStatus`         | No       | New status. Present on `statusChanged` events.                               |
+| `assigned`          | `boolean`               | No       | Whether the comment is assigned. Present on `assigned` events.               |
+
+**Huddle Basic Webhook Payload**
+
+No additional fields beyond the common fields when `notificationSource` is `huddle`.
+
+**CRDT Basic Webhook Payload**
+
+Additional fields present when `notificationSource` is `crdt`:
+
+| Property                  | Type             | Required | Description                                                                 |
+|---------------------------|------------------|----------|-----------------------------------------------------------------------------|
+| `crdtData`                | `object`         | Yes      | Contains the CRDT data and update information.                               |
+| `crdtData.id`             | `string`         | Yes      | The editor/store ID for the CRDT instance.                                   |
+| `crdtData.data`           | `unknown`        | Yes      | The CRDT data. Can be any supported type: array, map, text, xml, or xmltext. |
+| `crdtData.lastUpdatedBy`  | `string`         | Yes      | User ID who made the update.                                                 |
+| `crdtData.sessionId`      | `string \| null` | No       | Session ID if available.                                                     |
+| `crdtData.lastUpdate`     | `string`         | Yes      | Timestamp of the last update.                                                |
+| `accessDeniedUsers`       | `array`          | No       | List of users denied access.                                                 |
+
+#### UserNotificationsConfig
+---
+Per-user notification preferences included in webhook payloads when a notification config scope is active. Exactly one of the two fields is present per payload depending on whether org-level or document-level config is in use.
+
+| Property                               | Type                                                                                   | Required | Description                                                                                  |
+|----------------------------------------|----------------------------------------------------------------------------------------|----------|----------------------------------------------------------------------------------------------|
+| `usersOrganizationNotificationsConfig` | [`Record<string, NotificationChannelConfig>`](#notificationchannelconfig)              | No       | Per-user org-level notification preferences, keyed by userId.                                |
+| `usersDocumentNotificationsConfig`     | [`Record<string, NotificationChannelConfig>`](#notificationchannelconfig)              | No       | Per-user document-level notification preferences, keyed by userId.                           |
+
+#### NotificationChannelConfig
+---
+Per-channel notification preference map for a single user. Keys are channel identifiers; values are the preference level for that channel.
+
+```typescript
+type NotificationChannelConfig = Record<string, 'ALL' | 'MINE' | 'NONE'>;
+```
+
+| Key (channel) | Value | Description |
+|---------------|-------|-------------|
+| `inbox` | `'ALL' \| 'MINE' \| 'NONE'` | In-app inbox notification preference. |
+| `email` | `'ALL' \| 'MINE' \| 'NONE'` | Email notification preference. |
+
+| Value  | Description                                                        |
+|--------|--------------------------------------------------------------------|
+| `ALL`  | Receive notifications for all activity.                            |
+| `MINE` | Receive notifications only for activity directly involving the user. |
+| `NONE` | Receive no notifications for this channel.                         |
 
 
 # Misc

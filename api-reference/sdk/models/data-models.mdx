@@ -144,7 +144,7 @@ type CommentContextProvider = (documentId: string, location?: Location) => Comme
 
 #### CommentVisibilityType
 ---
-Visibility level for comment annotations.
+Visibility level used by **API methods** such as [`updateVisibility()`](/api-reference/sdk/api/api-methods#updatevisibility) and [`enablePrivateMode()`](/api-reference/sdk/api/api-methods#enableprivatemode) via [`CommentVisibilityConfig`](#commentvisibilityconfig).
 
 ```typescript
 type CommentVisibilityType = 'public' | 'organizationPrivate' | 'restricted';
@@ -156,23 +156,43 @@ type CommentVisibilityType = 'public' | 'organizationPrivate' | 'restricted';
 | `'organizationPrivate'` | Comment visible only to users in the specified organization        |
 | `'restricted'`          | Comment visible only to specified users (private)                  |
 
-#### CommentVisibilityOptionType
+<Info>
+The visibility system uses two separate sets of values:
+- **API methods** use [`CommentVisibilityConfig`](#commentvisibilityconfig) with [`CommentVisibilityType`](#commentvisibilitytype) values: `'public'`, `'organizationPrivate'`, `'restricted'` (3 values — `'restricted'` covers both self-only and selected-people, distinguished by whether `userIds` is provided).
+- **UI wireframes** use the [`CommentVisibilityOption`](#commentvisibilityoption) enum with 4 values: `'restrictedSelf'`, `'restrictedSelectedPeople'`, `'organizationPrivate'`, `'public'`. These are the `type` prop values on visibility banner dropdown wireframe items.
+</Info>
+
+#### CommentVisibilityOption
 ---
-UI-facing visibility option selected from the Comment Visibility Banner.
+Enum for **UI wireframe** visibility levels, used as the `type` prop on visibility banner dropdown content items. These are more granular than the API-level [`CommentVisibilityType`](#commentvisibilitytype) — the API's single `'restricted'` value maps to two UI options (`'restrictedSelf'` and `'restrictedSelectedPeople'`).
 
 ```typescript
-type CommentVisibilityOptionType = 'restricted-self' | 'restricted' | 'organization-private' | 'public';
+export declare enum CommentVisibilityOption {
+  RESTRICTED_SELF = "restrictedSelf",
+  RESTRICTED_SELECTED_PEOPLE = "restrictedSelectedPeople",
+  ORGANIZATION_PRIVATE = "organizationPrivate",
+  PUBLIC = "public"
+}
 ```
 
-| Value                    | Description                                              |
-|--------------------------|----------------------------------------------------------|
-| `'restricted-self'`      | Comment visible only to the author                       |
-| `'restricted'`           | Comment visible to specific users chosen via user picker |
-| `'organization-private'` | Comment visible to all users in the organization         |
-| `'public'`               | Comment visible to all users with document access        |
+| Value                        | Description                                                     | API Equivalent                                   |
+|------------------------------|-----------------------------------------------------------------|--------------------------------------------------|
+| `RESTRICTED_SELF`            | Visible only to the comment author                              | `'restricted'` with `userIds: [currentUserId]`   |
+| `RESTRICTED_SELECTED_PEOPLE` | Visible only to specifically selected users                     | `'restricted'` with `userIds: [...]`             |
+| `ORGANIZATION_PRIVATE`       | Visible to users in the organization                            | `'organizationPrivate'`                          |
+| `PUBLIC`                     | Visible to all users                                            | `'public'`                                       |
 
+#### CommentVisibilityOptionType
+---
+String union type derived from [`CommentVisibilityOption`](#commentvisibilityoption) enum values. Used in UI wireframe components.
+
+```typescript
+export type CommentVisibilityOptionType = `${CommentVisibilityOption}`;
+// = 'restrictedSelf' | 'restrictedSelectedPeople' | 'organizationPrivate' | 'public'
+```
 #### CommentVisibilityConfig
 ---
+Configuration object for **API methods** that update comment visibility. Uses [`CommentVisibilityType`](#commentvisibilitytype) values — not [`CommentVisibilityOption`](#commentvisibilityoption) values.
 
 | Property         | Type                                                              | Required | Description                                                                                       |
 |------------------|-------------------------------------------------------------------|----------|---------------------------------------------------------------------------------------------------|
@@ -183,7 +203,7 @@ type CommentVisibilityOptionType = 'restricted-self' | 'restricted' | 'organizat
 
 #### PrivateModeConfig
 ---
-Configuration for enabling private mode. Subset of [`CommentVisibilityConfig`](#commentvisibilityconfig) — excludes `annotationId` and `organizationId`.
+Configuration for enabling private mode via **API methods**. Subset of [`CommentVisibilityConfig`](#commentvisibilityconfig) — excludes `annotationId` and `organizationId`. Uses [`CommentVisibilityType`](#commentvisibilitytype) values.
 
 ```typescript
 type PrivateModeConfig = Omit<CommentVisibilityConfig, 'annotationId' | 'organizationId'>;
@@ -2657,10 +2677,13 @@ This event object is related to requests for editor access. It is emitted for `a
 
 | Property    | Type     | Required | Description                                                                                                |
 |-------------|----------|----------|------------------------------------------------------------------------------------------------------------|
-| `viewer`    | `User`   | No       | The user who is the current viewer and is involved in the access request. |
-| `editor`    | `User`   | No       | The user who is the current editor at the time of the event.                                               |
-| `timestamp` | `number` | No       | UNIX timestamp (in milliseconds) of when the event occurred.                                               |
-| `status`    | `string` | No       | The status of the access request (e.g., "requested", "canceled", "accepted", "rejected" ).                    |
+| `viewer`                   | `User`     | No       | The user who is the current viewer and is involved in the access request. |
+| `editor`                   | `User`     | No       | The user who is the current editor at the time of the event.                                               |
+| `timestamp`                | `number`   | No       | UNIX timestamp (in milliseconds) of when the event occurred.                                               |
+| `status`                   | `string`   | No       | The status of the access request (e.g., "requested", "canceled", "accepted", "rejected" ).                    |
+| `totalUsers`               | `number`   | No       | Total number of users currently present on the document.                  |
+| `presenceSnippylyUserIds`  | `string[]` | No       | Velt internal user IDs of currently present users.                        |
+| `presenceClientUserIds`    | `string[]` | No       | Client-provided user IDs of currently present users.                      |
 
 #### SEMEvent
 ---
@@ -2668,10 +2691,13 @@ This event object is related to editor/viewer assignments and editor status chan
 
 | Property    | Type     | Required | Description                                                                                                |
 |-------------|----------|----------|------------------------------------------------------------------------------------------------------------|
-| `viewer`    | `User`   | No       | The user who is the current viewer at the time of the event.                                                            |
-| `editor`    | `User`   | No       | The user who is the current editor at the time of the event.                                                         |
-| `timestamp` | `number` | No       | UNIX timestamp (in milliseconds) of when the event occurred.                                               |
-| `role`      | `string` | No       | The role relevant to the event, typically "editor" or "viewer" for assignment events.                      |
+| `viewer`                   | `User`     | No       | The user who is the current viewer at the time of the event.                                    |
+| `editor`                   | `User`     | No       | The user who is the current editor at the time of the event.                                    |
+| `timestamp`                | `number`   | No       | UNIX timestamp (in milliseconds) of when the event occurred.                                    |
+| `role`                     | `string`   | No       | The role relevant to the event, typically "editor" or "viewer" for assignment events.           |
+| `totalUsers`               | `number`   | No       | Total number of users currently present on the document.                                        |
+| `presenceSnippylyUserIds`  | `string[]` | No       | Velt internal user IDs of currently present users.                                              |
+| `presenceClientUserIds`    | `string[]` | No       | Client-provided user IDs of currently present users.                                            |
 
 
 #### SingleEditorLiveStateData
@@ -4144,12 +4170,16 @@ The `getThumbnailTag` method takes an optional `url` parameter and returns an HT
 | `throwError`     | boolean | No       | If true, throws error if user authentication fails. Default: false.               |
 
 
+#### UserContact
+---
+A user object in a contact-selection context, such as autocomplete panels and assignment pickers. Shares the same shape as [`User`](#user).
+
 #### UserContactSelectedPayload
 ---
 
 | Property            | Type             | Required | Description                                                                                                       |
 |---------------------|------------------|----------|-------------------------------------------------------------------------------------------------------------------|
-| `contact`              | UserContact          | Yes      | Selected user contact details.                                                       |
+| `contact`              | [`UserContact`](#usercontact)          | Yes      | Selected user contact details.                                                       |
 | `isOrganizationContact`                | boolean           | Yes      | Is user part of organization contact.                                                              |
 | `isDocumentContact`               | boolean           | Yes      | Is user part of document contact.                                                                                        |
 | `documentAccessType`            | string           | Yes      | Document access type.                                                    |

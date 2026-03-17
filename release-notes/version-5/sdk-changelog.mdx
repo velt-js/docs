@@ -77,7 +77,125 @@ Results are cached in memory for the session; emails already resolved are not re
 </Update>
 
 
-<Update label="5.0.1-beta.4" description="February 17, 2026">
+<Update label="5.0.2-beta.2" description="February 24, 2026">
+
+### New Features
+
+- [**Comments**]: Added a `commentSaveTriggered` event that fires immediately when a user clicks the save button, before the async save completes. Use it for immediate pre-save feedback alongside the existing `commentSaved` event, which continues to fire after the save finishes.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+// Using hook
+const event = useCommentEventCallback('commentSaveTriggered');
+
+useEffect(() => {
+  if (event) {
+    console.log('Save triggered for annotation:', event.annotationId);
+  }
+}, [event]);
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<script>
+const commentElement = Velt.getCommentElement();
+commentElement.on('commentSaveTriggered').subscribe((event) => {
+  console.log('Save triggered for annotation:', event.annotationId);
+});
+</script>
+```
+</Tab>
+</Tabs>
+
+The exported [`CommentSaveTriggeredEvent`](/api-reference/sdk/models/data-models#commentsavetriggeredevent) interface has the following shape:
+
+```ts
+interface CommentSaveTriggeredEvent {
+  annotationId: string;
+  metadata: VeltEventMetadata;
+}
+```
+
+### Improvements
+- [**Comments**]: The sidebar now automatically returns to the full comment list when all annotations are deselected while in focused thread mode.
+
+- [**Comments**]: Page scroll position is now preserved when navigating to a highlighted annotation from the sidebar.
+
+</Update>
+
+<Update label="5.0.2-beta.1" description="February 20, 2026">
+
+### New Features
+
+- [**Comments**]: Added a visibility dropdown to the comment composer, letting users set a comment's visibility to `public` or `private` before submitting. Disabled by default; enable it via the `visibilityOptionDropdown` prop or API methods. A `visibilityOptionClicked` event fires on each selection, emitting the annotation ID, full [`CommentAnnotation`](/api-reference/sdk/models/data-models#commentannotation), and chosen visibility.
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// Declarative prop
+<VeltComments visibilityOptionDropdown={true} />
+
+// Using API methods
+const commentElement = client.getCommentElement();
+commentElement.enableVisibilityOptionDropdown();
+commentElement.disableVisibilityOptionDropdown();
+
+// Listening to the event
+import { useCommentEventCallback } from '@veltdev/react';
+const visibilityEvent = useCommentEventCallback('visibilityOptionClicked');
+
+useEffect(() => {
+  if (visibilityEvent) {
+    console.log('Visibility selected:', visibilityEvent.visibility);
+    console.log('Annotation ID:', visibilityEvent.annotationId);
+  }
+}, [visibilityEvent]);
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comments visibility-option-dropdown="true"></velt-comments>
+
+<script>
+const commentElement = Velt.getCommentElement();
+commentElement.enableVisibilityOptionDropdown();
+commentElement.disableVisibilityOptionDropdown();
+
+commentElement.on('visibilityOptionClicked').subscribe((event) => {
+  console.log('Visibility selected:', event.visibility);
+  console.log('Annotation ID:', event.annotationId);
+});
+</script>
+```
+</Tab>
+</Tabs>
+
+To customize the dropdown via wireframes, you can refer to the [wireframe documentation](/ui-customization/features/async/comments/comment-dialog-components#visibility-dropdown-composer).
+
+### Bug Fixes
+
+- [**Comments Sidebar**]: Fixed the "(This page)" indicator not appearing for locations identified by `locationName` instead of `id`. The sidebar now matches the current location by `id`, `locationName`, or legacy `locationId`, in that order.
+
+</Update>
+
+<Update label="5.0.1" description="February 18, 2026">
+
+### Bug Fixes
+
+- [**Comments**]: Fixed temporary composer annotations (prefixed `TEMP_COMPOSER_`) being inadvertently persisted to the database. Guards were added so temp annotations remain client-only and are never written to the database.
+
+- [**Comments**]: Fixed the comment dialog calling `markAsRead()` for `TEMP_COMPOSER_` annotations that do not yet exist in the database. The call is now guarded so only persisted annotations are marked read when a pin is selected.
+
+- [**Comments Sidebar**]: Fixed the sidebar failing to identify the current page's annotation group when a location is configured with `locationName` but no `id`. The sidebar now resolves the current location using `location.id` first, then `location.locationName`, then alphabetical order.
+
+- [**Notifications**]: Fixed a race condition where a stale async call completing after a newer one could overwrite the user's saved notification config with defaults.
+
+- [**Comments**]: Fixed comment pins being placed at incorrect positions on video timelines whose total duration is not a whole number of seconds. Fractional-second durations are now preserved correctly.
+
+</Update>
+
+<Update label="5.0.1-beta.4" description="February 18, 2026">
 
 ### New Features
 
@@ -152,6 +270,88 @@ commentElement.on('commentSaved').subscribe((event) => {
 </Tab>
 </Tabs>
 
+- [**Notifications**]: Added opt-in notification delay and batching pipeline for comment notifications. Configure `delayConfig` to hold notifications and suppress delivery if a user views the comment during the delay window. Configure `batchConfig` to accumulate notifications per document or per user before delivery, reducing noise on high-activity content. Webhooks and workflow triggers always fire immediately and are never subject to delay or batching.
+
+```json
+{
+  "delayConfig": {
+    "isEnabled": true,
+    "delaySeconds": 30
+  },
+  "batchConfig": {
+    "document": {
+      "isEnabled": true,
+      "batchWindowSeconds": 300,
+      "maxActivities": 10
+    },
+    "user": {
+      "isEnabled": true,
+      "batchWindowSeconds": 300,
+      "maxActivities": 10
+    }
+  }
+}
+```
+
+Set `notificationServiceConfig` in your workspace notification settings in the [Velt Console](https://console.velt.dev/dashboard/config/notification). [Learn more](/async-collaboration/notifications/customize-behavior#notificationserviceconfig)
+
+- [**Notifications**]: Webhook payloads now include per-user notification preferences for all involved users. Depending on the config level, payloads carry either `usersOrganizationNotificationsConfig` or `usersDocumentNotificationsConfig`, enabling downstream consumers to route notifications based on each user's settings. See [`UserNotificationsConfig`](/api-reference/sdk/models/data-models#usernotificationsconfig) for the type definition. [Learn more](/webhooks/basic)
+
+<Tabs>
+<Tab title="Webhook Payload — Org-Level Config">
+```json
+{
+  "webhookId": "notif-123",
+  "usersOrganizationNotificationsConfig": {
+    "user-1": { "inbox": "ALL", "email": "MINE" },
+    "user-2": { "inbox": "ALL", "email": "MINE" }
+  }
+}
+```
+</Tab>
+<Tab title="Webhook Payload — Document-Level Config">
+```json
+{
+  "webhookId": "notif-456",
+  "usersDocumentNotificationsConfig": {
+    "user-1": { "inbox": "ALL", "email": "MINE" },
+    "user-2": { "inbox": "ALL", "email": "MINE" }
+  }
+}
+```
+</Tab>
+</Tabs>
+
+- [**Notifications**]: The `getConfig` notification API now supports a `getOrganizationConfig: true` option to retrieve org-level notification config for a user. `documentIds` is now optional in `setConfig` — omitting it applies the config at the organization level as the user's default for all documents. [setConfig](/api-reference/rest-apis/v2/notifications/set-config) | [getConfig](/api-reference/rest-apis/v2/notifications/get-config)
+
+<Tabs>
+<Tab title="setConfig — Org-Level">
+```json
+{
+  "data": {
+    "organizationId": "org-123",
+    "userIds": ["user-1", "user-2"],
+    "config": {
+      "inbox": "ALL",
+      "email": "NONE"
+    }
+  }
+}
+```
+</Tab>
+<Tab title="getConfig — Org-Level">
+```json
+{
+  "data": {
+    "organizationId": "org-123",
+    "userId": "user-1",
+    "getOrganizationConfig": true
+  }
+}
+```
+</Tab>
+</Tabs>
+
 ### Improvements
 
 - [**Comments**]: Added auto-resolution of the organization ID from the current org configuration when `updateVisibility()` or `enablePrivateMode()` is called with `type: 'organizationPrivate'` and no `organizationId` is provided.
@@ -166,7 +366,10 @@ commentElement.on('commentSaved').subscribe((event) => {
 
 - [**Comments**]: Fixed priority dropdown showing an incorrect background color in dark mode when no priority was set.
 
+- [**Comments**]: Fixed user migration not updating `{{userId}}` placeholders in `commentText`/`commentHtml` and not remapping `views`/`viewedByUserIds` by internal user key. All userId references in comment content and view tracking are now correctly updated during migration.
+
 </Update>
+
 
 <Update label="5.0.1-beta.3" description="February 16, 2026">
 
@@ -810,22 +1013,22 @@ import { VeltCommentsSidebarWireframe } from '@veltdev/react';
 import { useCommentEventCallback } from '@veltdev/react';
 import { useEffect } from 'react';
 
-const commentToolClickEvent = useCommentEventCallback('commentToolClick');
+const commentToolClickEvent = useCommentEventCallback('commentToolClicked');
 
 useEffect(() => {
-  if (commentToolClickEvent) {
-    console.log('Context:', commentToolClickEvent.context);
-    console.log('Target Element ID:', commentToolClickEvent.targetElementId);
+  if (commentToolClickedEvent) {
+    console.log('Context:', commentToolClickedEvent.context);
+    console.log('Target Element ID:', commentToolClickedEvent.targetElementId);
   }
-}, [commentToolClickEvent]);
+}, [commentToolClickedEvent]);
 
-const sidebarButtonClickEvent = useCommentEventCallback('sidebarButtonClick');
+const sidebarButtonClickedEvent = useCommentEventCallback('sidebarButtonClicked');
 
 useEffect(() => {
-  if (sidebarButtonClickEvent) {
+  if (sidebarButtonClickedEvent) {
     console.log('Sidebar button clicked');
   }
-}, [sidebarButtonClickEvent]);
+}, [sidebarButtonClickedEvent]);
 
 // Using API methods
 import { useVeltClient } from '@veltdev/react';
@@ -833,12 +1036,12 @@ import { useVeltClient } from '@veltdev/react';
 const { client } = useVeltClient();
 const commentElement = client.getCommentElement();
 
-commentElement.on('commentToolClick').subscribe((event) => {
+commentElement.on('commentToolClicked').subscribe((event) => {
   console.log('Context:', event.context);
   console.log('Target Element ID:', event.targetElementId);
 });
 
-commentElement.on('sidebarButtonClick').subscribe((event) => {
+commentElement.on('sidebarButtonClicked').subscribe((event) => {
   console.log('Sidebar button clicked');
 });
 ```
@@ -849,14 +1052,14 @@ commentElement.on('sidebarButtonClick').subscribe((event) => {
 const commentElement = Velt.getCommentElement();
 
 // Comment Tool Click
-commentElement.on('commentToolClick').subscribe((event) => {
+commentElement.on('commentToolClicked').subscribe((event) => {
   console.log('Context:', event.context);
   console.log('Target Element ID:', event.targetElementId);
   console.log('Metadata:', event.metadata);
 });
 
 // Sidebar Button Click
-commentElement.on('sidebarButtonClick').subscribe((event) => {
+commentElement.on('sidebarButtonClicked').subscribe((event) => {
   console.log('Sidebar button clicked');
   console.log('Metadata:', event.metadata);
 });

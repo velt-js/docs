@@ -9,6 +9,74 @@ description: Release Notes of changes added to the core Velt SDK
 - `@veltdev/client`
 - `@veltdev/sdk`
 
+<Update label="5.0.2-beta.3" description="February 24, 2026">
+
+### New Features
+
+- [**Comments**]: Added [`AnonymousUserDataProvider`](/self-host-data/users#anonymous-user-resolution) to resolve email → `userId` mappings for users who are tagged by email in comments but are not part of the contact list. When a comment is saved and a tagged contact or `to` recipient has an email but no `userId`, the SDK calls the registered provider to look up the `userId` and backfills it into the comment data before persisting.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+// Option 1: standalone method
+client.setAnonymousUserDataProvider({
+  resolveUserIdsByEmail: async (request) => {
+    // request.emails: string[]
+    const map = await yourBackend.lookupUserIds(request.emails);
+    return { statusCode: 200, success: true, data: map };
+  },
+  config: {
+    resolveTimeout: 5000,
+    getRetryConfig: { retryCount: 2, retryDelay: 300 },
+  },
+});
+
+// Option 2: via setDataProviders
+client.setDataProviders({
+  anonymousUser: {
+    resolveUserIdsByEmail: async (request) => { /* ... */ },
+  },
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<script>
+// Option 1: standalone method
+Velt.setAnonymousUserDataProvider({
+  resolveUserIdsByEmail: async (request) => {
+    // request.emails: string[]
+    const map = await yourBackend.lookupUserIds(request.emails);
+    return { statusCode: 200, success: true, data: map };
+  },
+  config: {
+    resolveTimeout: 5000,
+    getRetryConfig: { retryCount: 2, retryDelay: 300 },
+  },
+});
+
+// Option 2: via setDataProviders
+Velt.setDataProviders({
+  anonymousUser: {
+    resolveUserIdsByEmail: async (request) => { /* ... */ },
+  },
+});
+</script>
+```
+</Tab>
+</Tabs>
+
+Results are cached in memory for the session; emails already resolved are not re-fetched. On timeout or error, the provider returns whatever was cached and proceeds without the unresolved user IDs. If no [`UserDataProvider`](/api-reference/sdk/models/data-models#userdataprovider) is configured, resolved user IDs are automatically backfilled to the organization database as stub user records (`{ userId, name: email, email }`). If a `UserDataProvider` is already configured, the org DB backfill is skipped.
+
+### Improvements
+
+- [**Comments**]: Comment annotations now store a top-level [`visibilityConfig`](/api-reference/sdk/models/data-models#commentannotationvisibilityconfig) field (`{ type, organizationId, userIds }`) alongside the existing `context.accessFields` tokens. This makes the original visibility setting inspectable without reversing hashed tokens. Annotations without an explicit visibility setting default to `{ type: 'public' }`. The `context.accessFields` tokens continue to govern actual access control.
+
+- [**Comments**]: When setting restricted visibility, the current user's `userId` is now automatically appended to `userIds` (deduplicated) if not already present. Existing explicit `userIds` lists are preserved. This applies across [`enablePrivateMode`](/async-collaboration/comments/customize-behavior#enableprivatemode), [`addCommentAnnotation`](/async-collaboration/comments/customize-behavior#addcommentannotation), and [`updateVisibility`](/async-collaboration/comments/customize-behavior#updatevisibility).
+
+</Update>
+
+
 <Update label="5.0.2-beta.2" description="February 24, 2026">
 
 ### New Features
@@ -302,157 +370,6 @@ Set `notificationServiceConfig` in your workspace notification settings in the [
 
 </Update>
 
-
-<Update label="5.0.1-beta.4" description="February 17, 2026">
-
-### New Features
-
-- [**Comments**]: Added `enablePrivateMode(config)` and `disablePrivateMode()` methods to set a global visibility policy for all newly created comments. Supports `restricted` (user-list), `organizationPrivate`, and `public` visibility types via the new [`PrivateModeConfig`](/api-reference/sdk/models/data-models#privatemodeconfig) type.
-
-<Tabs>
-<Tab title="React / Next.js">
-```tsx
-// Using API methods
-const commentElement = client.getCommentElement();
-
-// Restrict all new comments to specific users
-commentElement.enablePrivateMode({ type: 'restricted', userIds: ['user-1', 'user-2'] });
-
-// Restrict all new comments to the current organization
-commentElement.enablePrivateMode({ type: 'organizationPrivate' });
-
-// Revert to default public visibility
-commentElement.disablePrivateMode();
-```
-</Tab>
-<Tab title="Other Frameworks">
-```ts
-const commentElement = Velt.getCommentElement();
-
-// Restrict all new comments to specific users
-commentElement.enablePrivateMode({ type: 'restricted', userIds: ['user-1', 'user-2'] });
-
-// Restrict all new comments to the current organization
-commentElement.enablePrivateMode({ type: 'organizationPrivate' });
-
-// Revert to default public visibility
-commentElement.disablePrivateMode();
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added a `commentSaved` event that fires after a comment is persisted to the database, providing a reliable signal for triggering downstream actions. The payload includes the annotation ID, full [`CommentAnnotation`](/api-reference/sdk/models/data-models#commentannotation), and [`VeltEventMetadata`](/api-reference/sdk/models/data-models#velteventmetadata).
-
-<Tabs>
-<Tab title="React / Next.js">
-```tsx
-// Using Hooks
-import { useCommentEventCallback } from '@veltdev/react';
-import { useEffect } from 'react';
-
-const commentSavedData = useCommentEventCallback('commentSaved');
-
-useEffect(() => {
-  if (commentSavedData) {
-    console.log('Comment saved:', commentSavedData.annotationId);
-    console.log('Annotation:', commentSavedData.commentAnnotation);
-  }
-}, [commentSavedData]);
-
-// Using API methods
-const commentElement = client.getCommentElement();
-commentElement.on('commentSaved').subscribe((event) => {
-  console.log('Comment saved:', event.annotationId);
-  console.log('Annotation:', event.commentAnnotation);
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```ts
-const commentElement = Velt.getCommentElement();
-commentElement.on('commentSaved').subscribe((event) => {
-  console.log('Comment saved:', event.annotationId);
-  console.log('Annotation:', event.commentAnnotation);
-});
-```
-</Tab>
-</Tabs>
-
-- [**Notifications**]: Added opt-in notification delay and batching pipeline for notifications. Configure `delayConfig` to hold notifications and suppress delivery if a user views the comment during the delay window. Configure `batchConfig` to accumulate notifications per document or per user before delivery, reducing noise on high-activity content. Webhooks and workflow triggers always fire immediately and are never subject to delay or batching.
-You can set this configuration in your workspace notification settings in the [Velt Console](https://console.velt.dev/dashboard/config/notification). [Learn more](/async-collaboration/notifications/customize-behavior#notificationserviceconfig)
-
-- [**Notifications**]: Webhook payloads now include per-user notification preferences for all involved users. Depending on the config level, payloads carry either `usersOrganizationNotificationsConfig` or `usersDocumentNotificationsConfig`, enabling downstream consumers to route notifications based on each user's settings. 
-
-<Tabs>
-<Tab title="Webhook Payload — Org-Level Config">
-```json
-{
-  "webhookId": "notif-123",
-  "usersOrganizationNotificationsConfig": {
-    "user-1": { "inbox": "ALL", "email": "MINE" },
-    "user-2": { "inbox": "ALL", "email": "MINE" }
-  }
-}
-```
-</Tab>
-<Tab title="Webhook Payload — Document-Level Config">
-```json
-{
-  "webhookId": "notif-456",
-  "usersDocumentNotificationsConfig": {
-    "user-1": { "inbox": "ALL", "email": "MINE" },
-    "user-2": { "inbox": "ALL", "email": "MINE" }
-  }
-}
-```
-</Tab>
-</Tabs>
-
-- [**Notifications**]: The `getConfig` notification API now supports a `getOrganizationConfig: true` option to retrieve org-level notification config for a user. `documentIds` is now optional in `setConfig` — omitting it applies the config at the organization level as the user's default for all documents. [setConfig](/api-reference/rest-apis/v2/notifications/set-config) | [getConfig](/api-reference/rest-apis/v2/notifications/get-config)
-
-<Tabs>
-<Tab title="setConfig — Org-Level">
-```json
-{
-  "data": {
-    "organizationId": "org-123",
-    "userIds": ["user-1", "user-2"],
-    "config": {
-      "inbox": "ALL",
-      "email": "NONE"
-    }
-  }
-}
-```
-</Tab>
-<Tab title="getConfig — Org-Level">
-```json
-{
-  "data": {
-    "organizationId": "org-123",
-    "userId": "user-1",
-    "getOrganizationConfig": true
-  }
-}
-```
-</Tab>
-</Tabs>
-
-### Improvements
-
-- [**Comments**]: Added auto-resolution of the organization ID from the current org configuration when `updateVisibility()` or `enablePrivateMode()` is called with `type: 'organizationPrivate'` and no `organizationId` is provided.
-
-### Bug Fixes
-
-- [**Comments**]: Fixed global dark mode toggling not affecting open comment dialogs. Dialog initialization no longer sets a component-level dark mode override that would block `ThemeService` propagation.
-
-- [**Comments**]: Fixed composer placeholder text not reappearing after a user typed and deleted all text. The contenteditable element is now cleared with `innerHTML = ''` to ensure the CSS `:empty::before` placeholder renders correctly.
-
-- [**Comments**]: Fixed SVG gradient, clip-path, and filter rendering for duplicate emoji reactions. Each emoji SVG instance now receives unique internal IDs via `EmojiService.uniquifySvgIds()`.
-
-- [**Comments**]: Fixed priority dropdown showing an incorrect background color in dark mode when no priority was set.
-
-</Update>
 
 <Update label="5.0.1-beta.3" description="February 16, 2026">
 

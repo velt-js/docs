@@ -326,6 +326,92 @@ Velt.setDataProviders({ user: userDataProvider });
 </Tab>
 </Tabs>
 
+# Anonymous User Resolution
+
+When a user who is not part of the contact list is tagged by email in a comment, they won't have a `userId`. The [`AnonymousUserDataProvider`](/api-reference/sdk/models/data-models#anonymoususerdataprovider) resolves these email → `userId` mappings automatically. When a comment is saved and a tagged contact or `to` recipient has an email but no `userId`, the SDK calls the registered provider to look up the `userId`, backfills it into the comment data before persisting, and optionally writes a stub user record to the organization database.
+
+- Type: [`AnonymousUserDataProvider`](/api-reference/sdk/models/data-models#anonymoususerdataprovider)
+  - `resolveUserIdsByEmail`: Callback that maps email addresses to user IDs. Called automatically at comment save time.
+    - Param: [`ResolveUserIdsByEmailRequest`](/api-reference/sdk/models/data-models#resolveuseridsbyemailrequest) - `{ organizationId: string, documentId?: string, folderId?: string, emails: string[] }`
+    - Return: [`Promise<ResolverResponse<Record<string, string>>>`](/api-reference/sdk/models/data-models#resolverresponse) - `{ statusCode, success, data: { [email]: userId } }`
+  - `config`: Optional configuration for timeout and retry behavior.
+    - Type: [`AnonymousUserDataProviderConfig`](/api-reference/sdk/models/data-models#anonymoususerdataproviderconfig)
+    - `resolveTimeout`: `number` - Timeout in milliseconds for the resolve call
+    - `getRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig) - `{ retryCount, retryDelay }`
+
+Key behaviors:
+- Results are cached in memory for the session; emails already resolved are not re-fetched.
+- On timeout or error, the provider returns whatever was cached and proceeds without the unresolved user IDs.
+- If no [`UserDataProvider`](/api-reference/sdk/models/data-models#userdataprovider) is configured, resolved user IDs are automatically backfilled to the organization database as stub user records (`{ userId, name: email, email }`).
+- If a `UserDataProvider` is already configured, the org DB backfill is skipped.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+// Option 1: via VeltProvider
+const anonymousUserDataProvider = {
+  resolveUserIdsByEmail: async (request) => {
+    const map = await yourBackend.lookupUserIds(request.emails);
+    return { statusCode: 200, success: true, data: map };
+  },
+  config: {
+    resolveTimeout: 5000,
+    getRetryConfig: { retryCount: 2, retryDelay: 300 },
+  },
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ anonymousUser: anonymousUserDataProvider }}
+>
+</VeltProvider>
+
+// Option 2: standalone method
+client.setAnonymousUserDataProvider({
+  resolveUserIdsByEmail: async (request) => {
+    const map = await yourBackend.lookupUserIds(request.emails);
+    return { statusCode: 200, success: true, data: map };
+  },
+  config: {
+    resolveTimeout: 5000,
+    getRetryConfig: { retryCount: 2, retryDelay: 300 },
+  },
+});
+
+// Option 3: via setDataProviders
+client.setDataProviders({
+  anonymousUser: {
+    resolveUserIdsByEmail: async (request) => { /* ... */ },
+  },
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<script>
+// Option 1: standalone method
+Velt.setAnonymousUserDataProvider({
+  resolveUserIdsByEmail: async (request) => {
+    const map = await yourBackend.lookupUserIds(request.emails);
+    return { statusCode: 200, success: true, data: map };
+  },
+  config: {
+    resolveTimeout: 5000,
+    getRetryConfig: { retryCount: 2, retryDelay: 300 },
+  },
+});
+
+// Option 2: via setDataProviders
+Velt.setDataProviders({
+  anonymousUser: {
+    resolveUserIdsByEmail: async (request) => { /* ... */ },
+  },
+});
+</script>
+```
+</Tab>
+</Tabs>
+
 # Sample Data
 
 <Tabs>

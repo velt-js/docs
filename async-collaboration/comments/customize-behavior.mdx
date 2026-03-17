@@ -1945,6 +1945,11 @@ contactElement.updateContactListScopeForOrganizationUsers(['all', 'organization'
 </Tab>
 </Tabs>
 
+#### [setAnonymousUserDataProvider](/api-reference/sdk/api/api-methods#setanonymoususerdataprovider)
+Register a provider to resolve email → `userId` mappings for users who are tagged by email in comments but are not part of the contact list. When a comment is saved and a tagged contact or `to` recipient has an email but no `userId`, the SDK calls the provider to look up the `userId` and backfills it into the comment data before persisting.
+
+[Full implementation guide →](/self-host-data/users#anonymous-user-resolution)
+
 #### autoCompleteScrollConfig
 Customize virtual scroll behavior in autocomplete dropdown for @mentions.
 
@@ -2583,17 +2588,28 @@ commentElement.disableGroupMatchedComments();
 
 
 # Private Comments
+
+<Info>
+The visibility system uses two separate sets of values:
+- **API methods** (on this page) use [`CommentVisibilityConfig`](/api-reference/sdk/models/data-models#commentvisibilityconfig) with 3 values: `'public'`, `'organizationPrivate'`, `'restricted'`.
+- **UI wireframes** use the [`CommentVisibilityOption`](/api-reference/sdk/models/data-models#commentvisibilityoption) enum with 4 values: `'restrictedSelf'`, `'restrictedSelectedPeople'`, `'organizationPrivate'`, `'public'`.
+
+The API's single `'restricted'` value covers both "self-only" and "selected people" — distinguished by whether `userIds` is provided.
+</Info>
+
 #### [updateVisibility](/api-reference/sdk/api/api-methods#updatevisibility)
-Manage who can view a comment annotation by updating its visibility settings. Use this method to control whether a comment is public, restricted to your organization, or visible only to specific users.
+Manage who can view a comment annotation by updating its visibility settings. Use this method to control whether a comment is public, restricted to your organization, or visible only to specific users. The resulting setting is stored on the annotation as [`visibilityConfig`](/api-reference/sdk/models/data-models#commentannotationvisibilityconfig).
 - To use this feature, you need to first enable it in [Velt Console](https://console.velt.dev/dashboard/config/appconfig)
 - Params: [CommentVisibilityConfig](/api-reference/sdk/models/data-models#commentvisibilityconfig)
   - `type`:
     - `'public'`: Comment visible to all users
     - `'organizationPrivate'`: Comment visible only to users in the specified organization. Even if someone is added to the document but not to the organization, they will not be able to view the comment.
-    - `'restricted'`: Comment visible only to the author and specified users
+    - `'restricted'`: Comment visible only to the specified users; the current user is always included
   - `organizationId`: string; required if `type` is `organizationPrivate`
-  - `userIds`: string[]; required if `type` is `restricted`
+  - `userIds`: string[]; optional when `type` is `'restricted'` — current user is always appended
 - Returns: `void`
+
+<Note>When `type` is `'restricted'`, the SDK automatically appends the current user's `userId` to `userIds` if it is not already present. This applies whether `userIds` is empty or contains an explicit list that excludes the author.</Note>
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -2607,7 +2623,7 @@ commentElement.updateVisibility({
   organizationId: 'org-123'
 });
 
-// Set comment to be private (visible only to current user - auto-defaults since v5.0.0-beta.17)
+// Set comment to be private (current user always included in restricted access)
 commentElement.updateVisibility({
   annotationId: "annotationId",
   type: 'restricted'
@@ -2639,7 +2655,7 @@ commentElement.updateVisibility({
   organizationId: 'org-123'
 });
 
-// Set comment to be private (visible only to current user - auto-defaults since v5.0.0-beta.17)
+// Set comment to be private (current user always included in restricted access)
 commentElement.updateVisibility({
   annotationId: "annotationId",
   type: 'restricted'
@@ -2666,10 +2682,12 @@ commentElement.updateVisibility({
 Set the default visibility for all new comments created by the current user.
 - Params: [PrivateModeConfig](/api-reference/sdk/models/data-models#privatemodeconfig)
   - `type`:
-    - `'restricted'`: New comments visible only to the author and specified users
+    - `'restricted'`: New comments visible only to the specified users; the current user is always included
     - `'organizationPrivate'`: New comments visible only to users in the current organization
-  - `userIds`: string[]; required if `type` is `'restricted'`
+  - `userIds`: string[]; optional when `type` is `'restricted'` — current user is always appended
 - Returns: `void`
+
+<Note>When `type` is `'restricted'`, the SDK automatically appends the current user's `userId` to `userIds` if it is not already present. This applies whether `userIds` is empty or contains an explicit list that excludes the author.</Note>
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -2712,6 +2730,109 @@ commentElement.disablePrivateMode();
 const commentElement = Velt.getCommentElement();
 // Revert to default public visibility
 commentElement.disablePrivateMode();
+```
+</Tab>
+</Tabs>
+
+#### visibilityOptions
+
+Show a visibility banner on the comment composer that lets users set a comment's visibility to `public`, `organization-private`, `restricted-self`, or `restricted` before submitting. Users can also change visibility after submission from the thread options menu.
+
+Default: `false`
+
+<Tabs>
+<Tab title="React / Next.js">
+**Using Props:**
+```jsx
+<VeltComments visibilityOptions={true} />
+```
+
+**Using API:**
+```jsx
+const commentElement = client.getCommentElement();
+commentElement.enableVisibilityOptions();
+commentElement.disableVisibilityOptions();
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+**Using Props:**
+```html
+<velt-comments visibility-options="true"></velt-comments>
+```
+
+**Using API:**
+```jsx
+const commentElement = Velt.getCommentElement();
+commentElement.enableVisibilityOptions();
+commentElement.disableVisibilityOptions();
+```
+</Tab>
+</Tabs>
+
+#### visibilityOptionClicked
+
+Subscribe to this event to be notified when a user selects a visibility option. Emits a [`VisibilityOptionClickedEvent`](/api-reference/sdk/models/data-models#visibilityoptionclickedevent).
+
+#### Setting visibility at comment creation time
+
+If you are creating comments using API, then pass a [`CommentVisibilityConfig`](/api-reference/sdk/models/data-models#commentvisibilityconfig) as the optional `visibility` field on [`AddCommentRequest`](/api-reference/sdk/models/data-models#addcommentrequest) to pre-set visibility when programmatically adding a comment.
+
+<Tabs>
+<Tab title="React / Next.js">
+**Using Hooks:**
+```jsx
+const addCommentRequest = {
+  annotationId: 'ANNOTATION_ID',
+  comment: {
+    commentText: 'This is a comment',
+    commentHtml: '<p>This is a comment</p>',
+  },
+  visibility: {
+    type: 'restricted',
+    userIds: ['user-1', 'user-2']
+  }
+};
+
+const { addComment } = useAddComment();
+const addCommentEventData = await addComment(addCommentRequest);
+```
+
+**Using API:**
+```jsx
+const addCommentRequest = {
+  annotationId: 'ANNOTATION_ID',
+  comment: {
+    commentText: 'This is a comment',
+    commentHtml: '<p>This is a comment</p>',
+  },
+  visibility: {
+    type: 'restricted',
+    userIds: ['user-1', 'user-2']
+  }
+};
+
+const commentElement = client.getCommentElement();
+const addCommentEventData = await commentElement.addComment(addCommentRequest);
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```jsx
+const addCommentRequest = {
+  annotationId: 'ANNOTATION_ID',
+  comment: {
+    commentText: 'This is a comment',
+    commentHtml: '<p>This is a comment</p>',
+  },
+  visibility: {
+    type: 'restricted',
+    userIds: ['user-1', 'user-2']
+  }
+};
+
+const commentElement = Velt.getCommentElement();
+const addCommentEventData = await commentElement.addComment(addCommentRequest);
 ```
 </Tab>
 </Tabs>
@@ -3094,10 +3215,12 @@ Subscribe to Comment Events. Here is the list of events you can subscribe to and
 | UI | `commentPinClicked` | Triggered when a comment pin is clicked | [CommentPinClickedEvent](/api-reference/sdk/models/data-models#commentpinclickedevent) |
 | UI | `commentBubbleClicked` | Triggered when a comment bubble is clicked | [CommentBubbleClickedEvent](/api-reference/sdk/models/data-models#commentbubbleclickedevent) |
 | UI | `linkClicked` | Triggered when a clickable link in comment content is clicked | [LinkClickedEvent](/api-reference/sdk/models/data-models#linkclickedevent) |
-| UI | `commentToolClick` | Triggered when comment tool button is clicked | [CommentToolClickEvent](/api-reference/sdk/models/data-models#commenttoolclickevent) |
-| UI | `sidebarButtonClick` | Triggered when sidebar button is clicked | [SidebarButtonClickEvent](/api-reference/sdk/models/data-models#sidebarbuttonclickevent) |
+| UI | `commentToolClicked` | Past-tense alias for `commentToolClick`, identical payload | [CommentToolClickedEvent](/api-reference/sdk/models/data-models#commenttoolclickedevent) |
+| UI | `sidebarButtonClicked` | Past-tense alias for `sidebarButtonClick`, identical payload | [SidebarButtonClickedEvent](/api-reference/sdk/models/data-models#sidebarbuttonclickedevent) |
 | Recorder | `transcriptionDone` | Triggered when a transcription is generated and ready | [TranscriptionDoneEvent](/api-reference/sdk/models/data-models#transcriptiondoneevent) |
 | Threads | `commentSaved` | Triggered when a comment annotation is saved to the database | [CommentSavedEvent](/api-reference/sdk/models/data-models#commentsavedevent) |
+| Threads | `commentSaveTriggered` | Triggered immediately when the save button is clicked, before async save completes | [CommentSaveTriggeredEvent](/api-reference/sdk/models/data-models#commentsavetriggeredevent) |
+| Visibility | `visibilityOptionClicked` | Triggered when a user selects a visibility option | [VisibilityOptionClickedEvent](/api-reference/sdk/models/data-models#visibilityoptionclickedevent) |
 
 <Tabs>
 <Tab title="React / Next.js">

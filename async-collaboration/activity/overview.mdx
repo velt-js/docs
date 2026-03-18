@@ -1,25 +1,61 @@
 ---
-title: "Activity"
+title: "Activity Logs"
 sidebarTitle: "Overview"
 ---
 
-The Activity feature provides a real-time feed of collaboration events across your app. Activities are generated automatically for comments, reactions, recorder events, and CRDT edits, and you can also emit custom activities for non-Velt events (e.g., deployments, status changes).
+Every collaboration event in your app, every comment, approval, edit, and review, generates a question someone eventually asks: "Who did what, and when?" Activity Logs gives you a complete, real-time record of everything that happens across your product.
 
-You can also manage activity records directly using REST APIs. [Learn more about the Activity Service REST API →](/api-reference/rest-apis/v2/activities/get-activities)
+Velt automatically generates activity log records for Comments, Reactions, Recorder, and CRDT features. You can also emit custom records for non-Velt events (deployments, status changes, escalations) using the SDK or REST API, so your users get one unified timeline. [Learn more about the Activity Logs REST API →](/api-reference/rest-apis/v2/activities/get-activities)
 
-## How It Works
+## Architecture
 
-- **Automatic generation**: Velt generates activity records whenever users interact with Comments, Reactions, Recorder, or CRDT features. For CRDT edits, use [`setActivityDebounceTime()`](/realtime-collaboration/crdt/setup/core#activity-debounce) to control how keystrokes are batched into activity records.
-- **Custom activities**: Use `createActivity()` to push your own events into the same feed.
-- **2-layer trigger listener architecture**: Activity records are created at the feature layer (e.g., a comment is added) and emitted through a subscription layer (`getAllActivities()`) that supports org-wide or scoped filtering.
+Activity Logs use a 2-layer trigger-listener architecture:
 
-## Use Cases
+1. **Feature layer (record creation):** A record is generated whenever a user interacts with a Velt feature, such as adding a comment, changing a comment status, reacting, or editing a CRDT document. Each record includes the user, action type, target object, timestamp, and document context.
 
-- **Org-wide activity feed**: Show every collaboration event across all documents in the organization.
-- **Per-document feed**: Scope the feed to a single document and filter by feature type.
-- **Custom events**: Merge application-level events (deployments, escalations) into the same activity stream.
+2. **Subscription layer (record delivery):** `getAllActivities()` opens a real-time subscription that pushes records to your UI as they're created. You can scope the subscription org-wide or filter by `documentId`, `userId`, or feature type.
 
-## Next Steps
+## Automatic Activity Logging
 
-- [Setup →](/async-collaboration/activity/setup)
-- [Customize Behavior →](/async-collaboration/activity/customize-behavior)
+Velt generates records for the following features out of the box:
+
+- **Comments:** Record created on add, edit, delete, status change, and @mention.
+- **Reactions:** Record created when a reaction is added or removed.
+- **Recorder:** Record created on recording start, stop, and playback events.
+- **CRDT edits:** Record created per edit batch. Use `setActivityDebounceTime(ms)` to control how keystrokes are grouped into a single record. For example, `setActivityDebounceTime(5000)` batches all edits within a 5-second window into one activity log entry, keeping the feed meaningful rather than noisy.
+
+## Custom Activity Logs
+
+Use `createActivity()` to push your own events into the same feed:
+
+```javascript
+createActivity({
+  type: 'deployment',
+  action: 'deployed_to_production',
+  message: 'v2.4.1 deployed by CI pipeline',
+  documentId: 'doc_abc123',
+  userId: 'user_xyz'
+});
+```
+
+This lets you merge application-level events (deployments, escalations, status transitions) into the same stream as collaboration events, giving your users a single source of truth.
+
+## Querying and Filtering
+
+`getAllActivities()` returns a real-time subscription. You can scope it to fit different UI patterns:
+
+- **Org-wide feed:** No filters. Returns all activity across every document in the organization. Useful for admin dashboards and team lead overviews.
+- **Per-document timeline:** Filter by `documentId` to show the full history of a single document, from first draft to final approval. Useful for inline review panels and document sidebars.
+- **Feature-scoped feed:** Filter by feature type (e.g., only Comments or only CRDT edits) to reduce noise for specific views.
+
+## Immutability
+
+Activity log records can be made immutable by turning on the config in Velt Console. When immutability is enabled, records cannot be edited or deleted after creation, giving you a tamper-evident audit trail that holds up under compliance scrutiny.
+
+This is critical for regulated workflows (SOX, SOC 2, HIPAA) where auditors need to verify that the record of who approved what, and when, has not been altered after the fact. When immutability is off (the default), records can be updated or removed through the SDK and REST API as needed.
+
+## Common Patterns
+
+- **Audit trail for regulated workflows:** Surface a "who approved what, when" log for processes like invoice sign-offs, legal reviews, or budget approvals. Enable the Immutability config in Velt Console to ensure records cannot be altered after creation, with full user attribution and timestamps suitable for SOX, SOC 2, or any compliance context requiring a tamper-evident record.
+- **Unified event stream:** Combine Velt activity with your app's own events using `createActivity()` so reviewers see one timeline instead of checking multiple systems.
+- **AI agent traceability:** When AI agents post comments or trigger approvals via the API, each action generates an activity log record, giving human reviewers a clear trail of what the agent did and when.

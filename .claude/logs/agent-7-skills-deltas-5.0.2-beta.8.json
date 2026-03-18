@@ -1,0 +1,136 @@
+[
+  {
+    "version": "5.0.2-beta.8",
+    "timestamp": "2026-03-13T00:00:00Z",
+    "skillSet": "crdt",
+    "hasDeltas": true,
+    "deltas": [
+      {
+        "id": "delta-001",
+        "type": "new_feature",
+        "releaseNoteText": "Added six methods on `CrdtElement` implementing a unified message stream for Yjs-backed collaborative editors. The stream carries both sync and awareness messages over a single Firebase RTDB channel per document, with encryption at rest, ordered serialization, and automatic pruning after snapshot checkpoints.\n\nThe six new methods are:\n- `pushMessage(query)` — push a lib0-encoded sync or awareness message to the stream\n- `onMessage(query)` — subscribe to real-time messages; returns an unsubscribe function\n- `getMessages(query)` — fetch all messages after a given timestamp (one-time read for replay)\n- `getSnapshot(query)` — retrieve the latest full-state snapshot as a baseline for replay\n- `saveSnapshot(query)` — checkpoint the current Y.Doc state and vector clock\n- `pruneMessages(query)` — remove messages older than a given timestamp to keep storage bounded",
+        "releaseNoteVersion": "5.0.2-beta.8",
+        "skillTarget": "crdt",
+        "action": "create_rule",
+        "targetFile": "rules/shared/core/core-message-stream.md",
+        "targetSection": null,
+        "summary": "Create a new rule documenting the six CrdtElement message-stream methods (pushMessage, onMessage, getMessages, getSnapshot, saveSnapshot, pruneMessages) that implement the y-redis synchronization pattern over Firebase RTDB for Yjs-backed collaborative editors.",
+        "details": {
+          "apiName": "CrdtElement.pushMessage / onMessage / getMessages / getSnapshot / saveSnapshot / pruneMessages",
+          "apiType": "method",
+          "signature": "pushMessage(query: { id: string; data: number[]; yjsClientId: number; messageType: 'sync' | 'awareness'; source?: string }): Promise<void>\nonMessage(query: { id: string; callback: (msg: { data: number[] }) => void }): () => void\ngetMessages(query: { id: string; afterTs: number }): Promise<Array<{ data: number[] }>>\ngetSnapshot(query: { id: string }): Promise<{ state: number[]; timestamp: number; vector: number[] } | null>\nsaveSnapshot(query: { id: string; state: number[]; vector: number[]; source?: string }): Promise<void>\npruneMessages(query: { id: string; beforeTs: number }): Promise<void>",
+          "parameters": [
+            {
+              "name": "query.id",
+              "type": "string",
+              "description": "Unique document identifier for the message stream channel"
+            },
+            {
+              "name": "query.data",
+              "type": "number[]",
+              "description": "lib0-encoded Yjs update as a plain number array (pushMessage)"
+            },
+            {
+              "name": "query.yjsClientId",
+              "type": "number",
+              "description": "The Y.Doc clientID of the sending peer (pushMessage)"
+            },
+            {
+              "name": "query.messageType",
+              "type": "'sync' | 'awareness'",
+              "description": "Whether the message carries a document sync update or an awareness update (pushMessage)"
+            },
+            {
+              "name": "query.source",
+              "type": "string",
+              "description": "Optional label identifying the editor integration (e.g. 'tiptap') for debugging"
+            },
+            {
+              "name": "query.callback",
+              "type": "(msg: { data: number[] }) => void",
+              "description": "Invoked for each incoming real-time message (onMessage)"
+            },
+            {
+              "name": "query.afterTs",
+              "type": "number",
+              "description": "Unix-ms timestamp; only messages newer than this value are returned (getMessages)"
+            },
+            {
+              "name": "query.state",
+              "type": "number[]",
+              "description": "Full Y.Doc state as produced by Y.encodeStateAsUpdate (saveSnapshot)"
+            },
+            {
+              "name": "query.vector",
+              "type": "number[]",
+              "description": "Y.Doc state vector as produced by Y.encodeStateVector (saveSnapshot)"
+            },
+            {
+              "name": "query.beforeTs",
+              "type": "number",
+              "description": "Unix-ms timestamp; messages older than this value are deleted (pruneMessages)"
+            }
+          ],
+          "returnType": "pushMessage → Promise<void>; onMessage → () => void (unsubscribe); getMessages → Promise<Array<{ data: number[] }>>; getSnapshot → Promise<{ state: number[]; timestamp: number; vector: number[] } | null>; saveSnapshot → Promise<void>; pruneMessages → Promise<void>",
+          "codeExample": "const crdtElement = client.getCrdtElement();\n\n// --- Initial load (y-redis pattern) ---\nconst snapshot = await crdtElement.getSnapshot({ id: 'my-doc' });\nif (snapshot?.state) {\n  Y.applyUpdate(ydoc, new Uint8Array(snapshot.state));\n}\nconst afterTs = snapshot?.timestamp ?? 0;\nconst messages = await crdtElement.getMessages({ id: 'my-doc', afterTs });\nfor (const msg of messages) {\n  Y.applyUpdate(ydoc, new Uint8Array(msg.data));\n}\n\n// --- Real-time streaming ---\nconst unsubscribe = crdtElement.onMessage({\n  id: 'my-doc',\n  callback: (msg) => {\n    Y.applyUpdate(ydoc, new Uint8Array(msg.data));\n  },\n});\n\n// --- Sending updates ---\nydoc.on('update', async (update, origin) => {\n  await crdtElement.pushMessage({\n    id: 'my-doc',\n    data: Array.from(update),\n    yjsClientId: ydoc.clientID,\n    messageType: 'sync',\n    source: 'tiptap',\n  });\n});\n\n// --- Periodic snapshot + pruning ---\nawait crdtElement.saveSnapshot({\n  id: 'my-doc',\n  state: Y.encodeStateAsUpdate(ydoc),\n  vector: Y.encodeStateVector(ydoc),\n  source: 'tiptap',\n});\nawait crdtElement.pruneMessages({\n  id: 'my-doc',\n  beforeTs: Date.now() - 24 * 60 * 60 * 1000,\n});\n\n// --- Cleanup ---\nunsubscribe();"
+        },
+        "confidence": "high",
+        "ambiguityNote": null
+      }
+    ]
+  },
+  {
+    "version": "5.0.2-beta.8",
+    "timestamp": "2026-03-13T00:00:00Z",
+    "skillSet": "comments",
+    "hasDeltas": true,
+    "deltas": [
+      {
+        "id": "delta-002",
+        "type": "behavior_change",
+        "releaseNoteText": "The `get`, `save`, and `delete` methods on `CommentAnnotationDataProvider`, `ReactionAnnotationDataProvider`, and `AttachmentDataProvider` are now optional. Developers using config-based URL endpoints (`config.getConfig`, `config.saveConfig`, `config.deleteConfig`) no longer need to supply placeholder callbacks. `ResolverConfig` also gains a new `additionalFields?: string[]` property for including custom fields in resolver payloads.",
+        "releaseNoteVersion": "5.0.2-beta.8",
+        "skillTarget": "comments",
+        "action": "create_rule",
+        "targetFile": "rules/shared/data/data-comment-annotation-data-provider.md",
+        "targetSection": null,
+        "summary": "Create a new rule documenting CommentAnnotationDataProvider (and the parallel ReactionAnnotationDataProvider and AttachmentDataProvider) — covering the fact that get/save/delete callbacks are now optional when using config-based URL endpoints, the ResolverConfig.additionalFields property, and the two valid registration forms (callback-based vs. config-based).",
+        "details": {
+          "apiName": "CommentAnnotationDataProvider",
+          "apiType": "prop",
+          "signature": "interface CommentAnnotationDataProvider {\n  get?: (request: CommentAnnotationGetRequest) => Promise<ResolverResponse<CommentAnnotation>>;\n  save?: (request: CommentAnnotationSaveRequest) => Promise<ResolverResponse<void>>;\n  delete?: (request: CommentAnnotationDeleteRequest) => Promise<ResolverResponse<void>>;\n  config?: ResolverConfig;\n}\n\ninterface ResolverConfig {\n  getConfig?: { url: string };\n  saveConfig?: { url: string };\n  deleteConfig?: { url: string };\n  additionalFields?: string[];\n}",
+          "parameters": [
+            {
+              "name": "get",
+              "type": "(request) => Promise<ResolverResponse<CommentAnnotation>>",
+              "optional": true,
+              "description": "Callback to fetch a comment annotation from your backend. Optional when config.getConfig is provided."
+            },
+            {
+              "name": "save",
+              "type": "(request) => Promise<ResolverResponse<void>>",
+              "optional": true,
+              "description": "Callback to persist a comment annotation to your backend. Optional when config.saveConfig is provided."
+            },
+            {
+              "name": "delete",
+              "type": "(request) => Promise<ResolverResponse<void>>",
+              "optional": true,
+              "description": "Callback to delete a comment annotation from your backend. Optional when config.deleteConfig is provided."
+            },
+            {
+              "name": "config.additionalFields",
+              "type": "string[]",
+              "optional": true,
+              "description": "Extra fields to include in the resolver payload sent to config-based HTTP endpoints."
+            }
+          ],
+          "returnType": "N/A — provider object passed to setDataProviders()",
+          "codeExample": "// Callback-based (get/save/delete are still valid but now optional)\nclient.setDataProviders({\n  comment: {\n    get: async (request) => { /* fetch from your backend */ },\n    save: async (request) => { /* persist to your backend */ },\n    delete: async (request) => { /* delete from your backend */ },\n  },\n});\n\n// Config-based URL endpoints — no callbacks needed (v5.0.2-beta.8+)\nclient.setDataProviders({\n  comment: {\n    config: {\n      getConfig:    { url: 'https://api.yourapp.com/comments/get' },\n      saveConfig:   { url: 'https://api.yourapp.com/comments/save' },\n      deleteConfig: { url: 'https://api.yourapp.com/comments/delete' },\n      additionalFields: ['tenantId', 'projectId'],\n    },\n  },\n});"
+        },
+        "confidence": "high",
+        "ambiguityNote": null
+      }
+    ]
+  }
+]

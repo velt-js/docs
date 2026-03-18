@@ -1,0 +1,672 @@
+---
+title: "Recordings"
+description: "Self-host your recording annotation PII data while using Velt's components. Keep identity, transcription, and attachment URLs on your infrastructure with only minimal identifiers stored on Velt servers."
+---
+
+<Warning>
+  - This is currently only compatible with `setDocuments` method.
+  - Ensure that the data providers are set prior to calling `identify` method.
+  - The data provider methods must return the correct status code (e.g. 200 for success, 500 for errors) and success boolean in the response object. This ensures proper error handling and retries.
+</Warning>
+
+# Overview
+Velt supports self-hosting your recording annotation PII data:
+
+- Recording annotation identity (user `from` field), transcription, and attachment URLs can be stored on your own infrastructure, with only necessary identifiers on Velt servers.
+- Velt Components automatically hydrate recording data in the frontend by fetching from your configured data provider.
+- This gives you full control over recording PII while maintaining all Velt recorder features.
+
+# How does it work?
+When recorder annotations are created, updated, or deleted:
+
+1. The SDK uses your configured [`RecorderAnnotationDataProvider`](/api-reference/sdk/models/data-models#recorderannotationdataprovider) to handle storage and retrieval.
+2. Your data provider implements three optional methods:
+   - `get`: Fetches recording annotation PII from your database
+   - `save`: Stores PII fields and returns updated transcription/attachments
+   - `delete`: Removes PII fields from your database
+
+**The process works as follows:**
+
+When a recording annotation operation occurs:
+
+1. The SDK first attempts the operation on your storage infrastructure
+2. If successful:
+   - The SDK updates Velt's servers with minimal identifiers
+   - The [`RecorderAnnotation`](/api-reference/sdk/models/data-models#recorderannotation) object is updated with `isRecorderResolverUsed: true` while PII is being fetched
+   - Once PII is available, the annotation is hydrated with identity, transcription, and attachment data
+3. If the operation fails, no changes are made to Velt's servers and the operation is retried if you have configured retries.
+
+# Implementation Approaches
+
+You can implement recorder self-hosting using either of these approaches:
+
+1. **Endpoint based**: Provide endpoint URLs and let the SDK handle HTTP requests
+2. **Function based**: Implement `get`, `save`, and `delete` methods yourself
+
+Both approaches are fully backward compatible and can be used together.
+
+| Feature | Function based | Endpoint based |
+|---------|----------------|----------------|
+| **Best For** | Complex setups requiring middleware logic, dynamic headers, or transformation before sending | Standard REST APIs where you just need to pass the request "as-is" to the backend |
+| **Implementation** | You write the `fetch()` or `axios` code | You provide the `url` string and `headers` object |
+| **Flexibility** | High | Medium |
+| **Speed** | Medium | High |
+
+## Endpoint based DataProvider
+
+Instead of implementing custom methods, you can configure endpoints directly and let the SDK handle HTTP requests.
+
+### getConfig
+Config-based endpoint for fetching recording annotation PII. The SDK automatically makes HTTP POST requests with the request body.
+- Type: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig)
+- Request body format: [`GetRecorderResolverRequest`](/api-reference/sdk/models/data-models#getrecorderresolverrequest)
+- Response format: [`ResolverResponse<Record<string, PartialRecorderAnnotation>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const recorderDataProvider = {
+  config: {
+    getConfig: {
+      url: 'https://your-backend.com/api/velt/recordings/get',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    }
+  }
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ recorder: recorderDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const recorderDataProvider = {
+  config: {
+    getConfig: {
+      url: 'https://your-backend.com/api/velt/recordings/get',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    }
+  }
+};
+
+Velt.setDataProviders({ recorder: recorderDataProvider });
+```
+</Tab>
+</Tabs>
+
+### saveConfig
+Config-based endpoint for saving recording annotation PII. The SDK automatically makes HTTP POST requests with the request body.
+- Type: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig)
+- Request body format: [`SaveRecorderResolverRequest`](/api-reference/sdk/models/data-models#saverecorderresolverrequest)
+- Response format: [`ResolverResponse<SaveRecorderResolverData>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const recorderDataProvider = {
+  config: {
+    saveConfig: {
+      url: 'https://your-backend.com/api/velt/recordings/save',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    }
+  }
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ recorder: recorderDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const recorderDataProvider = {
+  config: {
+    saveConfig: {
+      url: 'https://your-backend.com/api/velt/recordings/save',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    }
+  }
+};
+
+Velt.setDataProviders({ recorder: recorderDataProvider });
+```
+</Tab>
+</Tabs>
+
+### deleteConfig
+Config-based endpoint for deleting recording annotation PII. The SDK automatically makes HTTP POST requests with the request body.
+- Type: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig)
+- Request body format: [`DeleteRecorderResolverRequest`](/api-reference/sdk/models/data-models#deleterecorderresolverrequest)
+- Response format: [`ResolverResponse<undefined>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const recorderDataProvider = {
+  config: {
+    deleteConfig: {
+      url: 'https://your-backend.com/api/velt/recordings/delete',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    }
+  }
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ recorder: recorderDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const recorderDataProvider = {
+  config: {
+    deleteConfig: {
+      url: 'https://your-backend.com/api/velt/recordings/delete',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    }
+  }
+};
+
+Velt.setDataProviders({ recorder: recorderDataProvider });
+```
+</Tab>
+</Tabs>
+
+### Endpoint based Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const recorderDataProvider = {
+  config: {
+    getConfig: {
+      url: 'https://your-backend.com/api/velt/recordings/get',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    },
+    saveConfig: {
+      url: 'https://your-backend.com/api/velt/recordings/save',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    },
+    deleteConfig: {
+      url: 'https://your-backend.com/api/velt/recordings/delete',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    },
+    additionalFields: ['customField1', 'customField2'],
+    resolveTimeout: 5000,
+    getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+    saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+    deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+  },
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ recorder: recorderDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const recorderDataProvider = {
+  config: {
+    getConfig: {
+      url: 'https://your-backend.com/api/velt/recordings/get',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    },
+    saveConfig: {
+      url: 'https://your-backend.com/api/velt/recordings/save',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    },
+    deleteConfig: {
+      url: 'https://your-backend.com/api/velt/recordings/delete',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    },
+    additionalFields: ['customField1', 'customField2'],
+    resolveTimeout: 5000,
+    getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+    saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+    deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+  },
+};
+
+Velt.setDataProviders({ recorder: recorderDataProvider });
+```
+</Tab>
+</Tabs>
+
+## Function based DataProvider
+
+Implement custom methods to handle data operations yourself.
+
+### get
+Fetch recording annotation PII data from your database. Called when annotations need to be hydrated in the frontend.
+- Param: [`GetRecorderResolverRequest`](/api-reference/sdk/models/data-models#getrecorderresolverrequest)
+- Return: [`Promise<ResolverResponse<Record<string, PartialRecorderAnnotation>>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const getRecordingFromDB = async (request) => {
+  const response = await fetch('/api/velt/recordings/get', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const recorderDataProvider = {
+  get: getRecordingFromDB,
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ recorder: recorderDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const getRecordingFromDB = async (request) => {
+  const response = await fetch('/api/velt/recordings/get', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const recorderDataProvider = {
+  get: getRecordingFromDB,
+};
+
+Velt.setDataProviders({ recorder: recorderDataProvider });
+```
+</Tab>
+</Tabs>
+
+### save
+Store recording annotation PII fields. Called when a recorder annotation is created or updated.
+- Param: [`SaveRecorderResolverRequest`](/api-reference/sdk/models/data-models#saverecorderresolverrequest)
+- Return: [`Promise<ResolverResponse<SaveRecorderResolverData>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const saveRecordingToDB = async (request) => {
+  const response = await fetch('/api/velt/recordings/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const recorderDataProvider = {
+  save: saveRecordingToDB,
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ recorder: recorderDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const saveRecordingToDB = async (request) => {
+  const response = await fetch('/api/velt/recordings/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const recorderDataProvider = {
+  save: saveRecordingToDB,
+};
+
+Velt.setDataProviders({ recorder: recorderDataProvider });
+```
+</Tab>
+</Tabs>
+
+### delete
+Remove recording annotation PII from your database. Called when a recorder annotation is deleted.
+- Param: [`DeleteRecorderResolverRequest`](/api-reference/sdk/models/data-models#deleterecorderresolverrequest)
+- Return: [`Promise<ResolverResponse<undefined>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const deleteRecordingFromDB = async (request) => {
+  const response = await fetch('/api/velt/recordings/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const recorderDataProvider = {
+  delete: deleteRecordingFromDB,
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ recorder: recorderDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const deleteRecordingFromDB = async (request) => {
+  const response = await fetch('/api/velt/recordings/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const recorderDataProvider = {
+  delete: deleteRecordingFromDB,
+};
+
+Velt.setDataProviders({ recorder: recorderDataProvider });
+```
+</Tab>
+</Tabs>
+
+### config
+Configuration for the recorder data provider.
+- Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig). Relevant properties:
+  - `resolveTimeout`: Timeout duration (in milliseconds) for resolver operations
+  - `getRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for get operations.
+  - `saveRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for save operations.
+  - `deleteRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for delete operations.
+
+```jsx
+const recorderResolverConfig = {
+  resolveTimeout: 5000,
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+};
+```
+
+### uploadChunks
+Controls whether recording media is uploaded as individual chunks during recording, or as a single full recording after the `annotationId` is assigned.
+- Type: `boolean`
+- Default: `false` (upload full recording)
+
+Set to `true` to upload individual chunks as they are recorded, which can be useful for long recordings or unreliable network conditions.
+
+### storage
+A scoped [`AttachmentDataProvider`](/api-reference/sdk/models/data-models#attachmentdataprovider) for recorder media files. Use this to route recording file uploads to a separate storage backend from your default attachment provider.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const recorderDataProvider = {
+  storage: {
+    save: async (request) => {
+      const formData = new FormData();
+      formData.append('file', request.file);
+      formData.append('metadata', JSON.stringify(request.metadata));
+      const response = await fetch('/api/velt/recordings/upload', {
+        method: 'POST',
+        body: formData
+      });
+      return await response.json();
+    },
+    delete: async (request) => {
+      const response = await fetch('/api/velt/recordings/upload/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request)
+      });
+      return await response.json();
+    },
+  },
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ recorder: recorderDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const recorderDataProvider = {
+  storage: {
+    save: async (request) => {
+      const formData = new FormData();
+      formData.append('file', request.file);
+      formData.append('metadata', JSON.stringify(request.metadata));
+      const response = await fetch('/api/velt/recordings/upload', {
+        method: 'POST',
+        body: formData
+      });
+      return await response.json();
+    },
+    delete: async (request) => {
+      const response = await fetch('/api/velt/recordings/upload/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request)
+      });
+      return await response.json();
+    },
+  },
+};
+
+Velt.setDataProviders({ recorder: recorderDataProvider });
+```
+</Tab>
+</Tabs>
+
+### Function based Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const getRecordingFromDB = async (request) => {
+  const response = await fetch('/api/velt/recordings/get', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const saveRecordingToDB = async (request) => {
+  const response = await fetch('/api/velt/recordings/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const deleteRecordingFromDB = async (request) => {
+  const response = await fetch('/api/velt/recordings/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const recorderResolverConfig = {
+  resolveTimeout: 5000,
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+};
+
+const recorderDataProvider = {
+  get: getRecordingFromDB,
+  save: saveRecordingToDB,
+  delete: deleteRecordingFromDB,
+  config: recorderResolverConfig,
+  uploadChunks: false,
+  storage: {
+    save: async (request) => {
+      const formData = new FormData();
+      formData.append('file', request.file);
+      formData.append('metadata', JSON.stringify(request.metadata));
+      const response = await fetch('/api/velt/recordings/upload', {
+        method: 'POST',
+        body: formData
+      });
+      return await response.json();
+    },
+    delete: async (request) => {
+      const response = await fetch('/api/velt/recordings/upload/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request)
+      });
+      return await response.json();
+    },
+  },
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ recorder: recorderDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const getRecordingFromDB = async (request) => {
+  const response = await fetch('/api/velt/recordings/get', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const saveRecordingToDB = async (request) => {
+  const response = await fetch('/api/velt/recordings/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const deleteRecordingFromDB = async (request) => {
+  const response = await fetch('/api/velt/recordings/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const recorderResolverConfig = {
+  resolveTimeout: 5000,
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+};
+
+const recorderDataProvider = {
+  get: getRecordingFromDB,
+  save: saveRecordingToDB,
+  delete: deleteRecordingFromDB,
+  config: recorderResolverConfig,
+  uploadChunks: false,
+  storage: {
+    save: async (request) => {
+      const formData = new FormData();
+      formData.append('file', request.file);
+      formData.append('metadata', JSON.stringify(request.metadata));
+      const response = await fetch('/api/velt/recordings/upload', {
+        method: 'POST',
+        body: formData
+      });
+      return await response.json();
+    },
+    delete: async (request) => {
+      const response = await fetch('/api/velt/recordings/upload/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request)
+      });
+      return await response.json();
+    },
+  },
+};
+
+Velt.setDataProviders({ recorder: recorderDataProvider });
+```
+</Tab>
+</Tabs>
+
+# Loading and Upload State Fields
+
+Two fields on [`RecorderAnnotation`](/api-reference/sdk/models/data-models#recorderannotation) indicate recorder resolver status:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `isRecorderResolverUsed` | `boolean` | `true` while PII is being fetched from the recorder resolver. Use this field to show a loading state in your UI. |
+| `isUrlAvailable` | `boolean` | `true` once the recording URL has been uploaded and is available (not a local blob URL). Use this field to indicate upload progress. |
+
+# Debugging
+
+You can subscribe to `dataProvider` events to monitor and debug recorder resolver operations. Filter for the `RecorderResolverModuleName.GET_RECORDER_ANNOTATIONS` module name to isolate recorder-specific events.
+
+You can also use the [Velt Chrome DevTools extension](https://chromewebstore.google.com/detail/velt-devtools/nfldoicbagllmegffdapcnohakpamlnl) to inspect and debug your Velt implementation.
+
+[`RecorderResolverModuleName`](/api-reference/sdk/models/data-models#recorderresolvermodulename) — Enum of module names for recorder resolver events.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useVeltClient } from '@veltdev/react';
+
+const { client } = useVeltClient();
+
+useEffect(() => {
+  if (!client) return;
+
+  const subscription = client.on('dataProvider').subscribe((event) => {
+    console.log('Data Provider Event:', event);
+  });
+
+  return () => subscription?.unsubscribe();
+}, [client]);
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```javascript
+const subscription = Velt.on('dataProvider').subscribe((event) => {
+  console.log('Data Provider Event:', event);
+});
+
+// Unsubscribe when done
+subscription?.unsubscribe();
+```
+</Tab>
+</Tabs>

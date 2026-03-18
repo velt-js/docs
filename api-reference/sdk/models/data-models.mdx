@@ -2669,6 +2669,173 @@ Defines the time window and activity cap for a single batching scope.
 | `maxActivities`      | `number`  | No       | Maximum activities per batch; flush triggers early when this count is reached.    |
 
 
+# Activity Logs
+
+#### ActivityFeatureType
+---
+Feature area that generated an activity log record.
+
+```typescript
+type ActivityFeatureType = 'comment' | 'reaction' | 'recorder' | 'crdt' | 'custom';
+```
+
+| Value | Description |
+|-------|-------------|
+| `'comment'` | Activity log from the Comments feature |
+| `'reaction'` | Activity log from the Reactions feature |
+| `'recorder'` | Activity log from the Recorder feature |
+| `'crdt'` | Activity log from the CRDT (collaborative editor) feature |
+| `'custom'` | Activity log created by the host application |
+
+#### ActivitySubscribeConfig
+---
+Filter config passed to `getAllActivities()` to scope the activity log feed.
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `organizationId` | `string` | No | Scope feed to a specific organization ID |
+| `documentIds` | `string[]` | No | Filter to specific document IDs |
+| `currentDocumentOnly` | `boolean` | No | When `true`, limits feed to the current document. Auto-switches when `setDocument()` is called |
+| `maxDays` | `number` | No | Maximum age in days for returned activity logs (default: 30) |
+| `featureTypes` | [`ActivityFeatureType[]`](#activityfeaturetype) | No | Filter by feature area |
+| `excludeFeatureTypes` | [`ActivityFeatureType[]`](#activityfeaturetype) | No | Exclude specific feature areas |
+| `actionTypes` | `string[]` | No | Filter by action type; use the exported action type constants |
+| `excludeActionTypes` | `string[]` | No | Exclude specific action types |
+| `userIds` | `string[]` | No | Filter to activity logs by specific user IDs |
+| `excludeUserIds` | `string[]` | No | Exclude activity logs by specific user IDs |
+
+#### ActivityRecord
+---
+Core activity log object returned from the activity log feed. Generic params: `TEntity` (entity data shape), `TTarget` (target entity data shape).
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `id` | `string` | Yes | Unique activity log ID |
+| `featureType` | [`ActivityFeatureType`](#activityfeaturetype) | Yes | Feature area that generated this activity log |
+| `actionType` | `string` | Yes | Specific action that occurred |
+| `eventType` | `string` | No | Sub-event type within the action |
+| `actionUser` | [`User`](#user) | Yes | User who performed the action |
+| `timestamp` | `number` | Yes | Unix timestamp of the activity log |
+| `metadata` | [`ActivityMetadata`](#activitymetadata) | Yes | Feature-specific extensible metadata |
+| `targetEntityId` | `string` | Yes | ID of the entity this activity log targets |
+| `targetSubEntityId` | `string \| null` | No | ID of a sub-entity within the target |
+| `changes` | [`ActivityChanges`](#activitychanges) | No | Before/after field changes |
+| `entityData` | `TEntity` | No | Full entity object at time of action |
+| `entityTargetData` | `TTarget` | No | Full target entity object at time of action |
+| `displayMessageTemplate` | `string` | No | Template string with `{{variable}}` placeholders |
+| `displayMessageTemplateData` | `Record<string, unknown>` | No | Data to resolve the display message template |
+| `displayMessage` | `string` | No | Resolved human-readable display message. Computed client-side — never stored in Firestore |
+| `actionIcon` | `string` | No | Icon URL or identifier for the action |
+| `immutable` | `boolean` | No | When `true`, the record cannot be updated or deleted via REST API |
+
+#### ActivityChanges
+---
+Map of field names to their before/after change values.
+
+```typescript
+interface ActivityChanges {
+  [key: string]: ActivityChange | undefined;
+}
+```
+
+#### ActivityChange
+---
+Before/after values for a single changed field. Generic param `T` is the field value type.
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `from` | `T \| null` | No | Field value before the action |
+| `to` | `T \| null` | No | Field value after the action |
+
+#### ActivityMetadata
+---
+Extensible metadata attached to an activity log record. Extends `BaseMetadata` with open index signature for feature-specific fields.
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `apiKey` | `string` | No | Inherited from `BaseMetadata` |
+| `documentId` | `string` | No | Inherited from `BaseMetadata` |
+| `organizationId` | `string` | No | Inherited from `BaseMetadata` |
+| `clientOrganizationId` | `string` | No | Inherited from `BaseMetadata` |
+| `folderId` | `string` | No | Inherited from `BaseMetadata` |
+| `veltFolderId` | `string` | No | Inherited from `BaseMetadata` |
+| `documentMetadata` | `DocumentMetadata` | No | Inherited from `BaseMetadata` |
+| `sdkVersion` | `string \| null` | No | Inherited from `BaseMetadata` |
+| `[key: string]` | `any` | No | Feature-specific extension fields |
+
+#### CreateActivityData
+---
+Payload for `createActivity()`. Use `featureType: 'custom'` and `actionType: 'custom'` for non-Velt events. Generic params: `TEntity` (entity data shape), `TTarget` (target entity data shape).
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `featureType` | [`ActivityFeatureType`](#activityfeaturetype) | Yes | Feature type; use `'custom'` for non-Velt events |
+| `actionType` | `string` | Yes | Action identifier; use `'custom'` for non-Velt events |
+| `eventType` | `string` | No | Sub-event type within the action |
+| `targetEntityId` | `string` | Yes | ID of the entity this activity log targets |
+| `targetSubEntityId` | `string \| null` | No | ID of a sub-entity within the target |
+| `changes` | [`ActivityChanges`](#activitychanges) | No | Before/after field changes to record |
+| `entityData` | `TEntity` | No | Full entity object at time of action |
+| `entityTargetData` | `TTarget` | No | Full target entity object at time of action |
+| `actionIcon` | `string` | No | Icon URL or identifier — typically for custom activities |
+| `displayMessageTemplate` | `string` | No | Template string with `{{variable}}` placeholders — only for custom activities |
+| `displayMessageTemplateData` | `Record<string, unknown>` | No | Template variable values — only for custom activities |
+
+### Activity Log Action Type Constants
+
+Pre-defined `actionType` string constants for each feature's activity log records. Import these to build type-safe `actionTypes` filters in [`ActivitySubscribeConfig`](#activitysubscribeconfig).
+
+#### CommentActivityActionTypes
+---
+Action type constants for Comment feature activity logs. Union type: `CommentActivityActionType`.
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `ANNOTATION_ADD` | `'comment_annotation.add'` | A comment annotation was added |
+| `ANNOTATION_DELETE` | `'comment_annotation.delete'` | A comment annotation was deleted |
+| `COMMENT_ADD` | `'comment.add'` | A comment was added |
+| `COMMENT_UPDATE` | `'comment.update'` | A comment was updated |
+| `COMMENT_DELETE` | `'comment.delete'` | A comment was deleted |
+| `STATUS_CHANGE` | `'comment_annotation.status_change'` | Comment annotation status changed |
+| `PRIORITY_CHANGE` | `'comment_annotation.priority_change'` | Comment annotation priority changed |
+| `ASSIGN` | `'comment_annotation.assign'` | Comment annotation was assigned |
+| `ACCESS_MODE_CHANGE` | `'comment_annotation.access_mode_change'` | Comment annotation access mode changed |
+| `CUSTOM_LIST_CHANGE` | `'comment_annotation.custom_list_change'` | Comment annotation custom list changed |
+| `APPROVE` | `'comment_annotation.approve'` | Comment annotation was approved |
+| `ACCEPT` | `'comment.accept'` | A comment was accepted |
+| `REJECT` | `'comment.reject'` | A comment was rejected |
+| `REACTION_ADD` | `'comment.reaction_add'` | A reaction was added to a comment |
+| `REACTION_DELETE` | `'comment.reaction_delete'` | A reaction was removed from a comment |
+| `SUBSCRIBE` | `'comment_annotation.subscribe'` | User subscribed to a comment annotation |
+| `UNSUBSCRIBE` | `'comment_annotation.unsubscribe'` | User unsubscribed from a comment annotation |
+
+#### RecorderActivityActionTypes
+---
+Action type constants for Recorder feature activity logs. Union type: `RecorderActivityActionType`.
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `RECORDING_ADD` | `'recording.add'` | A recording was added |
+| `RECORDING_DELETE` | `'recording.delete'` | A recording was deleted |
+
+#### ReactionActivityActionTypes
+---
+Action type constants for Reaction feature activity logs. Union type: `ReactionActivityActionType`.
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `REACTION_ADD` | `'reaction.add'` | A reaction was added |
+| `REACTION_DELETE` | `'reaction.delete'` | A reaction was deleted |
+
+#### CrdtActivityActionTypes
+---
+Action type constants for CRDT feature activity logs. Union type: `CrdtActivityActionType`.
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `EDITOR_EDIT` | `'crdt.editor_edit'` | A CRDT editor edit occurred |
+
+
 # Single Editor Mode
 
 #### AccessRequestEvent

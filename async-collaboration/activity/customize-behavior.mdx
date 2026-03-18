@@ -1,0 +1,185 @@
+---
+title: "Customize Behavior"
+---
+
+#### getAllActivities
+
+Subscribe to the real-time activity log feed. Emits the full list of ActivityRecord objects whenever the feed changes.
+
+- Params: `config?:` [`ActivitySubscribeConfig`](/api-reference/sdk/models/data-models#activitysubscribeconfig)
+  - `documentIds` (`string[]`) — Filter activity logs to specific document IDs.
+  - `featureTypes` (`ActivityFeatureType[]`) — Filter by feature type: `'comment'`, `'reaction'`, `'recorder'`, `'crdt'`, `'custom'`.
+  - `actionTypes` (`string[]`) — Filter by action type; use exported action type constants for type-safe values.
+- Returns: [`Observable<ActivityRecord[] | null>`](/api-reference/sdk/models/data-models#activityrecord)
+
+<Tabs>
+<Tab title="React / Next.js">
+
+**Using Hook — org-wide feed:**
+```jsx
+import { useAllActivities } from '@veltdev/react';
+
+function ActivityFeed() {
+  const activities = useAllActivities();
+
+  if (activities === null) return <p>Loading...</p>;
+  if (activities.length === 0) return <p>No activities yet.</p>;
+
+  return (
+    <ul>
+      {activities.map((activity) => (
+        <li key={activity.id}>{activity.displayMessage}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+**Using Hook — document-scoped feed:**
+```jsx
+import { useAllActivities } from '@veltdev/react';
+
+function DocumentActivityFeed({ documentId }: { documentId: string }) {
+  const activities = useAllActivities({
+    documentIds: [documentId],
+    featureTypes: ['comment', 'reaction'],
+  });
+
+  if (activities === null) return <p>Loading...</p>;
+  return (
+    <ul>
+      {activities?.map((activity) => (
+        <li key={activity.id}>{activity.displayMessage}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+**Using API:**
+```jsx
+import { useVeltClient } from '@veltdev/react';
+import { useEffect } from 'react';
+
+function YourComponent() {
+  const { client } = useVeltClient();
+
+  useEffect(() => {
+    if (!client) return;
+    const activityElement = client.getActivityElement();
+
+    // Org-wide subscription
+    const subscription = activityElement.getAllActivities().subscribe((activities) => {
+      if (activities === null) return;
+      console.log(activities);
+    });
+
+    // Document-scoped subscription
+    const docSubscription = activityElement.getAllActivities({
+      documentIds: ['my-document-id'],
+      featureTypes: ['comment'],
+    }).subscribe((activities) => {
+      console.log(activities);
+    });
+
+    return () => {
+      subscription?.unsubscribe();
+      docSubscription?.unsubscribe();
+    };
+  }, [client]);
+}
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```javascript
+const activityElement = Velt.getActivityElement();
+
+// Org-wide subscription
+const subscription = activityElement.getAllActivities().subscribe((activities) => {
+  if (activities === null) return;
+  console.log(activities.map((a) => a.displayMessage));
+});
+
+// Document-scoped subscription
+const docSubscription = activityElement.getAllActivities({
+  documentIds: ['my-document-id'],
+  featureTypes: ['comment'],
+}).subscribe((activities) => {
+  console.log(activities);
+});
+
+// To unsubscribe:
+// subscription?.unsubscribe();
+// docSubscription?.unsubscribe();
+```
+</Tab>
+</Tabs>
+
+#### createActivity
+
+Create a custom activity log record for non-Velt events. Use `displayMessageTemplate` with `{{variable}}` placeholders and supply values in `displayMessageTemplateData`.
+
+- Params: [`CreateActivityData`](/api-reference/sdk/models/data-models#createactivitydata)
+- Returns: `Promise<void>`
+
+<Tabs>
+<Tab title="React / Next.js">
+
+**Using Hook:**
+```jsx
+import { useActivityUtils } from '@veltdev/react';
+
+function CustomActivityButton() {
+  const activityElement = useActivityUtils();
+
+  const handleClick = async () => {
+    await activityElement?.createActivity({
+      featureType: 'custom',
+      actionType: 'custom',
+      targetEntityId: 'my-entity-id',
+      displayMessageTemplate: '{{actionUser.name}} deployed version {{version}}',
+      displayMessageTemplateData: { version: 'v2.3.1' },
+    });
+  };
+
+  return <button onClick={handleClick}>Create Activity</button>;
+}
+```
+
+**Using API:**
+```jsx
+import { useVeltClient } from '@veltdev/react';
+
+function YourComponent() {
+  const { client } = useVeltClient();
+
+  const createCustomActivity = async () => {
+    if (!client) return;
+    const activityElement = client.getActivityElement();
+    await activityElement.createActivity({
+      featureType: 'custom',
+      actionType: 'custom',
+      targetEntityId: 'annotation-id',
+      displayMessageTemplate: '{{actionUser.name}} escalated this to {{assignee.name}}',
+      displayMessageTemplateData: { assignee: { name: 'Alice' } },
+    });
+  };
+}
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```javascript
+const activityElement = Velt.getActivityElement();
+
+await activityElement.createActivity({
+  featureType: 'custom',
+  actionType: 'custom',
+  targetEntityId: 'annotation-id',
+  displayMessageTemplate: '{{actionUser.name}} escalated this to {{assignee.name}}',
+  displayMessageTemplateData: { assignee: { name: 'Alice' } },
+});
+```
+</Tab>
+</Tabs>

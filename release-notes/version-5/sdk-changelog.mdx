@@ -13,154 +13,15 @@ description: Release Notes of changes added to the core Velt SDK
 
 ### New Features
 
-- [**Activity Logs**]: Added a new `ActivityElement` API that provides a real-time activity log history feed scoped to your org, specific documents, or individual entities. Activity logs are auto-generated for comment, reaction, recorder, and CRDT actions, and you can create custom activity logs for non-Velt events. The feed uses the same 2-layer trigger/listener architecture as notifications.
+- [**Activity Logs**]: A complete, real-time record of everything that happens across your product. Velt automatically generates activity log records for Comments, Reactions, Recorder, and CRDT features, and you can push custom events (deployments, status changes, escalations) into the same timeline using `createActivity()`. Subscribe org-wide for admin dashboards, filter by document for inline timelines, or scope by feature type to reduce noise. [Learn more →](/async-collaboration/activity/overview)
 
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-import { useAllActivities, useActivityUtils } from '@veltdev/react';
+- [**CRDT**]: Added `setActivityDebounceTime(time)` on `CrdtElement` to control how long editor keystrokes are batched before flushing a single activity log record. Default: 10 minutes. Minimum: 10 seconds. [Documentation →](/realtime-collaboration/crdt/setup/core#activity-log-debounce)
 
-// Subscribe to all activities
-const activities = useAllActivities();
-
-// Subscribe with filters
-const filtered = useAllActivities({
-  documentIds: ['my-document-id'],
-  featureTypes: ['comment', 'reaction'],
-});
-
-// Create a custom activity
-const activityElement = useActivityUtils();
-await activityElement?.createActivity({
-  featureType: 'custom',
-  actionType: 'custom',
-  targetEntityId: 'my-entity-id',
-  displayMessageTemplate: '{{actionUser.name}} deployed version {{version}}',
-  displayMessageTemplateData: { version: 'v2.3.1' },
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```js
-const activityElement = Velt.getActivityElement();
-
-// Subscribe org-wide
-const subscription = activityElement.getAllActivities();
-subscription.subscribe((activities) => {
-  if (activities === null) return;
-  console.log(activities.map((a) => a.displayMessage));
-});
-
-// Subscribe scoped to a document
-const docSubscription = activityElement.getAllActivities({
-  documentIds: ['my-document-id'],
-  featureTypes: ['comment'],
-});
-docSubscription.subscribe((activities) => {
-  console.log(activities);
-});
-
-// Create a custom activity
-await activityElement.createActivity({
-  featureType: 'custom',
-  actionType: 'custom',
-  targetEntityId: 'annotation-id',
-  displayMessageTemplate: '{{actionUser.name}} escalated this to {{assignee.name}}',
-  displayMessageTemplateData: { assignee: { name: 'Alice' } },
-});
-```
-</Tab>
-</Tabs>
-
-Key types: [`ActivityRecord`](/api-reference/sdk/models/data-models#activityrecord), [`ActivitySubscribeConfig`](/api-reference/sdk/models/data-models#activitysubscribeconfig), [`CreateActivityData`](/api-reference/sdk/models/data-models#createactivitydata). [See documentation →](/async-collaboration/activity/overview) | [API Methods →](/api-reference/sdk/api/api-methods#activity-logs)
-
-- [**Activity Logs**]: Added exported constant objects (`CommentActivityActionTypes`, `RecorderActivityActionTypes`, `ReactionActivityActionTypes`, `CrdtActivityActionTypes`) and their union types for type-safe action type values in [`ActivitySubscribeConfig`](/api-reference/sdk/models/data-models#activitysubscribeconfig) filters and custom activity log creation. Use these instead of raw strings when filtering by `actionTypes`. [See constants reference →](/api-reference/sdk/models/data-models#activity-log-action-type-constants)
-
-```ts
-const activities = activityElement.getAllActivities({
-  actionTypes: [
-    CommentActivityActionTypes.ANNOTATION_ADD,
-    CommentActivityActionTypes.STATUS_CHANGE,
-  ],
-});
-```
-
-- [**CRDT**]: Added `setActivityDebounceTime(time)` method on `CrdtElement` to control how long CRDT editor keystrokes are batched before a single activity log record is flushed. The default is 10 minutes; the minimum enforced value is 10 seconds (10,000 ms). [See documentation →](/realtime-collaboration/crdt/setup/core#activity-log-debounce)
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using API methods
-const crdtElement = client.getCrdtElement();
-
-// Flush CRDT edit activities after 30 seconds of inactivity
-crdtElement.setActivityDebounceTime(30000);
-```
-</Tab>
-<Tab title="Other Frameworks">
-```js
-const crdtElement = Velt.getCrdtElement();
-
-// Flush CRDT edit activities after 30 seconds of inactivity
-crdtElement.setActivityDebounceTime(30000);
-```
-</Tab>
-</Tabs>
-
-- [**Activity Logs Service**]: Added REST API endpoints for full CRUD operations on activity log records: `POST /v2/activities/get`, `POST /v2/activities/add`, `POST /v2/activities/update`, and `POST /v2/activities/delete`. All endpoints are served via the `notificationsapibe` cloud function. Activity log creation requires the workspace to have `activityServiceConfig` enabled. Also added a `triggerActivities` flag on the `CommentData` schema in the `POST /v2/commentannotations/add` endpoint — when set to `true` on an individual comment, an activity log record is automatically created on comment addition.
-
-```json
-// POST /v2/activities/get — fetch with filters
-{
-  "apiKey": "YOUR_API_KEY",
-  "organizationId": "org-123",
-  "documentId": "doc-456",
-  "featureTypes": ["comment"],
-  "order": "desc",
-  "pageSize": 50
-}
-
-// POST /v2/activities/add — create activity records
-{
-  "apiKey": "YOUR_API_KEY",
-  "organizationId": "org-123",
-  "documentId": "doc-456",
-  "activities": [
-    {
-      "featureType": "comment",
-      "actionType": "comment.add",
-      "actionUser": { "userId": "user-1", "email": "user@example.com" },
-      "targetEntityId": "annotation-789",
-      "displayMessageTemplate": "{{user}} added a comment"
-    }
-  ]
-}
-
-// POST /v2/commentannotations/add — triggerActivities flag
-{
-  "data": {
-    "commentAnnotations": [
-      {
-        "commentData": [
-          {
-            "from": { "userId": "user-1", "email": "user@example.com" },
-            "commentText": "This needs review",
-            "triggerActivities": true
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-[Activity Logs API Reference →](/api-reference/rest-apis/v2/activities/get-activities)
+- [**Activity Logs REST API**]: Added CRUD endpoints for activity log records (`/v2/activities/get`, `/v2/activities/add`, `/v2/activities/update`, `/v2/activities/delete`). Also added a `triggerActivities` flag on `POST /v2/commentannotations/add` to auto-create activity log records when comments are added. [REST API Reference →](/api-reference/rest-apis/v2/activities/get-activities)
 
 ### Bug Fixes
 
-- [**Comments**]: Fixed temp annotation context being cleared prematurely during comment submission in composer mode. The cleanup now runs only when the component transitions from a temporary ID to a real annotation ID, preventing stale context from affecting subsequent comment operations.
-
-- [**Comments**]: Disabled `removeCommentTextTrigger` and `removeCommentTextSdktestTrigger` exports to resolve channel presence issues. Comment text removal triggers are temporarily unavailable.
+- [**Comments**]: Fixed temp annotation context being cleared prematurely during comment submission in composer mode, preventing stale context from affecting subsequent comment operations.
 
 </Update>
 

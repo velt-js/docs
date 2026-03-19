@@ -325,6 +325,7 @@ Configuration for text formatting toolbar options in comment composers.
 | `filterGhostComments` | `boolean`           | No       | If true, excludes ghost (deleted or orphaned) comments from the results                      |
 | `batchedPerDocument`  | `boolean`           | No       | Enable batched listener for large document lists (50+ docs) |
 | `debounceMs`          | `number`            | No       | Debounce delay for auto-batching updates in milliseconds (default: 5000ms)                          |
+| `agentFields`         | `string[]`          | No       | Filters queries to annotations where `agent.agentFields` contains any provided value; when set, unread count equals total count |
 
 
 #### GetCommentAnnotationsCountResponse
@@ -2151,6 +2152,26 @@ Available filter criteria for sidebar filtering.
 | `commentPlaceholder`          | `string`  | No       | Custom placeholder text for comment input field |
 | `replyPlaceholder`            | `string`  | No       | Custom placeholder text for reply input field   |
 | `pageModePlaceholder`         | `string`  | No       | Custom placeholder text for page mode input     |
+| `version`                     | `string`  | No       | When set to `"2"`, renders the V2 sidebar implementation |
+
+#### VeltCommentsSidebarV2Props
+---
+
+| Property                            | Type                      | Required | Description                                                   |
+|-------------------------------------|---------------------------|----------|---------------------------------------------------------------|
+| `pageMode`                          | `boolean`                 | No       | Enable page-mode composer                                     |
+| `focusedThreadMode`                 | `boolean`                 | No       | Enable focused-thread view on comment click                   |
+| `readOnly`                          | `boolean`                 | No       | Enable read-only mode                                         |
+| `embedMode`                         | `string \| null`          | No       | Embeds the sidebar inline within a container                  |
+| `floatingMode`                      | `boolean`                 | No       | Renders the sidebar as a floating overlay                     |
+| `position`                          | `string`                  | No       | Sidebar position, e.g., `'right'`, `'left'`                   |
+| `variant`                           | `string`                  | No       | Sidebar variant, e.g., `'sidebar'`, `'inline'`                |
+| `forceClose`                        | `boolean`                 | No       | Force-close the sidebar                                       |
+| `version`                           | `string`                  | No       | When `"2"`, routes `VeltCommentsSidebar` to the V2 implementation |
+| `onSidebarOpen`                     | `(data: any) => void`     | No       | Callback when sidebar opens                                   |
+| `onSidebarClose`                    | `(data: any) => void`     | No       | Callback when sidebar closes                                  |
+| `onCommentClick`                    | `(data: any) => void`     | No       | Callback when a comment is clicked                            |
+| `onCommentNavigationButtonClick`    | `(data: any) => void`     | No       | Callback when navigation button is clicked                    |
 
 #### VeltInlineCommentsSectionProps
 ---
@@ -2549,6 +2570,7 @@ Interface representing the Recorder element object that provides methods for con
 | `metadata`                          | `NotificationMetadata`| No       | Metadata for the current notification. e.g., `documentId`                                      |
 | `notifyUsers`                       | `{ [emailHash: string]: boolean }` | No | Map of email hashes to boolean values indicating whether to notify the user           |
 | `notifyUsersByUserId`               | `{ [userIdHash: string]: boolean }` | No | Map of user ID hashes to boolean values indicating whether to notify the user        |
+| `isNotificationResolverUsed`        | `boolean`             | No       | `true` when the notification was enriched via the notification resolver               |
 
 
 #### NotificationMetadata
@@ -3826,6 +3848,7 @@ Union type for all recorder resolver lifecycle event type strings.
 | `reaction`        | `ReactionAnnotationDataProvider`| No       | Provider for reaction annotation data          |
 | `attachment`      | `AttachmentDataProvider`        | No       | Provider for file attachment data              |
 | `recorder`        | `RecorderAnnotationDataProvider`| No       | Provider for recording annotation PII data     |
+| `notification`    | [`NotificationDataProvider`](#notificationdataprovider) | No | Provider for custom notification PII data      |
 | `anonymousUser`     | [`AnonymousUserDataProvider`](#anonymoususerdataprovider) | No | Provider to resolve email → userId mappings for anonymous users tagged by email in comments. |
 
 #### ResolverEndpointConfig
@@ -3851,7 +3874,8 @@ Config-based resolver endpoint configuration. SDK handles HTTP requests, headers
 | `getConfig`       | `ResolverEndpointConfig` | No       | Config-based endpoint for fetch operations     |
 | `saveConfig`      | `ResolverEndpointConfig` | No       | Config-based endpoint for save operations      |
 | `deleteConfig`    | `ResolverEndpointConfig` | No       | Config-based endpoint for delete operations    |
-| `additionalFields` | `string[]`              | No       | Additional fields from the feature's data object (e.g., `CommentAnnotation`, `RecorderAnnotation`) to include in resolver request payloads sent to your backend. By default, only core content/PII fields are sent. |
+| `additionalFields` | `string[]`              | No       | Custom fields copied to resolver payloads but retained in Velt's storage |
+| `fieldsToRemove`  | `string[]`              | No       | Fields stripped from Velt's storage before writing to your resolver endpoint |
 
 #### ResolverResponse
 ---
@@ -3970,6 +3994,60 @@ Request format used by config-based user resolver endpoints.
 | `config`        | `ResolverConfig`                                                                                                     | No       | Configuration for the data provider                     |
 | `uploadChunks`  | `boolean`                                                                                                            | No       | Whether to upload recording in chunks                   |
 | `storage`       | `AttachmentDataProvider`                                                                                             | No       | Storage provider for recording media files              |
+
+#### NotificationDataProvider
+---
+
+Provider for custom notification PII data. Only `notificationSource === 'custom'` notifications are routed through this resolver.
+
+| Property | Type                                                                                                                          | Required | Description                                      |
+|----------|-------------------------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|
+| `get`    | `(request: GetNotificationResolverRequest) => Promise<ResolverResponse<Record<string, PartialNotification>>>`                 | No       | Fetch notification data from your backend        |
+| `delete` | `(request: DeleteNotificationResolverRequest) => Promise<ResolverResponse<undefined>>`                                        | No       | Delete notification data from your backend       |
+| `config` | [`NotificationResolverConfig`](#notificationresolverconfig)                                                                   | No       | Configuration for the data provider              |
+
+#### NotificationResolverConfig
+---
+
+| Property            | Type                                        | Required | Description                                              |
+|---------------------|---------------------------------------------|----------|----------------------------------------------------------|
+| `resolveTimeout`    | `number`                                    | No       | Timeout in milliseconds for resolver operations          |
+| `getRetryConfig`    | [`RetryConfig`](#retryconfig)               | No       | Retry configuration for get operations                   |
+| `deleteRetryConfig` | [`RetryConfig`](#retryconfig)               | No       | Retry configuration for delete operations                |
+| `getConfig`         | [`ResolverEndpointConfig`](#resolverendpointconfig) | No | Config-based endpoint for fetch operations               |
+| `deleteConfig`      | [`ResolverEndpointConfig`](#resolverendpointconfig) | No | Config-based endpoint for delete operations              |
+
+#### GetNotificationResolverRequest
+---
+
+| Property          | Type       | Required | Description                                    |
+|-------------------|------------|----------|------------------------------------------------|
+| `organizationId`  | `string`   | Yes      | ID of the organization                         |
+| `notificationIds` | `string[]` | Yes      | Array of notification IDs to fetch             |
+
+#### DeleteNotificationResolverRequest
+---
+
+| Property          | Type     | Required | Description                                    |
+|-------------------|----------|----------|------------------------------------------------|
+| `notificationId`  | `string` | Yes      | ID of the notification to delete               |
+| `organizationId`  | `string` | Yes      | ID of the organization                         |
+
+#### PartialNotification
+---
+
+Partial notification data returned by the notification resolver. All fields are optional except `notificationId`.
+
+| Property                              | Type                                                                              | Required | Description                                                         |
+|---------------------------------------|-----------------------------------------------------------------------------------|----------|---------------------------------------------------------------------|
+| `notificationId`                      | `string`                                                                          | Yes      | ID of the notification                                              |
+| `displayHeadlineMessageTemplate`      | `string`                                                                          | No       | Template string for the notification headline message               |
+| `displayHeadlineMessageTemplateData`  | `{ actionUser?: User; recipientUser?: User; actionMessage?: string; [key: string]: any }` | No | Data to populate the headline message template              |
+| `displayBodyMessage`                  | `string`                                                                          | No       | Body message of the notification                                    |
+| `displayBodyMessageTemplate`          | `string`                                                                          | No       | Template string for the notification body message                   |
+| `displayBodyMessageTemplateData`      | `{ [key: string]: any }`                                                          | No       | Data to populate the body message template                          |
+| `notificationSourceData`              | `any`                                                                             | No       | Custom source data for the notification                             |
+| `[key: string]`                       | `any`                                                                             | No       | Additional custom fields                                            |
 
 #### GetRecorderResolverRequest
 ---

@@ -9,6 +9,176 @@ description: Release Notes of changes added to the core Velt SDK
 - `@veltdev/client`
 - `@veltdev/sdk`
 
+<Update label="5.0.2-beta.9" description="March 17, 2026">
+
+### New Features
+
+- [**UI Customization**]: Added `<velt-comments-sidebar-v2>` — a complete redesign of the Comments Sidebar built on a flat primitive component architecture. Every section of the UI is an independently importable and composable primitive. The V2 sidebar ships with a unified filter model (replacing the legacy `minimalFilter` + `advancedFilters` system), CDK virtual scroll for large comment lists, a focused-thread view, a minimal actions dropdown, and a filter dropdown.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<VeltCommentsSidebarV2
+  pageMode={false}
+  focusedThreadMode={false}
+  readOnly={false}
+  position="right"
+  variant="sidebar"
+  forceClose={true}
+  onSidebarOpen={(data) => console.log('sidebar opened', data)}
+  onSidebarClose={(data) => console.log('sidebar closed', data)}
+  onCommentClick={(data) => console.log('comment clicked', data)}
+  onCommentNavigationButtonClick={(data) => console.log('nav button clicked', data)}
+/>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comments-sidebar-v2
+  page-mode="false"
+  focused-thread-mode="false"
+  read-only="false"
+  position="right"
+  variant="sidebar"
+  force-close="true"
+></velt-comments-sidebar-v2>
+```
+</Tab>
+</Tabs>
+
+  All sections are fully wireframe-customizable and available as standalone primitives. See the [UI Customization docs](/ui-customization/features/async/comments/comment-sidebar-components-v2) for the complete wireframe structure and list of `VeltCommentsSidebarV2*` / `velt-comments-sidebar-*-v2` components.
+
+- [**Notifications**]: Added `notification` field on `VeltDataProvider` accepting a `NotificationDataProvider`. When configured, Velt calls your `get` and `delete` handlers to fetch and remove notification data from your own backend instead of Velt's storage. The resolution pipeline runs notification → user → comment, ensuring resolver-enriched user references are available when the user resolver runs. Only notifications with `notificationSource === 'custom'` are routed through the resolver. [Learn more →](/self-host-data/notifications)
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// Using API methods
+client.setDataProviders({
+  notification: {
+    get: async ({ organizationId, notificationIds }) => {
+      const results = await myBackend.fetchNotifications(organizationId, notificationIds);
+      return { status: 200, data: results };
+    },
+    delete: async ({ notificationId, organizationId }) => {
+      await myBackend.deleteNotification(organizationId, notificationId);
+      return { status: 200, data: undefined };
+    },
+    config: {
+      resolveTimeout: 30000,
+      getRetryConfig: { retryCount: 2, retryDelay: 500, revertOnFailure: false },
+    },
+  },
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setDataProviders({
+  notification: {
+    get: async ({ organizationId, notificationIds }) => {
+      const results = await myBackend.fetchNotifications(organizationId, notificationIds);
+      return { status: 200, data: results };
+    },
+    delete: async ({ notificationId, organizationId }) => {
+      await myBackend.deleteNotification(organizationId, notificationId);
+      return { status: 200, data: undefined };
+    },
+    config: {
+      resolveTimeout: 30000,
+      getRetryConfig: { retryCount: 2, retryDelay: 500, revertOnFailure: false },
+    },
+  },
+});
+```
+</Tab>
+</Tabs>
+
+  The [`Notification`](/api-reference/sdk/models/data-models#notification) model gains `isNotificationResolverUsed?: boolean` to detect resolver-enriched notifications downstream.
+
+### Improvements
+
+- [**UI Customization**]: `VeltCommentsSidebar` now accepts a `version` prop. Setting `version="2"` routes the existing `<velt-comments-sidebar>` tag to the full V2 implementation, forwarding all props (`pageMode`, `focusedThreadMode`, `readOnly`, `embedMode`, `floatingMode`, `position`, `variant`, `forceClose`).
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<VeltCommentsSidebar version="2" />
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comments-sidebar version="2"></velt-comments-sidebar>
+```
+</Tab>
+</Tabs>
+
+- [**Comments**]: Added `additionalFields` to `CommentAnnotationDataProvider.config`. Unlike `fieldsToRemove` (which strips fields from Velt's DB), `additionalFields` are copied to your resolver endpoint but retained in Velt's storage — enabling data replication without removal.
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// Using API methods
+client.setDataProviders({
+  comment: {
+    get: async (request) => { /* ... */ },
+    config: {
+      fieldsToRemove: ['sensitiveField'],
+      additionalFields: ['metadataField'],
+    },
+  },
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setDataProviders({
+  comment: {
+    get: async (request) => { /* ... */ },
+    config: {
+      fieldsToRemove: ['sensitiveField'],
+      additionalFields: ['metadataField'],
+    },
+  },
+});
+```
+</Tab>
+</Tabs>
+
+- [**Comments**]: Added `agentFields?: string[]` to [`CommentRequestQuery`](/api-reference/sdk/models/data-models#commentrequestquery) to filter comment count queries to annotations where `agent.agentFields` contains any of the provided values. When `agentFields` is set, the unread count query is skipped and treated as equal to the total count.
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// Using API methods
+const commentElement = client.getCommentElement();
+commentElement.getCommentAnnotationCount({
+  organizationId: 'org-123',
+  agentFields: ['agent-1', 'agent-2'],
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+commentElement.getCommentAnnotationCount({
+  organizationId: 'org-123',
+  agentFields: ['agent-1', 'agent-2'],
+});
+```
+</Tab>
+</Tabs>
+
+### Bug Fixes
+
+- [**Comments**]: Fixed `updateVisibility()` silently overwriting custom metadata in the annotation's [`context`](/api-reference/sdk/models/data-models#context) field. The internal `updateCommentAnnotationContext` call now uses `{ merge: true }`, preserving all custom fields set via `addCommentAnnotation` or `updateCommentAnnotationContext`.
+
+- [**Comments**]: Fixed `updateCommentAnnotationContext` dropping the `accessFields` system field when called without `{ merge: true }`. All system-managed context fields (`access`, `accessFields`) are now preserved when they are not explicitly provided in the incoming context object.
+
+- [**UI Customization**]: Fixed wireframe components' computed signals (`shouldShow`, `default-condition`) evaluating against default/empty values on first render. The fix defers view attachment until after all inputs are set, so `velt-if` and conditional wireframe customizations work correctly on first render.
+
+</Update>
+
 <Update label="5.0.2-beta.8" description="March 12, 2026">
 
 ### New Features

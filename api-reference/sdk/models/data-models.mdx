@@ -4944,39 +4944,152 @@ Configuration for creating a BlockNote collaboration store.
 
 # Tiptap Collaboration
 
-#### VeltTiptapCrdtExtensionConfig
+## v2 API
+
+#### UseCollaborationConfig
 ---
-Configuration for the Tiptap CRDT extension that enables real-time collaborative editing.
+Configuration for the `useCollaboration` React hook that enables real-time collaborative editing on TipTap.
+
+| Property                  | Type                       | Required | Description |
+|---------------------------|----------------------------|----------|-------------|
+| `editorId`                | `string`                   | Yes      | Unique identifier for this collaborative session. |
+| `initialContent`          | `string`                   | No       | HTML content applied once for brand-new documents. Default: empty paragraph. |
+| `debounceMs`              | `number`                   | No       | Throttle interval (ms) for backend writes. Default: `0`. |
+| `forceResetInitialContent`| `boolean`                  | No       | If `true`, always clear and re-apply `initialContent`. Default: `false`. |
+| `veltClient`              | `Velt`                     | No       | Explicit Velt client. Falls back to `VeltProvider` context. |
+| `onError`                 | `(error: Error) => void`   | No       | Error callback. |
+
+#### UseCollaborationReturn
+---
+Return value of the `useCollaboration` hook.
+
+| Property    | Type                             | Description |
+|-------------|----------------------------------|-------------|
+| `extension` | `Extension \| null`              | TipTap Extension bundling Yjs binding + cursor rendering. `null` while loading. |
+| `isLoading` | `boolean`                        | `true` until CollaborationManager is initialized. |
+| `isSynced`  | `boolean`                        | `true` after the initial sync with the backend completes. |
+| `status`    | `SyncStatus`                     | Connection status: `'connecting'`, `'connected'`, or `'disconnected'`. |
+| `error`     | `Error \| null`                  | Most recent error, or `null`. |
+| `manager`   | `CollaborationManager \| null`   | Escape hatch to the underlying manager. `null` before initialization. |
+
+#### SyncStatus
+---
+Connection status type for the collaborative session.
+
+```typescript
+type SyncStatus = 'connecting' | 'connected' | 'disconnected';
+```
+
+#### Version
+---
+Represents a named snapshot of the document state.
+
+| Property      | Type                        | Description |
+|---------------|-----------------------------|-------------|
+| `versionId`   | `string`                    | Unique identifier for the version. |
+| `versionName` | `string`                    | Human-readable name for the version. |
+| `timestamp`   | `number`                    | Unix timestamp of when the version was saved. |
+| `state`       | `number[] \| Uint8Array`    | Serialized Yjs document state. |
+
+#### CollaborationConfig
+---
+Configuration for the non-React `createCollaboration()` factory function.
+
+| Property                   | Type                       | Required | Description |
+|----------------------------|----------------------------|----------|-------------|
+| `editorId`                 | `string`                   | Yes      | Unique editor/document identifier for syncing. |
+| `veltClient`               | `Velt`                     | Yes      | Velt client instance — must have an authenticated user. |
+| `initialContent`           | `string`                   | No       | HTML content applied once for brand-new (empty) documents. |
+| `debounceMs`               | `number`                   | No       | Throttle interval (ms) for backend writes. `0` = immediate. Default: `0`. |
+| `onError`                  | `(error: Error) => void`   | No       | Callback for non-fatal errors (sync failures, recovery attempts). |
+| `forceResetInitialContent` | `boolean`                  | No       | If `true`, always reset to `initialContent` on init. Default: `false`. |
+
+#### CollaborationManager
+---
+Manages the CRDT lifecycle for collaborative TipTap editing. Returned by `useCollaboration` (React) via `manager`, or by `createCollaboration` (non-React).
+
+| Method / Property              | Type / Signature                                         | Description |
+|--------------------------------|----------------------------------------------------------|-------------|
+| `createExtension()`            | `Extension`                                              | Returns a TipTap Extension bundling Yjs binding + cursor rendering. Non-React only. |
+| `initialized`                  | `boolean`                                                | Whether `initialize()` has completed. |
+| `synced`                       | `boolean`                                                | Whether initial sync with the backend has completed. |
+| `status`                       | `SyncStatus`                                             | Current connection status. |
+| `onStatusChange(cb)`           | `(cb: (status: SyncStatus) => void) => Unsubscribe`     | Subscribe to connection status changes. |
+| `onSynced(cb)`                 | `(cb: (synced: boolean) => void) => Unsubscribe`         | Subscribe to sync state changes. |
+| `saveVersion(name)`            | `(name: string) => Promise<string>`                      | Save a named snapshot. Returns the version ID. |
+| `getVersions()`                | `Promise<Version[]>`                                     | List all saved versions. |
+| `restoreVersion(id)`           | `(versionId: string) => Promise<boolean>`                | Restore to a saved version. Returns `true` on success. |
+| `setStateFromVersion(version)` | `(version: Version) => Promise<void>`                    | Apply a Version object's state locally. |
+| `getDoc()`                     | `Y.Doc`                                                  | Get the underlying Yjs document. |
+| `getXmlFragment()`             | `Y.XmlFragment \| null`                                  | Get the XmlFragment bound to TipTap content. |
+| `getProvider()`                | `SyncProvider`                                           | Get the sync provider. |
+| `getAwareness()`               | `Awareness`                                              | Get the Yjs Awareness instance. |
+| `getStore()`                   | `Store<string>`                                          | Get the core CRDT Store. |
+| `destroy()`                    | `void`                                                   | Full cleanup. Automatic on editor destroy or component unmount. Safe to call multiple times. |
+
+#### Unsubscribe
+---
+Cleanup function returned by subscription methods.
+
+```typescript
+type Unsubscribe = () => void;
+```
+
+
+## v1 API (deprecated)
+
+<Warning>The v1 Tiptap API is deprecated. Use the v2 `useCollaboration` hook (React) or `createCollaboration` (non-React) for all new integrations.</Warning>
+
+#### VeltTiptapCrdtExtensionConfig (deprecated)
+---
+Configuration for the legacy Tiptap CRDT extension.
 
 | Property         | Type    | Required | Description |
 |------------------|---------|----------|-------------|
 | `editorId`       | `string`| Yes      | Unique document identifier for synchronization. |
 | `initialContent` | `string`| No       | Initial editor content. Applied only when no server-side data exists. |
 | `debounceMs`     | `number`| No       | Debounce time for update propagation (ms). |
+| `onSynced`       | `(doc?: Y.Doc) => void` | No | Called after initial sync completes. |
+| `onConnectionError` | `(error: Error) => void` | No | Called if a connection error occurs. |
+| `veltClient`     | `Velt`  | No       | Velt client instance. |
 
-#### VeltTiptapCrdtExtensionResponse
+#### VeltTiptapCrdtExtensionResponse (React, deprecated)
 ---
+Response from the React `useVeltTiptapCrdtExtension()` hook.
+
 | Property    | Type                       | Description |
 |-------------|----------------------------|-------------|
-| `VeltCrdt`  | `Extension<unknown> \| null` | Tiptap Velt CRDT Extension. |
+| `VeltCrdt`  | `Extension \| null`          | Tiptap Velt CRDT Extension. |
 | `store`     | `VeltTipTapStore \| null`   | Tiptap CRDT store instance. |
 | `isLoading` | `boolean`                  | `false` once store is initialized, `true` by default. |
 
-
-#### VeltTipTapStoreConfig
+#### VeltTiptapCrdtExtensionResponse (non-React, deprecated)
 ---
-Configuration for creating a Tiptap collaboration store.
+Response from the non-React `createVeltTiptapCrdtExtension()` callback.
+
+| Property   | Type                      | Description |
+|------------|---------------------------|-------------|
+| `VeltCrdt` | `Extension \| null`       | TipTap extension to add to the editor. |
+| `store`    | `VeltTipTapStore \| null` | Store instance for version management. |
+| `error`    | `string \| null`          | Error message if initialization failed. |
+
+
+#### VeltTipTapStoreConfig (deprecated)
+---
+Configuration for creating a legacy Tiptap collaboration store (used by non-React `createVeltTipTapStore`).
 
 | Property         | Type    | Required | Description |
 |------------------|---------|----------|-------------|
 | `editorId`       | `string`| Yes      | Unique document identifier for synchronization. Use a different ID per editor. |
-| `veltClient`     | `Velt`  | Yes      | Velt client for velt sdk integration |
+| `veltClient`     | `Velt`  | No       | Velt client instance. |
 | `initialContent` | `string`| No       | Initial editor content. Applied only when no server-side data exists. |
 | `debounceMs`     | `number`| No       | Debounce time for updates in milliseconds |
+| `onSynced`       | `(doc?: Y.Doc) => void` | No | Called once when initial sync completes. |
+| `onConnectionError` | `(error: Error) => void` | No | Called on connection errors. |
 
-#### VeltTipTapStore
+#### VeltTipTapStore (deprecated)
 ---
-Represents the Tiptap collaboration store instance. Public API surface only; all other fields are private.
+Represents the legacy Tiptap collaboration store instance. Public API surface only; all other fields are private.
 
 | Method / Property        | Type / Signature                         | Description |
 |--------------------------|-------------------------------------------|-------------|
@@ -4991,9 +5104,9 @@ Represents the Tiptap collaboration store instance. Public API surface only; all
 | `destroy()`              | `void`                                    | Cleans up resources and marks instance uninitialized. |
 | `getCollabExtension()`   | `Extension`                               | Tiptap Extension configured with current Yjs doc. |
 
-#### createVeltTipTapStore
+#### createVeltTipTapStore (deprecated)
 ---
-Factory method that constructs a `VeltTipTapStore`, calls `initialize()`, and returns it.
+Legacy factory method that constructs a `VeltTipTapStore`, calls `initialize()`, and returns it. Use `createCollaboration()` for new non-React integrations.
 
 | Parameter | Type                    | Required | Description |
 |-----------|-------------------------|----------|-------------|

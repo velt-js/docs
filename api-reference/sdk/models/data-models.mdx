@@ -4905,21 +4905,132 @@ Response returned by `useVeltCodeMirrorCrdtExtension`.
 
 # BlockNote Collaboration
 
-#### VeltBlockNoteCrdtExtensionConfig
+## v2 API
+
+#### UseCollaborationConfig (BlockNote)
+---
+Configuration for the `useCollaboration` React hook for BlockNote collaborative editing.
+
+| Property                  | Type                       | Required | Description |
+|---------------------------|----------------------------|----------|-------------|
+| `editorId`                | `string`                   | Yes      | Unique identifier for this collaborative session. |
+| `initialContent`          | `any[]`                    | No       | Block content applied once for brand-new documents. |
+| `debounceMs`              | `number`                   | No       | Throttle interval (ms) for backend writes. Default: `0`. |
+| `forceResetInitialContent`| `boolean`                  | No       | If `true`, always clear and re-apply `initialContent`. Default: `false`. |
+| `veltClient`              | `Velt`                     | No       | Explicit Velt client. Falls back to `VeltProvider` context. |
+| `showCursorLabels`        | `’activity’ \| ‘always’`   | No       | Cursor label display mode. Default: `’activity’`. |
+| `onError`                 | `(error: Error) => void`   | No       | Error callback. |
+
+#### UseCollaborationReturn (BlockNote)
+---
+Return value of the `useCollaboration` hook for BlockNote.
+
+| Property              | Type                                         | Description |
+|-----------------------|----------------------------------------------|-------------|
+| `collaborationConfig` | `BlockNoteCollaborationConfig \| null`       | BlockNote collaboration config. `null` while loading, stable reference once ready. |
+| `isLoading`           | `boolean`                                    | `true` until CollaborationManager is initialized. |
+| `isSynced`            | `boolean`                                    | `true` after the initial sync with the backend completes. |
+| `status`              | `SyncStatus`                                 | Connection status: `’connecting’`, `’connected’`, or `’disconnected’`. |
+| `error`               | `Error \| null`                              | Most recent error, or `null`. |
+| `manager`             | `CollaborationManager \| null`               | Escape hatch to the underlying manager. `null` before initialization. |
+| `saveVersion`         | `(name: string) => Promise<string>`          | Save a named version snapshot. Returns the version ID, or empty string on failure. |
+| `getVersions`         | `() => Promise<Version[]>`                   | List all saved versions. Returns empty array on failure. |
+| `restoreVersion`      | `(versionId: string) => Promise<boolean>`    | Restore to a saved version. Returns `true` on success, `false` on failure. |
+
+#### BlockNoteCollaborationConfig
+---
+Configuration object passed to `useCreateBlockNote({ collaboration: ... })`.
+
+| Property           | Type                                     | Description |
+|--------------------|------------------------------------------|-------------|
+| `provider`         | `SyncProvider`                           | The Yjs sync provider instance. |
+| `fragment`         | `Y.XmlFragment`                          | The Y.XmlFragment bound to BlockNote’s document-store key. |
+| `user`             | `{ name: string; color: string }`        | User identity for cursor rendering. |
+| `showCursorLabels` | `’activity’ \| ‘always’`                 | Cursor label display mode. |
+
+#### CollaborationConfig (BlockNote)
+---
+Configuration for the non-React `createCollaboration()` factory function for BlockNote.
+
+| Property                   | Type                       | Required | Description |
+|----------------------------|----------------------------|----------|-------------|
+| `editorId`                 | `string`                   | Yes      | Unique editor/document identifier for syncing. |
+| `veltClient`               | `Velt`                     | Yes      | Velt client instance — must have an authenticated user. |
+| `initialContent`           | `any[]`                    | No       | Block content applied once for brand-new (empty) documents. |
+| `debounceMs`               | `number`                   | No       | Throttle interval (ms) for backend writes. `0` = immediate. Default: `0`. |
+| `onError`                  | `(error: Error) => void`   | No       | Callback for non-fatal errors (sync failures, recovery attempts). |
+| `forceResetInitialContent` | `boolean`                  | No       | If `true`, always reset to `initialContent` on init. Default: `false`. |
+
+#### CollaborationManager (BlockNote)
+---
+Manages the CRDT lifecycle for collaborative BlockNote editing. Returned by `useCollaboration` (React) via `manager`, or by `createCollaboration` (non-React).
+
+| Method / Property              | Type / Signature                                         | Description |
+|--------------------------------|----------------------------------------------------------|-------------|
+| `getCollaborationConfig(opts?)`| `BlockNoteCollaborationConfig \| null`                   | Returns the BlockNote collaboration config. Non-React: pass optional `{ showCursorLabels }`. |
+| `initialized`                  | `boolean`                                                | Whether `initialize()` has completed. |
+| `synced`                       | `boolean`                                                | Whether initial sync with the backend has completed. |
+| `status`                       | `SyncStatus`                                             | Current connection status. |
+| `onStatusChange(cb)`           | `(cb: (status: SyncStatus) => void) => Unsubscribe`     | Subscribe to connection status changes. |
+| `onSynced(cb)`                 | `(cb: (synced: boolean) => void) => Unsubscribe`         | Subscribe to sync state changes. |
+| `saveVersion(name)`            | `(name: string) => Promise<string>`                      | Save a named snapshot. Returns the version ID, or empty string on failure. |
+| `getVersions()`                | `Promise<Version[]>`                                     | List all saved versions. Returns empty array on failure. |
+| `restoreVersion(id)`           | `(versionId: string) => Promise<boolean>`                | Restore to a saved version. Returns `true` on success, `false` on failure. |
+| `setStateFromVersion(version)` | `(version: Version) => Promise<void>`                    | Apply a version’s state locally. |
+| `getDoc()`                     | `Y.Doc \| null`                                          | Get the underlying Yjs document. |
+| `getXmlFragment()`             | `Y.XmlFragment \| null`                                  | Get the XmlFragment bound to BlockNote’s `document-store` key. |
+| `getProvider()`                | `SyncProvider \| null`                                   | Get the sync provider. |
+| `getAwareness()`               | `Awareness \| null`                                      | Get the Yjs Awareness instance. |
+| `getStore()`                   | `Store<string> \| null`                                  | Get the core CRDT Store. |
+| `destroy()`                    | `void`                                                   | Full cleanup. Automatic on editor destroy or component unmount. Safe to call multiple times. |
+
+#### SyncStatus (BlockNote)
+---
+Connection status of the CRDT sync provider.
+
+```typescript
+type SyncStatus = 'connecting' | 'connected' | 'disconnected';
+```
+
+#### Unsubscribe (BlockNote)
+---
+Callback returned by `onStatusChange()` and `onSynced()`. Call it to stop listening.
+
+```typescript
+type Unsubscribe = () => void;
+```
+
+#### Version (BlockNote)
+---
+A saved snapshot of the document state (from `@veltdev/crdt`).
+
+| Property      | Type                       | Description                            |
+|---------------|----------------------------|----------------------------------------|
+| `versionId`   | `string`                   | Unique version identifier.             |
+| `versionName` | `string`                   | Human-readable version name.           |
+| `timestamp`   | `number`                   | Creation timestamp (ms since epoch).   |
+| `state`       | `Uint8Array \| number[]`   | Encoded Yjs document state.            |
+
+
+## v1 API (deprecated)
+
+<Warning>The v1 BlockNote API is deprecated. Use the v2 `useCollaboration` hook (React) or `createCollaboration` (non-React) for all new integrations.</Warning>
+
+#### VeltBlockNoteCrdtExtensionConfig (deprecated)
 ---
 
-Configuration for the `useVeltBlockNoteCrdtExtension` React hook.
+Configuration for the legacy `useVeltBlockNoteCrdtExtension` React hook.
 
 | Property         | Type     | Required | Description                                                   |
 |------------------|----------|----------|---------------------------------------------------------------|
 | `editorId`       | `string` | Yes      | Unique document identifier for synchronization.               |
 | `initialContent` | `string` | No       | Initial BlockNote document (JSON string of blocks).           |
-| `debounceMs`     | `number` | No       | Debounce time for update propagation in milliseconds.   
+| `debounceMs`     | `number` | No       | Debounce time for update propagation in milliseconds.         |
 
 
-#### VeltBlockNoteCrdtExtensionResponse
+#### VeltBlockNoteCrdtExtensionResponse (deprecated)
 ---
-Response returned by `useVeltBlockNoteCrdtExtension`.
+Response returned by the legacy `useVeltBlockNoteCrdtExtension`.
 
 | Property              | Type                                                                                     | Description                                                                                  |
 |-----------------------|------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
@@ -4928,9 +5039,9 @@ Response returned by `useVeltBlockNoteCrdtExtension`.
 | `isLoading` | `boolean`                  | `false` once store is initialized, `true` by default. |
 
 
-#### VeltBlockNoteStoreConfig
+#### VeltBlockNoteStoreConfig (deprecated)
 ---
-Configuration for creating a BlockNote collaboration store.
+Configuration for creating a legacy BlockNote collaboration store.
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|

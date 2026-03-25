@@ -3,7 +3,7 @@ title: CodeMirror Editor
 description: Setup Multiplayer Editing for CodeMirror Editor.
 ---
 
-The `@veltdev/codemirror-crdt-react` library enables real-time collaborative editing on CodeMirror Editors. The collaboration editing engine is built on top of [Yjs](https://docs.yjs.dev/) and Velt SDK.
+The `@veltdev/codemirror-crdt-react` and `@veltdev/codemirror-crdt` libraries enable real-time collaborative editing on CodeMirror Editors. The collaboration editing engine is built on top of [Yjs](https://docs.yjs.dev/) and Velt SDK.
 
 ## Prerequisites
 
@@ -22,14 +22,14 @@ Install the required packages:
 <Tab title="React / Next.js">
 
 ```bash
-npm install @veltdev/codemirror-crdt-react @veltdev/react
+npm install @veltdev/codemirror-crdt-react @veltdev/codemirror-crdt @veltdev/react @veltdev/types codemirror @codemirror/state @codemirror/view y-codemirror.next yjs
 ```
 
 </Tab>
 <Tab title="Other Frameworks">
 
 ```bash
-npm install @veltdev/codemirror-crdt @veltdev/client y-codemirror.next
+npm install @veltdev/codemirror-crdt @veltdev/client codemirror @codemirror/state y-codemirror.next yjs
 ```
 
 </Tab>
@@ -37,78 +37,449 @@ npm install @veltdev/codemirror-crdt @veltdev/client y-codemirror.next
 
 ### Step 2: Setup Velt
 
-Initialize the Velt client by following the [Velt Setup Docs](/get-started/quickstart). This is required for the collaboration engine to work.
-
-### Step 3: Initialize Velt CRDT Extension
-
-- Initialize the Velt CRDT extension and use it to initialize the CodeMirror editor.
-- Pass an `editorId` to uniquely identify each editor instance you have in your app. This is especially important when you have multiple editors in your app.
-
+Initialize the Velt client and set the document context. This is required for the collaboration engine to work.
 
 <Tabs>
 <Tab title="React / Next.js">
 
-```jsx
-// Initialize the Velt CRDT extension
-const { store, isLoading } = useVeltCodeMirrorCrdtExtension({ editorId });
+Wrap your app with `VeltProvider` and use `useSetDocument` to scope the collaborative session.
 
-useEffect(() => {
-  if (!store || !editorRef.current) return;
+```tsx
+import { VeltProvider, useSetDocument } from '@veltdev/react';
 
-  const startState = EditorState.create({
-    doc: store.getYText()?.toString() ?? '',
-    extensions: [
-      basicSetup,
-      yCollab(store.getYText()!, store.getAwareness(), { undoManager: store.getUndoManager() }),
-    ],
-  });
+function App() {
+  return (
+    <VeltProvider apiKey="YOUR_API_KEY">
+      <YourApp />
+    </VeltProvider>
+  );
+}
 
-  viewRef.current = new EditorView({
-      state: startState,
-      parent: editorRef.current,
-  });
-
-  return () => viewRef.current?.destroy();
-}, [store]);
+function YourApp() {
+  useSetDocument('my-codemirror-document', { documentName: 'My Document' });
+  return <CodeMirrorEditor />;
+}
 ```
 
 </Tab>
 <Tab title="Other Frameworks">
 
+Initialize the Velt SDK with `initVelt()`, set the document context, and authenticate a user.
+
 ```js
-// Create the CRDT store
-const store = await createVeltCodeMirrorStore({
-  editorId: editorId,
-  veltClient: veltClient,
-});
+import { initVelt } from '@veltdev/client';
 
-// Create editor state with yCollab extension
-const startState = EditorState.create({
-  doc: store.getYText()?.toString() ?? '',
-  extensions: [
-    basicSetup,
-    yCollab(store.getYText(), store.getAwareness(), {
-      undoManager: store.getUndoManager(),
-    }),
-  ],
-});
+const client = await initVelt('YOUR_API_KEY');
 
-// Create editor view
-const view = new EditorView({
-  state: startState,
-  parent: editorContainer,
+// Set the document scope
+client.setDocument('my-document-id', { documentName: 'My Document' });
+
+// Authenticate a user
+await client.identify({
+  userId: 'user-1',
+  name: 'John Doe',
+  email: 'john@example.com',
 });
 ```
 
 </Tab>
 </Tabs>
 
+### Step 3: Initialize Collaborative Editor
+
+- Initialize the collaboration manager and use it to create the CodeMirror editor.
+- Pass an `editorId` to uniquely identify each editor instance you have in your app. This is especially important when you have multiple editors in your app.
+
+
+<Tabs>
+<Tab title="React / Next.js">
+
+Use the `useCollaboration` hook to manage the entire CRDT lifecycle. It creates a `CollaborationManager`, initializes the CRDT store, and returns collaboration `primitives` (`ytext`, `awareness`, `undoManager`, `doc`) that you pass to `yCollab()` from `y-codemirror.next`.
+
+```tsx
+import { useCollaboration } from '@veltdev/codemirror-crdt-react';
+import { EditorState } from '@codemirror/state';
+import { EditorView, basicSetup } from 'codemirror';
+import { yCollab } from 'y-codemirror.next';
+import { useEffect, useRef } from 'react';
+
+function CodeMirrorEditor() {
+  const editorElRef = useRef<HTMLDivElement>(null);
+
+  const { primitives, isLoading, isSynced, status, error, manager } = useCollaboration({
+    editorId: 'my-codemirror-editor',
+    initialContent: 'console.log("Hello!");',
+    onError: (err) => console.error('Collaboration error:', err),
+  });
+
+  useEffect(() => {
+    if (!primitives?.ytext || !editorElRef.current) return;
+
+    const state = EditorState.create({
+      doc: primitives.ytext.toString(),
+      extensions: [
+        basicSetup,
+        yCollab(primitives.ytext, primitives.awareness, {
+          undoManager: primitives.undoManager,
+        }),
+      ],
+    });
+
+    const view = new EditorView({ state, parent: editorElRef.current });
+    return () => view.destroy();
+  }, [primitives]);
+
+  if (error) return <div>Error: {error.message}</div>;
+  if (isLoading || !primitives) return <div>Connecting...</div>;
+
+  return <div ref={editorElRef} />;
+}
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Use `createCollaboration()` to create a `CollaborationManager`, then call `manager.getCollaborationPrimitives()` to get the Yjs primitives (`ytext`, `awareness`, `undoManager`) and pass them to `yCollab()` from `y-codemirror.next`.
+
+```js
+import { createCollaboration } from '@veltdev/codemirror-crdt';
+import { EditorState } from '@codemirror/state';
+import { EditorView, basicSetup } from 'codemirror';
+import { yCollab } from 'y-codemirror.next';
+
+// Wait for the SDK to be ready
+client.getVeltInitState().subscribe(async (isReady) => {
+  if (!isReady) return;
+
+  // Create the CollaborationManager
+  const manager = await createCollaboration({
+    editorId: 'my-codemirror-editor',
+    veltClient: client,
+    initialContent: 'console.log("Hello!");',
+    onError: (error) => console.error('Collaboration error:', error),
+  });
+
+  // Get Yjs primitives for CodeMirror binding
+  const { ytext, awareness, undoManager } = manager.getCollaborationPrimitives();
+
+  // Create CodeMirror editor with yCollab extension
+  const state = EditorState.create({
+    doc: ytext.toString(),
+    extensions: [
+      basicSetup,
+      yCollab(ytext, awareness, { undoManager }),
+    ],
+  });
+
+  const editorView = new EditorView({
+    state,
+    parent: document.querySelector('#editor'),
+  });
+});
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 4: Status Monitoring (Optional)
+
+Monitor the connection status and sync state to display UI indicators.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+The `useCollaboration` hook returns reactive `status`, `isSynced`, and `error` state:
+
+```tsx
+const { primitives, isLoading, isSynced, status, error } = useCollaboration({
+  editorId: 'my-codemirror-editor',
+});
+
+if (error) return <div>Error: {error.message}</div>;
+if (isLoading) return <div>Connecting...</div>;
+
+// In your JSX
+<div>Status: {status} | Synced: {isSynced ? 'Yes' : 'No'}</div>
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Subscribe to status and sync changes on the `manager`:
+
+```js
+// Connection status: 'connecting' | 'connected' | 'disconnected'
+manager.onStatusChange((status) => {
+  console.log('Status:', status);
+});
+
+// Sync state: true when initial sync is complete
+manager.onSynced((synced) => {
+  console.log('Synced:', synced);
+});
+
+// Read current values at any time
+console.log(manager.status);       // 'connected'
+console.log(manager.synced);       // true
+console.log(manager.initialized);  // true
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 5: Version Management (Optional)
+
+Save and restore named snapshots of the document state.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+The `manager` returned by `useCollaboration` provides version management methods:
+
+```tsx
+// Save a version
+const versionId = await manager.saveVersion('Before major edit');
+
+// List all versions
+const versions = await manager.getVersions();
+
+// Restore a specific version
+await manager.restoreVersion(versions[0].versionId);
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+// Save a named snapshot
+const versionId = await manager.saveVersion('Draft v1');
+
+// List all saved versions
+const versions = await manager.getVersions();
+// Returns: [{ versionId, versionName, timestamp }, ...]
+
+// Restore to a saved version
+await manager.restoreVersion(versionId);
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 6: Force Reset Initial Content (Optional)
+
+By default, `initialContent` is applied exactly once only when the document is brand new. Pass `forceResetInitialContent: true` to always overwrite remote data with `initialContent` on initialization.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+const collab = useCollaboration({
+  editorId: 'my-codemirror-editor',
+  initialContent: '// Fresh start',
+  forceResetInitialContent: true,
+});
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+const manager = await createCollaboration({
+  editorId: 'my-document-id',
+  veltClient: client,
+  initialContent: 'Fresh start',
+  forceResetInitialContent: true,
+});
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 7: CRDT Event Subscription (Optional)
+
+Listen for real-time sync events using `getCrdtElement().on()` from the Velt client.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+import { useVeltClient } from '@veltdev/react';
+
+const { client } = useVeltClient();
+
+useEffect(() => {
+  if (!client) return;
+  const crdtElement = client.getCrdtElement();
+  const sub = crdtElement.on('updateData').subscribe((event) => {
+    if (event) console.log('CRDT update:', event);
+  });
+  return () => sub?.unsubscribe?.();
+}, [client]);
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+const crdtElement = client.getCrdtElement();
+
+crdtElement.on('updateData').subscribe((event) => {
+  if (event) {
+    console.log('CRDT data updated:', event);
+  }
+});
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 8: Custom Encryption (Optional)
+
+Encrypt CRDT data before it's stored in Velt by registering a custom encryption provider. For CRDT methods, input data is of type `Uint8Array | number[]`.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```ts
+const encryptionProvider = {
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+};
+
+<VeltProvider apiKey="YOUR_API_KEY" encryptionProvider={encryptionProvider}>
+  ...
+</VeltProvider>
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+const encryptionProvider = {
+  encrypt: async (config) => {
+    return config.data.map((num) => num.toString()).join('__');
+  },
+  decrypt: async (config) => {
+    return config.data.split('__').map((str) => parseInt(str, 10));
+  },
+};
+
+client.setEncryptionProvider(encryptionProvider);
+```
+
+</Tab>
+</Tabs>
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+ · [EncryptConfig](/api-reference/sdk/models/data-models#encryptconfig)
+ · [DecryptConfig](/api-reference/sdk/models/data-models#decryptconfig)
+
+
+### Step 9: Error Handling (Optional)
+
+<Tabs>
+<Tab title="React / Next.js">
+
+Pass an `onError` callback to handle initialization or runtime errors. The `error` reactive state is also available for rendering.
+
+```tsx
+const collab = useCollaboration({
+  editorId: 'my-codemirror-editor',
+  onError: (error) => console.error('Collaboration error:', error),
+});
+
+if (collab.error) {
+  return <div>Error: {collab.error.message}</div>;
+}
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Pass an `onError` callback when creating the CollaborationManager:
+
+```js
+const manager = await createCollaboration({
+  editorId: 'my-codemirror-editor',
+  veltClient: client,
+  onError: (error) => console.error('Collaboration error:', error),
+});
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 10: Access Yjs Internals (Advanced)
+
+The manager exposes escape hatches for direct Yjs manipulation when needed.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+// From the manager returned by useCollaboration
+const doc = manager.getDoc();
+const text = manager.getText();
+const awareness = manager.getAwareness();
+const provider = manager.getProvider();
+const store = manager.getStore();
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+import * as Y from 'yjs';
+
+const doc = manager.getDoc();
+const ytext = manager.getYText();
+const provider = manager.getProvider();
+const awareness = manager.getAwareness();
+const store = manager.getStore();
+const undoManager = manager.getUndoManager();
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 11: Cleanup
+
+Cleanup is handled by calling `manager.destroy()`, which cascades to the store, provider, undo manager, and all listeners. Safe to call multiple times.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+// Automatic on component unmount via useEffect cleanup
+// Or manually:
+manager.destroy();
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+manager.destroy();
+```
+
+</Tab>
+</Tabs>
+
+
 ## Notes
 
 - **Unique editorId**: Use a unique `editorId` per editor instance.
 - **Wait for auth**: Initialize the store only after the Velt client is ready.
-- **Use yCollab**: Pass the store's Yjs text, awareness, and undo manager to `yCollab`.
-- **Initialize and clean up**: Destroy the `EditorView` and store on unmount to avoid leaks.
+- **Use yCollab**: Pass the Yjs text, awareness, and undo manager to `yCollab`.
+- **Initialize and clean up**: Destroy the `EditorView` and manager on unmount to avoid leaks.
 
 ## Testing and Debugging
 
@@ -130,92 +501,311 @@ Use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setu
 <Tabs>
 <Tab title="React / Next.js">
 
-[Open Live Demo In Larger Window](https://sample-apps-codemirror-crdt-demo.vercel.app/) | [View Demo Repo](https://github.com/velt-js/sample-apps/tree/main/apps/react/crdt/text-editors/codemirror/codemirror-crdt-demo)
+A complete collaborative CodeMirror editor with user login, status display, and version management.
 
-```jsx Complete Implementation expandable lines
-// Import required modules
-import { useVeltCodeMirrorCrdtExtension } from "@veltdev/codemirror-crdt-react";
-import { yCollab } from "y-codemirror.next";
-import { EditorState } from "@codemirror/state";
-import { basicSetup, EditorView } from "codemirror";
+**App.tsx**
 
-// Add hook in your codemirror editor component
-const { store, isLoading } = useVeltCodeMirrorCrdtExtension({ editorId });
+```tsx Complete App.tsx expandable lines
+import { useMemo } from 'react';
+import { VeltProvider, useSetDocument, useCurrentUser } from '@veltdev/react';
+import { Header } from './Header';
+import { EditorComponent } from './Editor';
 
-useEffect(() => {
-    if (!store || !editorRef.current) return;
+const API_KEY = 'YOUR_API_KEY';
 
-    // Clean up existing view if any
-    viewRef.current?.destroy();
+function getDocumentParams() {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    documentId: params.get('documentId') || 'codemirror-crdt-react-demo-doc-1',
+    documentName: params.get('documentName') || 'CodeMirror CRDT React Demo',
+  };
+}
 
-    const startState = EditorState.create({
-        doc: store.getYText()?.toString() ?? '',
-        extensions: [
-            basicSetup,
-            autocompletion(),
-            yCollab(store.getYText()!, store.getAwareness(), { undoManager: store.getUndoManager() }),
-        ],
+function AppContent() {
+  const veltUser = useCurrentUser();
+  const { documentId, documentName } = useMemo(() => getDocumentParams(), []);
+  useSetDocument(documentId, { documentName });
+
+  return (
+    <div className="app-container">
+      <Header />
+      <main className="app-content">
+        <EditorComponent key={veltUser?.userId || '__none__'} />
+      </main>
+    </div>
+  );
+}
+
+export const App = () => (
+  <VeltProvider apiKey={API_KEY}>
+    <AppContent />
+  </VeltProvider>
+);
+```
+
+**Editor.tsx**
+
+```tsx Complete Editor.tsx expandable lines
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { useCurrentUser } from '@veltdev/react';
+import { useCollaboration } from '@veltdev/codemirror-crdt-react';
+import { EditorState } from '@codemirror/state';
+import { EditorView, basicSetup } from 'codemirror';
+import { javascript } from '@codemirror/lang-javascript';
+import { yCollab } from 'y-codemirror.next';
+import type { Version } from '@veltdev/crdt';
+
+const DEFAULT_INITIAL_CONTENT = 'console.log("Hello CodeMirror CRDT!");';
+
+export const EditorComponent = () => {
+  const editorElRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const [versions, setVersions] = useState<Version[]>([]);
+  const [versionInput, setVersionInput] = useState('');
+  const veltUser = useCurrentUser();
+
+  const { primitives, isLoading, isSynced, status, error, manager } = useCollaboration({
+    editorId: 'my-document-id',
+    initialContent: DEFAULT_INITIAL_CONTENT,
+    onError: (err) => console.error('Collaboration error:', err),
+  });
+
+  // Create CodeMirror editor when primitives are ready
+  useEffect(() => {
+    if (!primitives?.ytext || !editorElRef.current || viewRef.current) return;
+
+    const state = EditorState.create({
+      doc: primitives.ytext.toString(),
+      extensions: [
+        basicSetup,
+        javascript(),
+        EditorView.lineWrapping,
+        yCollab(primitives.ytext, primitives.awareness, {
+          undoManager: primitives.undoManager,
+        }),
+      ],
     });
 
-    viewRef.current = new EditorView({
-        state: startState,
-        parent: editorRef.current,
-    });
+    viewRef.current = new EditorView({ state, parent: editorElRef.current });
 
     return () => {
-        viewRef.current?.destroy();
-        viewRef.current = null;
+      viewRef.current?.destroy();
+      viewRef.current = null;
     };
-}, [store]);
+  }, [primitives]);
+
+  // Version management
+  const refreshVersions = useCallback(async () => {
+    if (!manager) return;
+    setVersions(await manager.getVersions());
+  }, [manager]);
+
+  useEffect(() => { refreshVersions(); }, [manager, refreshVersions]);
+
+  const handleSaveVersion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manager || !versionInput.trim()) return;
+    await manager.saveVersion(versionInput.trim());
+    setVersionInput('');
+    await refreshVersions();
+  };
+
+  const handleRestoreVersion = async (versionId: string) => {
+    if (!manager) return;
+    await manager.restoreVersion(versionId);
+    await refreshVersions();
+  };
+
+  if (error) return <div>Error: {error.message}</div>;
+  if (isLoading || !primitives) return <div>Connecting...</div>;
+
+  return (
+    <div className="editor-container">
+      <div id="editor-header">
+        {veltUser ? `Editing as ${veltUser.name}` : 'Please login'}
+      </div>
+      <div id="status">
+        Status: {status} | Synced: {isSynced ? 'Yes' : 'No'}
+      </div>
+      <div id="editor" ref={editorElRef} />
+      <div className="versions-section">
+        <form onSubmit={handleSaveVersion}>
+          <input
+            className="version-input"
+            value={versionInput}
+            onChange={(e) => setVersionInput(e.target.value)}
+            placeholder="Version name..."
+          />
+          <button className="save-version-btn" type="submit">Save Version</button>
+        </form>
+        <ul className="version-list">
+          {versions.map((v) => (
+            <li key={v.versionId} className="version-item">
+              <span className="version-name">{v.versionName}</span>
+              <button className="restore-btn" onClick={() => handleRestoreVersion(v.versionId)}>
+                Restore
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+};
 ```
 
 </Tab>
 <Tab title="Other Frameworks">
 
-[Open Live Demo In Larger Window](https://sample-apps-codemirror-non-react-cr.vercel.app/) | [View Demo Repo](https://github.com/velt-js/sample-apps/tree/main/apps/javascript/crdt/text-editors/codemirror/codemirror-crdt-demo)
+A complete collaborative CodeMirror editor with SDK initialization, user login, status display, and version management.
 
-```js Complete Implementation expandable lines
-// Import required modules
+**velt.ts**
+
+```ts Complete velt.ts expandable lines
 import { initVelt } from '@veltdev/client';
-import { createVeltCodeMirrorStore } from '@veltdev/codemirror-crdt';
-import { yCollab } from 'y-codemirror.next';
+import type { Velt } from '@veltdev/types';
+
+let client: Velt | null = null;
+let veltInitialized = false;
+
+const veltInitSubscribers = new Map<string, (velt: Velt) => void>();
+
+async function initializeVelt() {
+  client = await initVelt('YOUR_API_KEY');
+
+  client.setDocument('my-document-id', { documentName: 'My Document' });
+
+  client.getVeltInitState().subscribe((isReady) => {
+    veltInitialized = !!isReady;
+    if (isReady && client) {
+      veltInitSubscribers.forEach((callback) => callback(client));
+    }
+  });
+}
+
+export const subscribeToVeltInit = (id: string, callback: (velt: Velt) => void) => {
+  veltInitSubscribers.set(id, callback);
+  if (veltInitialized && client) {
+    callback(client);
+  }
+};
+
+export async function loginWithUser(userId: string, name: string) {
+  await client?.identify({ userId, name });
+}
+
+initializeVelt();
+```
+
+**editor.ts**
+
+```ts Complete editor.ts expandable lines
 import { EditorState } from '@codemirror/state';
-import { basicSetup, EditorView } from 'codemirror';
+import { EditorView, basicSetup } from 'codemirror';
+import { javascript } from '@codemirror/lang-javascript';
+import { yCollab } from 'y-codemirror.next';
+import { createCollaboration } from '@veltdev/codemirror-crdt';
+import type { CollaborationManager } from '@veltdev/codemirror-crdt';
+import type { Velt } from '@veltdev/types';
+import { subscribeToVeltInit } from './velt';
 
-// Step 1: Initialize Velt client
-const veltClient = await initVelt('YOUR_API_KEY');
+let manager: CollaborationManager | null = null;
+let editorView: EditorView | null = null;
 
-// Step 2: Authenticate user
-await veltClient.identify({ userId: 'user-1', name: 'John Doe' });
+async function initEditor(veltClient: Velt) {
+  // Create the collaboration manager
+  manager = await createCollaboration({
+    editorId: 'my-document-id',
+    veltClient,
+    initialContent: 'Hello CodeMirror CRDT!',
+    onError: (error) => console.error('Collaboration error:', error),
+  });
 
-// Step 3: Set document
-await veltClient.setDocument('my-document-id');
+  // Get Yjs primitives for CodeMirror binding
+  const { ytext, awareness, undoManager } = manager.getCollaborationPrimitives();
 
-// Step 4: Create CRDT store
-const store = await createVeltCodeMirrorStore({
-  editorId: 'velt-codemirror-crdt-demo',
-  veltClient: veltClient,
-});
+  // Create the CodeMirror editor
+  const state = EditorState.create({
+    doc: ytext?.toString() ?? '',
+    extensions: [
+      basicSetup,
+      javascript(),
+      yCollab(ytext!, awareness, { undoManager }),
+    ],
+  });
 
-// Step 5: Create CodeMirror editor
-const startState = EditorState.create({
-  doc: store.getYText()?.toString() ?? '',
-  extensions: [
-    basicSetup,
-    yCollab(store.getYText(), store.getAwareness(), {
-      undoManager: store.getUndoManager(),
-    }),
-  ],
-});
+  editorView = new EditorView({
+    state,
+    parent: document.querySelector('#editor')!,
+  });
 
-const view = new EditorView({
-  state: startState,
-  parent: document.getElementById('editor'),
-});
+  // Wire up status display
+  manager.onStatusChange((status) => updateStatus(status, manager!.synced));
+  manager.onSynced((synced) => updateStatus(manager!.status, synced));
+}
 
-// Cleanup on unmount
-view.destroy();
-store.destroy();
+function updateStatus(status: string, synced: boolean) {
+  const el = document.getElementById('status');
+  if (!el) return;
+
+  if (status === 'connected') {
+    el.textContent = synced ? 'Connected & Synced' : 'Connected, syncing...';
+  } else if (status === 'connecting') {
+    el.textContent = 'Connecting...';
+  } else {
+    el.textContent = 'Disconnected';
+  }
+}
+
+// Wait for SDK to be ready
+subscribeToVeltInit('editor', (velt) => initEditor(velt));
+
+// Version management
+export async function saveVersion(name: string) {
+  await manager?.saveVersion(name);
+}
+
+export async function getVersions() {
+  return await manager?.getVersions() ?? [];
+}
+
+export async function restoreVersion(versionId: string) {
+  await manager?.restoreVersion(versionId);
+}
+```
+
+**HTML structure**
+
+```html
+<div class="app-container">
+  <header class="app-header">
+    <h1>CodeMirror CRDT Demo</h1>
+    <div id="user-controls"></div>
+  </header>
+
+  <main class="app-content">
+    <div id="editor-header">Please login to start editing</div>
+    <div id="status" class="status-bar">Connecting...</div>
+    <div id="editor" class="editor-content"></div>
+
+    <div class="versions-section">
+      <h3>Versions</h3>
+      <form id="version-form">
+        <input type="text" class="version-input" placeholder="Version name..." />
+        <button type="submit" class="save-version-btn">Save Version</button>
+      </form>
+      <ul class="version-list"></ul>
+    </div>
+  </main>
+</div>
+```
+
+**main.ts**
+
+```ts
+import './style.css';
+import './velt';
+import './editor';
 ```
 
 </Tab>
@@ -247,209 +837,507 @@ store.destroy();
 </Tab>
 </Tabs>
 
+## How It Works
+
+1. **`useCollaboration` (React) / `createCollaboration` (non-React)** creates a `CollaborationManager`. This initializes a CRDT Store (`type: 'text'`), a Yjs `Y.Text`, and a `SyncProvider`.
+2. **The primitives** (`ytext`, `awareness`, `undoManager`, `doc`) are returned by the hook or via `manager.getCollaborationPrimitives()`. You pass these to `yCollab()` from `y-codemirror.next` as a CodeMirror extension.
+3. **User types** -> CodeMirror transaction -> `Y.Text` mutation -> Yjs CRDT broadcasts via Velt backend -> all connected clients see the change.
+4. **Remote cursors** are tracked via Yjs Awareness. The `yCollab` extension renders colored cursor indicators at each remote user's selection position.
+5. **Initial content** is applied only once for brand-new documents. The manager waits for remote content before deciding the document is new.
+6. **Conflict resolution** is handled by Yjs CRDTs, concurrent typing at different positions merges correctly.
+7. **Version management** saves the full Yjs state as a named snapshot. Restoring a version replaces the current state and broadcasts to all clients.
+8. **Cleanup** is automatic, the manager destroys the editor bindings, store, and all listeners when destroyed or the component unmounts.
+
+
 ## APIs
 
-### Custom Encryption
+### React: useCollaboration()
 
-You can encrypt CRDT data before it’s stored in Velt by registering a custom encryption provider. For CRDT methods, input data is of type `Uint8Array | number[]`.
+The primary React hook for collaborative CodeMirror editing. Creates a `CollaborationManager`, initializes the CRDT store, and returns collaboration primitives for CodeMirror integration.
 
-<Tabs>
-<Tab title="React / Next.js">
+- Signature: `useCollaboration(config: UseCollaborationConfig)`
+- Params: [UseCollaborationConfig](/api-reference/sdk/models/data-models#usecollaborationconfig-codemirror)
+  - `editorId`: Unique identifier for this collaborative session.
+  - `initialContent`: Text content applied once for brand-new documents.
+  - `debounceMs`: Throttle interval (ms) for backend writes. Default: `0`.
+  - `forceResetInitialContent`: If `true`, always clear and re-apply `initialContent`. Default: `false`.
+  - `veltClient`: Explicit Velt client. Falls back to `VeltProvider` context.
+  - `onError`: Error callback.
+- Returns: [UseCollaborationReturn](/api-reference/sdk/models/data-models#usecollaborationreturn-codemirror)
+  - `primitives`: Yjs primitives for CodeMirror. `null` while loading.
+  - `isLoading`: `true` until CollaborationManager is initialized.
+  - `isSynced`: `true` after the initial sync with the backend completes.
+  - `status`: Connection status: `'connecting'`, `'connected'`, or `'disconnected'`.
+  - `error`: Most recent error, or `null`.
+  - `manager`: The underlying `CollaborationManager`. `null` before initialization.
 
-```ts
-async function encryptData(config: EncryptConfig<number[]>): Promise<string> {
-  const encryptedData = await yourEncryptDataMethod(config.data);
-  return encryptedData;
-}
-
-async function decryptData(config: DecryptConfig<string>): Promise<number[]> {
-  const decryptedData = await yourDecryptDataMethod(config.data);
-  return decryptedData;
-}
-
-const encryptionProvider: VeltEncryptionProvider<number[], string> = {
-  encrypt: encryptData,
-  decrypt: decryptData,
-};
-
-<VeltProvider
-  apiKey="YOUR_API_KEY"
-  encryptionProvider={encryptionProvider}
-/>
-
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```ts
-async function encryptData(config: EncryptConfig<number[]>): Promise<string> {
-  const encryptedData = await yourEncryptDataMethod(config.data);
-  return encryptedData;
-}
-
-async function decryptData(config: DecryptConfig<string>): Promise<number[]> {
-  const decryptedData = await yourDecryptDataMethod(config.data);
-  return decryptedData;
-}
-
-const encryptionProvider: VeltEncryptionProvider<number[], string> = {
-  encrypt: encryptData,
-  decrypt: decryptData,
-};
-
-client.setEncryptionProvider(encryptionProvider);
-```
-
-</Tab>
-</Tabs>
-
-See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
- · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
- · [EncryptConfig](/api-reference/sdk/models/data-models#encryptconfig)
- · [DecryptConfig](/api-reference/sdk/models/data-models#decryptconfig)
-
-### Initialization
-
-<Tabs>
-<Tab title="React / Next.js">
-
-#### [useVeltCodeMirrorCrdtExtension()](/api-reference/sdk/api/api-methods#useveltcodemirrorcrdtextension)
-
-React hook that provides real-time collaborative editing on CodeMirror editor with Yjs and Velt SDK.
-
-- Signature: `useVeltCodeMirrorCrdtExtension(config: VeltCodeMirrorCrdtExtensionConfig)`
-- Params: [VeltCodeMirrorCrdtExtensionConfig](/api-reference/sdk/models/data-models#veltcodemirrorcrdtextensionconfig)
-  - `editorId`: Unique identifier for the editor instance.
-  - `initialContent`: Initial content for the editor.
-  - `debounceMs`: Debounce time for update propagation (ms).
-- Returns: [VeltCodeMirrorCrdtExtensionResponse](/api-reference/sdk/models/data-models#veltcodemirrorcrdtextensionresponse)
-  - `store`: CodeMirror CRDT store instance.
-  - `isLoading`: Whether the store is initialized. `false` once store is initialized, `true` by default.
-
-```jsx
-const { store, isLoading } = useVeltCodeMirrorCrdtExtension({ 
-  editorId: 'velt-codemirror-crdt-demo' 
+```tsx
+const { primitives, isLoading, isSynced, status, error, manager } = useCollaboration({
+  editorId: 'my-codemirror-editor',
+  initialContent: 'console.log("Hello!");',
+  onError: (err) => console.error('Collaboration error:', err),
 });
 ```
 
-</Tab>
-<Tab title="Other Frameworks">
 
-#### [createVeltCodeMirrorStore()](/api-reference/sdk/api/api-methods#createveltcodemirrorstore)
+### Non-React: createCollaboration()
 
-Factory function that creates and initializes a `VeltCodeMirrorStore` instance for collaborative editing.
+Factory function that creates a `CollaborationManager`, calls `initialize()`, and returns a ready-to-use instance.
 
-- Signature: `createVeltCodeMirrorStore(config: VeltCodeMirrorStoreConfig): Promise<VeltCodeMirrorStore | null>`
-- Params: `VeltCodeMirrorStoreConfig`
-  - `editorId`: Unique identifier for the editor instance.
-  - `veltClient`: Velt client instance (from `initVelt()`).
-  - `initialContent`: Optional initial content for the editor.
-  - `debounceMs`: Optional debounce time for update propagation (ms).
-- Returns: `Promise<VeltCodeMirrorStore | null>` - The store instance or null if creation fails.
+- Signature: `createCollaboration(config: CollaborationConfig): Promise<CollaborationManager>`
+- Params: [CollaborationConfig](/api-reference/sdk/models/data-models#collaborationconfig-codemirror)
+  - `editorId`: Unique editor/document identifier for syncing.
+  - `veltClient`: Velt client instance must have an authenticated user.
+  - `initialContent`: Plain text content applied once for brand-new documents.
+  - `debounceMs`: Throttle interval (ms) for backend writes. Default: `0`.
+  - `onError`: Callback for non-fatal errors.
+  - `forceResetInitialContent`: If `true`, always reset to `initialContent`. Default: `false`.
+- Returns: `Promise<CollaborationManager>`
 
 ```js
-import { createVeltCodeMirrorStore } from '@veltdev/codemirror-crdt';
+import { createCollaboration } from '@veltdev/codemirror-crdt';
 
-const store = await createVeltCodeMirrorStore({
-  editorId: 'velt-codemirror-crdt-demo',
+const manager = await createCollaboration({
+  editorId: 'my-document-id',
   veltClient: client,
-  initialContent: '// Start coding...',
+  initialContent: 'Hello world',
+  onError: (error) => console.error(error),
 });
 ```
 
-</Tab>
-</Tabs>
+
+### CollaborationPrimitives
+
+The `primitives` object (from the React hook) or `manager.getCollaborationPrimitives()` (non-React) contains everything you need to set up `yCollab()`:
+
+| Property | Type | Description |
+|---|---|---|
+| `ytext` | `Y.Text \| null` | Y.Text bound to the document. Pass to `yCollab()`. |
+| `awareness` | `Awareness` | Awareness instance for cursor/presence tracking. |
+| `undoManager` | `Y.UndoManager \| null` | Collaborative undo manager (tracks local changes only). |
+| `doc` | `Y.Doc` | Underlying Yjs document. |
 
 
-{/*
-#### [createVeltCodeMirrorStore](/api-reference/sdk/api/api-methods#createveltcodemirrorstore)
+### CollaborationManager Methods
 
-Create and initialize a collaborative CodeMirror store instance.
+Once the `manager` is available (non-null from the hook, or returned from `createCollaboration`), you can use its full API:
 
-- Params: [VeltCodeMirrorStoreConfig](/api-reference/sdk/models/data-models#veltcodemirrorstoreconfig)
-- Returns: `Promise<VeltCodeMirrorStore | null>`
+#### manager.getCollaborationPrimitives()
 
-<Tabs>
-<Tab title="React / Next.js">
+Returns the Yjs primitives needed to call `yCollab()`. Non-React only, the React hook returns `primitives` directly.
 
-```jsx
-const store = await createVeltCodeMirrorStore({ editorId: 'velt-cm-doc', veltClient: client });
-```
-
-</Tab>
-<Tab title="Other Frameworks">
+- Returns: `{ ytext: Y.Text | null, awareness: Awareness, undoManager: Y.UndoManager | null, doc: Y.Doc }`
 
 ```js
-const store = await createVeltCodeMirrorStore({ editorId: 'velt-cm-doc', veltClient: client });
+const { ytext, awareness, undoManager } = manager.getCollaborationPrimitives();
 ```
 
-</Tab>
-</Tabs>
-*/}
+#### manager.onStatusChange()
 
-### Store Methods
+Subscribe to connection status changes.
 
-#### [store.getStore()](/api-reference/sdk/api/api-methods#getstore)
+- Signature: `manager.onStatusChange(callback: (status: SyncStatus) => void): Unsubscribe`
+- Returns: `Unsubscribe` (call to stop listening)
 
-Get the underlying `Store<string>` that manages document state and synchronization.
+```js
+const unsubscribe = manager.onStatusChange((status) => {
+  console.log('Connection:', status);
+});
 
-- Returns: `Store<string>`
-
-```ts
-const underlying = store.getStore();
+unsubscribe(); // Stop listening
 ```
 
-#### [store.getYDoc()](/api-reference/sdk/api/api-methods#getydoc)
+#### manager.onSynced()
 
-Access the Yjs document used for collaborative editing.
+Subscribe to sync state changes.
+
+- Signature: `manager.onSynced(callback: (synced: boolean) => void): Unsubscribe`
+- Returns: `Unsubscribe`
+
+```js
+const unsubscribe = manager.onSynced((synced) => {
+  if (synced) console.log('Initial sync complete');
+});
+```
+
+#### manager.initialized
+
+Whether `initialize()` has completed.
+
+- Returns: `boolean`
+
+#### manager.synced
+
+Whether initial sync with the backend has completed.
+
+- Returns: `boolean`
+
+#### manager.status
+
+Current connection status.
+
+- Returns: `SyncStatus` (`'connecting' | 'connected' | 'disconnected'`)
+
+#### manager.saveVersion()
+
+Save a named snapshot. Returns the version ID.
+
+- Signature: `manager.saveVersion(name: string): Promise<string>`
+- Returns: `Promise<string>`
+
+```js
+const versionId = await manager.saveVersion('Before major edit');
+```
+
+#### manager.getVersions()
+
+List all saved versions.
+
+- Returns: `Promise<Version[]>`
+
+```js
+const versions = await manager.getVersions();
+```
+
+#### manager.restoreVersion()
+
+Restore to a saved version. Returns `true` on success. The restored state is pushed to all connected clients.
+
+- Signature: `manager.restoreVersion(versionId: string): Promise<boolean>`
+- Returns: `Promise<boolean>`
+
+```js
+await manager.restoreVersion(versions[0].versionId);
+```
+
+#### manager.setStateFromVersion()
+
+Apply a Version object's state locally to the current document.
+
+- Signature: `manager.setStateFromVersion(version: Version): Promise<void>`
+- Returns: `Promise<void>`
+
+```js
+const versions = await manager.getVersions();
+const version = versions.find((v) => v.versionId === targetVersionId);
+if (version) {
+  await manager.setStateFromVersion(version);
+}
+```
+
+#### manager.getDoc()
+
+Get the underlying Yjs document.
 
 - Returns: `Y.Doc`
 
-```ts
-const ydoc = store.getYDoc();
+```js
+const doc = manager.getDoc();
 ```
 
-#### [store.getYText()](/api-reference/sdk/api/api-methods#getytext)
+#### manager.getText() / manager.getYText()
 
-Get the shared Y.Text bound to the current CodeMirror document.
+Get the Y.Text bound to the document content. In React, this method is called `getText()`; in non-React, it is called `getYText()`.
 
 - Returns: `Y.Text | null`
 
-```ts
-const docText = store.getYText()?.toString() ?? '';
+```js
+const text = manager.getText();   // React
+const ytext = manager.getYText(); // Non-React
 ```
 
-#### [store.getAwareness()](/api-reference/sdk/api/api-methods#getawareness)
+#### manager.getProvider()
 
-Access the Yjs Awareness instance associated with the store.
+Get the sync provider.
+
+- Returns: `SyncProvider`
+
+```js
+const provider = manager.getProvider();
+```
+
+#### manager.getAwareness()
+
+Get the Yjs Awareness instance.
 
 - Returns: `Awareness`
 
-```ts
-yCollab(store.getYText()!, store.getAwareness(), { undoManager: store.getUndoManager() });
+```js
+const awareness = manager.getAwareness();
 ```
 
-#### [store.getUndoManager()](/api-reference/sdk/api/api-methods#getundomanager)
+#### manager.getStore()
 
-Access the Yjs UndoManager for collaborative undo/redo.
+Get the core CRDT Store.
 
-- Returns: `Y.UndoManager`
+- Returns: `Store<string>`
 
-```ts
-const extensions = [
-  basicSetup,
-  yCollab(store.getYText()!, store.getAwareness(), { undoManager: store.getUndoManager() }),
-];
+```js
+const crdtStore = manager.getStore();
 ```
 
-#### [store.destroy()](/api-reference/sdk/api/api-methods#destroy)
+#### manager.getUndoManager()
 
-Cleans up all resources, listeners, and destroys the store instance. Call this when unmounting the editor to prevent memory leaks.
+Get the Y.UndoManager for undo/redo operations.
+
+- Returns: `Y.UndoManager | null`
+
+```js
+const undoManager = manager.getUndoManager();
+```
+
+#### manager.destroy()
+
+Full cleanup (automatic on editor destroy or component unmount). Safe to call multiple times.
 
 - Returns: `void`
 
-```ts
-// Cleanup when done
-store.destroy();
+```js
+manager.destroy();
 ```
+
+
+## Migration Guide: v1 to v2
+
+### React
+
+#### Overview
+
+The v2 API replaces `useVeltCodeMirrorCrdtExtension()` with `useCollaboration()`. The new hook provides richer reactive state (status, sync, error), returns Yjs primitives directly, and exposes the `CollaborationManager` for advanced use.
+
+#### Key Changes
+
+| Aspect              | v1 (deprecated)                                           | v2 (current)                                   |
+| ------------------- | --------------------------------------------------------- | ---------------------------------------------- |
+| Entry point         | `useVeltCodeMirrorCrdtExtension(config)`                  | `useCollaboration(config)`                      |
+| Yjs access          | `store.getYText()`, `store.getAwareness()`                | `primitives.ytext`, `primitives.awareness`       |
+| Undo manager        | `store.getUndoManager()`                                  | `primitives.undoManager`                         |
+| Manager access      | `store` (VeltCodeMirrorStore)                             | `manager` (CollaborationManager)                 |
+| Version management  | `store.saveVersion()`, `store.getVersions()`              | `manager.saveVersion()`, `manager.getVersions()` |
+| Status tracking     | Not available                                             | `status`, `isSynced` (reactive state)            |
+| Error handling      | Not available                                             | `onError` callback + `error` state               |
+| Cleanup             | Automatic on unmount                                      | Automatic on unmount                             |
+
+#### Step-by-Step
+
+**1. Replace the hook:**
+```tsx
+// Before (v1)
+import { useVeltCodeMirrorCrdtExtension } from '@veltdev/codemirror-crdt-react';
+const { store, isLoading } = useVeltCodeMirrorCrdtExtension({ editorId: 'my-doc' });
+
+// After (v2)
+import { useCollaboration } from '@veltdev/codemirror-crdt-react';
+const { primitives, isLoading, isSynced, status, error, manager } = useCollaboration({
+  editorId: 'my-doc',
+  onError: (err) => console.error(err),
+});
+```
+
+**2. Replace editor creation:**
+```tsx
+// Before (v1): store.getYText(), store.getAwareness(), store.getUndoManager()
+// After (v2): primitives.ytext, primitives.awareness, primitives.undoManager
+```
+
+**3. Replace version management:**
+```tsx
+// Before (v1): store.getVersions(), store.setStateFromVersion(version)
+// After (v2): manager.getVersions(), manager.restoreVersion(versionId)
+```
+
+**4. Add status monitoring (new in v2):**
+```tsx
+if (error) return <div>Error: {error.message}</div>;
+if (isLoading) return <div>Connecting...</div>;
+<div>Status: {status} | Synced: {isSynced ? 'Yes' : 'No'}</div>
+```
+
+### Non-React
+
+#### Overview
+
+The v2 API replaces the callback-based `createVeltCodeMirrorCrdtExtension()` with an async `createCollaboration()` factory that returns a `CollaborationManager`.
+
+#### Key Changes
+
+| Aspect              | v1 (deprecated)                                               | v2 (current)                                       |
+| ------------------- | ------------------------------------------------------------- | -------------------------------------------------- |
+| Entry point         | `createVeltCodeMirrorCrdtExtension(config, callback)`         | `await createCollaboration(config)`                 |
+| Return value        | Cleanup function                                              | `CollaborationManager` instance                     |
+| Yjs primitives      | Via callback: `store.getYText()`, `store.getAwareness()`      | Via method: `manager.getCollaborationPrimitives()`   |
+| Store access        | Via callback: `response.store`                                | Via method: `manager.getStore()`                     |
+| Version management  | `store.getEncodedState()`, `store.setStateFromVersion()`      | `manager.saveVersion()`, `manager.getVersions()`     |
+| Status tracking     | Not available                                                 | `manager.onStatusChange()`, `manager.onSynced()`     |
+| Cleanup             | Call returned cleanup function                                | `manager.destroy()`                                  |
+| Error handling      | `onConnectionError` callback                                  | `onError` callback                                   |
+| Sync notification   | `onSynced` callback (fires once)                              | `manager.onSynced()` (subscribable)                  |
+
+#### Step-by-Step
+
+**1. Replace the store creation:**
+```js
+// Before (v1)
+import { createVeltCodeMirrorCrdtExtension } from '@veltdev/codemirror-crdt';
+const cleanup = createVeltCodeMirrorCrdtExtension(
+  { editorId: 'my-doc', veltClient: client },
+  ({ store }) => {
+    const state = EditorState.create({
+      doc: store.getYText()?.toString() ?? '',
+      extensions: [basicSetup, yCollab(store.getYText()!, store.getAwareness(), { undoManager: store.getUndoManager() })],
+    });
+    new EditorView({ state, parent: document.querySelector('#editor') });
+  }
+);
+
+// After (v2)
+import { createCollaboration } from '@veltdev/codemirror-crdt';
+const manager = await createCollaboration({ editorId: 'my-doc', veltClient: client });
+const { ytext, awareness, undoManager } = manager.getCollaborationPrimitives();
+const state = EditorState.create({
+  doc: ytext.toString(),
+  extensions: [basicSetup, yCollab(ytext, awareness, { undoManager })],
+});
+new EditorView({ state, parent: document.querySelector('#editor') });
+```
+
+**2. Replace version management:**
+```js
+// Before (v1): store.getEncodedState(), store.setStateFromVersion(version)
+// After (v2): manager.saveVersion('v1'), manager.restoreVersion(versionId)
+```
+
+**3. Replace cleanup:**
+```js
+// Before (v1): cleanup()
+// After (v2): manager.destroy()
+```
+
+**4. Add status monitoring (new in v2):**
+```js
+manager.onStatusChange((status) => console.log('Status:', status));
+manager.onSynced((synced) => console.log('Synced:', synced));
+```
+
+**5. Access Yjs internals:**
+```js
+// Before (v1): store.getYDoc(), store.getYText(), store.getAwareness(), store.getUndoManager()
+// After (v2): manager.getDoc(), manager.getYText(), manager.getAwareness(), manager.getUndoManager(), manager.getProvider()
+```
+
+
+## Legacy API (v1)
+
+<Warning>The v1 API is deprecated. Use the v2 `useCollaboration` hook (React) or `createCollaboration` (non-React) for all new integrations. The v1 API is still exported for backward compatibility.</Warning>
+
+### React: useVeltCodeMirrorCrdtExtension() (deprecated)
+
+A React hook that returns a store for CodeMirror integration. Internally delegates to `useCollaboration` (v2) via a compatibility wrapper.
+
+- Signature: `useVeltCodeMirrorCrdtExtension(config: VeltCodeMirrorCrdtExtensionConfig)`
+- Params: [VeltCodeMirrorCrdtExtensionConfig](/api-reference/sdk/models/data-models#veltcodemirrorcrdtextensionconfig-deprecated)
+- Returns: [VeltCodeMirrorCrdtExtensionResponse](/api-reference/sdk/models/data-models#veltcodemirrorcrdtextensionresponse-deprecated)
+
+```tsx
+import { useVeltCodeMirrorCrdtExtension } from '@veltdev/codemirror-crdt-react';
+
+const { store, isLoading } = useVeltCodeMirrorCrdtExtension({
+  editorId: 'my-document-id',
+  initialContent: 'console.log("Hello!");',
+});
+
+// Use store to create CodeMirror extensions
+if (store) {
+  const state = EditorState.create({
+    doc: store.getYText()?.toString() ?? '',
+    extensions: [
+      basicSetup,
+      yCollab(store.getYText()!, store.getAwareness(), {
+        undoManager: store.getUndoManager(),
+      }),
+    ],
+  });
+}
+```
+
+### React: VeltCodeMirrorCrdtExtensionConfig (deprecated)
+
+| Property             | Type                          | Required | Description                                      |
+| -------------------- | ----------------------------- | -------- | ------------------------------------------------ |
+| `editorId`           | `string`                      | Yes      | Unique editor identifier.                        |
+| `initialContent`     | `string`                      | No       | Text content for new documents.                  |
+| `debounceMs`         | `number`                      | No       | Throttle interval (ms).                          |
+| `veltClient`         | `Velt`                        | No       | Velt client instance.                            |
+
+### React: VeltCodeMirrorCrdtExtensionResponse (deprecated)
+
+| Property    | Type                          | Description                                    |
+| ----------- | ----------------------------- | ---------------------------------------------- |
+| `store`     | `VeltCodeMirrorStore \| null` | Store instance for editor and version management. |
+| `isLoading` | `boolean`                     | `true` until the store is ready.               |
+
+### Non-React: createVeltCodeMirrorCrdtExtension() (deprecated)
+
+Creates a collaboration store using a callback-based pattern. The function subscribes to the Velt SDK lifecycle and invokes the `onReady` callback when the store is ready.
+
+- Signature: `createVeltCodeMirrorCrdtExtension(config: VeltCodeMirrorStoreConfig, onReady: (response) => void): () => void`
+- Returns: `() => void` (cleanup function)
+
+```js
+import { createVeltCodeMirrorCrdtExtension } from '@veltdev/codemirror-crdt';
+
+const cleanup = createVeltCodeMirrorCrdtExtension(
+  {
+    editorId: 'my-document-id',
+    veltClient: client,
+    initialContent: 'Hello world',
+  },
+  ({ store }) => {
+    if (store) {
+      const state = EditorState.create({
+        doc: store.getYText()?.toString() ?? '',
+        extensions: [
+          basicSetup,
+          yCollab(store.getYText()!, store.getAwareness(), { undoManager: store.getUndoManager() }),
+        ],
+      });
+      new EditorView({ state, parent: document.querySelector('#editor') });
+    }
+  }
+);
+
+// Call cleanup() to tear down
+cleanup();
+```
+
+### Non-React: VeltCodeMirrorStoreConfig (deprecated)
+
+| Property             | Type                          | Required | Description                                      |
+| -------------------- | ----------------------------- | -------- | ------------------------------------------------ |
+| `editorId`           | `string`                      | Yes      | Unique editor identifier.                        |
+| `initialContent`     | `string`                      | No       | Text content for new documents.                  |
+| `debounceMs`         | `number`                      | No       | Throttle interval (ms).                          |
+| `onSynced`           | `(doc?: Y.Doc) => void`       | No       | Called once when initial sync completes.          |
+| `onConnectionError`  | `(error: Error) => void`      | No       | Called on connection errors.                      |
+| `veltClient`         | `Velt`                        | No       | Velt client instance.                            |
+
+### Non-React: VeltCodeMirrorCrdtExtensionResponse (deprecated)
+
+| Property   | Type                           | Description                                    |
+| ---------- | ------------------------------ | ---------------------------------------------- |
+| `store`    | `VeltCodeMirrorStore \| null`  | Store instance for Yjs access and versions.     |
+| `error`    | `string \| null`               | Error message if initialization failed.         |
+
+### VeltCodeMirrorStore Methods (deprecated)
+
+| Method                   | Returns                   | Description                                       |
+| ------------------------ | ------------------------- | ------------------------------------------------- |
+| `getStore()`             | `Store<string>`           | Get the core CRDT Store.                          |
+| `getYText()`             | `Y.Text \| null`          | Get the Yjs Text instance.                        |
+| `getYDoc()`              | `Y.Doc`                   | Get the Yjs Doc.                                  |
+| `getUndoManager()`       | `Y.UndoManager \| null`  | Get the Yjs UndoManager.                          |
+| `getAwareness()`         | `Awareness`               | Get the Awareness instance.                       |
+| `getEncodedState()`      | `number[]`                | Get encoded Y.Doc state for versioning.           |
+| `isConnected()`          | `boolean`                 | Check if connected to backend.                    |
+| `setStateFromVersion(v)` | `Promise<void>`           | Apply a version's state.                          |
+| `destroy()`              | `void`                    | Clean up all resources.                           |

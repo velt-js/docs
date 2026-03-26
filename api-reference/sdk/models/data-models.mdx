@@ -5006,22 +5006,128 @@ Factory method that constructs a `VeltTipTapStore`, calls `initialize()`, and re
 
 # Core Collaboration
 
-#### StoreConfig`<T>`;
----
-| Property         | Type                                    | Required | Description                                                                 |
-|------------------|-----------------------------------------|----------|-----------------------------------------------------------------------------|
-| `id`             | `string`                                | Yes      | Unique identifier for the collaborative store (e.g., document ID).          |
-| `veltClient`     | `Velt`                                  | Yes      | Velt client for SDK integration.                                            |
-| `type`           | `'array' \| 'map' \| 'text' \| 'xml'`   | Yes      | Backing CRDT data type for the store.                                       |
-| `initialValue`   | `T`                                     | No       | Optional initial value (e.g., `''` for text, `[]` for array).               |
-| `enablePresence` | `boolean`                               | No       | Enable realtime presence tracking (default: `true`).                        |
-| `debounceMs`     | `number`                                | No       | Debounce interval in ms for batching local updates before syncing.          |
+## v2 API
 
-#### YjsType
+#### UseStoreConfig`<T>`
 ---
-`'array' | 'map' | 'text' | 'xml'`
+Configuration for the `useStore` React hook.
 
-#### useVeltCrdtStore
+| Property                   | Type                       | Required | Description                                                                    |
+|----------------------------|----------------------------|----------|--------------------------------------------------------------------------------|
+| `storeId`                  | `string`                   | Yes      | Unique document identifier.                                                    |
+| `type`                     | `FieldKind`                | Yes      | Yjs data type: `'text'`, `'map'`, `'array'`, `'xml'`, or `'xmltext'`.         |
+| `initialValue`             | `T`                        | No       | Initial value applied if remote state is empty.                                |
+| `debounceMs`               | `number`                   | No       | Throttle interval (ms) for backend writes. `0` = immediate. Default: `0`.     |
+| `enablePresence`           | `boolean`                  | No       | Enable presence tracking. Default: `true`.                                     |
+| `forceResetInitialContent` | `boolean`                  | No       | If `true`, always reset to `initialValue` on init. Default: `false`.           |
+| `onError`                  | `(error: Error) => void`   | No       | Error callback for store initialization failures.                              |
+| `veltClient`               | `Velt`                     | No       | Velt client instance. Falls back to `VeltProvider` context.                    |
+
+#### UseStoreReturn`<T>`
+---
+Return value of `useStore()`.
+
+| Property              | Type                                               | Description                                                |
+|-----------------------|----------------------------------------------------|------------------------------------------------------------|
+| `value`               | `T \| null`                                        | Current store value, reactively updated.                   |
+| `versions`            | `Version[]`                                        | List of saved versions.                                    |
+| `isLoading`           | `boolean`                                          | `true` while the store is initializing.                    |
+| `isSynced`            | `boolean`                                          | `true` when the store is connected and synced.             |
+| `status`              | `SyncStatus`                                       | Connection status.                                         |
+| `error`               | `Error \| null`                                    | Error object if initialization failed.                     |
+| `store`               | `Store<T> \| null`                                 | Underlying store instance for advanced use.                |
+| `update`              | `(newValue: T) => void`                            | Replace the entire store value.                            |
+| `saveVersion`         | `(versionName: string) => Promise<string>`         | Save a named snapshot.                                     |
+| `getVersions`         | `() => Promise<Version[]>`                         | List all saved versions.                                   |
+| `getVersionById`      | `(versionId: string) => Promise<Version \| null>`  | Get a specific version by ID.                              |
+| `restoreVersion`      | `(versionId: string) => Promise<boolean>`          | Restore to a saved version.                                |
+| `setStateFromVersion` | `(version: Version) => Promise<void>`              | Apply a version's state to the document.                   |
+
+#### FieldKind
+---
+```typescript
+type FieldKind = 'text' | 'map' | 'array' | 'xml' | 'xmltext';
+```
+
+#### AwarenessState
+---
+Base shape of the local awareness state.
+
+```typescript
+interface AwarenessState {
+  user?: { userId: string; name: string; color: string };
+  cursor?: { anchor: number; head: number };
+  [key: string]: unknown;
+}
+```
+
+#### UseAwarenessReturn`<T>`
+---
+Return value of `useAwareness()`.
+
+| Property        | Type                          | Description                                            |
+|-----------------|-------------------------------|--------------------------------------------------------|
+| `remoteStates`  | `RemoteAwarenessState<T>[]`   | Awareness states of all remote peers.                  |
+| `localState`    | `T \| null`                   | Current local awareness state.                         |
+| `setLocalState` | `(state: T \| null) => void`  | Set or clear the local awareness state.                |
+
+#### SyncStatus
+---
+```typescript
+type SyncStatus = 'connecting' | 'connected' | 'disconnected';
+```
+
+#### RemoteAwarenessState`<T>`
+---
+A remote client's awareness state, tagged with their Yjs client ID.
+
+```typescript
+type RemoteAwarenessState<T extends AwarenessState = AwarenessState> = T & {
+  clientId: number;
+};
+```
+
+#### Version (CRDT)
+---
+A saved snapshot of the store state.
+
+| Property      | Type                     | Required | Description                          |
+|---------------|--------------------------|----------|--------------------------------------|
+| `versionId`   | `string`                 | Yes      | Unique version identifier.           |
+| `versionName` | `string`                 | Yes      | Human-readable version name.         |
+| `timestamp`   | `number`                 | No       | Creation timestamp (ms since epoch). |
+| `state`       | `Uint8Array \| number[]` | Yes      | Encoded Yjs document state.          |
+
+#### LogLevel
+---
+```typescript
+type LogLevel = 'silent' | 'error' | 'warn' | 'debug';
+```
+
+
+## v1 API (deprecated)
+
+<Warning>The v1 `useVeltCrdtStore` hook is deprecated. Use the v2 `useStore` hook for all new React integrations. The non-React `createVeltStore` API remains unchanged.</Warning>
+
+#### StoreConfig`<T>`
+---
+Configuration for `createVeltStore()` (non-React).
+
+| Property                   | Type                                    | Required | Description                                                                 |
+|----------------------------|-----------------------------------------|----------|-----------------------------------------------------------------------------|
+| `id`                       | `string`                                | Yes      | Unique document identifier.                                                 |
+| `type`                     | `'array' \| 'map' \| 'text' \| 'xml'`   | Yes      | Yjs data type for the store.                                                |
+| `initialValue`             | `T`                                     | No       | Initial value applied if remote state is empty.                             |
+| `veltClient`               | `Velt`                                  | No       | Velt client instance (required for sync).                                   |
+| `debounceMs`               | `number`                                | No       | Throttle interval (ms) for backend writes. Default: `0`.                    |
+| `enablePresence`           | `boolean`                               | No       | Enable presence tracking. Default: `true`.                                  |
+| `forceResetInitialContent` | `boolean`                               | No       | If `true`, always reset to `initialValue` on init. Default: `false`.        |
+| `contentKey`               | `string`                                | No       | Content key for Yjs shared types. Default: `'content'`.                     |
+| `userId`                   | `string`                                | No       | User identifier for update attribution.                                     |
+| `collection`               | `string`                                | No       | Collection/namespace for document grouping.                                 |
+| `logLevel`                 | `LogLevel`                              | No       | Log level: `'silent'`, `'error'`, `'warn'`, `'debug'`. Default: `'error'`. |
+
+#### useVeltCrdtStore (deprecated)
 ---
 | Property              | Type                                  | Description                                   |
 |-----------------------|---------------------------------------|-----------------------------------------------|

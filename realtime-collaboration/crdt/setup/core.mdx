@@ -1,11 +1,11 @@
 ---
-title: Core
+title: Core Setup
 description: Setup Multiplayer Editing for any frameworks or custom implementations.
 ---
 
 ## Introduction
 
-Use these guides to add Yjs-based CRDT to your project with Velt. Pick the React Hook wrapper for the fastest integration in React apps, or the core library for other frameworks and custom implementations.
+Use these guides to add Yjs-based CRDT to your project with Velt. The core library supports multiple store types — pick the one that matches your data shape. Use the React Hook wrapper for the fastest integration in React apps, or the core library for other frameworks and custom implementations.
 
 ## Setup
 
@@ -14,27 +14,15 @@ Use these guides to add Yjs-based CRDT to your project with Velt. Pick the React
 <Tabs>
 <Tab title="React / Next.js">
 
-**npm:**
 ```bash
 npm install @veltdev/crdt-react @veltdev/crdt @veltdev/react
-```
-
-**yarn:**
-```bash
-yarn add @veltdev/crdt-react @veltdev/crdt @veltdev/react
 ```
 
 </Tab>
 <Tab title="Other Frameworks">
 
-**npm:**
 ```bash
 npm install @veltdev/crdt @veltdev/client
-```
-
-**yarn:**
-```bash
-yarn add @veltdev/crdt @veltdev/client
 ```
 
 </Tab>
@@ -42,102 +30,110 @@ yarn add @veltdev/crdt @veltdev/client
 
 ### Step 2: Initialize Velt in your app
 
-Initialize the Velt client by following the [Velt Setup Docs](/get-started/quickstart). This is required for the collaboration engine to work.
-
-
-### Step 3: Initialize a CRDT store
+Initialize the Velt client and set the document context. This is required for the collaboration engine to work.
 
 <Tabs>
 <Tab title="React / Next.js">
 
-```jsx
-import { useVeltCrdtStore } from '@veltdev/crdt-react';
+Wrap your app with `VeltProvider` and use `useSetDocument` to scope the collaborative session. Follow the [Velt Setup Docs](/get-started/quickstart) for full setup.
 
-function Component() {
-  const { store } = useVeltCrdtStore<string>({
-    id: 'my-collab-note',
-    type: 'text',
-    initialValue: 'Hello, world!',
-  });
-  return null;
+```tsx
+import { VeltProvider, useSetDocument } from '@veltdev/react';
+
+function App() {
+  return (
+    <VeltProvider apiKey="YOUR_API_KEY">
+      <YourApp />
+    </VeltProvider>
+  );
+}
+
+function YourApp() {
+  useSetDocument('my-document-id', { documentName: 'My Document' });
+  return <YourComponent />;
 }
 ```
 
 </Tab>
 <Tab title="Other Frameworks">
 
-```ts
-import { createVeltStore } from '@veltdev/crdt';
+Initialize the Velt SDK with `initVelt()`, set the document context, and authenticate a user.
+
+```js
 import { initVelt } from '@veltdev/client';
 
-const veltClient = await initVelt('YOUR_API_KEY');
+const client = await initVelt('YOUR_API_KEY');
 
-const store = await createVeltStore<string>({
-  id: 'my-document',
-  type: 'text', // 'array' | 'map' | 'text' | 'xml'
-  initialValue: 'Hello, world!',
-  veltClient,
+// Set the document scope
+client.setDocument('my-document-id', { documentName: 'My Document' });
+
+// Authenticate a user
+await client.identify({
+  userId: 'user-1',
+  name: 'John Doe',
+  email: 'john@example.com',
+});
+
+// Wait for the SDK to be ready
+client.getVeltInitState().subscribe((isReady) => {
+  if (isReady) {
+    initializeStore(client);
+  }
 });
 ```
 
 </Tab>
 </Tabs>
 
-### Step 4: Set or update the store value
+### Step 3: Choose a store type
 
-Set or update local changes to the store.
+Each store type maps to a Yjs shared data structure. Pick the one that matches your use case and follow its setup guide:
 
-<Tabs>
-<Tab title="React / Next.js">
+<CardGroup cols={2}>
+<Card title="Array Store" icon="list" href="/realtime-collaboration/crdt/setup/core-stores/array">
+Collaborative ordered lists — todo apps, item collections, ordered datasets.
+</Card>
 
-```jsx
-import { useVeltCrdtStore } from '@veltdev/crdt-react';
+<Card title="Map Store" icon="key" href="/realtime-collaboration/crdt/setup/core-stores/map">
+Collaborative key-value pairs — settings, metadata, configuration objects.
+</Card>
+</CardGroup>
 
-function Component() {
-  const { update } = useVeltCrdtStore<string>({ id: 'my-collab-note', type: 'text' });
-  const onChange = (e) => update(e.target.value);
-  return <input onChange={onChange} />;
-}
-```
+<Note>Text and XML store guides are coming soon. They follow the same `useStore` / `createVeltStore` patterns shown in the array and map guides.</Note>
 
-</Tab>
-<Tab title="Other Frameworks">
-
-```ts
-store.update('Hello, collaborative world!');
-```
-
-</Tab>
-</Tabs>
-
-### Step 5: Listen for changes
-
-Listen and subscribe for updates from local and remote peers.
+### Step 4: Event subscriptions (optional)
 
 <Tabs>
 <Tab title="React / Next.js">
 
-```jsx
-import { useEffect } from 'react';
-import { useVeltCrdtStore } from '@veltdev/crdt-react';
+Use the `useCrdtEventCallback` hook to listen for CRDT events:
 
-function Component() {
-  const { value } = useVeltCrdtStore<string>({ id: 'my-collab-note', type: 'text' });
+```jsx
+import { useCrdtEventCallback } from '@veltdev/react';
+
+function YourComponent() {
+  const updateDataEvent = useCrdtEventCallback('updateData');
 
   useEffect(() => {
-    console.log('Updated value:', value);
-  }, [value]);
-
-  return null;
+    if (updateDataEvent) {
+      console.log('CRDT data updated:', updateDataEvent);
+    }
+  }, [updateDataEvent]);
 }
 ```
 
 </Tab>
 <Tab title="Other Frameworks">
 
-```ts
-const unsubscribe = store.subscribe((newValue) => {
-  console.log('Updated value:', newValue);
+Use `getCrdtElement().on()` to listen for CRDT events like `updateData`, which fires whenever the store data is synced.
+
+```js
+const crdtElement = client.getCrdtElement();
+
+crdtElement.on('updateData').subscribe((event) => {
+  if (event) {
+    console.log('CRDT data updated:', event);
+  }
 });
 ```
 
@@ -145,37 +141,31 @@ const unsubscribe = store.subscribe((newValue) => {
 </Tabs>
 
 
-### Step 6: Save and restore versions
-
-Create checkpoints and roll back when needed.
+### Step 5: Custom encryption (optional)
 
 <Tabs>
 <Tab title="React / Next.js">
 
-```jsx
-import { useVeltCrdtStore } from '@veltdev/crdt-react';
+Pass a custom `VeltEncryptionProvider` to `VeltProvider` to encrypt/decrypt CRDT state before it is stored on the backend.
 
-function Component() {
-  const { saveVersion, getVersions, getVersionById, setStateFromVersion } =
-    useVeltCrdtStore<string>({ id: 'my-collab-note', type: 'text' });
+```tsx
+import { VeltProvider } from '@veltdev/react';
+import { VeltEncryptionProvider } from '@veltdev/types';
 
-  async function onSave() {
-    const versionId = await saveVersion('Checkpoint');
-    console.log('Saved version:', versionId);
-  }
+const encryptionProvider: VeltEncryptionProvider<number[], string> = {
+  encrypt: async (config) => {
+    return config.data.map((num) => num.toString()).join('__');
+  },
+  decrypt: async (config) => {
+    return config.data.split('__').map((str) => parseInt(str, 10));
+  },
+};
 
-  async function onRestoreLatest() {
-    const versions = await getVersions();
-    if (versions.length === 0) return;
-    const latest = versions[0];
-    await setStateFromVersion(latest);
-  }
-
+function App() {
   return (
-    <div>
-      <button onClick={onSave}>Save Version</button>
-      <button onClick={onRestoreLatest}>Restore Latest</button>
-    </div>
+    <VeltProvider apiKey="YOUR_API_KEY" encryptionProvider={encryptionProvider}>
+      <YourAppContent />
+    </VeltProvider>
   );
 }
 ```
@@ -183,67 +173,16 @@ function Component() {
 </Tab>
 <Tab title="Other Frameworks">
 
-```ts
-const versionId = await store.saveVersion('Initial checkpoint');
-const versions = await store.getVersions();
-const fetched = await store.getVersionById(versionId);
-if (fetched) {
-  await store.setStateFromVersion(fetched);
-}
-```
+Call `client.setEncryptionProvider()` to encrypt/decrypt CRDT state before it is stored on the backend.
 
-</Tab>
-</Tabs>
-
-## APIs
-
-### Custom Encryption
-
-Encrypt CRDT data before it's stored in Velt by registering a custom encryption provider. For CRDT methods, input data is of type `Uint8Array | number[]`.
-
-<Tabs>
-<Tab title="React / Next.js">
-
-```tsx
-async function encryptData(config: EncryptConfig<number[]>): Promise<string> {
-  const encryptedData = await yourEncryptDataMethod(config.data);
-  return encryptedData;
-}
-
-async function decryptData(config: DecryptConfig<string>): Promise<number[]> {
-  const decryptedData = await yourDecryptDataMethod(config.data);
-  return decryptedData;
-}
-
-const encryptionProvider: VeltEncryptionProvider<number[], string> = {
-  encrypt: encryptData,
-  decrypt: decryptData,
-};
-
-<VeltProvider
-  apiKey="YOUR_API_KEY"
-  encryptionProvider={encryptionProvider}
-/>
-
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```ts
-async function encryptData(config: EncryptConfig<number[]>): Promise<string> {
-  const encryptedData = await yourEncryptDataMethod(config.data);
-  return encryptedData;
-}
-
-async function decryptData(config: DecryptConfig<string>): Promise<number[]> {
-  const decryptedData = await yourDecryptDataMethod(config.data);
-  return decryptedData;
-}
-
-const encryptionProvider: VeltEncryptionProvider<number[], string> = {
-  encrypt: encryptData,
-  decrypt: decryptData,
+```js
+const encryptionProvider = {
+  encrypt: async (config) => {
+    return config.data.map((num) => num.toString()).join('__');
+  },
+  decrypt: async (config) => {
+    return config.data.split('__').map((str) => parseInt(str, 10));
+  },
 };
 
 client.setEncryptionProvider(encryptionProvider);
@@ -258,161 +197,138 @@ See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryp
  · [DecryptConfig](/api-reference/sdk/models/data-models#decryptconfig)
 
 
-### Core
+## APIs
 
-#### Initialization
+### React: useStore()
 
-<Tabs>
-<Tab title="React / Next.js">
+React hook that creates and manages a CRDT store. Handles initialization, real-time subscriptions, and cleanup automatically.
 
-#### [useVeltCrdtStore](/api-reference/sdk/api/api-methods#useveltcrdtstore)
+- Signature: `useStore<T>(config: UseStoreConfig<T>)`
+- Params:
+  - `storeId`: Unique document identifier.
+  - `type`: Yjs data type: `'text'`, `'map'`, `'array'`, `'xml'`, or `'xmltext'`.
+  - `initialValue`: Initial value applied if remote state is empty.
+  - `debounceMs`: Throttle interval (ms) for backend writes. Default: `0`.
+  - `enablePresence`: Enable presence tracking. Default: `true`.
+  - `forceResetInitialContent`: If `true`, always reset to `initialValue` on init. Default: `false`.
+  - `onError`: Error callback.
+  - `veltClient`: Explicit Velt client. Falls back to `VeltProvider` context.
+- Returns: `UseStoreReturn<T>`
+  - `value`: Current store value, reactively updated.
+  - `update`: Replace the entire store value.
+  - `store`: Underlying store instance for advanced use.
+  - `isLoading`: `true` while the store is initializing.
+  - `isSynced`: `true` when the store is connected and synced.
+  - `status`: Connection status: `'connecting'`, `'connected'`, or `'disconnected'`.
+  - `error`: Error object if initialization failed.
+  - `versions`: List of saved versions.
+  - `saveVersion`: Save a named snapshot.
+  - `getVersions`: List all saved versions.
+  - `getVersionById`: Get a specific version by ID.
+  - `restoreVersion`: Restore to a saved version.
+  - `setStateFromVersion`: Apply a version's state to the document.
 
-React hook to create and sync a collaborative CRDT store.
+```tsx
+import { useStore } from '@veltdev/crdt-react';
 
-- Params: [useveltcrdtstore](/api-reference/sdk/models/data-models#useveltcrdtstore)
-  - `id`: Unique identifier for the store.
-  - `type`: Type of Yjs data structure (`'text'` | `'array'` | `'map'` | `'xml'`).
-  - `initialValue`: Optional initial value for the store.
-  - `debounceMs`: Optional debounce time for update propagation (ms).
-  - `enablePresence`: Optional boolean to enable realtime presence tracking (default: `true`).
-- Returns: Store properties and methods
-
-```jsx
 const {
   value,
-  versions,
-  store,
   update,
+  store,
+  isLoading,
+  isSynced,
+  status,
+  error,
   saveVersion,
   getVersions,
   getVersionById,
   restoreVersion,
   setStateFromVersion,
-} = useVeltCrdtStore<string>({
-  id: 'my-collab-note',
-  type: 'text',
-  initialValue: 'Hello, world!',
-  debounceMs: 100,
-  enablePresence: true,
+} = useStore<Item[]>({
+  storeId: 'my-array-store',
+  type: 'array', // can be 'array', 'map', 'text', 'xml', or 'xmltext'
+  initialValue: [],
 });
 ```
 
-</Tab>
-<Tab title="Other Frameworks">
 
-#### [createVeltStore](/api-reference/sdk/api/api-methods#createveltstore)
+### React: useAwareness()
 
-Create and initialize a collaborative CRDT store.
+React hook that wraps the Yjs Awareness instance from a store, providing reactive remote peer states and a stable setter for local awareness state.
 
-- Params: [StoreConfig](/api-reference/sdk/models/data-models#storeconfig<t>%3B)
-  - `id`: Unique identifier for the store.
-  - `type`: Type of Yjs data structure (`'text'` | `'array'` | `'map'` | `'xml'`).
-  - `initialValue`: Optional initial value for the store.
-  - `veltClient`: Velt client instance (from `initVelt()`).
-  - `debounceMs`: Optional debounce time for update propagation (ms).
-  - `enablePresence`: Optional boolean to enable realtime presence tracking (default: `true`).
+- Params: `store: Store<any> | null` — The store instance from `useStore()` (safe to pass `null`)
+- Returns: `UseAwarenessReturn<T>`
+  - `remoteStates`: Awareness states of all remote peers.
+  - `localState`: Current local awareness state.
+  - `setLocalState`: Set or clear the local awareness state.
+
+```tsx
+import { useStore, useAwareness } from '@veltdev/crdt-react';
+
+const { store } = useStore<Item[]>({ storeId: 'my-store', type: 'array', initialValue: [] });
+const { remoteStates, localState, setLocalState } = useAwareness(store);
+
+setLocalState({
+  user: { userId: 'user-1', name: 'John', color: '#ff0000' },
+  cursor: { anchor: 0, head: 5 },
+});
+```
+
+
+### Non-React: createVeltStore()
+
+Convenience factory that creates a `Store`, calls `initialize()`, and returns it. Returns `null` if initialization fails.
+
+- Params: [StoreConfig](/api-reference/sdk/models/data-models#storeconfig)
+  - `id`: Unique document identifier.
+  - `type`: Yjs data type: `'text'`, `'map'`, `'array'`, or `'xml'`.
+  - `initialValue`: Initial value applied if remote state is empty.
+  - `veltClient`: Velt client instance (from `initVelt()`). Required for sync.
+  - `debounceMs`: Throttle interval (ms) for backend writes. Default: `0`.
+  - `enablePresence`: Enable presence tracking. Default: `true`.
+  - `forceResetInitialContent`: If `true`, always reset to `initialValue` on init. Default: `false`.
+  - `contentKey`: Content key for Yjs shared types. Default: `'content'`.
+  - `userId`: User identifier for update attribution.
+  - `collection`: Collection/namespace for document grouping.
+  - `logLevel`: Log level: `'silent'`, `'error'`, `'warn'`, `'debug'`. Default: `'error'`.
 - Returns: `Promise<Store<T> | null>`
 
-```ts
-const store = await createVeltStore<string>({
-  id: 'my-document',
-  type: 'text',
-  initialValue: 'Hello, world!',
-  veltClient,
-  debounceMs: 100,
-  enablePresence: true,
+```js
+const store = await createVeltStore({
+  id: 'my-array-store',
+  type: 'array',
+  initialValue: [{ id: '1', name: 'First item' }],
+  veltClient: client,
 });
 ```
 
-</Tab>
-</Tabs>
 
-#### [update](/api-reference/sdk/api/api-methods#update)
+### Store Methods
+
+These methods are available on the `store` instance (from `useStore` or `createVeltStore`):
+
+#### update()
 
 Update the store value and sync to peers.
 
 - Params: `newValue: T`
 - Returns: `void`
 
-<CodeGroup>
-```jsx React
-const { update } = useVeltCrdtStore<string>({ id: 'my-collab-note', type: 'text' });
-update('New value');
-```
-
-```ts Other Frameworks
+```ts
 store.update('New Value');
 ```
-</CodeGroup>
 
-#### [getValue](/api-reference/sdk/api/api-methods#getvalue)
+#### getValue()
 
-Access the current store value.
-
-##### **Get one-time current value**
-
-<Tabs>
-<Tab title="React / Next.js">
-
-**[value](/api-reference/sdk/api/api-methods#value)**
-
-Reactive property that updates automatically when the store changes.
-
-- Type: `T | null`
-
-```jsx
-const { value } = useVeltCrdtStore<string>({ id: 'my-collab-note', type: 'text' });
-console.log(value);
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-**[getValue()](/api-reference/sdk/api/api-methods#getvalue)**
-
-Method to retrieve the current store value.
+Get the current store value. For map stores, returns the `toJSON()` representation of the underlying Y.Map as a plain JavaScript object.
 
 - Returns: `T`
 
 ```ts
 const value = store.getValue();
-console.log(value);
 ```
 
-</Tab>
-</Tabs>
-
-##### **Subscribe to value changes**
-
-Listen for updates from local and remote peers.
-
-<Tabs>
-<Tab title="React / Next.js">
-
-Use `useEffect` with the reactive `value` property for automatic updates, or use `store.subscribe()` for manual subscriptions.
-
-```jsx
-const { store, value } = useVeltCrdtStore<string>({ id: 'my-collab-note', type: 'text' });
-
-// Option 1: Use reactive value (recommended)
-useEffect(() => {
-  console.log('Value changed:', value);
-}, [value]);
-
-// Option 2: Manual subscription
-useEffect(() => {
-  if (!store) return;
-  const subscription = store.subscribe((newValue) => {
-    console.log('Updated value:', newValue);
-  });
-  return () => subscription?.();
-}, [store]);
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-**[subscribe()](/api-reference/sdk/api/api-methods#subscribe)**
+#### subscribe()
 
 Subscribe to changes in the store.
 
@@ -423,77 +339,183 @@ Subscribe to changes in the store.
 const unsubscribe = store.subscribe((newValue) => {
   console.log('Updated value:', newValue);
 });
-
-// Later, to stop listening:
-unsubscribe();
 ```
 
-</Tab>
-</Tabs>
+#### destroy()
 
-#### [store](/api-reference/sdk/api/api-methods#store)
-
-Access the underlying Velt Store instance for advanced operations.
-
-<Tabs>
-<Tab title="React / Next.js">
-
-The underlying store instance returned by the hook.
-
-- Type: `Store<T> | null`
-
-```jsx
-const { store } = useVeltCrdtStore<string>({ id: 'my-collab-note', type: 'text' });
-console.log(store);
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-The store instance is returned directly from `createVeltStore()`.
-
-- Type: `Store<T> | null`
-
-```ts
-const store = await createVeltStore<string>({
-  id: 'my-document',
-  type: 'text',
-  veltClient,
-});
-console.log(store);
-```
-
-</Tab>
-</Tabs>
-
-#### [destroy](/api-reference/sdk/api/api-methods#destroy)
-
-Clean up resources when done with the store.
-
-<Tabs>
-<Tab title="React / Next.js">
-
-Cleanup is handled automatically by the hook when the component unmounts. No manual cleanup is required.
-
-```jsx
-// Cleanup happens automatically when component unmounts
-const { store } = useVeltCrdtStore<string>({ id: 'my-collab-note', type: 'text' });
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-Manually destroy the store to clean up resources and listeners.
+Clean up resources when done with the store. Automatic in React via the hook.
 
 - Returns: `void`
 
 ```ts
-// When done with the store
 store.destroy();
+```
+
+#### getDoc()
+
+Get the underlying Yjs document.
+
+- Returns: `Y.Doc`
+
+```ts
+const ydoc = store.getDoc();
+```
+
+#### getProvider()
+
+Get the provider instance for the store.
+
+- Returns: `Provider`
+
+```ts
+const provider = store.getProvider();
+```
+
+#### getText()
+
+Get the Y.Text instance if store type is 'text'.
+
+- Returns: `Y.Text | null`
+
+```ts
+const ytext = store.getText();
+```
+
+#### getXml()
+
+Get the Y.XmlFragment instance if store type is 'xml'.
+
+- Returns: `Y.XmlFragment | null`
+
+```ts
+const yxml = store.getXml();
+```
+
+#### getAwareness()
+
+Get the Awareness instance for cursor/presence tracking.
+
+- Returns: `Awareness`
+
+```ts
+const awareness = store.getAwareness();
+```
+
+
+### Version Methods
+
+Available on both the `useStore` hook return and the `store` instance:
+
+#### saveVersion()
+
+Save a snapshot of the current state as a named version.
+
+- Params: `versionName: string`
+- Returns: `Promise<string>`
+
+```ts
+const versionId = await saveVersion('Checkpoint');
+```
+
+#### getVersions()
+
+Fetch all saved versions.
+
+- Returns: `Promise<Version[]>`
+
+```ts
+const versions = await getVersions();
+```
+
+#### getVersionById()
+
+Fetch a specific version by ID.
+
+- Params: `versionId: string`
+- Returns: `Promise<Version | null>`
+
+```ts
+const version = await getVersionById('abc123');
+```
+
+#### restoreVersion()
+
+Restore the store to a specific version using its ID.
+
+- Params: `versionId: string`
+- Returns: `Promise<boolean>`
+
+```ts
+await restoreVersion('abc123');
+```
+
+#### setStateFromVersion()
+
+Restore the store state from a specific version object.
+
+- Params: `version: Version`
+- Returns: `Promise<void>`
+
+```ts
+await setStateFromVersion(version);
+```
+
+
+### Custom Encryption
+
+Encrypt CRDT data before it's stored in Velt by registering a custom encryption provider. For CRDT methods, input data is of type `Uint8Array | number[]`.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+import { VeltProvider } from '@veltdev/react';
+import { VeltEncryptionProvider } from '@veltdev/types';
+
+const encryptionProvider: VeltEncryptionProvider<number[], string> = {
+  encrypt: async (config) => {
+    return config.data.map((num) => num.toString()).join('__');
+  },
+  decrypt: async (config) => {
+    return config.data.split('__').map((str) => parseInt(str, 10));
+  },
+};
+
+function App() {
+  return (
+    <VeltProvider apiKey="YOUR_API_KEY" encryptionProvider={encryptionProvider}>
+      <YourAppContent />
+    </VeltProvider>
+  );
+}
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+const encryptionProvider = {
+  encrypt: async (config) => {
+    return config.data.map((num) => num.toString()).join('__');
+  },
+  decrypt: async (config) => {
+    return config.data.split('__').map((str) => parseInt(str, 10));
+  },
+};
+
+client.setEncryptionProvider(encryptionProvider);
 ```
 
 </Tab>
 </Tabs>
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+ · [EncryptConfig](/api-reference/sdk/models/data-models#encryptconfig)
+ · [DecryptConfig](/api-reference/sdk/models/data-models#decryptconfig)
+
+
+### CRDT Event Subscriptions
 
 #### [on](/api-reference/sdk/api/api-methods#on)
 
@@ -508,10 +530,8 @@ Subscribe to CRDT events. Currently supports the `updateData` event which fires 
 **Using Hook:**
 ```jsx
 import { useCrdtEventCallback } from "@veltdev/react";
-import { useEffect } from "react";
 
 export function YourComponent() {
-  // Hook: Subscribe to updateData event
   const crdtUpdateData = useCrdtEventCallback("updateData");
 
   useEffect(() => {
@@ -525,21 +545,16 @@ export function YourComponent() {
 **Using API:**
 ```jsx
 import { useVeltClient } from "@veltdev/react";
-import { useEffect } from "react";
 
 export function YourComponent() {
   const { client } = useVeltClient();
 
   useEffect(() => {
     if (!client) return;
-
     const crdtElement = client.getCrdtElement();
-    
-    // Subscribe to updateData event
     const subscription = crdtElement.on("updateData").subscribe((eventData) => {
       console.log("[CRDT] event on data change: ", eventData);
     });
-
     return () => subscription.unsubscribe();
   }, [client]);
 
@@ -552,32 +567,21 @@ export function YourComponent() {
 
 ```html
 <script>
-// Get CRDT element
 const crdtElement = Velt.getCrdtElement();
 
-// Subscribe to updateData event
 crdtElement.on("updateData").subscribe((eventData) => {
   console.log("[CRDT] event on data change: ", eventData);
-  // eventData structure:
-  // {
-  //   methodName: string,
-  //   uniqueId: string,
-  //   timestamp: number,
-  //   source: string,
-  //   payload: {
-  //     id: string,
-  //     data: unknown,
-  //     lastUpdatedBy: string,
-  //     sessionId: string | null,
-  //     lastUpdate: string
-  //   }
-  // }
 });
 </script>
 ```
 
 </Tab>
 </Tabs>
+
+
+### Low-Level Message APIs
+
+These APIs provide direct access to the CRDT message stream for custom implementations.
 
 #### [pushMessage()](/api-reference/sdk/api/api-methods#pushmessage)
 
@@ -634,7 +638,6 @@ const unsubscribe = crdtElement.onMessage({
   },
 });
 
-// Cleanup when done
 unsubscribe();
 ```
 </Tab>
@@ -649,7 +652,6 @@ const unsubscribe = crdtElement.onMessage({
   },
 });
 
-// Cleanup when done
 unsubscribe();
 ```
 </Tab>
@@ -657,7 +659,7 @@ unsubscribe();
 
 #### [getMessages()](/api-reference/sdk/api/api-methods#getmessages)
 
-Retrieve historical messages from the unified message stream. Used for message replay during initial load.
+Retrieve historical messages from the unified message stream.
 
 - Params: [`CrdtGetMessagesQuery`](/api-reference/sdk/models/data-models#crdtgetmessagesquery)
 - Returns: [`Promise<CrdtMessageData[]>`](/api-reference/sdk/models/data-models#crdtmessagedata)
@@ -693,7 +695,7 @@ for (const msg of messages) {
 
 #### [getSnapshot()](/api-reference/sdk/api/api-methods#getsnapshot)
 
-Retrieve the latest CRDT state snapshot for a document. Used as the baseline for message replay during initial load.
+Retrieve the latest CRDT state snapshot for a document.
 
 - Params: [`CrdtGetSnapshotQuery`](/api-reference/sdk/models/data-models#crdtgetsnapshotquery)
 - Returns: [`Promise<CrdtSnapshotData | null>`](/api-reference/sdk/models/data-models#crdtsnapshotdata)
@@ -723,7 +725,7 @@ if (snapshot?.state) {
 
 #### [saveSnapshot()](/api-reference/sdk/api/api-methods#savesnapshot)
 
-Persist a CRDT state snapshot for a document. Called periodically to create checkpoints, enabling message pruning.
+Persist a CRDT state snapshot for a document.
 
 - Params: [`CrdtSaveSnapshotQuery`](/api-reference/sdk/models/data-models#crdtsavesnapshotquery)
 - Returns: `Promise<void>`
@@ -757,7 +759,7 @@ await crdtElement.saveSnapshot({
 
 #### [pruneMessages()](/api-reference/sdk/api/api-methods#prunemessages)
 
-Delete historical messages older than a given timestamp from the message stream. Called after saving a snapshot to keep the message stream bounded.
+Delete historical messages older than a given timestamp from the message stream.
 
 - Params: [`CrdtPruneMessagesQuery`](/api-reference/sdk/models/data-models#crdtprunemessagesquery)
 - Returns: `Promise<void>`
@@ -786,197 +788,95 @@ await crdtElement.pruneMessages({
 </Tabs>
 
 
-### Versions
+## Migration Guide: v1 to v2
 
-#### [saveVersion](/api-reference/sdk/api/api-methods#saveversion)
+### React
 
-Save a snapshot of the current state as a named version.
+#### Overview
 
-- Params: `versionName: string`
-- Returns: `Promise<string>`
+The v2 API replaces `useVeltCrdtStore()` with `useStore()`. The new hook uses `storeId` instead of `id`, adds reactive `status`/`isSynced`/`error` state, and supports `forceResetInitialContent`.
 
-<Tabs>
-<Tab title="React / Next.js">
+#### Key Changes
+
+| Aspect              | v1 (deprecated)                     | v2 (current)                                 |
+| ------------------- | ----------------------------------- | -------------------------------------------- |
+| Entry point         | `useVeltCrdtStore(config)`          | `useStore(config)`                           |
+| Store ID field      | `id`                                | `storeId`                                    |
+| Status tracking     | Not available                       | `isLoading`, `isSynced`, `status`            |
+| Error handling      | Not available                       | `onError` callback + `error` state           |
+| Force reset         | Not available                       | `forceResetInitialContent`                   |
+| Version management  | Same methods                        | Same methods                                 |
+| Cleanup             | Automatic on unmount                | Automatic on unmount                         |
+
+#### Step-by-Step
+
+**1. Replace the hook:**
+```tsx
+// Before (v1)
+import { useVeltCrdtStore } from '@veltdev/crdt-react';
+const { value, update, store } = useVeltCrdtStore<string>({ id: 'my-doc', type: 'text' });
+
+// After (v2)
+import { useStore } from '@veltdev/crdt-react';
+const { value, update, store, isLoading, isSynced, status, error } = useStore<string>({
+  storeId: 'my-doc',
+  type: 'text',
+  onError: (err) => console.error(err),
+});
+```
+
+**2. Add status monitoring (new in v2):**
+```tsx
+if (isLoading) return <div>Loading...</div>;
+if (error) return <div>Error: {error.message}</div>;
+```
+
+
+## Legacy API (v1)
+
+<Warning>The v1 `useVeltCrdtStore` hook is deprecated. Use the v2 `useStore` hook for all new React integrations. The non-React `createVeltStore` API remains unchanged.</Warning>
+
+### useVeltCrdtStore() (deprecated)
+
+React hook to create and sync a collaborative CRDT store. Internally delegates to `useStore` (v2) via a compatibility wrapper.
+
+- Signature: `useVeltCrdtStore<T>(config)`
+- Params:
+  - `id`: Unique identifier for the store.
+  - `type`: Type of Yjs data structure (`'text'` | `'array'` | `'map'` | `'xml'`).
+  - `initialValue`: Optional initial value for the store.
+  - `debounceMs`: Optional debounce time for update propagation (ms).
+  - `enablePresence`: Optional boolean to enable realtime presence tracking (default: `true`).
+- Returns: Store properties and methods (`value`, `update`, `store`, `versions`, `saveVersion`, `getVersions`, `getVersionById`, `restoreVersion`, `setStateFromVersion`)
 
 ```jsx
-const { saveVersion } = useVeltCrdtStore<string>({ id: 'my-collab-note', type: 'text' });
-await saveVersion('Checkpoint');
+import { useVeltCrdtStore } from '@veltdev/crdt-react';
+
+const {
+  value,
+  versions,
+  store,
+  update,
+  saveVersion,
+  getVersions,
+  getVersionById,
+  restoreVersion,
+  setStateFromVersion,
+} = useVeltCrdtStore<string>({
+  id: 'my-collab-note',
+  type: 'text',
+  initialValue: 'Hello, world!',
+});
 ```
 
-</Tab>
-<Tab title="Other Frameworks">
 
-```ts
-const versionId = await store.saveVersion('Initial checkpoint');
-```
-
-</Tab>
-</Tabs>
-
-#### [getVersions](/api-reference/sdk/api/api-methods#getversions)
-
-Fetch all saved versions.
-
-- Returns: `Promise<Version[]>`
-
-<Tabs>
-<Tab title="React / Next.js">
-
-**Reactive property:**
-
-```jsx
-const { versions } = useVeltCrdtStore<string>({ id: 'my-collab-note', type: 'text' });
-console.log(versions);
-```
-
-**Async method:**
-
-```jsx
-const { getVersions } = useVeltCrdtStore<string>({ id: 'my-collab-note', type: 'text' });
-const versions = await getVersions();
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```ts
-const versions = await store.getVersions();
-```
-
-</Tab>
-</Tabs>
-
-#### [getVersionById](/api-reference/sdk/api/api-methods#getversionbyid)
-
-Fetch a specific version by ID.
-
-- Params: `versionId: string`
-- Returns: `Promise<Version | null>`
-
-<Tabs>
-<Tab title="React / Next.js">
-
-```jsx
-const { getVersionById } = useVeltCrdtStore<string>({ id: 'my-collab-note', type: 'text' });
-const version = await getVersionById('abc123');
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```ts
-const version = await store.getVersionById('abc123');
-```
-
-</Tab>
-</Tabs>
-
-#### [setStateFromVersion](/api-reference/sdk/api/api-methods#setstatefromversion)
-
-Restore the store state from a specific version object.
-
-- Params: `version: Version`
-- Returns: `Promise<void>`
-
-<Tabs>
-<Tab title="React / Next.js">
-
-```jsx
-const { setStateFromVersion } = useVeltCrdtStore<string>({ id: 'my-collab-note', type: 'text' });
-await setStateFromVersion(version);
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```ts
-await store.setStateFromVersion(version);
-```
-
-</Tab>
-</Tabs>
-
-#### [restoreVersion](/api-reference/sdk/api/api-methods#restoreversion)
-
-Restore the store to a specific version using its ID.
-
-<Tabs>
-<Tab title="React / Next.js">
-
-Convenience method that fetches and restores a version in one call.
-
-- Params: `versionId: string`
-- Returns: `Promise<boolean>`
-
-```jsx
-const { restoreVersion } = useVeltCrdtStore<string>({ id: 'my-collab-note', type: 'text' });
-await restoreVersion('abc123');
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-Combine `getVersionById()` and `setStateFromVersion()` to achieve the same result.
-
-```ts
-const version = await store.getVersionById('abc123');
-if (version) {
-  await store.setStateFromVersion(version);
-}
-```
-
-</Tab>
-</Tabs>
-
-### Yjs
-
-#### [getDoc](/api-reference/sdk/api/api-methods#getdoc)
-
-Get the underlying Yjs document.
-
-- Returns: `Y.Doc`
-
-```ts
-const ydoc = store.getDoc();
-```
-
-#### [getProvider](/api-reference/sdk/api/api-methods#getprovider)
-
-Get the provider instance for the store.
-
-- Returns: `Provider`
-
-```ts
-const provider = store.getProvider();
-```
-
-#### [getText](/api-reference/sdk/api/api-methods#gettext)
-
-Get the Y.Text instance if store type is 'text'.
-
-- Returns: `Y.Text | null`
-
-```ts
-const ytext = store.getText();
-```
-
-#### [getXml](/api-reference/sdk/api/api-methods#getxml)
-
-Get the Y.XmlFragment instance if store type is 'xml'.
-
-- Returns: `Y.XmlFragment | null`
-
-```ts
-const yxml = store.getXml();
-```
-
-### Debugging
+## Debugging
 
 Use the Velt Chrome Extension or the `window.VeltCrdtStoreMap` debugging interface to inspect and monitor your CRDT stores.
 
-#### window.VeltCrdtStoreMap
+### window.VeltCrdtStoreMap
 
-`window.VeltCrdtStoreMap` is a global debugging interface that exposes all active CRDT stores in your application. It's automatically created and maintained by the Velt CRDT library, allowing you to inspect, monitor, and debug CRDT stores from the browser console or developer tools.
+`window.VeltCrdtStoreMap` is a global debugging interface that exposes all active CRDT stores in your application. It's automatically created and maintained by the Velt CRDT library.
 
 #### [get()](/api-reference/sdk/api/api-methods#get)
 
@@ -984,10 +884,10 @@ Get a store by its ID.
 
 - Params:
   - `id` (optional): Store ID. If omitted, returns the first registered store.
-- Returns: `VeltCrdtStore | undefined` - Store instance or undefined if not found
+- Returns: `VeltCrdtStore | undefined`
   - **Store object methods:**
     - `getValue()`: Get the current value from the store
-    - `subscribe(callback: (value: any) => void)`: Subscribe to changes in the store. Returns an unsubscribe function.
+    - `subscribe(callback: (value: any) => void)`: Subscribe to changes. Returns an unsubscribe function.
 
 <Tabs>
 <Tab title="Basic Usage">
@@ -1007,298 +907,20 @@ const firstStore = window.VeltCrdtStoreMap.get();
 <Tab title="Inspect Store">
 
 ```jsx
-// Get store and inspect
 const store = window.VeltCrdtStoreMap.get('editor-123');
 
 if (store) {
-  // Get current value
   console.log('Current value:', store.getValue());
 
-  // Subscribe to changes
   store.subscribe((value) => {
     console.log('Value updated:', value);
   });
 
-  // Log value every second
   setInterval(() => {
     console.log('Current value:', store.getValue());
-  }, 1000);
+  }, 5000);
 }
 ```
 
-</Tab>
-</Tabs>
-
-#### [getAll()](/api-reference/sdk/api/api-methods#getall)
-
-Get all registered stores as an object.
-
-- Returns: `{ [id: string]: VeltCrdtStore }` - Object mapping store IDs to store instances
-  - **Each store object provides:**
-    - `getValue()`: Get the current value from the store
-    - `subscribe(callback: (value: any) => void)`: Subscribe to changes in the store. Returns an unsubscribe function.
-
-<Tabs>
-<Tab title="Basic Usage">
-
-```jsx
-// Get all stores
-const allStores = window.VeltCrdtStoreMap.getAll();
-console.log('Total stores:', Object.keys(allStores).length);
-
-// Iterate through all stores
-Object.entries(allStores).forEach(([id, store]) => {
-  console.log(`Store ${id}:`, store.getValue());
-});
-```
-
-</Tab>
-<Tab title="Find Stores">
-
-```jsx
-// Find all stores
-const allStores = window.VeltCrdtStoreMap.getAll();
-
-// Find stores by pattern
-const editorStores = Object.keys(allStores).filter(id =>
-  id.startsWith('editor-')
-);
-console.log('Editor stores:', editorStores);
-
-// Get specific subset
-const documentStores = Object.keys(allStores).filter(id =>
-  id.includes('document')
-);
-```
-
-</Tab>
-<Tab title="Monitor All Stores">
-
-```jsx
-// Monitor all stores for changes
-Object.keys(window.VeltCrdtStoreMap.stores).forEach(storeId => {
-  const store = window.VeltCrdtStoreMap.get(storeId);
-
-  store.subscribe((value) => {
-    console.log(`Store "${storeId}" changed:`, value);
-  });
-});
-```
-
-</Tab>
-</Tabs>
-
-#### Events
-
-The library dispatches custom events when stores are registered or unregistered.
-
-##### **veltCrdtStoreRegister**
-
-Fired when a new store is registered.
-
-- Event Detail: `{ id: string }` - Store ID
-
-```jsx
-window.addEventListener('veltCrdtStoreRegister', (event) => {
-  console.log('Store registered:', event.detail.id);
-  const store = window.VeltCrdtStoreMap.get(event.detail.id);
-  // Do something with the new store
-});
-```
-
-##### **veltCrdtStoreUnregister**
-
-Fired when a store is unregistered (destroyed).
-
-- Event Detail: `{ id: string }` - Store ID
-
-```jsx
-window.addEventListener('veltCrdtStoreUnregister', (event) => {
-  console.log('Store unregistered:', event.detail.id);
-});
-```
-
-## Backend REST APIs
-
-Use these REST API endpoints for server-side access to CRDT editor data. Useful for seeding initial content, server-side processing, backups, or integrations.
-
-- [Get CRDT Data](/api-reference/rest-apis/v2/crdt/get-crdt-data) — fetch data for a specific editor by `editorId`, or all editors in a document by omitting it.
-- [Add CRDT Data](/api-reference/rest-apis/v2/crdt/add-crdt-data) — create new CRDT editor data on the backend (errors if the `editorId` already exists).
-- [Update CRDT Data](/api-reference/rest-apis/v2/crdt/update-crdt-data) — replace existing CRDT editor data; generates proper CRDT operations so connected clients pick up the change.
-
-## Webhooks
-
-CRDT supports webhooks for data change events. Webhooks are disabled by default. When enabled, the default debounce time is 5 seconds.
-
-For more information on setting up webhooks, see:
-- [Basic Webhooks](/webhooks/basic#crdt-events)
-- [Advanced Webhooks](/webhooks/advanced#crdt)
-
-Enabling webhooks involves two steps:
-1. Enable webhooks in the [Velt Console](https://console.velt.dev/dashboard/config/webhook)
-2. Enable webhooks in the frontend using the `enableWebhook()` method
-
-### Configure Webhooks
-
-**Step 1: Enable in Velt Console**
-
-Configure your webhook endpoint in the [Velt Console](https://console.velt.dev/dashboard/config/webhook).
-
-**Step 2: Enable in Frontend**
-
-Call the `enableWebhook()` method to enable webhook notifications. You can also optionally configure the debounce time.
-
-<Tabs>
-<Tab title="React / Next.js">
-
-**Using Hook:**
-```jsx
-import { useCrdtUtils } from "@veltdev/react";
-import { useEffect } from "react";
-
-export function YourComponent() {
-  const crdtUtils = useCrdtUtils();
-
-  useEffect(() => {
-    if (crdtUtils) {
-      // Enable webhook
-      crdtUtils.enableWebhook();
-
-      // Optional: Change webhook debounce time (minimum 5 seconds)
-      crdtUtils.setWebhookDebounceTime(10 * 1000); // 10 seconds
-    }
-  }, [crdtUtils]);
-
-  return <div>Your Component</div>;
-}
-```
-
-**Using API:**
-```jsx
-import { useVeltClient } from "@veltdev/react";
-import { useEffect } from "react";
-
-export function YourComponent() {
-  const { client } = useVeltClient();
-
-  useEffect(() => {
-    if (!client) return;
-
-    const crdtElement = client.getCrdtElement();
-
-    // Enable webhook
-    crdtElement.enableWebhook();
-
-    // Optional: Change webhook debounce time (minimum 5 seconds)
-    crdtElement.setWebhookDebounceTime(10 * 1000); // 10 seconds
-  }, [client]);
-
-  return <div>Your Component</div>;
-}
-```
-
-</Tab>
-<Tab title="Other Frameworks">
-
-```html
-<script>
-// Get CRDT element
-const crdtElement = Velt.getCrdtElement();
-
-// Enable webhook
-crdtElement.enableWebhook();
-
-// Optional: Change webhook debounce time (minimum 5 seconds)
-crdtElement.setWebhookDebounceTime(10 * 1000); // 10 seconds
-</script>
-```
-
-</Tab>
-</Tabs>
-
-### Webhook Methods
-
-#### enableWebhook()
-
-Enable webhook notifications for CRDT data changes.
-
-- Params: `void`
-- Returns: `void`
-
-#### disableWebhook()
-
-Disable webhook notifications for CRDT data changes.
-
-- Params: `void`
-- Returns: `void`
-
-#### setWebhookDebounceTime()
-
-Set the debounce time for webhook notifications.
-
-- Params: `debounceTime: number` (in milliseconds, minimum 5000ms)
-- Returns: `void`
-
-<Note>
-The minimum debounce time is 5 seconds (5000ms). Setting a value lower than this will use 5 seconds as the default.
-</Note>
-
-### Activity Log Debounce
-
-#### setActivityDebounceTime()
-
-Control how long CRDT editor keystrokes are batched before a single activity log record is flushed to the [activity log feed](/async-collaboration/activity/overview). This is distinct from the webhook debounce — it governs activity log generation only.
-
-- Params: `time: number` (milliseconds)
-- Returns: `void`
-- Default: 10 minutes
-- Minimum enforced: 10 seconds (10,000 ms)
-
-<Tabs>
-<Tab title="React / Next.js">
-
-**Using Hook:**
-```jsx
-import { useCrdtUtils } from "@veltdev/react";
-import { useEffect } from "react";
-
-export function YourComponent() {
-  const crdtUtils = useCrdtUtils();
-
-  useEffect(() => {
-    if (!crdtUtils) return;
-    crdtUtils.setActivityDebounceTime(30000); // 30 seconds
-  }, [crdtUtils]);
-
-  return <div>Your Component</div>;
-}
-```
-
-**Using API:**
-```jsx
-import { useVeltClient } from "@veltdev/react";
-import { useEffect } from "react";
-
-export function YourComponent() {
-  const { client } = useVeltClient();
-
-  useEffect(() => {
-    if (!client) return;
-    const crdtElement = client.getCrdtElement();
-    crdtElement.setActivityDebounceTime(30000); // 30 seconds
-  }, [client]);
-
-  return <div>Your Component</div>;
-}
-```
-</Tab>
-
-<Tab title="Other Frameworks">
-```html
-<script>
-const crdtElement = Velt.getCrdtElement();
-crdtElement.setActivityDebounceTime(30000); // 30 seconds
-</script>
-```
 </Tab>
 </Tabs>

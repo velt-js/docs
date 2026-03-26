@@ -1,53 +1,45 @@
 ---
-title: Array Store
-description: Add real-time collaborative lists and collections to your application using Velt CRDT.
+title: Text Store
+description: Add real-time collaborative text data to your application using Velt CRDT.
 ---
 
 <Info>Complete [Steps 1-2](/realtime-collaboration/crdt/setup/core#setup) on the Core setup page before continuing. Those steps install dependencies and initialize Velt.</Info>
 
 ## Setup
 
-### Step 1: Create a CRDT array store
+### Step 1: Create a CRDT text store
 
 <Tabs>
 <Tab title="React / Next.js">
 
-Use the `useStore` hook to create a CRDT store backed by a Yjs `Y.Array`. The hook handles store initialization, React lifecycle, and real-time subscriptions automatically — no manual `useState`/`useEffect` needed for store setup.
+Use the `useStore` hook to create a CRDT store backed by a Yjs `Y.Text`. The hook handles store initialization, React lifecycle, and real-time subscriptions automatically — no manual `useState`/`useEffect` needed for store setup.
 
 ```tsx
 import { useStore } from '@veltdev/crdt-react';
 
-interface Item {
-  id: string;
-  name: string;
-}
-
 function Component() {
   const {
-    value: items,
-    update: updateItems,
+    value: text,
+    update: updateText,
     store,
     isLoading,
     isSynced,
     status,
     error,
-  } = useStore<Item[]>({
-    storeId: 'my-array-store',
-    type: 'array',
-    initialValue: [{ id: '1', name: 'First item' }],
+  } = useStore<string>({
+    storeId: 'my-text-store',
+    type: 'text',
+    initialValue: 'Hello, start typing here...',
   });
 
   if (isLoading) return <div>Loading...</div>;
   if (error) return <div>Error: {error.message}</div>;
 
-  const itemList = Array.isArray(items) ? items : [];
-
   return (
-    <ul>
-      {itemList.map((item) => (
-        <li key={item.id}>{item.name}</li>
-      ))}
-    </ul>
+    <textarea
+      value={text ?? ''}
+      onChange={(e) => updateText(e.target.value)}
+    />
   );
 }
 ```
@@ -55,23 +47,23 @@ function Component() {
 </Tab>
 <Tab title="Other Frameworks">
 
-Use `createVeltStore` to create a CRDT store backed by a Yjs `Y.Array`. The `initialValue` is only applied when the document is brand-new (no prior remote state exists).
+Use `createVeltStore` to create a CRDT store backed by a Yjs `Y.Text`. The `initialValue` is only applied when the document is brand-new (no prior remote state exists).
 
 ```js
 import { createVeltStore } from '@veltdev/crdt';
 
 async function initializeStore(client) {
   const store = await createVeltStore({
-    id: 'my-array-store',
-    type: 'array',
-    initialValue: [{ id: '1', name: 'First item' }],
+    id: 'my-text-store',
+    type: 'text',
+    initialValue: 'Hello, start typing here...',
     veltClient: client,
   });
   if (!store) return;
 
   // Seed the UI with the current CRDT value
-  const items = store.getValue() || [];
-  renderItems(items);
+  const text = store.getValue() || '';
+  renderText(text);
 }
 ```
 
@@ -83,63 +75,34 @@ async function initializeStore(client) {
 <Tabs>
 <Tab title="React / Next.js">
 
-The hook's `value` field reactively tracks the current array — no manual subscription needed. Use `update()` to replace the entire array value, or read the latest value from `store.getValue()` before applying mutations. The CRDT library handles conflict-free merging with other users' edits automatically.
+The hook's `value` field reactively tracks the current text — no manual subscription needed. Use `update()` to replace the entire text value. The CRDT library handles conflict-free merging with other users' edits automatically.
 
 ```tsx
-// Add a new item to the end of the array
-const addItem = (name: string) => {
-  const current = store.getValue() || [];
-  if (Array.isArray(current)) {
-    updateItems([...current, { id: generateId(), name }]);
-  }
-};
+// The current text is always available via the hook's `value` field
+const { value: text, update: updateText } = useStore<string>({
+  storeId: 'my-text-store',
+  type: 'text',
+  initialValue: '',
+});
 
-// Update an item by its ID
-const updateItem = (itemId: string, newName: string) => {
-  const current = store.getValue() || [];
-  if (Array.isArray(current)) {
-    updateItems(
-      current.map((item) => (item.id === itemId ? { ...item, name: newName } : item))
-    );
-  }
-};
-
-// Remove an item from the array by its ID
-const removeItem = (itemId: string) => {
-  const current = store.getValue() || [];
-  if (Array.isArray(current)) {
-    updateItems(current.filter((item) => item.id !== itemId));
-  }
-};
+// Replace the entire text content
+function handleChange(newText: string) {
+  updateText(newText);
+}
 ```
 
 </Tab>
 <Tab title="Other Frameworks">
 
-Use `store.getValue()` to read the current value and `store.update()` to replace the entire value. The CRDT library handles conflict-free merging with other users' edits automatically.
+Use `store.getValue()` to read the current value and `store.update()` to replace the entire text. The CRDT library handles conflict-free merging with other users' edits automatically.
 
 ```js
-// Read the current array value
-const currentItems = store.getValue();
+// Read the current text value
+const currentText = store.getValue();
 
-// Add a new item to the end of the array
-function addItem(name) {
-  const current = store.getValue() || [];
-  store.update([...current, { id: generateId(), name }]);
-}
-
-// Update an item by its ID
-function updateItem(itemId, newName) {
-  const current = store.getValue() || [];
-  store.update(
-    current.map((item) => (item.id === itemId ? { ...item, name: newName } : item))
-  );
-}
-
-// Remove an item from the array by its ID
-function removeItem(itemId) {
-  const current = store.getValue() || [];
-  store.update(current.filter((item) => item.id !== itemId));
+// Replace the entire text content
+function updateText(newText) {
+  store.update(newText);
 }
 ```
 
@@ -148,13 +111,13 @@ function removeItem(itemId) {
 
 ### Step 3: Subscribe to real-time changes (Other Frameworks)
 
-Use `store.subscribe()` to listen for changes from all collaborators. The callback fires on every change (local and remote) with the full merged array.
+Use `store.subscribe()` to listen for changes from all collaborators. The callback fires on every change (local and remote) with the full merged text.
 
 ```js
 // Subscribe to all future changes (local and remote)
-const unsubscribe = store.subscribe((newItems) => {
+const unsubscribe = store.subscribe((newText) => {
   // Re-render the UI with the latest merged state
-  renderItems(Array.isArray(newItems) ? newItems : []);
+  renderText(typeof newText === 'string' ? newText : '');
 });
 
 // Call unsubscribe to stop listening when no longer needed
@@ -176,17 +139,17 @@ The `useStore` hook exposes version management methods directly:
 import { Version } from '@veltdev/crdt-react';
 
 const {
-  value: items,
-  update: updateItems,
+  value: text,
+  update: updateText,
   saveVersion,
   getVersions,
   getVersionById,
   restoreVersion,
   setStateFromVersion,
-} = useStore<Item[]>({
-  storeId: 'my-array-store',
-  type: 'array',
-  initialValue: [],
+} = useStore<string>({
+  storeId: 'my-text-store',
+  type: 'text',
+  initialValue: '',
 });
 
 // Save a named snapshot of the current state
@@ -234,10 +197,10 @@ By default, `initialValue` is only applied when the document has no existing rem
 <Tab title="React / Next.js">
 
 ```tsx
-const { value: items, update: updateItems } = useStore<Item[]>({
-  storeId: 'my-array-store',
-  type: 'array',
-  initialValue: defaultItems,
+const { value: text, update: updateText } = useStore<string>({
+  storeId: 'my-text-store',
+  type: 'text',
+  initialValue: defaultText,
   forceResetInitialContent: true,
 });
 ```
@@ -247,9 +210,9 @@ const { value: items, update: updateItems } = useStore<Item[]>({
 
 ```js
 const store = await createVeltStore({
-  id: 'my-array-store',
-  type: 'array',
-  initialValue: defaultItems,
+  id: 'my-text-store',
+  type: 'text',
+  initialValue: defaultText,
   veltClient: client,
   forceResetInitialContent: true,
 });
@@ -264,43 +227,30 @@ const store = await createVeltStore({
 <Tabs>
 <Tab title="React / Next.js">
 
-A complete collaborative todo list built with `useStore`:
+A complete collaborative notepad built with `useStore`:
 
 ```tsx Complete Implementation expandable lines
 import React, { useState, useEffect, useCallback } from 'react';
 import { useStore, Version } from '@veltdev/crdt-react';
 
-interface Todo {
-  id: string;
-  text: string;
-  completed: boolean;
-}
-
-const generateId = () => Math.random().toString(36).substring(2, 15);
-
-const defaultTodos: Todo[] = [
-  { id: 'seed-1', text: 'Welcome Todo - Edit me!', completed: false },
-];
-
-export const Todos = () => {
-  const [newTodo, setNewTodo] = useState('');
+export const Notepad = () => {
   const [versionName, setVersionName] = useState('');
   const [versions, setVersions] = useState<Version[]>([]);
 
   // Use the useStore hook — handles initialization and subscriptions automatically
   const {
-    value: todos,
-    update: updateTodos,
+    value: text,
+    update: updateText,
     store,
     saveVersion: storeSaveVersion,
     getVersions: storeGetVersions,
     restoreVersion: storeRestoreVersion,
     getVersionById,
     setStateFromVersion,
-  } = useStore<Todo[]>({
-    storeId: 'my-todo-store',
-    type: 'array',
-    initialValue: defaultTodos,
+  } = useStore<string>({
+    storeId: 'my-notepad-store',
+    type: 'text',
+    initialValue: 'Welcome to the Collaborative Notepad! Start typing here...',
   });
 
   // Fetch saved versions when store is ready
@@ -313,37 +263,9 @@ export const Todos = () => {
     if (store) refreshVersions();
   }, [refreshVersions, store]);
 
-  const todoList = Array.isArray(todos) ? todos : [];
-
-  // Add a new todo
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (newTodo.trim() && store) {
-      const newItem: Todo = { id: generateId(), text: newTodo.trim(), completed: false };
-      const current = store.getValue() || [];
-      if (Array.isArray(current)) {
-        updateTodos([...current, newItem]);
-      }
-      setNewTodo('');
-    }
-  };
-
-  // Toggle a todo's completed state
-  const toggleTodo = (todoId: string) => {
-    if (!store) return;
-    const current = store.getValue();
-    if (Array.isArray(current)) {
-      updateTodos(current.map((t: Todo) => t.id === todoId ? { ...t, completed: !t.completed } : t));
-    }
-  };
-
-  // Delete a todo
-  const deleteTodo = (todoId: string) => {
-    if (!store) return;
-    const current = store.getValue();
-    if (Array.isArray(current)) {
-      updateTodos(current.filter((t: Todo) => t.id !== todoId));
-    }
+  // Handle text changes from the textarea
+  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    updateText(e.target.value);
   };
 
   // Handle saving a new version
@@ -368,29 +290,12 @@ export const Todos = () => {
 
   return (
     <div>
-      <form onSubmit={handleSubmit}>
-        <input
-          type="text"
-          value={newTodo}
-          onChange={(e) => setNewTodo(e.target.value)}
-          placeholder="Add a new todo..."
-        />
-        <button type="submit">Add</button>
-      </form>
-
-      <ul>
-        {todoList.map((todo) => (
-          <li key={todo.id}>
-            <input
-              type="checkbox"
-              checked={todo.completed}
-              onChange={() => toggleTodo(todo.id)}
-            />
-            <span>{todo.text}</span>
-            <button onClick={() => deleteTodo(todo.id)}>Delete</button>
-          </li>
-        ))}
-      </ul>
+      <textarea
+        value={text ?? ''}
+        onChange={handleTextChange}
+        placeholder="Start typing..."
+      />
+      <div>{(text ?? '').length} character{(text ?? '').length !== 1 ? 's' : ''}</div>
 
       <h3>Versions</h3>
       <form onSubmit={handleSaveVersion}>
@@ -419,7 +324,7 @@ export const Todos = () => {
 </Tab>
 <Tab title="Other Frameworks">
 
-A complete collaborative todo list with SDK initialization, store management, and version control.
+A complete collaborative notepad with SDK initialization, store management, and version control.
 
 **velt.ts**
 
@@ -438,7 +343,7 @@ async function initializeVelt() {
   client = await initVelt('YOUR_API_KEY');
 
   // Scope all collaboration to the configured document
-  client.setDocument('crdt-array-demo-doc-1', { documentName: 'CRDT Array Demo' });
+  client.setDocument('crdt-text-demo-doc-1', { documentName: 'CRDT Text Demo' });
 
   // Track user login/logout
   client.getCurrentUser().subscribe((currentUser) => {
@@ -476,43 +381,37 @@ export async function logout() {
 initializeVelt();
 ```
 
-**todos.ts**
+**notepad.ts**
 
-```ts Complete todos.ts expandable lines
+```ts Complete notepad.ts expandable lines
 import { Store, Version, createVeltStore } from '@veltdev/crdt';
 import type { Velt } from '@veltdev/types';
 import { subscribeToVeltInit } from './velt';
 
-interface Todo {
-  id: string;
-  text: string;
-  completed: boolean;
-}
-
-let store: Store<Todo[]> | null = null;
-let todos: Todo[] = [];
+let store: Store<string> | null = null;
+let text = '';
 let versions: Version[] = [];
 
 // Initialize the store when the SDK is ready
 async function initStore(veltClient: Velt) {
-  // Create the CRDT array store with initial seed data
-  const todoStore = await createVeltStore<Todo[]>({
-    id: 'my-todo-store',
-    type: 'array',
-    initialValue: [{ id: 'seed-1', text: 'Welcome Todo - Edit me!', completed: false }],
+  // Create the CRDT text store with initial seed content
+  const textStore = await createVeltStore<string>({
+    id: 'my-notepad-store',
+    type: 'text',
+    initialValue: 'Welcome to the Collaborative Notepad! Start typing here...',
     veltClient: veltClient,
   });
-  if (!todoStore) return;
-  store = todoStore;
+  if (!textStore) return;
+  store = textStore;
 
   // Seed UI with the current CRDT value
-  todos = todoStore.getValue() || [];
-  renderTodos();
+  text = textStore.getValue() || '';
+  renderNotepad();
 
   // Subscribe to all future changes (local and remote)
-  todoStore.subscribe((newTodos) => {
-    todos = Array.isArray(newTodos) ? newTodos : [];
-    renderTodos();
+  textStore.subscribe((newText) => {
+    text = typeof newText === 'string' ? newText : '';
+    renderNotepad();
   });
 
   // Load saved versions
@@ -520,32 +419,14 @@ async function initStore(veltClient: Velt) {
 }
 
 // Wait for the SDK to be ready, then initialize the store
-subscribeToVeltInit('todos', (velt) => {
+subscribeToVeltInit('notepad', (velt) => {
   initStore(velt);
 });
 
-// Add a new todo to the end of the list
-function addTodo(text: string) {
+// Replace the entire text content
+function updateText(newText: string) {
   if (!store) return;
-  const current = store.getValue() || [];
-  const newTodo: Todo = { id: Math.random().toString(36).substring(2, 15), text, completed: false };
-  store.update([...current, newTodo]);
-}
-
-// Toggle the completed state of a todo by its ID
-function toggleTodo(todoId: string) {
-  if (!store) return;
-  const current = store.getValue() || [];
-  store.update(
-    current.map((todo) => (todo.id === todoId ? { ...todo, completed: !todo.completed } : todo))
-  );
-}
-
-// Remove a todo from the list by its ID
-function deleteTodo(todoId: string) {
-  if (!store) return;
-  const current = store.getValue() || [];
-  store.update(current.filter((todo) => todo.id !== todoId));
+  store.update(newText);
 }
 
 // Save a named snapshot of the current state
@@ -573,32 +454,16 @@ async function refreshVersions() {
   renderVersions();
 }
 
-// Render the todo list into the DOM
-function renderTodos() {
-  const todoList = document.querySelector('.todo-list');
-  if (!todoList) return;
+// Render the notepad textarea and character count into the DOM
+function renderNotepad() {
+  const textarea = document.querySelector('.notepad-textarea') as HTMLTextAreaElement;
+  if (textarea && textarea !== document.activeElement) {
+    textarea.value = text;
+  }
 
-  todoList.innerHTML = '';
-  for (const todo of todos) {
-    const li = document.createElement('li');
-    li.className = `todo-item${todo.completed ? ' completed' : ''}`;
-
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = todo.completed;
-    checkbox.addEventListener('change', () => toggleTodo(todo.id));
-
-    const span = document.createElement('span');
-    span.textContent = todo.text;
-
-    const deleteBtn = document.createElement('button');
-    deleteBtn.textContent = 'Delete';
-    deleteBtn.addEventListener('click', () => deleteTodo(todo.id));
-
-    li.appendChild(checkbox);
-    li.appendChild(span);
-    li.appendChild(deleteBtn);
-    todoList.appendChild(li);
+  const charCount = document.querySelector('.char-count');
+  if (charCount) {
+    charCount.textContent = `${text.length} character${text.length !== 1 ? 's' : ''}`;
   }
 }
 
@@ -624,20 +489,23 @@ function renderVersions() {
   }
 }
 
-// Attach form submit handlers to the DOM
-export function setupTodoForm() {
-  const todoForm = document.getElementById('todo-form');
-  if (todoForm) {
-    todoForm.addEventListener('submit', (event) => {
-      event.preventDefault();
-      const input = todoForm.querySelector('.todo-input') as HTMLInputElement;
-      if (input && input.value.trim()) {
-        addTodo(input.value.trim());
-        input.value = '';
+// Attach form and textarea event handlers to the DOM
+export function setupNotepadForm() {
+  // Handle textarea input events
+  const textarea = document.querySelector('.notepad-textarea') as HTMLTextAreaElement;
+  if (textarea) {
+    textarea.addEventListener('input', () => {
+      text = textarea.value;
+      updateText(text);
+
+      const charCount = document.querySelector('.char-count');
+      if (charCount) {
+        charCount.textContent = `${text.length} character${text.length !== 1 ? 's' : ''}`;
       }
     });
   }
 
+  // Handle version form submission
   const versionForm = document.getElementById('version-form');
   if (versionForm) {
     versionForm.addEventListener('submit', (event) => {
@@ -657,10 +525,10 @@ export function setupTodoForm() {
 ```ts Complete main.ts expandable lines
 import './style.css';
 import './velt';
-import { setupTodoForm } from './todos';
+import { setupNotepadForm } from './notepad';
 
 // Attach form handlers once the DOM is ready
-setupTodoForm();
+setupNotepadForm();
 ```
 
 **HTML structure**
@@ -668,19 +536,15 @@ setupTodoForm();
 ```html Complete index.html expandable lines
 <div class="app-container">
   <header class="app-header">
-    <h1>CRDT Array Demo</h1>
+    <h1>CRDT Text Demo</h1>
     <div id="user-controls"></div>
   </header>
 
   <main class="app-content">
-    <div id="todos-header">Collaborative Todos - Please login to start editing</div>
+    <div id="notepad-header">Collaborative Notepad - Please login to start editing</div>
 
-    <form id="todo-form">
-      <input type="text" class="todo-input" placeholder="Add a new todo..." />
-      <button type="submit">Add</button>
-    </form>
-
-    <ul class="todo-list"></ul>
+    <textarea class="notepad-textarea" placeholder="Start typing..."></textarea>
+    <div class="char-count">0 characters</div>
 
     <div class="versions-section">
       <h3>Versions</h3>

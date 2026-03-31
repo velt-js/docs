@@ -1,0 +1,215 @@
+name: Docs Sync
+
+on:
+  push:
+    branches: [main]
+    paths: ['**/*.mdx']
+  workflow_dispatch: # Manual trigger from GitHub UI
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  docs-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # ── 1. Check out all repos (latest main) ──────────────────────
+
+      - name: Checkout docs
+        uses: actions/checkout@v4
+        with:
+          repository: velt-js/docs
+          path: docs
+          token: ${{ secrets.CROSS_REPO_PAT }}
+
+      - name: Checkout agent-skills
+        uses: actions/checkout@v4
+        with:
+          repository: velt-js/agent-skills
+          path: agent-skills
+          token: ${{ secrets.CROSS_REPO_PAT }}
+
+      - name: Checkout velt-plugin-cursor
+        uses: actions/checkout@v4
+        with:
+          repository: velt-js/velt-plugin-cursor
+          path: velt-plugin-cursor
+          token: ${{ secrets.CROSS_REPO_PAT }}
+
+      - name: Checkout velt-plugin-claude
+        uses: actions/checkout@v4
+        with:
+          repository: velt-js/velt-plugin-claude
+          path: velt-plugin-claude
+          token: ${{ secrets.CROSS_REPO_PAT }}
+
+      - name: Checkout velt-mcp-installer
+        uses: actions/checkout@v4
+        with:
+          repository: velt-js/velt-mcp-installer
+          path: velt-mcp-installer
+          token: ${{ secrets.CROSS_REPO_PAT }}
+
+      - name: Checkout add-velt-next-js
+        uses: actions/checkout@v4
+        with:
+          repository: velt-js/add-velt-next-js
+          path: add-velt-next-js
+          token: ${{ secrets.CROSS_REPO_PAT }}
+
+      - name: Checkout sample-apps
+        uses: actions/checkout@v4
+        with:
+          repository: velt-js/sample-apps
+          path: sample-apps
+          token: ${{ secrets.CROSS_REPO_PAT }}
+
+      # ── 2. Create symlinks for pipeline path compatibility ─────────
+
+      - name: Create path symlinks
+        run: |
+          sudo mkdir -p /Users/yoenzhang/Downloads
+          ln -s $GITHUB_WORKSPACE/docs /Users/yoenzhang/Downloads/docs
+          ln -s $GITHUB_WORKSPACE/agent-skills /Users/yoenzhang/Downloads/agent-skills
+          ln -s $GITHUB_WORKSPACE/velt-plugin-cursor /Users/yoenzhang/Downloads/velt-plugin-cursor
+          ln -s $GITHUB_WORKSPACE/velt-plugin-claude /Users/yoenzhang/Downloads/velt-plugin-claude
+          ln -s $GITHUB_WORKSPACE/velt-mcp-installer /Users/yoenzhang/Downloads/velt-mcp-installer
+          ln -s $GITHUB_WORKSPACE/add-velt-next-js /Users/yoenzhang/Downloads/add-velt-next-js
+          ln -s $GITHUB_WORKSPACE/sample-apps /Users/yoenzhang/Downloads/sample-apps
+
+      # ── 3. Setup Node.js ───────────────────────────────────────────
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install agent-skills dependencies
+        run: cd $GITHUB_WORKSPACE/agent-skills && npm install --ignore-scripts
+
+      - name: Install velt-plugin-cursor dependencies
+        run: cd $GITHUB_WORKSPACE/velt-plugin-cursor && npm install --ignore-scripts
+
+      # ── 4. Detect existing open docs-sync PRs ─────────────────────
+
+      - name: Check for existing docs-sync PRs
+        id: check-prs
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+        run: |
+          EXISTING_PRS=""
+          for repo in agent-skills velt-plugin-cursor velt-plugin-claude velt-mcp-installer; do
+            pr_json=$(gh pr list --repo velt-js/$repo --label docs-sync --state open --json number,headRefName --jq '.[0] // empty' 2>/dev/null || echo "")
+            if [ -n "$pr_json" ]; then
+              branch=$(echo "$pr_json" | jq -r '.headRefName')
+              number=$(echo "$pr_json" | jq -r '.number')
+              echo "Found existing PR #$number on branch $branch in velt-js/$repo"
+              # Checkout the existing PR branch so new commits land on it
+              git -C $GITHUB_WORKSPACE/$repo fetch origin "$branch"
+              git -C $GITHUB_WORKSPACE/$repo checkout "$branch"
+              EXISTING_PRS="$EXISTING_PRS\n- velt-js/$repo: PR #$number on branch $branch"
+            else
+              echo "No existing docs-sync PR in velt-js/$repo"
+              EXISTING_PRS="$EXISTING_PRS\n- velt-js/$repo: no existing PR (create new)"
+            fi
+          done
+          # Pass existing PR info to Claude via output
+          echo "existing_prs<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$EXISTING_PRS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # ── 5. Configure git for commits ───────────────────────────────
+
+      - name: Configure git identity
+        run: |
+          for repo in agent-skills velt-plugin-cursor velt-plugin-claude velt-mcp-installer; do
+            git -C $GITHUB_WORKSPACE/$repo config user.name "docs-sync[bot]"
+            git -C $GITHUB_WORKSPACE/$repo config user.email "docs-sync[bot]@users.noreply.github.com"
+          done
+
+      # ── 6. Run Claude Code docs-sync pipeline ─────────────────────
+
+      - name: Run docs-sync pipeline
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: |
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep"
+            --model claude-opus-4-6
+            --max-turns 100
+          prompt: |
+            You are running the docs-sync pipeline in CI. Docs is the source of truth —
+            downstream repos (agent-skills, installer, CLI, plugins) must align to docs.
+
+            ## Pipeline Instructions
+
+            Read the orchestrator definition at:
+            /Users/yoenzhang/Downloads/velt-plugin-cursor/.claude/agents/docs-sync-orchestrator.md
+
+            Run the FULL docs-sync pipeline (Stages 0-9).
+
+            ## Existing PR Status
+
+            ${{ steps.check-prs.outputs.existing_prs }}
+
+            ## If No Drift Detected
+
+            If the pipeline finds zero drift (no patches needed across any target),
+            do NOT create any PRs or branches. Simply log "No drift detected — nothing to do"
+            and exit successfully. Update the baseline state file and stop.
+
+            ## After Pipeline Completes (Only If Changes Were Made)
+
+            For each repo that was modified by the pipeline, create or update a PR:
+
+            ### If the repo is already on a docs-sync/ branch (existing PR):
+            1. Stage and commit all changes with message: "docs-sync: update from docs [automated]"
+            2. Run: git push
+            3. The existing PR will auto-update.
+
+            ### If the repo is on main (no existing PR):
+            1. Create a new branch: docs-sync/$(date -u +%Y-%m-%dT%H-%M-%S)
+            2. Stage and commit all changes with message: "docs-sync: update from docs [automated]"
+            3. Push the branch
+            4. Create a PR using:
+               gh pr create --repo velt-js/{repo-name} \
+                 --title "docs-sync: automated update from docs" \
+                 --label docs-sync \
+                 --reviewer yoen-velt \
+                 --body "## Docs Sync - Automated Update
+
+            This PR was automatically generated by the docs-sync pipeline.
+            Docs changes triggered drift detection and patches were applied.
+
+            ### What Changed
+            (Include summary from the stage-5 patch plan summary and stage-6 patch log)
+
+            ### Review
+            Please review the changes and merge when ready.
+
+            ---
+            Generated by docs-sync pipeline"
+
+            ### Downstream Plugin Sync
+            After agent-skills changes are committed:
+            1. Run: cd /Users/yoenzhang/Downloads/velt-plugin-cursor && node scripts/sync-agent-skills.mjs
+            2. This copies updated agent-skills to both velt-plugin-cursor and velt-plugin-claude
+            3. In velt-plugin-cursor: run npm run build && npm run validate
+            4. Commit and push/PR the plugin changes the same way as above
+
+            ### Repos That Get PRs
+            - agent-skills (if skills were patched)
+            - velt-plugin-cursor (if agent-skills were synced)
+            - velt-plugin-claude (if agent-skills were synced)
+            - velt-mcp-installer (only if installer patches were applied)
+
+            ### Important
+            - add-velt-next-js is REPORT ONLY — never auto-patch it
+            - Use the GH_TOKEN environment variable for gh CLI commands
+            - Docs is the source of truth. Compare downstream repos AGAINST docs, not the reverse.
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}

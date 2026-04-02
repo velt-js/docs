@@ -1787,6 +1787,7 @@ Error codes returned when permission resolution fails:
 | Property     | Type                        | Required | Description                                           |
 |--------------|-----------------------------|----------|-------------------------------------------------------|
 | `accessRole` | `UserPermissionAccessRole`  | No       | Access role for the resource.                         |
+| `accessType` | `string`                    | No       | How access was granted (e.g., `'public'`). Present alongside `accessRole` when applicable. |
 | `expiresAt`  | `number`                    | No       | Expiry (Unix ms) for temporary access, if applicable. |
 | `error`      | `string`                    | No       | Error message if permission resolution failed.        |
 | `errorCode`  | `UserPermissionAccessRoleResult` | No  | Error code indicating the type of permission resolution failure. |
@@ -2729,6 +2730,7 @@ Core activity log object returned from the activity log feed. Generic params: `T
 | `displayMessage` | `string` | No | Resolved human-readable display message. Computed client-side — never stored in Firestore |
 | `actionIcon` | `string` | No | Icon URL or identifier for the action |
 | `immutable` | `boolean` | No | When `true`, the record cannot be updated or deleted via REST API |
+| `isActivityResolverUsed` | `boolean` | No | `true` when PII was stripped by the activity data provider. Can be used to show a loading state while resolver re-hydration is pending. |
 
 #### ActivityChanges
 ---
@@ -3525,6 +3527,8 @@ Each resource represents something the user can access (organization, folder, or
 | `allDocuments`  | `boolean`            | No       | Subscribe to all documents in the folder. Use this when folderId is provided |
 | `rootDocumentId`  | `string`            | No       | The unique identifier of the root document. Used to specify the root document when multiple documents are subscribed. |
 | `context`         | [`SetDocumentsContext`](#setdocumentscontext) | No       | Filter comments by custom context fields. Fetches comments matching all provided field values (AND logic across fields). When Permission Provider is enabled with `isContextEnabled: true`, each context value triggers a separate permission request. |
+| `debounceTime`    | `number`            | No       | Per-call override for the debounce window (in ms) before emitting the document subscription. Overrides the global default for this call only. |
+| `optimisticPermissions` | `boolean`     | No       | When `false`, waits for permission validation to complete before returning. Defaults to `true` (optimistic). |
 
 
 
@@ -3826,6 +3830,7 @@ Union type for all recorder resolver lifecycle event type strings.
 | `reaction`        | `ReactionAnnotationDataProvider`| No       | Provider for reaction annotation data          |
 | `attachment`      | `AttachmentDataProvider`        | No       | Provider for file attachment data              |
 | `recorder`        | `RecorderAnnotationDataProvider`| No       | Provider for recording annotation PII data     |
+| `activity`        | [`ActivityAnnotationDataProvider`](#activityannotationdataprovider) | No | Provider for activity log PII data |
 | `anonymousUser`     | [`AnonymousUserDataProvider`](#anonymoususerdataprovider) | No | Provider to resolve email → userId mappings for anonymous users tagged by email in comments. |
 
 #### ResolverEndpointConfig
@@ -4040,6 +4045,48 @@ Request format used by config-based user resolver endpoints.
 | `strippedData` | `Record<string, PartialRecorderAnnotation> \| null`    | Yes      | Annotation data with PII stripped                    |
 | `originalData` | `RecorderAnnotation \| null`                           | Yes      | Original annotation data before PII stripping        |
 | `eventType`    | `ResolverActions`                                      | No       | Resolver action that produced this result            |
+
+#### ActivityAnnotationDataProvider
+---
+
+| Property  | Type                                                                                                                              | Required | Description                                              |
+|-----------|-----------------------------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------------|
+| `get`     | `(request: GetActivityResolverRequest) => Promise<ResolverResponse<Record<string, PartialActivityRecord>>>`                       | No       | Function to fetch activity PII from your backend for re-hydration |
+| `save`    | `(request: SaveActivityResolverRequest) => Promise<ResolverResponse<undefined>>`                                                   | No       | Function to store activity PII fields stripped before Velt writes to its backend |
+| `config`  | `ResolverConfig`                                                                                                                  | No       | Configuration for the data provider. Supports `resolveTimeout` and `fieldsToRemove`. |
+
+#### GetActivityResolverRequest
+---
+
+| Property        | Type       | Required | Description                                          |
+|----------------|------------|----------|------------------------------------------------------|
+| `organizationId`| `string`   | No       | ID of the organization                               |
+| `activityIds`   | `string[]` | No       | Activity record IDs to fetch PII for                 |
+| `documentIds`   | `string[]` | No       | Document IDs to filter activity records by           |
+
+#### SaveActivityResolverRequest
+---
+
+| Property   | Type                                   | Required | Description                                                         |
+|-----------|----------------------------------------|----------|---------------------------------------------------------------------|
+| `activity` | `Record<string, PartialActivityRecord>` | Yes      | Map of activity record IDs to their stripped PII fields             |
+| `event`    | `string`                               | No       | Resolver action that triggered the save                             |
+| `metadata` | `BaseMetadata`                         | No       | Additional metadata                                                 |
+
+#### PartialActivityRecord
+---
+
+Stripped activity record containing only PII fields routed to your data provider.
+
+| Property                       | Type                      | Required | Description                                             |
+|-------------------------------|---------------------------|----------|---------------------------------------------------------|
+| `id`                          | `string`                  | Yes      | Activity record ID                                      |
+| `metadata`                    | `BaseMetadata`            | No       | Additional metadata attached to the activity record     |
+| `changes`                     | `ActivityChanges`         | No       | Change snapshot captured at the time of the activity    |
+| `entityData`                  | `unknown`                 | No       | Feature-specific entity snapshot (e.g., comment body)   |
+| `entityTargetData`            | `unknown`                 | No       | Target entity snapshot (e.g., the element commented on) |
+| `displayMessageTemplateData`  | `Record<string, unknown>` | No       | Template variable values                                |
+| `[key: string]`               | `any`                     | No       | Additional custom fields configured via `fieldsToRemove` |
 
 #### AnonymousUserDataProvider
 ---

@@ -1107,7 +1107,7 @@ Configuration object for programmatically adding file attachments to the comment
 | Property       | Type              | Required | Description                      |
 |----------------|-------------------|----------|----------------------------------|
 | `attachmentId` | `number`          | Yes      | ID of the attachment            |
-| `metadata`     | `AttachmentResolverMetadata` | No       | Additional metadata for the request. eg: apikey, organizationId, documentId, etc.                                  |
+| `metadata`     | `AttachmentResolverMetadata` | No       | Metadata for the request. Contains only: `apiKey`, `documentId`, `organizationId`, and `folderId` (when present). Internal fields are stripped (v5.0.2-beta.11+). |
 | `event`        | `ResolverActions` | No       | Event that triggered the delete |
 
 #### SaveAttachmentResolverRequest  
@@ -1116,7 +1116,7 @@ Configuration object for programmatically adding file attachments to the comment
 | Property       | Type                | Required | Description                      |
 |----------------|---------------------|----------|----------------------------------|
 | `attachment`   | `ResolverAttachment`| Yes      | Attachment object to save        |
-| `metadata`     | `AttachmentResolverMetadata` | No       | Additional metadata for the request. eg: apikey, organizationId, documentId, etc.                                  |
+| `metadata`     | `AttachmentResolverMetadata` | No       | Metadata for the request. Contains: `apiKey`, `documentId`, `organizationId`, `folderId` (when present), `attachmentId`, and `commentAnnotationId`. |
 | `event`        | `ResolverActions`   | No       | Event that triggered the save    |
 
 
@@ -1447,7 +1447,7 @@ type ReactionPinType = 'timeline' | 'comment' | 'standalone';
 
 ### Comment Dialog Primitives
 
-Types for the 79 primitive components used to build custom comment dialog interfaces. See [Comment Dialog Primitives Overview](/ui-customization/features/async/comments/comment-dialog-primitives/overview) for usage examples and [API Methods](/api-reference/sdk/api/api-methods#comment-dialog-primitives) for component documentation.
+Types for the 92+ primitive components used to build custom comment dialog interfaces. See [Comment Dialog Primitives Overview](/ui-customization/features/async/comments/comment-dialog-primitives/overview) for usage examples and [API Methods](/api-reference/sdk/api/api-methods#comment-dialog-primitives) for component documentation.
 
 #### CommentDialogCommonProps
 [Usage Examples →](/ui-customization/features/async/comments/comment-dialog-primitives/overview#common-inputs)
@@ -3805,13 +3805,17 @@ Union type for all recorder resolver lifecycle event type strings.
 #### AttachmentResolverMetadata
 ---
 
+<Note>
+As of v5.0.2-beta.11, the `metadata` object passed to `AttachmentDataProvider.delete()` contains only `apiKey`, `documentId`, `organizationId`, and `folderId`. The `attachmentId` and `commentAnnotationId` fields are no longer forwarded to the delete callback. They remain available in the `save()` callback metadata.
+</Note>
+
 | Property             | Type            | Required | Description                                    |
 |---------------------|-----------------|-----------|------------------------------------------------|
 | `organizationId`    | `string \| null`| Yes      | ID of the organization                        |
 | `documentId`        | `string \| null`| Yes      | ID of the document                            |
 | `folderId`          | `string \| null`| No       | ID of the folder                              |
-| `attachmentId`      | `number \| null`| Yes      | ID of the attachment                          |
-| `commentAnnotationId`| `string \| null`| Yes      | ID of the comment annotation                  |
+| `attachmentId`      | `number \| null`| No       | ID of the attachment. Not present in `delete()` callbacks (v5.0.2-beta.11+). |
+| `commentAnnotationId`| `string \| null`| No      | ID of the comment annotation. Not present in `delete()` callbacks (v5.0.2-beta.11+). |
 | `apiKey`            | `string \| null`| Yes      | API key for authentication                     |
 
 
@@ -5168,3 +5172,46 @@ Query to delete historical messages older than a given timestamp from the messag
 |-----------|----------|----------|----------------------------------------------------------|
 | `id`       | `string` | Yes      | Document or store identifier                             |
 | `beforeTs` | `number` | Yes      | Delete all messages with timestamp before this value     |
+
+# Provider Configuration
+
+#### VeltProviderConfig
+---
+Configuration object passed to `VeltProvider` (React) or `initVelt()` (other frameworks) to customize SDK behavior, proxy routing, and security.
+
+| Property         | Type                                  | Required | Description                                                                                       |
+|------------------|---------------------------------------|----------|---------------------------------------------------------------------------------------------------|
+| `proxyDomain`    | `string`                              | No       | Base URL for proxying the Velt SDK via your own CDN or server.                                    |
+| `proxyConfig`    | [`ProxyConfig`](#proxyconfig)         | No       | Fine-grained proxy routing for individual Velt service hosts. Replaces `apiProxyDomain`.          |
+| `apiProxyDomain` | `string`                              | No       | **Deprecated.** Use `proxyConfig.apiHost` instead. Single proxy URL for all Velt API calls.      |
+| `integrity`      | `boolean`                             | No       | Enable Subresource Integrity (SRI) check on the SDK bundle. Default: `false`.                     |
+
+#### ProxyConfig
+---
+Fine-grained proxy routing configuration for individual Velt service hosts. Introduced in v5.0.2-beta.11. Replaces the single `apiProxyDomain` field.
+
+```typescript
+export interface ProxyConfig {
+  cdnHost?: string;
+  apiHost?: string;
+  v2DbHost?: string;
+  v1DbHost?: string;
+  storageHost?: string;
+  authHost?: string;
+  forceLongPolling?: boolean;
+}
+```
+
+| Property           | Type      | Required | Description                                                                      |
+|--------------------|-----------|----------|----------------------------------------------------------------------------------|
+| `cdnHost`          | `string`  | No       | Proxy host for Velt CDN assets (SDK bundle, static resources). Replaces `https://cdn.velt.dev`. |
+| `apiHost`          | `string`  | No       | Proxy host for Velt API calls. Replaces the deprecated `apiProxyDomain` field. Forwards to `https://api.velt.dev`. |
+| `v2DbHost`         | `string`  | No       | Proxy host for Firestore (Velt v2 database). Your proxy should forward to the Firestore endpoint. |
+| `v1DbHost`         | `string`  | No       | Proxy host for Firebase Realtime Database (Velt v1 database). Replaces the `firebaseio.com` domain. When set, the SDK host-locks RTDB to prevent redirect to shard servers. See [Proxy Server](/security/proxy-server#proxying-realtime-database). |
+| `storageHost`      | `string`  | No       | Proxy host for Firebase Storage. Replaces `firebasestorage.googleapis.com`.      |
+| `authHost`         | `string`  | No       | Proxy host for Firebase Auth. Replaces `identitytoolkit.googleapis.com` and `securetoken.googleapis.com`. Cached in `localStorage` at init time to apply before token refresh on page reload. |
+| `forceLongPolling` | `boolean` | No       | Force long-polling for Firestore and Realtime Database connections instead of WebSockets. Default: `false`. |
+
+<Info>
+`apiProxyDomain` is deprecated as of v5.0.2-beta.11. Migrate to `proxyConfig.apiHost` for equivalent behavior. All other host overrides require the new `proxyConfig` fields.
+</Info>

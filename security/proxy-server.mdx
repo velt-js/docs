@@ -2,11 +2,18 @@
 title: Proxy Server
 ---
 
-You can route Velt SDK events and API calls via a proxy to your own domain. This means you will have most Velt-related network calls branded to your domain.
+You can route Velt SDK traffic via reverse proxies on your own domain. This keeps all Velt-related network calls branded to your infrastructure and satisfies strict network policies that prohibit direct connections to third-party services.
 
-There are two main aspects to this:
-1. Proxying the Velt SDK
-2. Proxying Velt API calls
+The Velt SDK communicates with several backend services. You can proxy any combination of them:
+
+1. **CDN** — the SDK bundle itself (`proxyDomain`)
+2. **API** — Velt REST API calls (`proxyConfig.apiHost`)
+3. **Firestore** — Velt v2 database (`proxyConfig.v2DbHost`)
+4. **Realtime Database** — Velt v1 database (`proxyConfig.v1DbHost`)
+5. **Storage** — file/attachment storage (`proxyConfig.storageHost`)
+6. **Auth** — authentication token endpoints (`proxyConfig.authHost`)
+
+See [ProxyConfig reference](/api-reference/sdk/models/data-models#proxyconfig) for the full type definition.
 
 ### Proxying the Velt SDK
 
@@ -37,9 +44,39 @@ To serve the Velt SDK via your own proxy server (e.g., `nginx`) instead of Velt'
 
 ### Proxying Velt API calls
 
-To serve the Velt APIs via your own proxy server (e.g., `nginx`) instead of Velt's servers, provide your proxy's base URL.
-- If `apiProxyDomain` is `https://api.yourdomain.com`, the APIs will be loaded from `https://api.yourdomain.com`.
-- Your proxy server should be configured to forward requests from `[your_apiProxyDomain]` to `https://api.velt.dev` without any modifications to headers or any other content.
+<Warning>
+`apiProxyDomain` is deprecated as of v5.0.2-beta.11. Use [`ProxyConfig`](/api-reference/sdk/models/data-models#proxyconfig) for fine-grained control over all Velt service hosts (API, CDN, Firestore, RTDB, Storage, Auth). For API-only proxying, replace `apiProxyDomain` with `proxyConfig.apiHost`.
+</Warning>
+
+To serve the Velt APIs via your own proxy server (e.g., `nginx`) instead of Velt's servers, provide your proxy's base URL using `proxyConfig.apiHost`.
+- Your proxy server should be configured to forward requests from your proxy host to `https://api.velt.dev` without any modifications to headers or any other content.
+
+<Tabs>
+  <Tab title="React / Next.js">
+  ```jsx
+  <VeltProvider
+    config={{
+      proxyConfig: {
+        apiHost: 'https://api.yourdomain.com',
+      },
+    }}
+  ></VeltProvider>
+  ```
+  </Tab>
+  <Tab title="Other Frameworks">
+  ```jsx
+  const client = await initVelt('YOUR_API_KEY', {
+    proxyConfig: {
+      apiHost: 'https://api.yourdomain.com',
+    },
+  });
+  ```
+  </Tab>
+</Tabs>
+
+<Accordion title="Legacy: apiProxyDomain (deprecated)">
+
+`apiProxyDomain` is deprecated. Existing integrations continue to work, but migrate to `proxyConfig.apiHost` at your earliest convenience.
 
 <Tabs>
   <Tab title="React / Next.js">
@@ -52,9 +89,171 @@ To serve the Velt APIs via your own proxy server (e.g., `nginx`) instead of Velt
   ```
   </Tab>
   <Tab title="Other Frameworks">
- ```jsx
+  ```jsx
   const client = await initVelt('YOUR_API_KEY', {
     apiProxyDomain: 'https://api.yourdomain.com'
+  });
+  ```
+  </Tab>
+</Tabs>
+
+</Accordion>
+
+
+### Proxying Firestore
+
+To route Firestore (Velt v2 database) traffic through your proxy, set `proxyConfig.v2DbHost`.
+- Your proxy server should forward requests to the Firestore endpoint used by your Velt project without modifying headers or content.
+
+<Tabs>
+  <Tab title="React / Next.js">
+  ```jsx
+  <VeltProvider
+    config={{
+      proxyConfig: {
+        v2DbHost: 'https://firestore-proxy.yourdomain.com',
+      },
+    }}
+  ></VeltProvider>
+  ```
+  </Tab>
+  <Tab title="Other Frameworks">
+  ```jsx
+  const client = await initVelt('YOUR_API_KEY', {
+    proxyConfig: {
+      v2DbHost: 'https://firestore-proxy.yourdomain.com',
+    },
+  });
+  ```
+  </Tab>
+</Tabs>
+
+### Proxying Realtime Database
+
+To route Firebase Realtime Database (Velt v1 database) traffic through your proxy, set `proxyConfig.v1DbHost`. This replaces the `firebaseio.com` domain in all RTDB URLs.
+- Your proxy server should forward requests to `*.firebaseio.com` without modifying headers or content.
+
+<Note>
+When `v1DbHost` is set, the SDK host-locks RTDB by overriding the Firebase SDK's internal host property setter. This prevents Firebase's handshake from redirecting traffic to a shard server (`s-gke-*.firebaseio.com`), keeping all RTDB requests on your proxy domain for the lifetime of the connection.
+</Note>
+
+<Tabs>
+  <Tab title="React / Next.js">
+  ```jsx
+  <VeltProvider
+    config={{
+      proxyConfig: {
+        v1DbHost: 'https://rtdb-proxy.yourdomain.com',
+      },
+    }}
+  ></VeltProvider>
+  ```
+  </Tab>
+  <Tab title="Other Frameworks">
+  ```jsx
+  const client = await initVelt('YOUR_API_KEY', {
+    proxyConfig: {
+      v1DbHost: 'https://rtdb-proxy.yourdomain.com',
+    },
+  });
+  ```
+  </Tab>
+</Tabs>
+
+### Proxying Storage
+
+To route Firebase Storage (file attachments, recordings) traffic through your proxy, set `proxyConfig.storageHost`. This replaces `firebasestorage.googleapis.com`.
+- Your proxy server should forward requests to `firebasestorage.googleapis.com` without modifying headers or content.
+
+<Tabs>
+  <Tab title="React / Next.js">
+  ```jsx
+  <VeltProvider
+    config={{
+      proxyConfig: {
+        storageHost: 'https://storage-proxy.yourdomain.com',
+      },
+    }}
+  ></VeltProvider>
+  ```
+  </Tab>
+  <Tab title="Other Frameworks">
+  ```jsx
+  const client = await initVelt('YOUR_API_KEY', {
+    proxyConfig: {
+      storageHost: 'https://storage-proxy.yourdomain.com',
+    },
+  });
+  ```
+  </Tab>
+</Tabs>
+
+### Proxying Auth
+
+To route Firebase Auth traffic through your proxy, set `proxyConfig.authHost`. This replaces both `identitytoolkit.googleapis.com` and `securetoken.googleapis.com`.
+- Your proxy server should forward requests to both `identitytoolkit.googleapis.com` and `securetoken.googleapis.com` based on the request path, without modifying headers or content.
+
+<Note>
+The SDK caches the auth proxy host in `localStorage` during `initConfig()`. On subsequent page loads, the cached value is applied synchronously before Firebase Auth can fire an internal token refresh, ensuring the refresh request goes through your proxy rather than directly to Google.
+</Note>
+
+<Tabs>
+  <Tab title="React / Next.js">
+  ```jsx
+  <VeltProvider
+    config={{
+      proxyConfig: {
+        authHost: 'https://auth-proxy.yourdomain.com',
+      },
+    }}
+  ></VeltProvider>
+  ```
+  </Tab>
+  <Tab title="Other Frameworks">
+  ```jsx
+  const client = await initVelt('YOUR_API_KEY', {
+    proxyConfig: {
+      authHost: 'https://auth-proxy.yourdomain.com',
+    },
+  });
+  ```
+  </Tab>
+</Tabs>
+
+### Full proxy configuration
+
+To route all Velt traffic through your proxies, configure every host together. You can also set `forceLongPolling: true` to force Firestore and Realtime Database connections to use long-polling instead of WebSockets (useful when your proxy does not support WebSocket upgrades).
+
+<Tabs>
+  <Tab title="React / Next.js">
+  ```jsx
+  <VeltProvider apiKey="YOUR_API_KEY" config={{
+    proxyDomain: 'https://cdn-proxy.yourdomain.com',
+    proxyConfig: {
+      apiHost: 'https://api-proxy.yourdomain.com',
+      v2DbHost: 'https://firestore-proxy.yourdomain.com',
+      v1DbHost: 'https://rtdb-proxy.yourdomain.com',
+      storageHost: 'https://storage-proxy.yourdomain.com',
+      authHost: 'https://auth-proxy.yourdomain.com',
+      forceLongPolling: false,
+    },
+  }}>
+    <App />
+  </VeltProvider>
+  ```
+  </Tab>
+  <Tab title="Other Frameworks">
+  ```jsx
+  const client = await initVelt('YOUR_API_KEY', {
+    proxyDomain: 'https://cdn-proxy.yourdomain.com',
+    proxyConfig: {
+      apiHost: 'https://api-proxy.yourdomain.com',
+      v2DbHost: 'https://firestore-proxy.yourdomain.com',
+      v1DbHost: 'https://rtdb-proxy.yourdomain.com',
+      storageHost: 'https://storage-proxy.yourdomain.com',
+      authHost: 'https://auth-proxy.yourdomain.com',
+      forceLongPolling: false,
+    },
   });
   ```
   </Tab>

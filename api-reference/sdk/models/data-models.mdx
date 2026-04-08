@@ -4946,21 +4946,130 @@ Interface extending [`VeltReactFlowAppState`](#appstate).
 
 # CodeMirror Collaboration
 
-#### VeltCodeMirrorCrdtExtensionConfig
+## v2 API
+
+#### UseCollaborationConfig (CodeMirror)
+---
+Configuration for the `useCollaboration` React hook for CodeMirror collaborative editing.
+
+| Property                  | Type                       | Required | Description |
+|---------------------------|----------------------------|----------|-------------|
+| `editorId`                | `string`                   | Yes      | Unique identifier for this collaborative session. |
+| `initialContent`          | `string`                   | No       | Text content applied once for brand-new documents. |
+| `debounceMs`              | `number`                   | No       | Throttle interval (ms) for backend writes. Default: `0`. |
+| `forceResetInitialContent`| `boolean`                  | No       | If `true`, always clear and re-apply `initialContent`. Default: `false`. |
+| `veltClient`              | `Velt`                     | No       | Explicit Velt client. Falls back to `VeltProvider` context. |
+| `onError`                 | `(error: Error) => void`   | No       | Error callback. |
+
+#### UseCollaborationReturn (CodeMirror)
+---
+Return value of the `useCollaboration` hook for CodeMirror.
+
+| Property      | Type                             | Description |
+|---------------|----------------------------------|-------------|
+| `primitives`  | `CollaborationPrimitives \| null`| Yjs primitives for CodeMirror. `null` while loading. |
+| `isLoading`   | `boolean`                        | `true` until CollaborationManager is initialized. |
+| `isSynced`    | `boolean`                        | `true` after the initial sync with the backend completes. |
+| `status`      | `SyncStatus`                     | Connection status: `'connecting'`, `'connected'`, or `'disconnected'`. |
+| `error`       | `Error \| null`                  | Most recent error, or `null`. |
+| `manager`     | `CollaborationManager \| null`   | Escape hatch to the underlying manager. `null` before initialization. |
+
+#### CollaborationPrimitives
+---
+Yjs primitives returned by `useCollaboration` for CodeMirror integration. Pass these to `yCollab()` from `y-codemirror.next`.
+
+| Property       | Type                    | Description |
+|----------------|-------------------------|-------------|
+| `ytext`        | `Y.Text \| null`        | Y.Text bound to the document. Pass to `yCollab()`. |
+| `awareness`    | `Awareness`             | Awareness instance for cursor/presence tracking. |
+| `undoManager`  | `Y.UndoManager \| null` | Collaborative undo manager (tracks local changes only). |
+| `doc`          | `Y.Doc`                 | Underlying Yjs document. |
+
+#### CollaborationConfig (CodeMirror)
+---
+Configuration for the non-React `createCollaboration()` factory function for CodeMirror.
+
+| Property                   | Type                       | Required | Description |
+|----------------------------|----------------------------|----------|-------------|
+| `editorId`                 | `string`                   | Yes      | Unique editor/document identifier for syncing. |
+| `veltClient`               | `Velt`                     | Yes      | Velt client instance — must have an authenticated user. |
+| `initialContent`           | `string`                   | No       | Plain text content applied once for brand-new (empty) documents. |
+| `debounceMs`               | `number`                   | No       | Throttle interval (ms) for backend writes. `0` = immediate. Default: `0`. |
+| `onError`                  | `(error: Error) => void`   | No       | Callback for non-fatal errors (sync failures, recovery attempts). |
+| `forceResetInitialContent` | `boolean`                  | No       | If `true`, always reset to `initialContent` on init. Default: `false`. |
+
+#### CollaborationManager (CodeMirror)
+---
+Manages the CRDT lifecycle for collaborative CodeMirror editing. Returned by `useCollaboration` (React) via `manager`, or by `createCollaboration` (non-React).
+
+| Method / Property                | Type / Signature                                         | Description |
+|----------------------------------|----------------------------------------------------------|-------------|
+| `getCollaborationPrimitives()`   | `CollaborationPrimitives`                                | Returns Yjs primitives (`ytext`, `awareness`, `undoManager`, `doc`) for `yCollab()`. Non-React only. |
+| `initialized`                    | `boolean`                                                | Whether `initialize()` has completed. |
+| `synced`                         | `boolean`                                                | Whether initial sync with the backend has completed. |
+| `status`                         | `SyncStatus`                                             | Current connection status. |
+| `onStatusChange(cb)`             | `(cb: (status: SyncStatus) => void) => Unsubscribe`     | Subscribe to connection status changes. |
+| `onSynced(cb)`                   | `(cb: (synced: boolean) => void) => Unsubscribe`         | Subscribe to sync state changes. |
+| `saveVersion(name)`              | `(name: string) => Promise<string>`                      | Save a named snapshot. Returns the version ID. |
+| `getVersions()`                  | `Promise<Version[]>`                                     | List all saved versions. |
+| `restoreVersion(id)`             | `(versionId: string) => Promise<boolean>`                | Restore to a saved version. Returns `true` on success. |
+| `setStateFromVersion(version)`   | `(version: Version) => Promise<void>`                    | Apply a Version object's state locally. |
+| `getDoc()`                       | `Y.Doc`                                                  | Get the underlying Yjs document. |
+| `getText()` / `getYText()`       | `Y.Text \| null`                                         | Get the Y.Text bound to the document content. React uses `getText()`, non-React uses `getYText()`. |
+| `getProvider()`                  | `SyncProvider`                                           | Get the sync provider. |
+| `getAwareness()`                 | `Awareness`                                              | Get the Yjs Awareness instance. |
+| `getStore()`                     | `Store<string>`                                          | Get the core CRDT Store. |
+| `getUndoManager()`              | `Y.UndoManager \| null`                                  | Get the Y.UndoManager for undo/redo operations. |
+| `destroy()`                      | `void`                                                   | Full cleanup. Automatic on editor destroy or component unmount. Safe to call multiple times. |
+
+#### SyncStatus (CodeMirror)
+---
+Connection status for a collaborative CodeMirror session.
+
+```typescript
+type SyncStatus = 'connecting' | 'connected' | 'disconnected';
+```
+
+#### Version (CodeMirror)
+---
+A saved snapshot of the collaborative document state (from `@veltdev/crdt`).
+
+| Property      | Type                     | Description                          |
+|---------------|--------------------------|--------------------------------------|
+| `versionId`   | `string`                 | Unique version identifier.           |
+| `versionName` | `string`                 | Human-readable version name.         |
+| `timestamp`   | `number`                 | Creation timestamp (ms since epoch). |
+| `state`       | `Uint8Array \| number[]` | Encoded Yjs document state.          |
+
+#### Unsubscribe (CodeMirror)
+---
+Callback returned by `manager.onStatusChange()` and `manager.onSynced()`. Call it to stop listening.
+
+```typescript
+type Unsubscribe = () => void;
+```
+
+
+## v1 API (deprecated)
+
+<Warning>The v1 CodeMirror API is deprecated. Use the v2 `useCollaboration` hook (React) or `createCollaboration` (non-React) for all new integrations.</Warning>
+
+#### VeltCodeMirrorCrdtExtensionConfig (deprecated)
 ---
 
-Configuration for the `useVeltCodeMirrorCrdtExtension` React hook.
+Configuration for the legacy `useVeltCodeMirrorCrdtExtension` React hook.
 
 | Property         | Type     | Required | Description                                                   |
 |------------------|----------|----------|---------------------------------------------------------------|
 | `editorId`       | `string` | Yes      | Unique document identifier for synchronization.               |
 | `initialContent` | `string` | No       | Initial CodeMirror document. Applied only when no server-side data exists. |
 | `debounceMs`     | `number` | No       | Debounce time for update propagation in milliseconds.         |
+| `veltClient`     | `Velt`   | No       | Velt client instance.                                         |
 
-#### VeltCodeMirrorCrdtExtensionResponse
+#### VeltCodeMirrorCrdtExtensionResponse (deprecated)
 ---
 
-Response returned by `useVeltCodeMirrorCrdtExtension`.
+Response returned by the legacy `useVeltCodeMirrorCrdtExtension`.
 
 | Property    | Type                                                                                       | Description                                                  |
 |-------------|--------------------------------------------------------------------------------------------|--------------------------------------------------------------|
@@ -4969,7 +5078,7 @@ Response returned by `useVeltCodeMirrorCrdtExtension`.
 
 
 
-#### VeltCodeMirrorStoreConfig
+#### VeltCodeMirrorStoreConfig (deprecated)
 ---
 
 | Property | Type | Required | Description |
@@ -4978,6 +5087,8 @@ Response returned by `useVeltCodeMirrorCrdtExtension`.
 | `veltClient` | `Velt` | Yes | Velt client for Velt SDK integration. |
 | `initialContent` | `string` | No | Initial editor content. Applied only when no server-side data exists. |
 | `debounceMs` | `number` | No | Debounce time for updates (milliseconds). |
+| `onSynced` | `(doc?: Y.Doc) => void` | No | Called once when initial sync completes. |
+| `onConnectionError` | `(error: Error) => void` | No | Called on connection errors. |
 
 
 

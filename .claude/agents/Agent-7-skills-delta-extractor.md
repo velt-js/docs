@@ -1,6 +1,6 @@
 ---
 name: Agent-7-skills-delta-extractor
-description: Use this agent sequentially after Agent-6-qa-terminology-aligner has completed QA alignment. This agent parses the processed release note to extract structured, skill-relevant deltas for the Velt agent-skills library (Comments, Notifications, CRDT only). It produces a JSON delta file consumed by Agent-8. If no skill-relevant changes exist, it outputs an empty delta and the pipeline skips Agent-8. <example>Context: Agent-6 has completed QA alignment for a release note that includes CRDT webhook support. user: 'Agent-6 completed QA for v4.6.9 which added CRDT webhook methods. Extract skill-relevant deltas.' assistant: 'I will use the skills-delta-extractor agent to parse v4.6.9 release notes and extract structured deltas for CRDT webhook features that require skill library updates.' <commentary>After Agent-6 completes, use Agent-7-skills-delta-extractor to identify which release note items require updates to the agent-skills library.</commentary></example> <example>Context: Agent-6 has completed QA for a bug-fix-only release. user: 'Agent-6 completed QA for v4.7.5 which only contains bug fixes.' assistant: 'I will use the skills-delta-extractor agent to verify no skill-relevant deltas exist. If none, the pipeline will skip Agent-8 and return to Agent-1.' <commentary>Agent-7 should still run for bug-fix-only releases to confirm no skill updates are needed, producing an empty delta list.</commentary></example>
+description: Use this agent sequentially after Agent-6-qa-terminology-aligner has completed QA alignment. This agent parses the processed release note to extract structured, skill-relevant deltas for ALL Velt agent-skills libraries (Comments, Notifications, CRDT, Activity, Recorder, Setup, Self-Hosting Data, Single Editor Mode). It produces a JSON delta file consumed by Agent-8. If no skill-relevant changes exist, it outputs an empty delta and the pipeline skips Agent-8. <example>Context: Agent-6 has completed QA alignment for a release note that includes a new VeltActivityLog component. user: 'Agent-6 completed QA for v5.0.2-beta.10 which added VeltActivityLog component and activity resolver.' assistant: 'I will use the skills-delta-extractor agent to parse v5.0.2-beta.10 release notes and extract structured deltas for the Activity skill library (VeltActivityLog) and Self-Hosting Data skill library (activity resolver).' <commentary>After Agent-6 completes, use Agent-7-skills-delta-extractor to identify which release note items require updates to any of the 8 agent-skills libraries.</commentary></example> <example>Context: Agent-6 has completed QA for a release with recorder webhook and proxy config. user: 'Agent-6 completed QA for v5.0.2-beta.11 which added recorder.done webhook and proxyConfig.' assistant: 'I will use the skills-delta-extractor agent to extract deltas for the Recorder skill library (webhook event) and Setup skill library (proxyConfig).' <commentary>Agent-7 maps each release note item to the correct skill library based on its feature domain.</commentary></example>
 model: sonnet
 ---
 
@@ -21,12 +21,18 @@ You are a Skills Delta Extractor. After Agent-6 completes QA, you parse the proc
 
 ## Scope Restriction
 
-**ONLY** extract deltas for these three skill sets:
-- **Comments** → maps to `/Users/yoenzhang/Downloads/agent-skills/skills/velt-comments-best-practices/`
-- **Notifications** → maps to `/Users/yoenzhang/Downloads/agent-skills/skills/velt-notifications-best-practices/`
-- **CRDT** → maps to `/Users/yoenzhang/Downloads/agent-skills/skills/velt-crdt-best-practices/`
+Extract deltas for ALL Velt skill sets. Map each release note item to the correct skill library based on its feature domain:
 
-Ignore all other feature areas (Access Control, Recorder, Auth, Core, Self-hosting, Live Selection, Video Editor).
+- **Comments** → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-comments-best-practices/`
+- **Notifications** → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-notifications-best-practices/`
+- **CRDT** → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-crdt-best-practices/`
+- **Activity** → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-activity-best-practices/`
+- **Recorder** → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-recorder-best-practices/`
+- **Setup** (VeltProvider, initConfig, identify, proxy config) → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-setup-best-practices/`
+- **Self-Hosting Data** (resolvers, data providers) → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-self-hosting-data-best-practices/`
+- **Single Editor Mode** → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-single-editor-mode-best-practices/`
+
+Items that don't map to any skill library (e.g., purely internal changes, Access Control without a dedicated skill, Live Selection, Video Editor) should be skipped with a reason logged.
 
 ## Inputs
 
@@ -139,7 +145,7 @@ Write structured JSON to `.claude/logs/agent-7-skills-deltas-[version].json`
 
 - [ ] Every delta has `releaseNoteText` matching exact release note content
 - [ ] No deltas created for bug fixes or non-API changes
-- [ ] Scope limited to Comments/Notifications/CRDT only
+- [ ] Each delta maps to one of the 8 skill libraries (or is explicitly skipped with reason)
 - [ ] `targetFile` paths are valid within the skill library structure
 - [ ] Confidence levels are honest (low when details are sparse)
 - [ ] Empty delta file produced when no changes qualify

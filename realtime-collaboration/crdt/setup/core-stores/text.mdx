@@ -1,0 +1,562 @@
+---
+title: Text Store
+description: Add real-time collaborative text data to your application using Velt CRDT.
+---
+
+<Info>Complete [Steps 1-2](/realtime-collaboration/crdt/setup/core#setup) on the Core setup page before continuing. Those steps install dependencies and initialize Velt.</Info>
+
+## Setup
+
+### Step 1: Create a CRDT text store
+
+<Tabs>
+<Tab title="React / Next.js">
+
+Use the `useStore` hook to create a CRDT store backed by a Yjs `Y.Text`. The hook handles store initialization, React lifecycle, and real-time subscriptions automatically — no manual `useState`/`useEffect` needed for store setup.
+
+```tsx
+import { useStore } from '@veltdev/crdt-react';
+
+function Component() {
+  const {
+    value: text,
+    update: updateText,
+    store,
+    isLoading,
+    isSynced,
+    status,
+    error,
+  } = useStore<string>({
+    storeId: 'my-text-store',
+    type: 'text',
+    initialValue: 'Hello, start typing here...',
+  });
+
+  if (isLoading) return <div>Loading...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <textarea
+      value={text ?? ''}
+      onChange={(e) => updateText(e.target.value)}
+    />
+  );
+}
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Use `createVeltStore` to create a CRDT store backed by a Yjs `Y.Text`. The `initialValue` is only applied when the document is brand-new (no prior remote state exists).
+
+```js
+import { createVeltStore } from '@veltdev/crdt';
+
+async function initializeStore(client) {
+  const store = await createVeltStore({
+    id: 'my-text-store',
+    type: 'text',
+    initialValue: 'Hello, start typing here...',
+    veltClient: client,
+  });
+  if (!store) return;
+
+  // Seed the UI with the current CRDT value
+  const text = store.getValue() || '';
+  renderText(text);
+}
+```
+
+</Tab>
+</Tabs>
+
+### Step 2: Read and update the store
+
+<Tabs>
+<Tab title="React / Next.js">
+
+The hook's `value` field reactively tracks the current text — no manual subscription needed. Use `update()` to replace the entire text value. The CRDT library handles conflict-free merging with other users' edits automatically.
+
+```tsx
+// The current text is always available via the hook's `value` field
+const { value: text, update: updateText } = useStore<string>({
+  storeId: 'my-text-store',
+  type: 'text',
+  initialValue: '',
+});
+
+// Replace the entire text content
+function handleChange(newText: string) {
+  updateText(newText);
+}
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Use `store.getValue()` to read the current value and `store.update()` to replace the entire text. The CRDT library handles conflict-free merging with other users' edits automatically.
+
+```js
+// Read the current text value
+const currentText = store.getValue();
+
+// Replace the entire text content
+function updateText(newText) {
+  store.update(newText);
+}
+```
+
+</Tab>
+</Tabs>
+
+### Step 3: Subscribe to real-time changes (Other Frameworks)
+
+Use `store.subscribe()` to listen for changes from all collaborators. The callback fires on every change (local and remote) with the full merged text.
+
+```js
+// Subscribe to all future changes (local and remote)
+const unsubscribe = store.subscribe((newText) => {
+  // Re-render the UI with the latest merged state
+  renderText(typeof newText === 'string' ? newText : '');
+});
+
+// Call unsubscribe to stop listening when no longer needed
+unsubscribe();
+```
+
+<Info>In React, the `value` from `useStore` is already reactive — no manual subscription is needed.</Info>
+
+### Step 4: Save and restore versions (optional)
+
+Create checkpoints and roll back when needed.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+The `useStore` hook exposes version management methods directly:
+
+```tsx
+import { Version } from '@veltdev/crdt-react';
+
+const {
+  value: text,
+  update: updateText,
+  saveVersion,
+  getVersions,
+  getVersionById,
+  restoreVersion,
+  setStateFromVersion,
+} = useStore<string>({
+  storeId: 'my-text-store',
+  type: 'text',
+  initialValue: '',
+});
+
+// Save a named snapshot of the current state
+await saveVersion('Draft v1');
+
+// Retrieve the list of all saved versions
+const versions: Version[] = await getVersions();
+
+// Restore the store to a previously saved version
+await restoreVersion(versionId);
+const version = await getVersionById(versionId);
+if (version) {
+  await setStateFromVersion(version);
+}
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+import { Version } from '@veltdev/crdt';
+
+// Save a named snapshot of the current state
+const versionId = await store.saveVersion('Draft v1');
+
+// List all saved versions
+const versions = await store.getVersions();
+
+// Restore the store to a previously saved version
+await store.restoreVersion(versionId);
+const version = await store.getVersionById(versionId);
+if (version) {
+  await store.setStateFromVersion(version);
+}
+```
+
+</Tab>
+</Tabs>
+
+### Step 5: Initial content with forceResetInitialContent (optional)
+
+By default, `initialValue` is only applied when the document has no existing remote state. Set `forceResetInitialContent` to `true` to always reset the store to `initialValue` on initialization, overwriting any existing remote data.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+const { value: text, update: updateText } = useStore<string>({
+  storeId: 'my-text-store',
+  type: 'text',
+  initialValue: defaultText,
+  forceResetInitialContent: true,
+});
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+const store = await createVeltStore({
+  id: 'my-text-store',
+  type: 'text',
+  initialValue: defaultText,
+  veltClient: client,
+  forceResetInitialContent: true,
+});
+```
+
+</Tab>
+</Tabs>
+
+
+## Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+
+A complete collaborative notepad built with `useStore`:
+
+```tsx Complete Implementation expandable lines
+import React, { useState, useEffect, useCallback } from 'react';
+import { useStore, Version } from '@veltdev/crdt-react';
+
+export const Notepad = () => {
+  const [versionName, setVersionName] = useState('');
+  const [versions, setVersions] = useState<Version[]>([]);
+
+  // Use the useStore hook — handles initialization and subscriptions automatically
+  const {
+    value: text,
+    update: updateText,
+    store,
+    saveVersion: storeSaveVersion,
+    getVersions: storeGetVersions,
+    restoreVersion: storeRestoreVersion,
+    getVersionById,
+    setStateFromVersion,
+  } = useStore<string>({
+    storeId: 'my-notepad-store',
+    type: 'text',
+    initialValue: 'Welcome to the Collaborative Notepad! Start typing here...',
+  });
+
+  // Fetch saved versions when store is ready
+  const refreshVersions = useCallback(async () => {
+    const v = await storeGetVersions();
+    setVersions(v);
+  }, [storeGetVersions]);
+
+  useEffect(() => {
+    if (store) refreshVersions();
+  }, [refreshVersions, store]);
+
+  // Handle text changes from the textarea
+  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    updateText(e.target.value);
+  };
+
+  // Handle saving a new version
+  const handleSaveVersion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (versionName.trim()) {
+      await storeSaveVersion(versionName.trim());
+      setVersionName('');
+      await refreshVersions();
+    }
+  };
+
+  // Handle restoring a version
+  const handleRestoreVersion = async (versionId: string) => {
+    await storeRestoreVersion(versionId);
+    const version = await getVersionById(versionId);
+    if (version) {
+      await setStateFromVersion(version);
+    }
+    await refreshVersions();
+  };
+
+  return (
+    <div>
+      <textarea
+        value={text ?? ''}
+        onChange={handleTextChange}
+        placeholder="Start typing..."
+      />
+      <div>{(text ?? '').length} character{(text ?? '').length !== 1 ? 's' : ''}</div>
+
+      <h3>Versions</h3>
+      <form onSubmit={handleSaveVersion}>
+        <input
+          type="text"
+          value={versionName}
+          onChange={(e) => setVersionName(e.target.value)}
+          placeholder="Version name..."
+        />
+        <button type="submit">Save Version</button>
+      </form>
+
+      <ul>
+        {versions.map((version) => (
+          <li key={version.versionId}>
+            <span>{version.versionName}</span>
+            <button onClick={() => handleRestoreVersion(version.versionId)}>Restore</button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+};
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+A complete collaborative notepad with SDK initialization, store management, and version control.
+
+**velt.ts**
+
+```ts Complete velt.ts expandable lines
+import { initVelt } from '@veltdev/client';
+import type { Velt } from '@veltdev/types';
+
+let client: Velt | null = null;
+let veltInitialized = false;
+
+// Subscriber registry for SDK-ready notifications
+const veltInitSubscribers = new Map<string, (velt: Velt) => void>();
+
+async function initializeVelt() {
+  // Initialize the Velt SDK
+  client = await initVelt('YOUR_API_KEY');
+
+  // Scope all collaboration to the configured document
+  client.setDocument('crdt-text-demo-doc-1', { documentName: 'CRDT Text Demo' });
+
+  // Track user login/logout
+  client.getCurrentUser().subscribe((currentUser) => {
+    renderUserControls(currentUser);
+  });
+
+  // Track SDK-ready state and notify subscribers
+  client.getVeltInitState().subscribe((isReady) => {
+    veltInitialized = isReady;
+    if (isReady && client) {
+      veltInitSubscribers.forEach((callback) => callback(client));
+    }
+  });
+}
+
+// Subscribe to the SDK being fully initialized and ready
+export const subscribeToVeltInit = (subscriberId: string, callback: (velt: Velt) => void) => {
+  veltInitSubscribers.set(subscriberId, callback);
+  if (veltInitialized && client) {
+    callback(client);
+  }
+};
+
+// Authenticate a user with the Velt backend
+export async function loginWithUser(userId: string) {
+  await client?.identify({ userId, name: userId });
+}
+
+// Sign the current user out
+export async function logout() {
+  await client?.signOutUser();
+}
+
+// Start SDK initialization on module load
+initializeVelt();
+```
+
+**notepad.ts**
+
+```ts Complete notepad.ts expandable lines
+import { Store, Version, createVeltStore } from '@veltdev/crdt';
+import type { Velt } from '@veltdev/types';
+import { subscribeToVeltInit } from './velt';
+
+let store: Store<string> | null = null;
+let text = '';
+let versions: Version[] = [];
+
+// Initialize the store when the SDK is ready
+async function initStore(veltClient: Velt) {
+  // Create the CRDT text store with initial seed content
+  const textStore = await createVeltStore<string>({
+    id: 'my-notepad-store',
+    type: 'text',
+    initialValue: 'Welcome to the Collaborative Notepad! Start typing here...',
+    veltClient: veltClient,
+  });
+  if (!textStore) return;
+  store = textStore;
+
+  // Seed UI with the current CRDT value
+  text = textStore.getValue() || '';
+  renderNotepad();
+
+  // Subscribe to all future changes (local and remote)
+  textStore.subscribe((newText) => {
+    text = typeof newText === 'string' ? newText : '';
+    renderNotepad();
+  });
+
+  // Load saved versions
+  await refreshVersions();
+}
+
+// Wait for the SDK to be ready, then initialize the store
+subscribeToVeltInit('notepad', (velt) => {
+  initStore(velt);
+});
+
+// Replace the entire text content
+function updateText(newText: string) {
+  if (!store) return;
+  store.update(newText);
+}
+
+// Save a named snapshot of the current state
+async function saveVersionHandler(name: string) {
+  if (!store) return;
+  await store.saveVersion(name);
+  await refreshVersions();
+}
+
+// Restore the store to a previously saved version
+async function restoreVersionHandler(versionId: string) {
+  if (!store) return;
+  await store.restoreVersion(versionId);
+  const version = await store.getVersionById(versionId);
+  if (version) {
+    await store.setStateFromVersion(version);
+  }
+  await refreshVersions();
+}
+
+// Fetch the latest version list from the backend
+async function refreshVersions() {
+  if (!store) return;
+  versions = await store.getVersions();
+  renderVersions();
+}
+
+// Render the notepad textarea and character count into the DOM
+function renderNotepad() {
+  const textarea = document.querySelector('.notepad-textarea') as HTMLTextAreaElement;
+  if (textarea && textarea !== document.activeElement) {
+    textarea.value = text;
+  }
+
+  const charCount = document.querySelector('.char-count');
+  if (charCount) {
+    charCount.textContent = `${text.length} character${text.length !== 1 ? 's' : ''}`;
+  }
+}
+
+// Render the version list into the DOM
+function renderVersions() {
+  const versionList = document.querySelector('.version-list');
+  if (!versionList) return;
+
+  versionList.innerHTML = '';
+  for (const version of versions) {
+    const li = document.createElement('li');
+
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = version.versionName;
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.textContent = 'Restore';
+    restoreBtn.addEventListener('click', () => restoreVersionHandler(version.versionId));
+
+    li.appendChild(nameSpan);
+    li.appendChild(restoreBtn);
+    versionList.appendChild(li);
+  }
+}
+
+// Attach form and textarea event handlers to the DOM
+export function setupNotepadForm() {
+  // Handle textarea input events
+  const textarea = document.querySelector('.notepad-textarea') as HTMLTextAreaElement;
+  if (textarea) {
+    textarea.addEventListener('input', () => {
+      text = textarea.value;
+      updateText(text);
+
+      const charCount = document.querySelector('.char-count');
+      if (charCount) {
+        charCount.textContent = `${text.length} character${text.length !== 1 ? 's' : ''}`;
+      }
+    });
+  }
+
+  // Handle version form submission
+  const versionForm = document.getElementById('version-form');
+  if (versionForm) {
+    versionForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const input = versionForm.querySelector('.version-input') as HTMLInputElement;
+      if (input && input.value.trim()) {
+        saveVersionHandler(input.value.trim());
+        input.value = '';
+      }
+    });
+  }
+}
+```
+
+**main.ts**
+
+```ts Complete main.ts expandable lines
+import './style.css';
+import './velt';
+import { setupNotepadForm } from './notepad';
+
+// Attach form handlers once the DOM is ready
+setupNotepadForm();
+```
+
+**HTML structure**
+
+```html Complete index.html expandable lines
+<div class="app-container">
+  <header class="app-header">
+    <h1>CRDT Text Demo</h1>
+    <div id="user-controls"></div>
+  </header>
+
+  <main class="app-content">
+    <div id="notepad-header">Collaborative Notepad - Please login to start editing</div>
+
+    <textarea class="notepad-textarea" placeholder="Start typing..."></textarea>
+    <div class="char-count">0 characters</div>
+
+    <div class="versions-section">
+      <h3>Versions</h3>
+      <form id="version-form">
+        <input type="text" class="version-input" placeholder="Version name..." />
+        <button type="submit">Save Version</button>
+      </form>
+      <ul class="version-list"></ul>
+    </div>
+  </main>
+</div>
+```
+
+</Tab>
+</Tabs>

@@ -1,0 +1,706 @@
+---
+title: Map Store
+description: Add real-time collaborative key-value data to your application using Velt CRDT.
+---
+
+<Info>Complete [Steps 1-2](/realtime-collaboration/crdt/setup/core#setup) on the Core setup page before continuing. Those steps install dependencies and initialize Velt.</Info>
+
+## Setup
+
+### Step 1: Create a CRDT map store
+
+<Tabs>
+<Tab title="React / Next.js">
+
+Use the `useStore` hook with `type: 'map'` to create a CRDT store backed by a Yjs `Y.Map`. The hook handles store initialization, React lifecycle, and real-time subscriptions automatically — no manual `useState`/`useEffect` needed for store setup.
+
+```tsx
+import { useStore } from '@veltdev/crdt-react';
+
+type DataMap = Record<string, any>;
+
+function Component() {
+  const {
+    value: entries,
+    update: updateEntries,
+    store,
+    isLoading,
+    isSynced,
+    status,
+    error,
+  } = useStore<DataMap>({
+    storeId: 'my-map-store',
+    type: 'map',
+    initialValue: { key1: 'value1', key2: 'value2' },
+  });
+
+  if (isLoading) return <div>Loading...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+
+  const entriesMap = (entries && typeof entries === 'object' && !Array.isArray(entries)) ? entries : {};
+
+  return (
+    <ul>
+      {Object.entries(entriesMap).map(([key, value]) => (
+        <li key={key}>{key}: {value}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Use `createVeltStore` with `type: 'map'` to create a CRDT store backed by a Yjs `Y.Map`. The `initialValue` is only applied when the document is brand-new (no prior remote state exists).
+
+```js
+import { createVeltStore } from '@veltdev/crdt';
+
+async function initializeStore(client) {
+  const store = await createVeltStore({
+    id: 'my-map-store',
+    type: 'map',
+    initialValue: { key1: 'value1', key2: 'value2' },
+    veltClient: client,
+  });
+  if (!store) return;
+
+  // Seed the UI with the current CRDT value
+  const data = store.getValue() || {};
+  renderEntries(data);
+}
+```
+
+</Tab>
+</Tabs>
+
+### Step 2: Read and update the store
+
+<Tabs>
+<Tab title="React / Next.js">
+
+The hook's `value` field reactively tracks the current map — no manual subscription needed. Use `update()` to replace the entire map value, or read the latest value from `store.getValue()` before applying mutations. The CRDT library handles conflict-free merging with other users' edits automatically.
+
+```tsx
+// Add or overwrite a key-value pair
+const addEntry = (key: string, value: any) => {
+  const current = store.getValue() || {};
+  updateEntries({ ...current, [key]: value });
+};
+
+// Update the value for an existing key
+const updateEntry = (key: string, value: any) => {
+  const current = store.getValue() || {};
+  updateEntries({ ...current, [key]: value });
+};
+
+// Remove a key-value pair from the map
+const deleteEntry = (key: string) => {
+  const current = store.getValue() || {};
+  const updated = { ...current };
+  delete updated[key];
+  updateEntries(updated);
+};
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Use `store.getValue()` to read the current value and `store.update()` to replace the entire value. The CRDT library handles conflict-free merging with other users' edits automatically.
+
+```js
+// Read the current map value
+const currentData = store.getValue();
+
+// Set a key-value pair
+function setEntry(key, value) {
+  const current = store.getValue() || {};
+  store.update({ ...current, [key]: value });
+}
+
+// Update an existing key
+function updateEntry(key, value) {
+  const current = store.getValue() || {};
+  store.update({ ...current, [key]: value });
+}
+
+// Remove a key from the map
+function removeEntry(key) {
+  const current = store.getValue() || {};
+  const updated = { ...current };
+  delete updated[key];
+  store.update(updated);
+}
+```
+
+</Tab>
+</Tabs>
+
+### Step 3: Subscribe to real-time changes (Other Frameworks)
+
+Use `store.subscribe()` to listen for changes from all collaborators. The callback fires on every change (local and remote) with the full merged map.
+
+```js
+// Subscribe to all future changes (local and remote)
+const unsubscribe = store.subscribe((newData) => {
+  // Re-render the UI with the latest merged state
+  renderEntries(newData && typeof newData === 'object' ? newData : {});
+});
+
+// Call unsubscribe to stop listening when no longer needed
+unsubscribe();
+```
+
+<Info>In React, the `value` from `useStore` is already reactive — no manual subscription is needed.</Info>
+
+### Step 4: Save and restore versions (optional)
+
+Create checkpoints and roll back when needed.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+The `useStore` hook exposes version management methods directly:
+
+```tsx
+import { Version } from '@veltdev/crdt-react';
+
+const {
+  value: entries,
+  update: updateEntries,
+  saveVersion,
+  getVersions,
+  getVersionById,
+  restoreVersion,
+  setStateFromVersion,
+} = useStore<DataMap>({
+  storeId: 'my-map-store',
+  type: 'map',
+  initialValue: {},
+});
+
+// Save a named snapshot of the current state
+await saveVersion('Draft v1');
+
+// Retrieve the list of all saved versions
+const versions: Version[] = await getVersions();
+
+// Restore the store to a previously saved version
+await restoreVersion(versionId);
+const version = await getVersionById(versionId);
+if (version) {
+  await setStateFromVersion(version);
+}
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+import { Version } from '@veltdev/crdt';
+
+// Save a named snapshot of the current state
+const versionId = await store.saveVersion('Draft v1');
+
+// List all saved versions
+const versions = await store.getVersions();
+
+// Restore the store to a previously saved version
+await store.restoreVersion(versionId);
+const version = await store.getVersionById(versionId);
+if (version) {
+  await store.setStateFromVersion(version);
+}
+```
+
+</Tab>
+</Tabs>
+
+### Step 5: Initial content with forceResetInitialContent (optional)
+
+By default, `initialValue` is only applied when the document has no existing remote state. Set `forceResetInitialContent` to `true` to always reset the store to `initialValue` on initialization, overwriting any existing remote data.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+const { value: entries, update: updateEntries } = useStore<DataMap>({
+  storeId: 'my-map-store',
+  type: 'map',
+  initialValue: defaultEntries,
+  forceResetInitialContent: true,
+});
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+const store = await createVeltStore({
+  id: 'my-map-store',
+  type: 'map',
+  initialValue: defaultEntries,
+  veltClient: client,
+  forceResetInitialContent: true,
+});
+```
+
+</Tab>
+</Tabs>
+
+
+## Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+
+A complete collaborative key-value editor built with `useStore`:
+
+```tsx Complete Implementation expandable lines
+import React, { useState, useEffect, useCallback } from 'react';
+import { useStore, Version } from '@veltdev/crdt-react';
+
+type KVMap = Record<string, string>;
+
+const defaultEntries: KVMap = {
+  greeting: 'Hello World',
+  language: 'TypeScript',
+  framework: 'React',
+};
+
+export const KeyValueStore = () => {
+  const [newKey, setNewKey] = useState('');
+  const [newValue, setNewValue] = useState('');
+  const [versionName, setVersionName] = useState('');
+  const [versions, setVersions] = useState<Version[]>([]);
+
+  // Use the useStore hook — handles initialization and subscriptions automatically
+  const {
+    value: entries,
+    update: updateEntries,
+    store,
+    saveVersion: storeSaveVersion,
+    getVersions: storeGetVersions,
+    restoreVersion: storeRestoreVersion,
+    getVersionById,
+    setStateFromVersion,
+  } = useStore<KVMap>({
+    storeId: 'my-kvstore',
+    type: 'map',
+    initialValue: defaultEntries,
+  });
+
+  // Fetch saved versions when store is ready
+  const refreshVersions = useCallback(async () => {
+    const v = await storeGetVersions();
+    setVersions(v);
+  }, [storeGetVersions]);
+
+  useEffect(() => {
+    if (store) refreshVersions();
+  }, [refreshVersions, store]);
+
+  const entriesMap = (entries && typeof entries === 'object' && !Array.isArray(entries)) ? entries : {};
+
+  // Add a new entry
+  const handleAddEntry = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newKey.trim() && newValue.trim() && store) {
+      const current = store.getValue() || {};
+      updateEntries({ ...current, [newKey.trim()]: newValue.trim() });
+      setNewKey('');
+      setNewValue('');
+    }
+  };
+
+  // Update an existing entry
+  const handleUpdateEntry = (key: string, value: string) => {
+    if (!store) return;
+    const current = store.getValue() || {};
+    updateEntries({ ...current, [key]: value });
+  };
+
+  // Delete an entry
+  const handleDeleteEntry = (key: string) => {
+    if (!store) return;
+    const current = store.getValue() || {};
+    const updated = { ...current };
+    delete updated[key];
+    updateEntries(updated);
+  };
+
+  // Handle saving a new version
+  const handleSaveVersion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (versionName.trim()) {
+      await storeSaveVersion(versionName.trim());
+      setVersionName('');
+      await refreshVersions();
+    }
+  };
+
+  // Handle restoring a version
+  const handleRestoreVersion = async (versionId: string) => {
+    await storeRestoreVersion(versionId);
+    const version = await getVersionById(versionId);
+    if (version) {
+      await setStateFromVersion(version);
+    }
+    await refreshVersions();
+  };
+
+  const entryKeys = Object.keys(entriesMap);
+
+  return (
+    <div>
+      <form onSubmit={handleAddEntry}>
+        <input
+          type="text"
+          value={newKey}
+          onChange={(e) => setNewKey(e.target.value)}
+          placeholder="Key..."
+        />
+        <input
+          type="text"
+          value={newValue}
+          onChange={(e) => setNewValue(e.target.value)}
+          placeholder="Value..."
+        />
+        <button type="submit">Add</button>
+      </form>
+
+      <div>{entryKeys.length} entr{entryKeys.length !== 1 ? 'ies' : 'y'}</div>
+
+      <ul>
+        {entryKeys.map((key) => (
+          <li key={key}>
+            <span>{key}</span>
+            <input
+              type="text"
+              value={entriesMap[key]}
+              onChange={(e) => handleUpdateEntry(key, e.target.value)}
+            />
+            <button onClick={() => handleDeleteEntry(key)}>Delete</button>
+          </li>
+        ))}
+      </ul>
+
+      <h3>Versions</h3>
+      <form onSubmit={handleSaveVersion}>
+        <input
+          type="text"
+          value={versionName}
+          onChange={(e) => setVersionName(e.target.value)}
+          placeholder="Version name..."
+        />
+        <button type="submit">Save Version</button>
+      </form>
+
+      <ul>
+        {versions.map((version) => (
+          <li key={version.versionId}>
+            <span>{version.versionName}</span>
+            <button onClick={() => handleRestoreVersion(version.versionId)}>Restore</button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+};
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+A complete collaborative key-value store with SDK initialization, full DOM rendering, and version control.
+
+**velt.ts**
+
+```ts Complete velt.ts expandable lines
+import { initVelt } from '@veltdev/client';
+import type { Velt } from '@veltdev/types';
+
+let client: Velt | null = null;
+let veltInitialized = false;
+
+// Subscriber registry for SDK-ready notifications
+const veltInitSubscribers = new Map<string, (velt: Velt) => void>();
+
+async function initializeVelt() {
+  // Initialize the Velt SDK
+  client = await initVelt('YOUR_API_KEY');
+
+  // Scope all collaboration to the configured document
+  client.setDocument('crdt-map-demo-doc-1', { documentName: 'CRDT Map Demo' });
+
+  // Track user login/logout
+  client.getCurrentUser().subscribe((currentUser) => {
+    renderUserControls(currentUser);
+  });
+
+  // Track SDK-ready state and notify subscribers
+  client.getVeltInitState().subscribe((isReady) => {
+    veltInitialized = isReady;
+    if (isReady && client) {
+      veltInitSubscribers.forEach((callback) => callback(client));
+    }
+  });
+}
+
+// Subscribe to the SDK being fully initialized and ready
+export const subscribeToVeltInit = (subscriberId: string, callback: (velt: Velt) => void) => {
+  veltInitSubscribers.set(subscriberId, callback);
+  if (veltInitialized && client) {
+    callback(client);
+  }
+};
+
+// Authenticate a user with the Velt backend
+export async function loginWithUser(userId: string) {
+  await client?.identify({ userId, name: userId });
+}
+
+// Sign the current user out
+export async function logout() {
+  await client?.signOutUser();
+}
+
+// Start SDK initialization on module load
+initializeVelt();
+```
+
+**kvstore.ts**
+
+```ts Complete kvstore.ts expandable lines
+import { Store, Version, createVeltStore } from '@veltdev/crdt';
+import type { Velt } from '@veltdev/types';
+import { subscribeToVeltInit } from './velt';
+
+type KVMap = Record<string, string>;
+
+let store: Store<KVMap> | null = null;
+let entries: KVMap = {};
+let versions: Version[] = [];
+
+// Initialize the store when the SDK is ready
+async function initStore(veltClient: Velt) {
+  // Create the CRDT map store with initial seed data
+  const mapStore = await createVeltStore<KVMap>({
+    id: 'my-kvstore',
+    type: 'map',
+    initialValue: { greeting: 'Hello World', language: 'TypeScript', framework: 'Velt' },
+    veltClient: veltClient,
+  });
+  if (!mapStore) return;
+  store = mapStore;
+
+  // Seed UI with the current CRDT value
+  entries = mapStore.getValue() || {};
+  renderEntries();
+
+  // Subscribe to all future changes (local and remote)
+  mapStore.subscribe((newEntries) => {
+    entries = newEntries && typeof newEntries === 'object' ? newEntries : {};
+    renderEntries();
+  });
+
+  // Load saved versions
+  await refreshVersions();
+}
+
+// Wait for the SDK to be ready, then initialize the store
+subscribeToVeltInit('kvstore', (velt) => {
+  initStore(velt);
+});
+
+// Add a new key-value pair (or overwrite an existing key)
+function addEntry(key: string, value: string) {
+  if (!store) return;
+  const current = store.getValue() || {};
+  store.update({ ...current, [key]: value });
+}
+
+// Update the value for an existing key
+function updateEntry(key: string, value: string) {
+  if (!store) return;
+  const current = store.getValue() || {};
+  store.update({ ...current, [key]: value });
+}
+
+// Remove a key-value pair from the map
+function deleteEntry(key: string) {
+  if (!store) return;
+  const current = store.getValue() || {};
+  const updated = { ...current };
+  delete updated[key];
+  store.update(updated);
+}
+
+// Save a named snapshot of the current state
+async function saveVersionHandler(name: string) {
+  if (!store) return;
+  await store.saveVersion(name);
+  await refreshVersions();
+}
+
+// Restore the store to a previously saved version
+async function restoreVersionHandler(versionId: string) {
+  if (!store) return;
+  await store.restoreVersion(versionId);
+  const version = await store.getVersionById(versionId);
+  if (version) {
+    await store.setStateFromVersion(version);
+  }
+  await refreshVersions();
+}
+
+// Fetch the latest version list from the backend
+async function refreshVersions() {
+  if (!store) return;
+  versions = await store.getVersions();
+  renderVersions();
+}
+
+// Render the key-value entries into the DOM
+function renderEntries() {
+  const kvList = document.querySelector('.kv-list');
+  if (!kvList) return;
+
+  const entryKeys = Object.keys(entries);
+
+  // Update the entry count label
+  const entryCount = document.querySelector('.entry-count');
+  if (entryCount) {
+    entryCount.textContent = `${entryKeys.length} entr${entryKeys.length !== 1 ? 'ies' : 'y'}`;
+  }
+
+  // Clear and rebuild the entire list
+  kvList.innerHTML = '';
+  for (const key of entryKeys) {
+    const li = document.createElement('li');
+
+    // Read-only key label
+    const keySpan = document.createElement('span');
+    keySpan.textContent = key;
+
+    // Editable value input — pushes changes into the CRDT on every keystroke
+    const valueInput = document.createElement('input');
+    valueInput.type = 'text';
+    valueInput.value = entries[key];
+    valueInput.addEventListener('input', () => {
+      updateEntry(key, valueInput.value);
+    });
+
+    // Delete button — removes this entry from the CRDT map
+    const deleteBtn = document.createElement('button');
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', () => deleteEntry(key));
+
+    li.appendChild(keySpan);
+    li.appendChild(valueInput);
+    li.appendChild(deleteBtn);
+    kvList.appendChild(li);
+  }
+}
+
+// Render the version list into the DOM
+function renderVersions() {
+  const versionList = document.querySelector('.version-list');
+  if (!versionList) return;
+
+  versionList.innerHTML = '';
+  for (const version of versions) {
+    const li = document.createElement('li');
+
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = version.versionName;
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.textContent = 'Restore';
+    restoreBtn.addEventListener('click', () => restoreVersionHandler(version.versionId));
+
+    li.appendChild(nameSpan);
+    li.appendChild(restoreBtn);
+    versionList.appendChild(li);
+  }
+}
+
+// Attach form submit handlers to the DOM
+export function setupKVStoreForm() {
+  // Handle add entry form submission
+  const addEntryForm = document.getElementById('add-entry-form');
+  if (addEntryForm) {
+    addEntryForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const keyInput = addEntryForm.querySelector('.key-input') as HTMLInputElement;
+      const valueInput = addEntryForm.querySelector('.value-input') as HTMLInputElement;
+      if (keyInput && valueInput && keyInput.value.trim() && valueInput.value.trim()) {
+        addEntry(keyInput.value.trim(), valueInput.value.trim());
+        keyInput.value = '';
+        valueInput.value = '';
+      }
+    });
+  }
+
+  // Handle version form submission
+  const versionForm = document.getElementById('version-form');
+  if (versionForm) {
+    versionForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const input = versionForm.querySelector('.version-input') as HTMLInputElement;
+      if (input && input.value.trim()) {
+        saveVersionHandler(input.value.trim());
+        input.value = '';
+      }
+    });
+  }
+}
+```
+
+**main.ts**
+
+```ts Complete main.ts expandable lines
+import './style.css';
+import './velt';
+import { setupKVStoreForm } from './kvstore';
+
+// Attach form handlers once the DOM is ready
+setupKVStoreForm();
+```
+
+**HTML structure**
+
+```html Complete index.html expandable lines
+<div class="app-container">
+  <header class="app-header">
+    <h1>CRDT Map Demo</h1>
+    <div id="user-controls"></div>
+  </header>
+
+  <main class="app-content">
+    <div id="kvstore-header">Collaborative Key-Value Store - Please login to start editing</div>
+
+    <form id="add-entry-form">
+      <input type="text" class="key-input" placeholder="Key..." />
+      <input type="text" class="value-input" placeholder="Value..." />
+      <button type="submit">Add</button>
+    </form>
+
+    <div class="entry-count">0 entries</div>
+    <ul class="kv-list"></ul>
+
+    <div class="versions-section">
+      <h3>Versions</h3>
+      <form id="version-form">
+        <input type="text" class="version-input" placeholder="Version name..." />
+        <button type="submit">Save Version</button>
+      </form>
+      <ul class="version-list"></ul>
+    </div>
+  </main>
+</div>
+```
+
+</Tab>
+</Tabs>

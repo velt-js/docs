@@ -1,0 +1,223 @@
+---
+title: "Activity"
+description: "Self-host your activity log PII data while using Velt's components. Keep activity content, entity snapshots, and custom fields on your infrastructure with only minimal identifiers stored on Velt servers."
+---
+
+<Warning>
+  - This is currently only compatible with the `setDocuments` method.
+  - Ensure that the data providers are set prior to calling the `identify` method.
+  - The data provider methods must return the correct status code (e.g. 200 for success, 500 for errors) and success boolean in the response object. This ensures proper error handling and retries.
+</Warning>
+
+# Overview
+
+Velt supports self-hosting your activity log PII data:
+
+- Activity content (comment text embedded in change history), feature-specific entity snapshots, and custom fields can be stored on your own infrastructure, with only necessary identifiers on Velt servers.
+- Velt components automatically re-hydrate activity data in the frontend by fetching from your configured data provider.
+- This gives you full control over PII while maintaining all Velt activity log features.
+
+# How does it work?
+
+When activity records are created or read:
+
+1. The SDK uses your configured [`ActivityAnnotationDataProvider`](/api-reference/sdk/models/data-models#activityannotationdataprovider) to handle storage and retrieval.
+2. Your data provider implements two optional methods:
+   - `get`: Fetches activity PII from your database and returns it for re-hydration
+   - `save`: Stores PII fields stripped from the activity record before Velt writes to its backend
+
+**The process works as follows:**
+
+On write:
+1. The SDK strips configured PII fields from the activity record.
+2. Your `save` handler receives the stripped data and stores it in your backend.
+3. Velt's backend stores only the minimal identifiers.
+
+On read:
+1. The SDK fetches the activity records from Velt's backend (with PII absent).
+2. Your `get` handler is called with the activity IDs.
+3. The SDK merges the returned PII back into the activity records before delivering them to your UI.
+4. [`ActivityRecord.isActivityResolverUsed`](/api-reference/sdk/models/data-models#activityrecord) is set to `true` when PII was stripped by the resolver. Use this to show a loading state while re-hydration is pending.
+
+# Implementation
+
+## Function based DataProvider
+
+Implement custom `get` and `save` methods to handle data operations yourself.
+
+### get
+
+Fetch activity PII from your database. Called when activity records need to be re-hydrated in the frontend.
+
+- Param: [`GetActivityResolverRequest`](/api-reference/sdk/models/data-models#getactivityresolverrequest)
+- Return: [`Promise<ResolverResponse<Record<string, PartialActivityRecord>>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+const activityDataProvider = {
+  get: async (request) => {
+    const response = await fetch('/api/velt/activity/get', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    return await response.json();
+  },
+};
+
+client.setDataProviders({ activity: activityDataProvider });
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const activityDataProvider = {
+  get: async (request) => {
+    const response = await fetch('/api/velt/activity/get', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    return await response.json();
+  },
+};
+
+Velt.setDataProviders({ activity: activityDataProvider });
+```
+</Tab>
+</Tabs>
+
+### save
+
+Store activity PII fields stripped before Velt writes to its backend. Called when an activity record is created or updated.
+
+- Param: [`SaveActivityResolverRequest`](/api-reference/sdk/models/data-models#saveactivityresolverrequest)
+- Return: [`Promise<ResolverResponse<undefined>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+const activityDataProvider = {
+  save: async (request) => {
+    const response = await fetch('/api/velt/activity/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    return await response.json();
+  },
+};
+
+client.setDataProviders({ activity: activityDataProvider });
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const activityDataProvider = {
+  save: async (request) => {
+    const response = await fetch('/api/velt/activity/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    return await response.json();
+  },
+};
+
+Velt.setDataProviders({ activity: activityDataProvider });
+```
+</Tab>
+</Tabs>
+
+### config
+
+Configuration for the activity data provider.
+
+- Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig). Relevant properties:
+  - `resolveTimeout`: Timeout duration (in milliseconds) for resolver operations.
+  - `fieldsToRemove`: `string[]`. Additional fields to strip from activity records before writing to Velt's backend (e.g., `['customSensitiveField']`).
+
+```tsx
+const activityDataProvider = {
+  config: {
+    resolveTimeout: 60000,
+    fieldsToRemove: ['customSensitiveField'],
+  },
+};
+```
+
+## Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// Using API methods
+client.setDataProviders({
+  activity: {
+    get: async (request) => {
+      const response = await fetch('/api/velt/activity/get', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      });
+      return await response.json();
+    },
+    save: async (request) => {
+      const response = await fetch('/api/velt/activity/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      });
+      return await response.json();
+    },
+    config: {
+      resolveTimeout: 60000,
+      fieldsToRemove: ['customSensitiveField'],
+    },
+  },
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setDataProviders({
+  activity: {
+    get: async (request) => {
+      const response = await fetch('/api/velt/activity/get', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      });
+      return await response.json();
+    },
+    save: async (request) => {
+      const response = await fetch('/api/velt/activity/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      });
+      return await response.json();
+    },
+    config: {
+      resolveTimeout: 60000,
+      fieldsToRemove: ['customSensitiveField'],
+    },
+  },
+});
+```
+</Tab>
+</Tabs>
+
+# Loading State
+
+Use `isActivityResolverUsed` on [`ActivityRecord`](/api-reference/sdk/models/data-models#activityrecord) to show a loading state while PII is being fetched from your backend:
+
+```tsx
+const activities = useAllActivities();
+
+activities?.map((activity) => (
+  activity.isActivityResolverUsed
+    ? <ActivitySkeleton key={activity.id} />
+    : <ActivityItem key={activity.id} activity={activity} />
+));
+```

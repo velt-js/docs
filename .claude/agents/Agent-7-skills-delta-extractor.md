@@ -28,7 +28,7 @@ Extract deltas for ALL Velt skill sets. Map each release note item to the correc
 - **CRDT** → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-crdt-best-practices/`
 - **Activity** → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-activity-best-practices/`
 - **Recorder** → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-recorder-best-practices/`
-- **Setup** (VeltProvider, initConfig, identify, proxy config) → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-setup-best-practices/`
+- **Setup** (VeltProvider, authProvider, JWT tokens, proxy config) → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-setup-best-practices/`
 - **Self-Hosting Data** (resolvers, data providers) → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-self-hosting-data-best-practices/`
 - **Single Editor Mode** → `/Users/yoenzhang/Downloads/agent-skills/skills/velt-single-editor-mode-best-practices/`
 
@@ -54,11 +54,11 @@ Items that don't map to any skill library (e.g., purely internal changes, Access
   "deltas": [
     {
       "id": "delta-001",
-      "type": "new_feature|breaking_change|syntax_change|new_parameter|removed_parameter|behavior_change",
+      "type": "new_feature|breaking_change|syntax_change|new_parameter|removed_parameter|behavior_change|deprecation|removal",
       "releaseNoteText": "Exact text from release note that triggered this delta",
       "releaseNoteVersion": "4.6.9",
       "skillTarget": "comments|notifications|crdt",
-      "action": "create_rule|update_rule",
+      "action": "create_rule|update_rule|remove_rule|remove_section",
       "targetFile": "rules/shared/core/core-webhooks.md or existing file path",
       "targetSection": "Section heading within file, if updating existing",
       "summary": "One-sentence description of what must change",
@@ -95,8 +95,8 @@ Read the release note from the target changelog file (identified by Agent-1).
 
 ### 2. Categorize Each Item
 For each release note item:
-- Is it Comments, Notifications, or CRDT? If none, skip.
-- Is it a breaking change, syntax change, new parameter, new feature, or behavior change? If none (e.g., bug fix), skip.
+- Does it map to one of the 8 skill libraries (Comments, Notifications, CRDT, Activity, Recorder, Setup, Self-Hosting Data, Single Editor Mode)? If none, skip.
+- Is it a breaking change, syntax change, new parameter, new feature, behavior change, deprecation, or removal? If none (e.g., bug fix), skip.
 
 ### 3. Map to Skill Files
 For each qualifying item:
@@ -140,6 +140,89 @@ Write structured JSON to `.claude/logs/agent-7-skills-deltas-[version].json`
 - If release note says "Added X" but doesn't specify syntax, set confidence to "low" and include ambiguityNote
 - If release note is vague (e.g., "improved comments performance"), do NOT create a delta
 - Every delta MUST cite the exact release note text that triggered it
+
+## Directory Structure per Skill
+
+When determining `targetFile` paths, use this mapping of actual directory structures:
+
+**velt-setup-best-practices:**
+- `rules/shared/identity/` → `identity-*` rules (auth, JWT, user object)
+- `rules/shared/config/` → `config-*` rules (API key, proxy, firestore cache)
+- `rules/shared/document-identity/` → `document-*` rules (setDocuments, metadata)
+- `rules/shared/debugging-testing/` → `debug-*` rules
+- `rules/react/installation/` → `install-*` rules
+- `rules/react/provider-wiring/` → `provider-*` rules
+- `rules/react/identity/` → React-specific auth (identity-auth-provider)
+- `rules/react/project-structure/` → `structure-*` rules
+- `rules/react/routing-surfaces/` → `surface-*` rules
+
+**velt-comments-best-practices:**
+- `rules/shared/core/` → `core-*` rules (provider, document setup)
+- `rules/shared/mode/` → `mode-*` rules (freestyle, popover, stream, text, page, inline, video, lottie)
+- `rules/shared/ui/` → `ui-*` rules (dialog, bubble, wireframes, primitives)
+- `rules/shared/data/` → `data-*` rules (context, annotations, CRUD, types)
+- `rules/shared/surface/` → `surface-*` rules (sidebar)
+- `rules/shared/config/` → `config-*` rules
+- `rules/shared/permissions/` → `permissions-*` rules
+- `rules/react/core/` → React-specific core (authentication, document-setup)
+- `rules/react/mode/` → React editor modes (tiptap, slatejs, lexical, ace, canvas, charts)
+
+**velt-crdt-best-practices:**
+- `rules/shared/core/` → `core-*` rules (store, encryption, webhooks, REST, versioning)
+- `rules/shared/tiptap/` → `tiptap-*` rules (comments integration, cursor CSS, history)
+- `rules/shared/codemirror/` → `codemirror-*` rules (yCollab, editor ID)
+- `rules/react/core/` → React CRDT hooks
+- `rules/react/tiptap/` → React TipTap setup
+- `rules/react/blocknote/` → BlockNote rules
+- `rules/react/codemirror/` → React CodeMirror setup
+- `rules/react/reactflow/` → ReactFlow rules
+
+**velt-activity-best-practices:**
+- `rules/shared/core/` → `core-*` rules (setup, component)
+- `rules/shared/config/` → `config-*` rules (debounce, immutability, filters)
+- `rules/shared/data/` → `data-*` rules (subscribe, create custom)
+- `rules/shared/rest/` → `rest-*` rules
+- `rules/shared/debug/` → `debug-*` rules
+- `rules/react/data/` → React hooks (subscribe, create custom)
+
+**Other skills** (notifications, recorder, self-hosting, single-editor-mode): Follow the same `rules/shared/{category}/` and `rules/react/{category}/` pattern. Read the skill's `_sections.md` to discover the exact categories.
+
+## Framework Routing Decision
+
+When creating a new rule, determine its directory:
+- **`rules/shared/`** — Rule applies to all frameworks (vanilla JS API, HTML web components, or framework-agnostic concepts)
+- **`rules/react/`** — Rule uses React hooks (`useVeltClient`, `useState`, `useEffect`), JSX, or React-specific patterns
+- **`rules/non-react/`** — Rule is specific to Angular, Vue, or vanilla JS init patterns (rare)
+
+If unsure, default to `rules/shared/` — shared rules can include both React and non-React examples.
+
+## Deprecation & Removal Handling
+
+When release notes indicate an API/feature is deprecated or removed:
+
+**For `type: "deprecation"`:**
+- Set `action: "update_rule"` with `summary` describing the deprecation
+- The delta should instruct Agent-8 to: replace any code examples using the deprecated API with the new correct pattern, and add a text-only deprecation note (no copyable deprecated code)
+
+**For `type: "removal"`:**
+- Set `action: "remove_rule"` if the entire rule is about the removed feature
+- Set `action: "remove_section"` if only part of a rule references the removed feature
+- Specify `targetFile` and `targetSection` for what to remove
+
+## No Version Numbers in Skill Content
+
+Delta output destined for skill rules should NOT include version numbers. Skills describe the current correct way to do things — they are evergreen documentation, not a changelog.
+
+- Do NOT include "Added in v4.6.9" or "Since v5.0.2-beta.13" in `details.codeExample` or `summary`
+- Do NOT include beta version references
+- The `releaseNoteVersion` field in the delta is for traceability only — it should NOT appear in the generated skill content
+
+## No Deprecated Code in Delta Output
+
+When a delta describes a breaking change where an old API is replaced by a new one:
+- `details.codeExample` should show ONLY the new correct pattern
+- Describe the old/deprecated pattern in `summary` text (e.g., "Replaces the deprecated triggerAddComment with addComment")
+- Do NOT include copyable deprecated code — agents copy code blocks regardless of context labels
 
 ## Quality Checklist
 

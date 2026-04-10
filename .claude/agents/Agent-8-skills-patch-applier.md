@@ -81,25 +81,38 @@ For each unique `skillTarget`, read:
 
 #### For `action: "create_rule"`:
 1. Read `_template.md` for the target skill library
-2. Create new rule file following the template structure:
-   - YAML frontmatter (title, impact, impactDescription, tags)
+2. Create new rule file following this structure:
+   - YAML frontmatter (title, impact, impactDescription, tags — NO version numbers)
    - Heading matching title
-   - 1-2 sentence explanation
-   - Incorrect example (if applicable)
-   - Correct example with code
+   - 1-2 sentence explanation of why this matters
+   - Text-only description of what to avoid (describe the anti-pattern in words — NEVER include copyable deprecated/incorrect code)
+   - **Correct** example with code (this is the ONLY code block — show only the right way)
    - Additional context (if needed)
-   - Verification Checklist
-   - Source Pointers
+   - Verification Checklist (3-4 items)
+   - Source Pointers (full https://docs.velt.dev/ URLs)
 3. Add rule to `_sections.md` rules list
 4. Add rule to `SKILL.md` quick reference
+5. Verify the skill's `AGENTS.md` has the authProvider IMPORTANT note (add if missing)
+
+#### For `action: "remove_rule"`:
+1. Delete the rule file
+2. Remove the entry from `_sections.md`
+3. Remove the entry from `SKILL.md` Quick Reference
+4. Update rule count in `SKILL.md` header
+
+#### For `action: "remove_section"`:
+1. Read the target file
+2. Remove the specified section (code block, table row, or subsection)
+3. If the file becomes empty or meaningless after removal, delete the entire file and clean up references in `_sections.md` and `SKILL.md`
 
 ### 4. Handle Low-Confidence Deltas
 For deltas with `confidence: "low"`:
-- Add a TODO comment in the skill file:
+- Add a TODO comment in the skill file (without version numbers):
   ```markdown
-  <!-- TODO (v4.6.9): Verify exact API signature for enableWebhook(). Release note text: "Added webhook support" but exact parameters not specified. -->
+  <!-- TODO: Verify exact API signature for enableWebhook(). Release note text: "Added webhook support" but exact parameters not specified. -->
   ```
 - Do NOT guess at API details
+- Do NOT include version numbers in TODO comments
 
 ### 5. Validate Each Patch
 
@@ -144,7 +157,7 @@ For each modified/created file, verify:
 - [ ] `impact` value is one of: CRITICAL, HIGH, MEDIUM-HIGH, MEDIUM, LOW-MEDIUM, LOW
 - [ ] Main heading matches the `title` in frontmatter
 - [ ] Code blocks have language tags (`jsx`, `tsx`, `typescript`, `html`, `bash`)
-- [ ] Incorrect/Correct examples use bold labels with parenthetical descriptions
+- [ ] Anti-pattern described in text only (no copyable deprecated code); **Correct** example uses bold label with parenthetical description
 - [ ] Verification Checklist uses `- [ ]` checkbox format
 - [ ] Source Pointers use full `https://docs.velt.dev/` URLs (not relative paths)
 - [ ] No trailing whitespace or double blank lines
@@ -157,6 +170,12 @@ For each code example in modified/created files:
 - [ ] API method calls in React use `client.*` (never `Velt.*`)
 - [ ] `useEffect` hooks include dependency arrays
 - [ ] Subscriptions include cleanup/unsubscribe in return
+- [ ] VeltProvider uses `authProvider` prop (NEVER `useIdentify` or `identify()` — these are deprecated and must not appear in any code example)
+- [ ] No copyable deprecated code appears anywhere (describe anti-patterns in text only)
+- [ ] Velt components include `shadowDom={false}` where applicable (VeltComments, VeltNotificationsTool, VeltActivityLog, VeltInlineCommentsSection)
+- [ ] TipTap integrations use v5 API: `addComment` (not `triggerAddComment`), `renderComments` (not `highlightComments`), `BubbleMenu` from `@tiptap/react/menus`
+- [ ] No version numbers (e.g., "v5.0.2-beta.13", "Added in v4.6.9") in code comments or surrounding text
+- [ ] No stale beta references or version-conditional code ("if v4 use X, if v5 use Y" — show only the current correct pattern)
 
 #### 6f. Cross-Reference Validation
 When new rules are added:
@@ -226,9 +245,11 @@ npm run validate
 ```
 
 **After build completes**:
-- Verify `AGENTS.md` was updated for each modified skill (check the file's modification timestamp)
-- Spot-check that new rules appear in the generated output
-- If build fails, the error likely means a rule file has malformed YAML frontmatter or is missing required fields — fix the rule file and re-run
+- Check exit code: 0 = success, non-zero = failure
+- Verify `AGENTS.md` modification time is newer than before the build ran
+- Spot-check that new/updated rules appear in the generated output
+- If build fails: read the error output — likely malformed YAML frontmatter or missing required fields. Fix the rule file and re-run
+- If build succeeds but AGENTS.md didn't change: verify the rule file was saved correctly and is in the expected directory
 
 **Which skills to rebuild**: The build command rebuilds all skills at once, but only skills with changed rule files will produce different output. Log which skill libraries were rebuilt in the patch log.
 
@@ -237,7 +258,7 @@ Signal readiness for Agent-1 to process next release note. Only proceed if QA ve
 
 ## Formatting Rules (MUST follow)
 
-### Rule File Structure (from _template.md)
+### Rule File Structure
 ```markdown
 ---
 title: Action-Oriented Title
@@ -248,19 +269,14 @@ tags: comma, separated, keywords
 
 ## Action-Oriented Title
 
-1-2 sentence explanation focusing on problem and why it matters.
+1-2 sentence explanation focusing on why this matters.
 
-**Incorrect (problem description):**
-
-\`\`\`jsx
-// Comment explaining the problem
-<BrokenCode />
-\`\`\`
+Describe what to avoid in text only — do NOT include copyable deprecated/incorrect code. Example: "Do not use the deprecated useIdentify hook. It lacks token refresh and error handling."
 
 **Correct (solution description):**
 
 \`\`\`jsx
-// Comment explaining the fix
+// Comment explaining why this is the right approach
 <WorkingCode />
 \`\`\`
 
@@ -273,6 +289,8 @@ tags: comma, separated, keywords
 **Source Pointers:**
 - https://docs.velt.dev/relevant-path - Description
 ```
+
+**Why no "Incorrect" code blocks:** Eval testing showed that agents copy code from "Incorrect" examples — they don't reliably parse the label. Only showing the correct pattern in code prevents agents from learning deprecated patterns.
 
 ### Existing Pattern Enforcement
 - **File names**: `{prefix}-{descriptive-name}.md` in kebab-case
@@ -287,8 +305,17 @@ tags: comma, separated, keywords
 - Do NOT change file structure or organization
 - Do NOT modify `metadata.json` version numbers
 - Do NOT hand-edit `AGENTS.md` or `AGENTS.full.md` — these are generated by `npm run build` in Step 8
-- Do NOT add more than 1 incorrect + 1 correct example per concept
+- Do NOT include copyable deprecated/incorrect code in any example — describe anti-patterns in text only
+- Do NOT include version numbers in rule content (no "Added in v4.6.9", no "Since v5.0.2-beta.13")
+- Do NOT include beta version references
 - Do NOT add implementation details beyond what's in the release note
+
+### Cleanup When Editing Existing Rules
+When updating an existing rule file, also scan it for and fix:
+- Any deprecated API names (`useIdentify`, `triggerAddComment`, `highlightComments`) — replace with current correct names
+- Stale TODO comments referencing beta versions — remove or update
+- Version-specific conditionals ("if v4, use X; if v5, use Y") — replace with only the current correct pattern
+- Any copyable "Incorrect" code blocks — replace with text-only descriptions of what to avoid
 
 ## Quality Gate (Summary)
 

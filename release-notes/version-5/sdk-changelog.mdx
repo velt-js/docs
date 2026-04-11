@@ -5,7 +5,6 @@ description: Release Notes of changes added to the core Velt SDK
 ---
 
 ### Libraries
-
 - `@veltdev/react`
 - `@veltdev/client`
 - `@veltdev/sdk`
@@ -50,7 +49,7 @@ authHost: 'auth-proxy.example.com',
 },
 });
 
-````
+```
 </Tab>
 </Tabs>
 
@@ -74,11 +73,263 @@ authHost: 'auth-proxy.example.com',
 
 </Update>
 
+<Update label="5.0.2-beta.10" description="March 23, 2026">
+
+### New Features
+
+- [**Activity Logs**]: Added prebuilt components for Activity Logs feature. It's a filterable timeline of all Velt activities (custom, comments, reactions, recorder, CRDT) grouped by date. Supports `darkMode`, `useDummyData`, and `variant` props, and is fully customizable via primitives and wireframes. [Learn more →](/async-collaboration/activity/overview)
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+import { VeltActivityLog } from '@veltdev/react';
+
+<VeltActivityLog darkMode={false} useDummyData={true} />
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-activity-log use-dummy-data="true"></velt-activity-log>
+```
+</Tab>
+</Tabs>
+- [**Activity Logs**]: `targetEntityId` is now optional for non-`custom` `featureType` values (`comment`, `reaction`, `recorder`, `crdt`) when creating activities. An optional `id` field is also supported to use as the DB record ID for idempotent writes. `targetEntityId` remains required when `featureType` is `custom`. [Learn more →](/async-collaboration/activity/overview)
+- [**Access Control**]: [`getUserPermissions`](/api-reference/sdk/api/api-methods#getuserpermissions) response entries for folders and documents now include an `accessType` field (`public`, `restricted`, `organizationPrivate`). Documents in folders inherit their folder's `accessType`. The field is also present on `PERMISSION_DENIED` entries so consumers can inspect the effective access type even when access is denied. Organization-level access is now verified via DB permission rules rather than array membership checks.
+- [**Self-Host Data**]: Added `activity` field to [`VeltDataProvider`](/api-reference/sdk/models/data-models#veltdataprovider) accepting an [`ActivityAnnotationDataProvider`](/api-reference/sdk/models/data-models#activityannotationdataprovider). When configured via [`setDataProviders()`](/api-reference/sdk/api/api-methods#setdataproviders), Velt strips PII from activity records before writing to its backend and routes it to your storage; on read, resolved data is merged back transparently. [Learn more →](/self-host-data/activity)
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// Using API methods
+client.setDataProviders({
+  activity: {
+    get: async (request) => {
+      const data = await myBackend.getActivities(request.activityIds);
+      return { data, success: true, statusCode: 200 };
+    },
+    save: async (request) => {
+      await myBackend.saveActivities(request.activity);
+      return { data: undefined, success: true, statusCode: 200 };
+    },
+    config: { resolveTimeout: 60000, fieldsToRemove: ['customSensitiveField'] },
+  },
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setDataProviders({
+  activity: {
+    get: async (request) => {
+      const data = await myBackend.getActivities(request.activityIds);
+      return { data, success: true, statusCode: 200 };
+    },
+    save: async (request) => {
+      await myBackend.saveActivities(request.activity);
+      return { data: undefined, success: true, statusCode: 200 };
+    },
+    config: { resolveTimeout: 60000, fieldsToRemove: ['customSensitiveField'] },
+  },
+});
+```
+</Tab>
+</Tabs>
+
+### Improvements
+
+- [**Core**]: [`SetDocumentsRequestOptions`](/api-reference/sdk/models/data-models#setdocumentsrequestoptions) gains two optional fields: `debounceTime` (per-call override for the debounce window in ms) and `optimisticPermissions` (set to `false` to await permission validation before returning). Existing calls without these fields are unaffected.
+
+- [**Access Control**]: Document `accessType` in [`getUserPermissions`](/api-reference/sdk/api/api-methods#getuserpermissions) responses now correctly reflects folder inheritance — documents inside folders report the folder's `accessType` rather than their own `docIamConfig.accessType`.
+
+- [**Activity Logs**]: [`ActivityRecord`](/api-reference/sdk/models/data-models#activityrecord) gains an optional `isActivityResolverUsed?: boolean` field, set to `true` when PII was stripped by the activity resolver. Use this to show a loading state while re-hydration is pending.
+
+### Bug Fixes
+
+- [**Activity Logs**]: Fixed [`getAllActivities()`](/api-reference/sdk/api/api-methods#getallactivities) returning raw server-side records without user name/avatar hydration, resolver re-hydration, or internal field stripping. The stream now pipes through the full client transform pipeline.
+
+- [**Core**]: Fixed a race condition where a pending revoke timer from a prior [`setDocuments()`](/api-reference/sdk/api/api-methods#setdocuments) call could fire after a subsequent grant, silently removing access. Pending revokes are now cancelled when a new grant is issued for the same resource.
+
+- [**Core**]: Fixed [`setDocuments()`](/api-reference/sdk/api/api-methods#setdocuments) ignoring per-call `options.debounceTime`. The debounce window is now evaluated at emit time, so passing `debounceTime: 1000` correctly debounces at 1 second instead of the global 5-second default.
+
+- [**Access Control**]: Fixed temporary permissions silently overwriting valid regular permissions for documents, folders, and organizations. Guards now prevent overwrites unless the existing entry is already denied or errored, while `PERMISSION_DENIED` entries can still be correctly upgraded by valid temporary grants.
+
+- [**Access Control**]: Fixed silent failures in [`getUserPermissions`](/api-reference/sdk/api/api-methods#getuserpermissions) — errors in `getPermissionsForResources` and `fetchDocumentDataForAccessType` are now thrown and logged via `console.error` in all catch blocks instead of returning empty objects.
+
+</Update>
+
+
+<Update label="5.0.2-beta.9" description="March 17, 2026">
+
+### New Features
+
+- [**UI Customization**]: Added Velt Comments Sidebar V2 — a complete redesign of the Comments Sidebar built on a flat primitive component architecture. Every section of the UI is an independently importable and composable primitive. The V2 sidebar ships with a unified filter model (replacing the legacy `minimalFilter` + `advancedFilters` system), CDK virtual scroll for large comment lists, a focused-thread view, a minimal actions dropdown, and a filter dropdown.
+  - All sections are fully wireframe-customizable and available as standalone primitives. See the [UI Customization docs](/ui-customization/features/async/comments/comment-sidebar-components-v2) for the complete wireframe structure and list of `VeltCommentsSidebarV2*` / `velt-comments-sidebar-*-v2` components.
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<VeltCommentsSidebarV2
+  pageMode={false}
+  focusedThreadMode={false}
+  readOnly={false}
+  position="right"
+  variant="sidebar"
+  forceClose={true}
+  onSidebarOpen={(data) => console.log('sidebar opened', data)}
+  onSidebarClose={(data) => console.log('sidebar closed', data)}
+  onCommentClick={(data) => console.log('comment clicked', data)}
+  onCommentNavigationButtonClick={(data) => console.log('nav button clicked', data)}
+/>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comments-sidebar-v2
+  page-mode="false"
+  focused-thread-mode="false"
+  read-only="false"
+  position="right"
+  variant="sidebar"
+  force-close="true"
+></velt-comments-sidebar-v2>
+```
+</Tab>
+</Tabs>
+
+- [**Notifications**]: Added self hosting options for custom notifications. When configured, Velt calls your `get` and `delete` handlers to fetch and remove notification data from your own backend instead of Velt's storage. The resolution pipeline runs notification → user → comment, ensuring resolver-enriched user references are available when the user resolver runs. Only notifications with `notificationSource === 'custom'` are routed through the resolver. [Learn more →](/self-host-data/notifications)
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// Using API methods
+client.setDataProviders({
+  notification: {
+    get: async ({ organizationId, notificationIds }) => {
+      const results = await myBackend.fetchNotifications(organizationId, notificationIds);
+      return { status: 200, data: results };
+    },
+    delete: async ({ notificationId, organizationId }) => {
+      await myBackend.deleteNotification(organizationId, notificationId);
+      return { status: 200, data: undefined };
+    },
+    config: {
+      resolveTimeout: 30000,
+      getRetryConfig: { retryCount: 2, retryDelay: 500, revertOnFailure: false },
+    },
+  },
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setDataProviders({
+  notification: {
+    get: async ({ organizationId, notificationIds }) => {
+      const results = await myBackend.fetchNotifications(organizationId, notificationIds);
+      return { status: 200, data: results };
+    },
+    delete: async ({ notificationId, organizationId }) => {
+      await myBackend.deleteNotification(organizationId, notificationId);
+      return { status: 200, data: undefined };
+    },
+    config: {
+      resolveTimeout: 30000,
+      getRetryConfig: { retryCount: 2, retryDelay: 500, revertOnFailure: false },
+    },
+  },
+});
+```
+</Tab>
+</Tabs>
+
+  The [`Notification`](/api-reference/sdk/models/data-models#notification) model gains `isNotificationResolverUsed?: boolean` to detect resolver-enriched notifications downstream.
+
+### Improvements
+
+- [**UI Customization**]: `VeltCommentsSidebar` now accepts a `version` prop. Setting `version="2"` routes the existing `<velt-comments-sidebar>` tag to the full V2 implementation, forwarding all props (`pageMode`, `focusedThreadMode`, `readOnly`, `embedMode`, `floatingMode`, `position`, `variant`, `forceClose`).
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<VeltCommentsSidebar version="2" />
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comments-sidebar version="2"></velt-comments-sidebar>
+```
+</Tab>
+</Tabs>
+
+- [**Comments**]: Added `additionalFields` to `CommentAnnotationDataProvider.config`. Unlike `fieldsToRemove` (which strips fields from Velt's DB), `additionalFields` are copied to your resolver endpoint but retained in Velt's storage — enabling data replication without removal.
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// Using API methods
+client.setDataProviders({
+  comment: {
+    get: async (request) => { /* ... */ },
+    config: {
+      fieldsToRemove: ['sensitiveField'],
+      additionalFields: ['metadataField'],
+    },
+  },
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setDataProviders({
+  comment: {
+    get: async (request) => { /* ... */ },
+    config: {
+      fieldsToRemove: ['sensitiveField'],
+      additionalFields: ['metadataField'],
+    },
+  },
+});
+```
+</Tab>
+</Tabs>
+
+- [**Comments**]: Added `agentFields?: string[]` to [`CommentRequestQuery`](/api-reference/sdk/models/data-models#commentrequestquery) to filter comment count queries to annotations where `agent.agentFields` contains any of the provided values. When `agentFields` is set, the unread count query is skipped and treated as equal to the total count.
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// Using API methods
+const commentElement = client.getCommentElement();
+commentElement.getCommentAnnotationCount({
+  organizationId: 'org-123',
+  agentFields: ['agent-1', 'agent-2'],
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+commentElement.getCommentAnnotationCount({
+  organizationId: 'org-123',
+  agentFields: ['agent-1', 'agent-2'],
+});
+```
+</Tab>
+</Tabs>
+
+### Bug Fixes
+
+- [**Comments**]: Fixed `updateVisibility()` silently overwriting custom metadata in the annotation's [`context`](/api-reference/sdk/models/data-models#context) field. The internal `updateCommentAnnotationContext` call now uses `{ merge: true }`, preserving all custom fields set via `addCommentAnnotation` or `updateCommentAnnotationContext`.
+
+- [**Comments**]: Fixed `updateCommentAnnotationContext` dropping the `accessFields` system field when called without `{ merge: true }`. All system-managed context fields (`access`, `accessFields`) are now preserved when they are not explicitly provided in the incoming context object.
+
+- [**UI Customization**]: Fixed wireframe components' computed signals (`shouldShow`, `default-condition`) evaluating against default/empty values on first render. The fix defers view attachment until after all inputs are set, so `velt-if` and conditional wireframe customizations work correctly on first render.
+
+</Update>
+
 <Update label="5.0.2-beta.8" description="March 12, 2026">
 
 ### New Features
 
-- [**Recorder**]: Added `recorder` field on `VeltDataProvider` accepting a `RecorderAnnotationDataProvider`. When configured via `setDataProviders()`, recording PII (user identity, transcription, attachment URLs) is stripped from annotations before being written to Velt's persistence and routed to your own storage via resolver callbacks or config-based HTTP endpoints. On read, the resolved PII is merged back transparently. [Learn more →](/self-host-data/recordings)
+- [**Recorder**]: Added `recorder` field on `VeltDataProvider` accepting a `RecorderAnnotationDataProvider`. When configured via `setDataProviders()`, recording PII (user identity, transcription, attachment URLs) is stripped from annotations before being written to Velt's Firestore and routed to your own storage via resolver callbacks or config-based HTTP endpoints. On read, the resolved PII is merged back transparently. [Learn more →](/self-host-data/recordings)
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -102,8 +353,7 @@ client.setDataProviders({
     },
   },
 });
-````
-
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```js
@@ -129,7 +379,7 @@ Velt.setDataProviders({
 </Tab>
 </Tabs>
 
-Use `isRecorderResolverUsed` on [`RecorderAnnotation`](/api-reference/sdk/models/data-models#recorderannotation) to show a loading state while PII is being fetched, and `isUrlAvailable` to show an upload progress indicator while the recording URL is still a local blob.
+  Use `isRecorderResolverUsed` on [`RecorderAnnotation`](/api-reference/sdk/models/data-models#recorderannotation) to show a loading state while PII is being fetched, and `isUrlAvailable` to show an upload progress indicator while the recording URL is still a local blob.
 
 - [**REST API**]: Added two endpoints for asynchronous document migration. [Migrate Documents ](/api-reference/rest-apis/v2/documents/migrate-documents) initiates a migration that migrates all data from one document to another. [Migrate Documents Status →](/api-reference/rest-apis/v2/documents/migrate-documents-status) polls progress using the `migrationId` returned by the initiate call.
 
@@ -145,9 +395,10 @@ Use `isRecorderResolverUsed` on [`RecorderAnnotation`](/api-reference/sdk/models
 
 - [**Comments**]: Fixed text selection highlighting not activating for submitted (non-draft) comment annotations. The `textClicked` flag is now set correctly for all selected annotations when `last` is `true`, not only drafts.
 
-- [**REST API**]: Fixed "Transaction too big" errors during document migration by reducing persistence batch size from 500 to 100 in subcollection copy, notification copy, and user doc config operations. Migrations involving documents with large notification or comment payloads will no longer fail.
+- [**REST API**]: Fixed "Transaction too big" errors during document migration by reducing Firestore batch size from 500 to 100 in subcollection copy, notification copy, and user doc config operations. Migrations involving documents with large notification or comment payloads will no longer fail.
 
 </Update>
+
 
 <Update label="5.0.2-beta.7" description="March 10, 2026">
 
@@ -193,11 +444,12 @@ Use `isRecorderResolverUsed` on [`RecorderAnnotation`](/api-reference/sdk/models
 
 - [**UI Customization**]: Added `multiSelect`, `selectedFirstOrdering`, `readOnly`, `inline`, and `contacts` props to the [`VeltAutocomplete`](/ui-customization/features/async/comments/comment-dialog-primitives/overview#veltautocomplete) panel component.
 
+
 ### Improvements
 
 - [**Access Control**]: [`AccessRequestEvent`](/api-reference/sdk/models/data-models#accessrequestevent) and [`SEMEvent`](/api-reference/sdk/models/data-models#semevent) now include `totalUsers`, `presenceSnippylyUserIds`, and `presenceClientUserIds` fields for real-time presence context.
 
-- [**Analytics**]: `COMMENT_ADDED` and `COMMENT_STATUS_CHANGED` events now include `commentAnnotationCreatedAt`, `taggedClientUserIds`, and `taggedSnippylyUserIds`.
+- [**Analytics**]: `COMMENT_ADDED` and `COMMENT_STATUS_CHANGED` events now include `commentAnnotationCreatedAt`, `taggedClientUserIds`, and `taggedSnippylyUserIds`. 
 
 - [**Analytics**]: New `REACTION_ADDED` and `REACTION_DELETED` events fire with `annotationId`, `commentId`, `reactionId`, and `commentMode`.
 
@@ -226,8 +478,7 @@ Use `isRecorderResolverUsed` on [`RecorderAnnotation`](/api-reference/sdk/models
 const commentElement = client.getCommentElement();
 commentElement.enableVisibilityOptions();
 commentElement.disableVisibilityOptions();
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -238,8 +489,7 @@ const commentElement = Velt.getCommentElement();
 commentElement.enableVisibilityOptions();
 commentElement.disableVisibilityOptions();
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -335,12 +585,11 @@ client.setAnonymousUserDataProvider({
 
 // Option 2: via setDataProviders
 client.setDataProviders({
-anonymousUser: {
-resolveUserIdsByEmail: async (request) => {/* ... */},
-},
+  anonymousUser: {
+    resolveUserIdsByEmail: async (request) => { /* ... */ },
+  },
 });
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -365,8 +614,7 @@ Velt.setDataProviders({
   },
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -379,6 +627,7 @@ Results are cached in memory for the session; emails already resolved are not re
 - [**Comments**]: When setting restricted visibility, the current user's `userId` is now automatically appended to `userIds` (deduplicated) if not already present. Existing explicit `userIds` lists are preserved. This applies across [`enablePrivateMode`](/async-collaboration/comments/customize-behavior#enableprivatemode), [`addCommentAnnotation`](/async-collaboration/comments/customize-behavior#addcommentannotation), and [`updateVisibility`](/async-collaboration/comments/customize-behavior#updatevisibility).
 
 </Update>
+
 
 <Update label="5.0.2-beta.2" description="February 24, 2026">
 
@@ -393,12 +642,11 @@ Results are cached in memory for the session; emails already resolved are not re
 const event = useCommentEventCallback('commentSaveTriggered');
 
 useEffect(() => {
-if (event) {
-console.log('Save triggered for annotation:', event.annotationId);
-}
+  if (event) {
+    console.log('Save triggered for annotation:', event.annotationId);
+  }
 }, [event]);
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -408,8 +656,7 @@ commentElement.on('commentSaveTriggered').subscribe((event) => {
   console.log('Save triggered for annotation:', event.annotationId);
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -423,7 +670,6 @@ interface CommentSaveTriggeredEvent {
 ```
 
 ### Improvements
-
 - [**Comments**]: The sidebar now automatically returns to the full comment list when all annotations are deselected while in focused thread mode.
 
 - [**Comments**]: Page scroll position is now preserved when navigating to a highlighted annotation from the sidebar.
@@ -452,13 +698,12 @@ import { useCommentEventCallback } from '@veltdev/react';
 const visibilityEvent = useCommentEventCallback('visibilityOptionClicked');
 
 useEffect(() => {
-if (visibilityEvent) {
-console.log('Visibility selected:', visibilityEvent.visibility);
-console.log('Annotation ID:', visibilityEvent.annotationId);
-}
+  if (visibilityEvent) {
+    console.log('Visibility selected:', visibilityEvent.visibility);
+    console.log('Annotation ID:', visibilityEvent.annotationId);
+  }
 }, [visibilityEvent]);
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -474,8 +719,7 @@ commentElement.on('visibilityOptionClicked').subscribe((event) => {
   console.log('Annotation ID:', event.annotationId);
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -523,8 +767,7 @@ commentElement.enablePrivateMode({ type: 'organizationPrivate' });
 
 // Revert to default public visibility
 commentElement.disablePrivateMode();
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```ts
@@ -538,8 +781,7 @@ commentElement.enablePrivateMode({ type: 'organizationPrivate' });
 
 // Revert to default public visibility
 commentElement.disablePrivateMode();
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -555,20 +797,19 @@ import { useEffect } from 'react';
 const commentSavedData = useCommentEventCallback('commentSaved');
 
 useEffect(() => {
-if (commentSavedData) {
-console.log('Comment saved:', commentSavedData.annotationId);
-console.log('Annotation:', commentSavedData.commentAnnotation);
-}
+  if (commentSavedData) {
+    console.log('Comment saved:', commentSavedData.annotationId);
+    console.log('Annotation:', commentSavedData.commentAnnotation);
+  }
 }, [commentSavedData]);
 
 // Using API methods
 const commentElement = client.getCommentElement();
 commentElement.on('commentSaved').subscribe((event) => {
-console.log('Comment saved:', event.annotationId);
-console.log('Annotation:', event.commentAnnotation);
+  console.log('Comment saved:', event.annotationId);
+  console.log('Annotation:', event.commentAnnotation);
 });
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```ts
@@ -577,8 +818,7 @@ commentElement.on('commentSaved').subscribe((event) => {
   console.log('Comment saved:', event.annotationId);
   console.log('Annotation:', event.commentAnnotation);
 });
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -682,6 +922,7 @@ Set `notificationServiceConfig` in your workspace notification settings in the [
 
 </Update>
 
+
 <Update label="5.0.1-beta.3" description="February 16, 2026">
 
 ### Improvements
@@ -718,6 +959,7 @@ Set `notificationServiceConfig` in your workspace notification settings in the [
 
 </Update>
 
+
 <Update label="5.0.1-beta.2" description="February 16, 2026">
 
 ### New Features
@@ -739,13 +981,12 @@ commentElement.disableAttachmentDownload();
 const handleAttachmentDownloadClicked = useCommentEventCallback('attachmentDownloadClicked');
 
 useEffect(() => {
-if (handleAttachmentDownloadClicked) {
-console.log('Attachment clicked:', handleAttachmentDownloadClicked.attachment.attachmentId);
-console.log('Annotation ID:', handleAttachmentDownloadClicked.annotationId);
-}
+  if (handleAttachmentDownloadClicked) {
+    console.log('Attachment clicked:', handleAttachmentDownloadClicked.attachment.attachmentId);
+    console.log('Annotation ID:', handleAttachmentDownloadClicked.annotationId);
+  }
 }, [handleAttachmentDownloadClicked]);
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -761,8 +1002,7 @@ commentElement.on('attachmentDownloadClicked').subscribe((event) => {
   console.log('Annotation ID:', event.annotationId);
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -819,12 +1059,11 @@ commentElement.setContextInPageModeComposer({
 // Using API methods
 const commentElement = client.getCommentElement();
 commentElement.setContextInPageModeComposer({
-context: { documentId: '123', section: 'intro' },
-targetElementId: 'my-element',
-clearContext: false
+  context: { documentId: '123', section: 'intro' },
+  targetElementId: 'my-element',
+  clearContext: false
 });
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -836,8 +1075,7 @@ commentElement.setContextInPageModeComposer({
   clearContext: false
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -857,6 +1095,7 @@ commentElement.setContextInPageModeComposer({
 
 </Update>
 
+
 <Update label="5.0.0" description="February 12, 2026">
 
 ### New Features
@@ -870,6 +1109,7 @@ commentElement.setContextInPageModeComposer({
 - [**Comments**]: Fixed edit mode not working in thread card messages. Edit mode now properly propagates to comment messages within thread cards.
 
 </Update>
+
 
 <Update label="5.0.0-beta.17" description="February 12, 2026">
 
@@ -885,24 +1125,23 @@ const commentElement = useCommentUtils();
 
 // Before: Had to pass userIds manually
 commentElement.updateVisibility({
-annotationId: 'annotation-1',
-visibility: { type: 'restricted', userIds: ['current-user-id'] }
+  annotationId: 'annotation-1',
+  visibility: { type: 'restricted', userIds: ['current-user-id'] }
 });
 
 // After: userIds auto-defaults to current authenticated user
 commentElement.updateVisibility({
-annotationId: 'annotation-1',
-visibility: { type: 'restricted' }
+  annotationId: 'annotation-1',
+  visibility: { type: 'restricted' }
 });
 
 // Using API method
 const commentElement = client.getCommentElement();
 commentElement.updateVisibility({
-annotationId: 'annotation-1',
-visibility: { type: 'restricted' }
+  annotationId: 'annotation-1',
+  visibility: { type: 'restricted' }
 });
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -921,8 +1160,7 @@ commentElement.updateVisibility({
   visibility: { type: 'restricted' }
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -936,22 +1174,21 @@ const commentElement = useCommentUtils();
 
 // Automatically batches when 2+ documentIds are provided
 const counts = commentElement.getCommentAnnotationsCount({
-documentIds: ['doc-1', 'doc-2', 'doc-3']
+  documentIds: ['doc-1', 'doc-2', 'doc-3']
 });
 
 // Optional: customize debounce (default 5000ms)
 const countsWithDebounce = commentElement.getCommentAnnotationsCount({
-documentIds: ['doc-1', 'doc-2', 'doc-3'],
-debounceMs: 2000
+  documentIds: ['doc-1', 'doc-2', 'doc-3'],
+  debounceMs: 2000
 });
 
 // Using API method
 const commentElement = client.getCommentElement();
 const counts = commentElement.getCommentAnnotationsCount({
-documentIds: ['doc-1', 'doc-2', 'doc-3']
+  documentIds: ['doc-1', 'doc-2', 'doc-3']
 });
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -969,8 +1206,7 @@ const countsWithDebounce = commentElement.getCommentAnnotationsCount({
   debounceMs: 2000
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -978,11 +1214,12 @@ const countsWithDebounce = commentElement.getCommentAnnotationsCount({
 
 </Update>
 
+
 <Update label="5.0.0-beta.16" description="February 11, 2026">
 
 ### Improvements
 
-- [**Core**]: Added ability to control persistence SDK logs via `sessionStorage` or environment config. By default, logs are silenced to reduce console noise in production.
+- [**Core**]: Added ability to control Firestore SDK logs via `sessionStorage` or environment config. By default, logs are silenced to reduce console noise in production.
 
 - [**Performance**]: Added GSAP animation detection to reduce MutationObserver overhead. Pages using GSAP now experience ~20x performance improvement (from ~375ms to ~18ms per callback).
 
@@ -1001,6 +1238,7 @@ const countsWithDebounce = commentElement.getCommentAnnotationsCount({
 - [**Comments**]: Fixed attachment components not receiving parent UI state. Selected and invalid attachment components now correctly react to parent composer state changes.
 
 </Update>
+
 
 <Update label="5.0.0-beta.15" description="February 11, 2026">
 
@@ -1023,13 +1261,12 @@ commentElement.disableFormatOptions();
 
 // Configure individual format types
 commentElement.setFormatConfig({
-bold: { enable: true },
-italic: { enable: true },
-underline: { enable: false },
-strikethrough: { enable: false }
+  bold: { enable: true },
+  italic: { enable: true },
+  underline: { enable: false },
+  strikethrough: { enable: false }
 });
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -1048,8 +1285,7 @@ commentElement.setFormatConfig({
   strikethrough: { enable: false }
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -1065,8 +1301,7 @@ commentElement.clearComposer({ targetComposerElementId: 'my-composer-1' });
 // Using API methods
 const commentElement = client.getCommentElement();
 commentElement.clearComposer({ targetComposerElementId: 'my-composer-1' });
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -1074,8 +1309,7 @@ commentElement.clearComposer({ targetComposerElementId: 'my-composer-1' });
 const commentElement = Velt.getCommentElement();
 commentElement.clearComposer({ targetComposerElementId: 'my-composer-1' });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -1089,16 +1323,15 @@ const commentElement = useCommentUtils();
 const data = commentElement.getComposerData({ targetComposerElementId: 'my-composer-1' });
 
 if (data) {
-console.log(data.text);
-console.log(data.annotation);
-console.log(data.targetComposerElementId);
+  console.log(data.text);
+  console.log(data.annotation);
+  console.log(data.targetComposerElementId);
 }
 
 // Using API methods
 const commentElement = client.getCommentElement();
 const data = commentElement.getComposerData({ targetComposerElementId: 'my-composer-1' });
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -1112,30 +1345,29 @@ if (data) {
   console.log(data.targetComposerElementId);
 }
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
 - [**Comments**]: Added `context` prop to `VeltCommentDialogComposer` to attach custom context data to comments created from standalone composers.
 
 <Tabs>
-  <Tab title="React / Next.js">
-    ```jsx
-    <VeltCommentDialogComposer
-      targetComposerElementId="my-composer"
-      context={{ projectId: "abc123", section: "header" }}
-    />
-    ```
-  </Tab>
-  <Tab title="Other Frameworks">
-    ```html
-    <velt-comment-dialog-composer
-      target-composer-element-id="my-composer"
-      context='{"projectId": "abc123", "section": "header"}'
-    ></velt-comment-dialog-composer>
-    ```
-  </Tab>
+<Tab title="React / Next.js">
+```jsx
+<VeltCommentDialogComposer
+  targetComposerElementId="my-composer"
+  context={{ projectId: 'abc123', section: 'header' }}
+/>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comment-dialog-composer
+  target-composer-element-id="my-composer"
+  context='{"projectId": "abc123", "section": "header"}'>
+</velt-comment-dialog-composer>
+```
+</Tab>
 </Tabs>
 
 ### Improvements
@@ -1149,22 +1381,21 @@ if (data) {
 const composerTextChangeEvent = useCommentEventCallback('composerTextChange');
 
 useEffect(() => {
-if (composerTextChangeEvent) {
-console.log(composerTextChangeEvent.text);
-console.log(composerTextChangeEvent.annotation);
-console.log(composerTextChangeEvent.targetComposerElementId);
-}
+  if (composerTextChangeEvent) {
+    console.log(composerTextChangeEvent.text);
+    console.log(composerTextChangeEvent.annotation);
+    console.log(composerTextChangeEvent.targetComposerElementId);
+  }
 }, [composerTextChangeEvent]);
 
 // Using API methods
 const commentElement = client.getCommentElement();
 commentElement.on('composerTextChange').subscribe((event) => {
-console.log(event.text);
-console.log(event.annotation);
-console.log(event.targetComposerElementId);
+  console.log(event.text);
+  console.log(event.annotation);
+  console.log(event.targetComposerElementId);
 });
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -1176,8 +1407,7 @@ commentElement.on('composerTextChange').subscribe((event) => {
   console.log(event.targetComposerElementId);
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -1190,6 +1420,7 @@ commentElement.on('composerTextChange').subscribe((event) => {
 - [**Comments**]: Fixed formatted text (bold, italic, underline, strikethrough) to preserve formatting on submit and edit.
 
 </Update>
+
 
 <Update label="5.0.0-beta.14" description="February 10, 2026">
 
@@ -1210,8 +1441,8 @@ commentElement.enableContextInPageModeComposer();
 
 // Set context with target element
 commentElement.setContextInPageModeComposer({
-context: { projectId: 'abc123', section: 'header' },
-targetElementId: 'my-target-element'
+  context: { projectId: 'abc123', section: 'header' },
+  targetElementId: 'my-target-element'
 });
 
 // Focus the composer programmatically
@@ -1223,8 +1454,8 @@ commentElement.clearPageModeComposerContext();
 // Disable context passing mode
 commentElement.disableContextInPageModeComposer();
 
-// Using props
 
+// Using props
 <VeltCommentTool
   contextInPageModeComposer={true}
   context={{ section: 'header', elementId: 'nav-menu' }}
@@ -1240,7 +1471,6 @@ Using props:
 </velt-comment-tool>
 
 Using API methods:
-
 <script>
 const commentElement = Velt.getCommentElement();
 
@@ -1262,8 +1492,7 @@ commentElement.clearPageModeComposerContext();
 // Disable
 commentElement.disableContextInPageModeComposer();
 </script>
-
-````
+```
 </Tab>
 </Tabs>
 
@@ -1286,8 +1515,7 @@ commentElement.setAssignToType({ type: 'checkbox' });
 
 // Using props
 <VeltComments assignToType="checkbox" />
-````
-
+```
 </Tab>
 <Tab title="Other Frameworks">
 Using props:
@@ -1295,7 +1523,6 @@ Using props:
 <velt-comments assign-to-type="checkbox"></velt-comments>
 
 Using API methods:
-
 <script>
 const commentElement = Velt.getCommentElement();
 
@@ -1305,8 +1532,7 @@ commentElement.setAssignToType({ type: 'dropdown' });
 // Use checkbox mode
 commentElement.setAssignToType({ type: 'checkbox' });
 </script>
-
-````
+```
 </Tab>
 </Tabs>
 
@@ -1320,8 +1546,7 @@ import { VeltCommentsSidebarWireframe } from '@veltdev/react';
 <VeltCommentsSidebarWireframe.MinimalFilterDropdown.Content>
   <VeltCommentsSidebarWireframe.MinimalFilterDropdown.Content.FilterAssignedToMe />
 </VeltCommentsSidebarWireframe.MinimalFilterDropdown.Content>
-````
-
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -1343,18 +1568,18 @@ import { useEffect } from 'react';
 const commentToolClickEvent = useCommentEventCallback('commentToolClicked');
 
 useEffect(() => {
-if (commentToolClickedEvent) {
-console.log('Context:', commentToolClickedEvent.context);
-console.log('Target Element ID:', commentToolClickedEvent.targetElementId);
-}
+  if (commentToolClickedEvent) {
+    console.log('Context:', commentToolClickedEvent.context);
+    console.log('Target Element ID:', commentToolClickedEvent.targetElementId);
+  }
 }, [commentToolClickedEvent]);
 
 const sidebarButtonClickedEvent = useCommentEventCallback('sidebarButtonClicked');
 
 useEffect(() => {
-if (sidebarButtonClickedEvent) {
-console.log('Sidebar button clicked');
-}
+  if (sidebarButtonClickedEvent) {
+    console.log('Sidebar button clicked');
+  }
 }, [sidebarButtonClickedEvent]);
 
 // Using API methods
@@ -1364,15 +1589,14 @@ const { client } = useVeltClient();
 const commentElement = client.getCommentElement();
 
 commentElement.on('commentToolClicked').subscribe((event) => {
-console.log('Context:', event.context);
-console.log('Target Element ID:', event.targetElementId);
+  console.log('Context:', event.context);
+  console.log('Target Element ID:', event.targetElementId);
 });
 
 commentElement.on('sidebarButtonClicked').subscribe((event) => {
-console.log('Sidebar button clicked');
+  console.log('Sidebar button clicked');
 });
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -1392,8 +1616,7 @@ commentElement.on('sidebarButtonClicked').subscribe((event) => {
   console.log('Metadata:', event.metadata);
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -1420,8 +1643,7 @@ import { VeltCommentComposer, VeltInlineCommentsSection } from '@veltdev/react';
   target-element-id="my-element"
   read-only="true">
 </velt-inline-comments-section>
-
-````
+```
 </Tab>
 </Tabs>
 
@@ -1433,8 +1655,7 @@ import { VeltCommentComposer, VeltInlineCommentsSection } from '@veltdev/react';
 import { VeltCommentDialogWireframe } from '@veltdev/react';
 
 <VeltCommentDialogWireframe.ThreadCard.AssignButton />
-````
-
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -1461,7 +1682,7 @@ import { VeltCommentDialogWireframe } from '@veltdev/react';
 </Tab>
 </Tabs>
 
-- [**Comments**]: Added reaction pin component to pin specific reactions and exclude them from the general list.
+- [**Comments**]: Added reaction pin component to pin specific reactions and exclude them from the general list. 
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -1472,9 +1693,9 @@ import { VeltCommentDialogWireframe } from '@veltdev/react';
   <VeltCommentDialogWireframe.ThreadCard.ReactionPin reactionId="thumbs-up" />
   <VeltCommentDialogWireframe.ThreadCard.ReactionPin reactionId="heart" />
 
-<VeltCommentDialogWireframe.ThreadCard.Reactions
-  excludeReactionIds={["thumbs-up", "heart"]}
-/>
+  <VeltCommentDialogWireframe.ThreadCard.Reactions
+    excludeReactionIds={['thumbs-up', 'heart']}
+  />
 
   <VeltCommentDialogWireframe.ThreadCard.ReactionTool
     excludeReactionIds={['thumbs-up', 'heart']}
@@ -1495,8 +1716,7 @@ import { VeltCommentDialogWireframe } from '@veltdev/react';
 <velt-comment-dialog-thread-card-reaction-tool-wireframe
   exclude-reaction-ids='["thumbs-up", "heart"]'>
 </velt-comment-dialog-thread-card-reaction-tool-wireframe>
-
-````
+```
 </Tab>
 </Tabs>
 
@@ -1517,8 +1737,7 @@ import { VeltCommentComposer } from '@veltdev/react';
 
 // After (required)
 <VeltCommentComposer targetComposerElementId="my-composer" />
-````
-
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -1526,10 +1745,8 @@ import { VeltCommentComposer } from '@veltdev/react';
 <velt-comment-composer target-element-id="my-composer"></velt-comment-composer>
 
 <!-- After (required) -->
-
 <velt-comment-composer target-composer-element-id="my-composer"></velt-comment-composer>
-
-````
+```
 </Tab>
 </Tabs>
 
@@ -1576,8 +1793,7 @@ notificationElement.enableSettingsAtOrganizationLevel();
 
 // Disable organization-level settings
 notificationElement.disableSettingsAtOrganizationLevel();
-````
-
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -1593,14 +1809,16 @@ notificationElement.disableSettingsAtOrganizationLevel();
 </velt-notifications-tool>
 
 <script>
-  // Using API methods const notificationElement =
-  Velt.getNotificationElement(); // Enable organization-level settings
-  notificationElement.enableSettingsAtOrganizationLevel(); // Disable
-  organization-level settings
-  notificationElement.disableSettingsAtOrganizationLevel();
-</script>
+// Using API methods
+const notificationElement = Velt.getNotificationElement();
 
-````
+// Enable organization-level settings
+notificationElement.enableSettingsAtOrganizationLevel();
+
+// Disable organization-level settings
+notificationElement.disableSettingsAtOrganizationLevel();
+</script>
+```
 </Tab>
 </Tabs>
 
@@ -1661,8 +1879,7 @@ const counts = commentElement.getCommentAnnotationsCount({
   batchedPerDocument: true,
   debounceMs: 5000
 });
-````
-
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -1674,18 +1891,16 @@ const counts = commentElement.getCommentAnnotationsCount({
 });
 
 const countsWithDebounce = commentElement.getCommentAnnotationsCount({
-documentIds: ['doc-1', 'doc-2', ..., 'doc-100'],
-batchedPerDocument: true,
-debounceMs: 5000
+  documentIds: ['doc-1', 'doc-2', ..., 'doc-100'],
+  batchedPerDocument: true,
+  debounceMs: 5000
 });
-
 </script>
 ```
 </Tab>
 </Tabs>
 
 **Return Format:**
-
 ```typescript
 {
   data: {
@@ -1696,6 +1911,7 @@ debounceMs: 5000
 ```
 
 </Update>
+
 
 <Update label="5.0.0-beta.9" description="January 31, 2026">
 ### Bug Fixes
@@ -1723,6 +1939,7 @@ debounceMs: 5000
 
 </Update>
 
+
 <Update label="5.0.0-beta.8" description="January 30, 2026">
 
 ### New Features
@@ -1737,34 +1954,33 @@ const commentElement = useCommentUtils();
 
 // Set comment to organization-only
 commentElement.updateVisibility({
-annotationId: "annotationId",
-type: 'organizationPrivate',
-organizationId: 'org-123'
+  annotationId: "annotationId",
+  type: 'organizationPrivate',
+  organizationId: 'org-123'
 });
 
 // Set comment to private (specific users)
 commentElement.updateVisibility({
-annotationId: "annotationId",
-type: 'restricted',
-userIds: ['user-1', 'user-2']
+  annotationId: "annotationId",
+  type: 'restricted',
+  userIds: ['user-1', 'user-2']
 });
 
 // Set comment to public
 commentElement.updateVisibility({
-annotationId: "annotationId",
-type: 'public'
+  annotationId: "annotationId",
+  type: 'public'
 });
 
 // Using API method
 const client = useVeltClient();
 const commentElement = client.getCommentElement();
 commentElement.updateVisibility({
-annotationId: "annotationId",
-type: 'organizationPrivate',
-organizationId: 'org-123'
+  annotationId: "annotationId",
+  type: 'organizationPrivate',
+  organizationId: 'org-123'
 });
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -1791,8 +2007,7 @@ commentElement.updateVisibility({
   type: 'public'
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -1805,6 +2020,7 @@ commentElement.updateVisibility({
 - [**Comments**]: Fixed status reset when deleting comments. Status now only resets when current status is terminal.
 
 </Update>
+
 
 <Update label="5.0.0-beta.7" description="January 28, 2026">
 
@@ -1819,27 +2035,26 @@ commentElement.updateVisibility({
 const addCommentAnnotationDraftEvent = useCommentEventCallback('addCommentAnnotationDraft');
 
 useEffect(() => {
-if (addCommentAnnotationDraftEvent?.addContext) {
-addCommentAnnotationDraftEvent.addContext({
-questionId: '123',
-questionText: 'What is the capital of France?',
-});
-}
+    if (addCommentAnnotationDraftEvent?.addContext) {
+        addCommentAnnotationDraftEvent.addContext({
+            questionId: '123',
+            questionText: 'What is the capital of France?',
+        });
+    }
 }, [addCommentAnnotationDraftEvent]);
 
 // Using API method
 const client = useVeltClient();
 const commentElement = client.getCommentElement();
 commentElement.on('addCommentAnnotationDraft').subscribe((event) => {
-if (event?.addContext) {
-event.addContext({
-questionId: '123',
-questionText: 'What is the capital of France?',
+    if (event?.addContext) {
+        event.addContext({
+            questionId: '123',
+            questionText: 'What is the capital of France?',
+        });
+    }
 });
-}
-});
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -1854,8 +2069,7 @@ commentElement.on('addCommentAnnotationDraft').subscribe((event) => {
     }
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
@@ -1871,31 +2085,30 @@ import { useCallback, useEffect } from 'react';
 import { useSetContextProvider } from '@veltdev/react';
 
 const contextProvider = useCallback((documentId, location) => {
-return {
-questionId: '123',
-questionText: 'What is the capital of France?',
-}
+    return {
+        questionId: '123',
+        questionText: 'What is the capital of France?',
+    }
 }, []);
 
 const { setContextProvider } = useSetContextProvider();
 
 useEffect(() => {
-if (setContextProvider && contextProvider) {
-setContextProvider(contextProvider);
-}
+    if (setContextProvider && contextProvider) {
+        setContextProvider(contextProvider);
+    }
 }, []);
 
 // Using API method
 const client = useVeltClient();
 const commentElement = client.getCommentElement();
 commentElement.setContextProvider((documentId, location) => {
-return {
-questionId: '123',
-questionText: 'What is the capital of France?',
-}
+    return {
+        questionId: '123',
+        questionText: 'What is the capital of France?',
+    }
 });
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -1908,12 +2121,12 @@ commentElement.setContextProvider((documentId, location) => {
     }
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
 </Update>
+
 
 <Update label="5.0.0-beta.6" description="January 28, 2026">
 
@@ -1922,6 +2135,7 @@ commentElement.setContextProvider((documentId, location) => {
 - [**Core**]: Fixed package integrity issue in v5.0.0-beta.5.
 
 </Update>
+
 
 <Update label="5.0.0-beta.5" description="January 28, 2026">
 
@@ -1941,6 +2155,7 @@ commentElement.setContextProvider((documentId, location) => {
 
 </Update>
 
+
 <Update label="5.0.0-beta.4" description="January 23, 2026">
 
 ### Bug Fixes
@@ -1949,11 +2164,13 @@ commentElement.setContextProvider((documentId, location) => {
 
 </Update>
 
+
 <Update label="5.0.0-beta.3" description="January 22, 2026">
 
 ### Improvements
 
 - [**Core**]: Added robustness to initialization when `VeltProvider` was re-rendered multiple times over a slow network.
+
 
 ### Bug Fixes
 
@@ -1966,6 +2183,7 @@ commentElement.setContextProvider((documentId, location) => {
 - [**Comments**]: Fixed disable recording option not working in `velt-comment-composer`. This was a regression in v5.
 
 </Update>
+
 
 <Update label="5.0.0-beta.2" description="January 22, 2026">
 
@@ -1986,10 +2204,9 @@ commentElement.setContextProvider((documentId, location) => {
 // Using API method
 const client = useVeltClient();
 client.initConfig('API_KEY', {
-globalStyles: false
+  globalStyles: false
 });
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -1998,12 +2215,11 @@ Velt.initConfig('API_KEY', {
   globalStyles: false
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
-- [**Comments**]: Added `submitComment(targetElementId)` method to programmatically trigger comment submission. Enables custom buttons or keyboard shortcuts for submitting comments.
+- [**Comments**]: Added `submitComment(targetElementId)` method to programmatically trigger comment submission. Enables custom buttons or keyboard shortcuts for submitting comments. 
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -2020,8 +2236,7 @@ commentElement.submitComment('composer-1');
 const client = useVeltClient();
 const commentElement = client.getCommentElement();
 commentElement.submitComment('composer-1');
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -2037,26 +2252,25 @@ commentElement.submitComment('composer-1');
     commentElement.submitComment(targetElementId);
   }
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
 - [**Comments**]: Added `placeholder` prop to customize input placeholder text in comment composer. Overrides default placeholders. [Learn more](/ui-customization/features/async/comments/standalone-components/comment-composer#placeholder)
 
 <Tabs>
-  <Tab title="React / Next.js">
-    ```jsx
-    <VeltCommentComposer placeholder="Share your thoughts..." />
-    <VeltCommentDialogComposer placeholder="Add a comment..." />
-    ```
-  </Tab>
-  <Tab title="Other Frameworks">
-    ```html
-    <velt-comment-composer placeholder="Share your thoughts..."></velt-comment-composer>
-    <velt-comment-dialog-composer placeholder="Add a comment..."></velt-comment-dialog-composer>
-    ```
-  </Tab>
+<Tab title="React / Next.js">
+```jsx
+<VeltCommentComposer placeholder="Share your thoughts..." />
+<VeltCommentDialogComposer placeholder="Add a comment..." />
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comment-composer placeholder="Share your thoughts..."></velt-comment-composer>
+<velt-comment-dialog-composer placeholder="Add a comment..."></velt-comment-dialog-composer>
+```
+</Tab>
 </Tabs>
 
 - [**Comments**]: Added `composerTextChange` event that fires when text changes in any comment composer. Enables features like auto-save drafts, character counters, or real-time validation. [Learn more](/async-collaboration/comments/customize-behavior#event-subscription)
@@ -2076,10 +2290,9 @@ useEffect(() => {
 const client = useVeltClient();
 const commentElement = client.getCommentElement();
 commentElement.on('composerTextChange').subscribe((event) => {
-console.log('Text changed:', event.text);
+    console.log('Text changed:', event.text);
 });
-
-````
+```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
@@ -2089,12 +2302,12 @@ commentElement.on('composerTextChange').subscribe((event) => {
     console.log('Text changed:', event.text);
 });
 </script>
-````
-
+```
 </Tab>
 </Tabs>
 
 </Update>
+
 
 <Update label="5.0.0-beta.1" description="January 21, 2026">
 
@@ -2112,7 +2325,6 @@ Released 115+ primitive components for building custom comment dialogs. Each sub
 <VeltCommentDialogComposer annotationId="abc123" />
 
 // Pattern 2: Context Wrapper
-
 <VeltCommentDialogContextWrapper annotationId="abc123">
   <VeltCommentDialogHeader />
   <VeltCommentDialogComposer />
@@ -2127,7 +2339,6 @@ Released 115+ primitive components for building custom comment dialogs. Each sub
 <velt-comment-dialog-composer annotation-id="abc123"></velt-comment-dialog-composer>
 
 <!-- Pattern 2: Context Wrapper -->
-
 <velt-comment-dialog-context-wrapper annotation-id="abc123">
   <velt-comment-dialog-header></velt-comment-dialog-header>
   <velt-comment-dialog-composer></velt-comment-dialog-composer>
@@ -2138,7 +2349,6 @@ Released 115+ primitive components for building custom comment dialogs. Each sub
 </Tabs>
 
 **Available Components:**
-
 - **Header/Body**: Header, Body, CloseButton
 - **Thread**: ThreadCard with Avatar, Name, Time, Message, Reactions, Recordings, Reply, Options, and more
 - **Composer**: Composer, ComposerInput, ComposerActionButton, ComposerAttachmentButton, ComposerRecorderButton, ComposerRecorderPlayer, ComposerFiles

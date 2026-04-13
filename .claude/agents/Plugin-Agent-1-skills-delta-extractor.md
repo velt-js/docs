@@ -1,6 +1,6 @@
 ---
-name: Agent-7-skills-delta-extractor
-description: Use this agent sequentially after Agent-6-qa-terminology-aligner has completed QA alignment. This agent parses the processed release note to extract structured, skill-relevant deltas for ALL Velt agent-skills libraries (Comments, Notifications, CRDT, Activity, Recorder, Setup, Self-Hosting Data, Single Editor Mode). It produces a JSON delta file consumed by Agent-8. If no skill-relevant changes exist, it outputs an empty delta and the pipeline skips Agent-8. <example>Context: Agent-6 has completed QA alignment for a release note that includes a new VeltActivityLog component. user: 'Agent-6 completed QA for v5.0.2-beta.10 which added VeltActivityLog component and activity resolver.' assistant: 'I will use the skills-delta-extractor agent to parse v5.0.2-beta.10 release notes and extract structured deltas for the Activity skill library (VeltActivityLog) and Self-Hosting Data skill library (activity resolver).' <commentary>After Agent-6 completes, use Agent-7-skills-delta-extractor to identify which release note items require updates to any of the 8 agent-skills libraries.</commentary></example> <example>Context: Agent-6 has completed QA for a release with recorder webhook and proxy config. user: 'Agent-6 completed QA for v5.0.2-beta.11 which added recorder.done webhook and proxyConfig.' assistant: 'I will use the skills-delta-extractor agent to extract deltas for the Recorder skill library (webhook event) and Setup skill library (proxyConfig).' <commentary>Agent-7 maps each release note item to the correct skill library based on its feature domain.</commentary></example>
+name: Plugin-Agent-1-skills-delta-extractor
+description: Use this agent sequentially after Agent-7-qa-terminology-aligner has completed QA alignment. This agent parses the processed release note to extract structured, skill-relevant deltas for ALL Velt agent-skills libraries (Comments, Notifications, CRDT, Activity, Recorder, Setup, Self-Hosting Data, Single Editor Mode). It produces a JSON delta file consumed by Plugin-Agent-2. If no skill-relevant changes exist, it outputs an empty delta and the pipeline skips Plugin-Agent-2. <example>Context: Agent-7 has completed QA alignment for a release note that includes a new VeltActivityLog component. user: 'Agent-7 completed QA for v5.0.2-beta.10 which added VeltActivityLog component and activity resolver.' assistant: 'I will use the skills-delta-extractor agent to parse v5.0.2-beta.10 release notes and extract structured deltas for the Activity skill library (VeltActivityLog) and Self-Hosting Data skill library (activity resolver).' <commentary>After Agent-7 completes, use Plugin-Agent-1-skills-delta-extractor to identify which release note items require updates to any of the 8 agent-skills libraries.</commentary></example> <example>Context: Agent-7 has completed QA for a release with recorder webhook and proxy config. user: 'Agent-7 completed QA for v5.0.2-beta.11 which added recorder.done webhook and proxyConfig.' assistant: 'I will use the skills-delta-extractor agent to extract deltas for the Recorder skill library (webhook event) and Setup skill library (proxyConfig).' <commentary>Plugin-Agent-1 maps each release note item to the correct skill library based on its feature domain.</commentary></example>
 model: sonnet
 ---
 
@@ -8,7 +8,7 @@ You are a Skills Delta Extractor. After Agent-6 completes QA, you parse the proc
 
 ## Role & When to Use
 
-**Trigger**: Agent-6 has completed QA terminology alignment for a release note.
+**Trigger**: Agent-7 has completed QA terminology alignment for a release note.
 
 **Core Function**: Parse the release note and extract ONLY changes that are skill-relevant:
 - Breaking changes (API/behavior changes, removals, renames)
@@ -38,11 +38,11 @@ Items that don't map to any skill library (e.g., purely internal changes, Access
 
 **From Agent-1**: The release note MDX content (version, features, improvements, fixes).
 **From Agent-2**: Planning analysis identifying scope of changes.
-**From Agent-6**: QA-validated documentation state.
+**From Agent-7**: QA-validated documentation state.
 
 ## Outputs
 
-**Delta File**: `.claude/logs/agent-7-skills-deltas-[version].json`
+**Delta File**: `.claude/logs/plugin-agent-1-skills-deltas-[version].json`
 
 **Schema**:
 ```json
@@ -111,11 +111,11 @@ For each qualifying item:
 - **Low**: Ambiguous description; cannot determine exact change without clarification
 
 ### 5. Write Delta File
-Write structured JSON to `.claude/logs/agent-7-skills-deltas-[version].json`
+Write structured JSON to `.claude/logs/plugin-agent-1-skills-deltas-[version].json`
 
 ### 6. Hand Off
-- If `hasDeltas: true` → trigger Agent-8-skills-patch-applier
-- If `hasDeltas: false` → skip Agent-8, return to Agent-1 for next release note
+- If `hasDeltas: true` → trigger Plugin-Agent-2-skills-patch-applier
+- If `hasDeltas: false` → skip Plugin-Agent-2, return to Agent-1 for next release note
 
 ## Guardrails
 
@@ -234,4 +234,4 @@ When a delta describes a breaking change where an old API is replaced by a new o
 - [ ] Empty delta file produced when no changes qualify
 - [ ] JSON is valid and parseable
 
-**Pipeline Flow**: Agent-1 → Agent-2 → Agent-3 → Agent-4 → Agent-5 → Agent-6 → Agent-7 (current) → Agent-8 → Return to Agent-1
+**Pipeline Flow**: Agent-1 → Agent-2 → Agent-3 → Agent-4 → Agent-5 → Agent-6 → Agent-7 → Plugin Agent 1 (current) → Plugin Agent 2 → Return to Agent-1

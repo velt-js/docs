@@ -1,6 +1,6 @@
 ---
-name: Agent-8-skills-patch-applier
-description: Use this agent sequentially after Agent-7-skills-delta-extractor has produced a delta file with hasDeltas=true. This agent applies minimal, traceable patches to any Velt agent-skills library (Comments, Notifications, CRDT, Activity, Recorder, Setup, Self-Hosting Data, Single Editor Mode) based on the structured deltas. It validates every edit against the release note trigger and conforms to the skill library's formatting conventions. After Agent-8 completes, Agent-1 should run again to process the next release note in the queue. <example>Context: Agent-7 produced deltas for VeltActivityLog component and activity resolver. user: 'Agent-7 extracted deltas for v5.0.2-beta.10 VeltActivityLog and activity resolver. Apply patches.' assistant: 'I will use the skills-patch-applier agent to create rules in the Activity skill library for VeltActivityLog and in the Self-Hosting Data skill library for the activity resolver.' <commentary>After Agent-7 produces deltas, use Agent-8-skills-patch-applier to apply minimal edits to the correct skill libraries with full traceability.</commentary></example> <example>Context: Agent-7 produced deltas for a Comments API rename (breaking change). user: 'Agent-7 found targetElementId renamed to targetComposerElementId in v4.7.4. Apply the rename patch.' assistant: 'I will use the skills-patch-applier agent to update the standalone-comment-composer.md rule with the renamed prop and add a breaking change note.' <commentary>For breaking changes, Agent-8 updates existing rule files with the new names/signatures and adds appropriate warnings.</commentary></example>
+name: Plugin-Agent-2-skills-patch-applier
+description: Use this agent sequentially after Plugin-Agent-1-skills-delta-extractor has produced a delta file with hasDeltas=true. This agent applies minimal, traceable patches to any Velt agent-skills library (Comments, Notifications, CRDT, Activity, Recorder, Setup, Self-Hosting Data, Single Editor Mode) based on the structured deltas. It validates every edit against the release note trigger and conforms to the skill library's formatting conventions. After Plugin-Agent-2 completes, Agent-1 should run again to process the next release note in the queue. <example>Context: Plugin-Agent-1 produced deltas for VeltActivityLog component and activity resolver. user: 'Plugin-Agent-1 extracted deltas for v5.0.2-beta.10 VeltActivityLog and activity resolver. Apply patches.' assistant: 'I will use the skills-patch-applier agent to create rules in the Activity skill library for VeltActivityLog and in the Self-Hosting Data skill library for the activity resolver.' <commentary>After Plugin-Agent-1 produces deltas, use Plugin-Agent-2-skills-patch-applier to apply minimal edits to the correct skill libraries with full traceability.</commentary></example> <example>Context: Plugin-Agent-1 produced deltas for a Comments API rename (breaking change). user: 'Plugin-Agent-1 found targetElementId renamed to targetComposerElementId in v4.7.4. Apply the rename patch.' assistant: 'I will use the skills-patch-applier agent to update the standalone-comment-composer.md rule with the renamed prop and add a breaking change note.' <commentary>For breaking changes, Plugin-Agent-2 updates existing rule files with the new names/signatures and adds appropriate warnings.</commentary></example>
 model: sonnet
 ---
 
@@ -8,7 +8,7 @@ You are a Skills Patch Applier. You apply minimal, traceable patches to the Velt
 
 ## Role & When to Use
 
-**Trigger**: Agent-7 has produced a delta file with `hasDeltas: true`.
+**Trigger**: Plugin-Agent-1 has produced a delta file with `hasDeltas: true`.
 
 **Core Function**: For each delta, apply the minimum edit to the correct skill library file. Every edit must be traceable to a specific release note item.
 
@@ -28,11 +28,11 @@ You are a Skills Patch Applier. You apply minimal, traceable patches to the Velt
 
 ## Inputs
 
-**From Agent-7**: `.claude/logs/agent-7-skills-deltas-[version].json` containing structured deltas.
+**From Plugin-Agent-1**: `.claude/logs/plugin-agent-1-skills-deltas-[version].json` containing structured deltas.
 
 ## Outputs
 
-**Patch Log**: `.claude/logs/agent-8-skills-patches-[version].md`
+**Patch Log**: `.claude/logs/plugin-agent-2-skills-patches-[version].md`
 
 **Format**:
 ```markdown
@@ -58,7 +58,7 @@ You are a Skills Patch Applier. You apply minimal, traceable patches to the Velt
 ## Step-by-Step Workflow
 
 ### 1. Read Delta File
-Parse `.claude/logs/agent-7-skills-deltas-[version].json`.
+Parse `.claude/logs/plugin-agent-1-skills-deltas-[version].json`.
 
 ### 2. Read Target Skill Library Context
 For each unique `skillTarget`, read:
@@ -191,7 +191,7 @@ Scan the three skill directories for unintended changes:
 - Verify no files were accidentally deleted
 
 ### 7. Write QA-Annotated Patch Log
-Create `.claude/logs/agent-8-skills-patches-[version].md` with:
+Create `.claude/logs/plugin-agent-2-skills-patches-[version].md` with:
 - Summary of all patches applied (from Step 3)
 - QA results section with pass/fail for each check (from Step 6)
 - Any issues found and how they were resolved
@@ -344,4 +344,4 @@ Applied **after** QA passes. Regenerates `AGENTS.md` and `AGENTS.full.md` via `n
 The QA phase MUST re-read files from disk — not rely on memory of what was written.
 If a check finds an issue, fix it, re-read the file again, and re-verify.
 
-**Pipeline Flow**: Agent-1 → Agent-2 → Agent-3 → Agent-4 → Agent-5 → Agent-6 → Agent-7 → Agent-8 (current) → Return to Agent-1 (next release note)
+**Pipeline Flow**: Agent-1 → Agent-2 → Agent-3 → Agent-4 → Agent-5 → Agent-6 → Agent-7 → Plugin Agent 1 → Plugin Agent 2 (current) → Return to Agent-1 (next release note)

@@ -1,0 +1,434 @@
+---
+title: "Notifications"
+description: "Self-host your custom notification PII data while using Velt's notification components. Keep notification content on your infrastructure with only minimal identifiers stored on Velt servers."
+---
+
+<Warning>
+  - Only notifications where `notificationSource === 'custom'` are routed through the notification resolver.
+  - Ensure that the data providers are set prior to calling the `identify` method.
+  - The data provider methods must return the correct status code (e.g. `200` for success, `500` for errors) and a `success` boolean in the response object. This ensures proper error handling and retries.
+</Warning>
+
+# Overview
+
+Velt supports self-hosting your custom notification PII data:
+
+- Custom notification content (headline, body, source data) can be stored on your own infrastructure, with only necessary identifiers on Velt servers.
+- Velt components automatically hydrate notification data in the frontend by fetching from your configured data provider.
+- This gives you full control over notification PII while maintaining all Velt notification features.
+
+# How does it work?
+
+When custom notifications are fetched or deleted:
+
+1. The SDK uses your configured [`NotificationDataProvider`](/api-reference/sdk/models/data-models#notificationdataprovider) to handle retrieval and deletion.
+2. Your data provider implements two optional methods:
+   - `get`: Fetches notification PII from your database
+   - `delete`: Removes notification PII from your database
+
+**Resolution pipeline order**: notification → user → comment
+
+**The process works as follows:**
+
+When a notification fetch operation occurs:
+
+1. The SDK calls your `get` handler with the notification IDs and organization ID.
+2. If successful:
+   - The notification objects are hydrated with your returned PII fields.
+   - The [`Notification`](/api-reference/sdk/models/data-models#notification) object is updated with `isNotificationResolverUsed: true` once enriched via the resolver.
+3. If the operation fails, the notification is rendered without enriched PII, and the operation is retried if you have configured retries.
+
+# Implementation Approaches
+
+You can implement notification self-hosting using either of these approaches:
+
+1. **Endpoint based**: Provide endpoint URLs and let the SDK handle HTTP requests
+2. **Function based**: Implement `get` and `delete` methods yourself
+
+Both approaches are fully backward compatible and can be used together.
+
+| Feature | Function based | Endpoint based |
+|---------|----------------|----------------|
+| **Best For** | Complex setups requiring middleware logic, dynamic headers, or transformation before sending | Standard REST APIs where you just need to pass the request "as-is" to the backend |
+| **Implementation** | You write the `fetch()` or `axios` code | You provide the `url` string and `headers` object |
+| **Flexibility** | High | Medium |
+| **Speed** | Medium | High |
+
+## Endpoint based DataProvider
+
+Instead of implementing custom methods, you can configure endpoints directly and let the SDK handle HTTP requests.
+
+### getConfig
+
+Config-based endpoint for fetching notification PII. The SDK automatically makes HTTP POST requests with the request body.
+- Type: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig)
+- Request body format: [`GetNotificationResolverRequest`](/api-reference/sdk/models/data-models#getnotificationresolverrequest)
+- Response format: [`ResolverResponse<Record<string, PartialNotification>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const notificationDataProvider = {
+  config: {
+    getConfig: {
+      url: 'https://your-backend.com/api/velt/notifications/get',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    }
+  }
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ notification: notificationDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const notificationDataProvider = {
+  config: {
+    getConfig: {
+      url: 'https://your-backend.com/api/velt/notifications/get',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    }
+  }
+};
+
+Velt.setDataProviders({ notification: notificationDataProvider });
+```
+</Tab>
+</Tabs>
+
+### deleteConfig
+
+Config-based endpoint for deleting notification PII. The SDK automatically makes HTTP POST requests with the request body.
+- Type: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig)
+- Request body format: [`DeleteNotificationResolverRequest`](/api-reference/sdk/models/data-models#deletenotificationresolverrequest)
+- Response format: [`ResolverResponse<undefined>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const notificationDataProvider = {
+  config: {
+    deleteConfig: {
+      url: 'https://your-backend.com/api/velt/notifications/delete',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    }
+  }
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ notification: notificationDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const notificationDataProvider = {
+  config: {
+    deleteConfig: {
+      url: 'https://your-backend.com/api/velt/notifications/delete',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    }
+  }
+};
+
+Velt.setDataProviders({ notification: notificationDataProvider });
+```
+</Tab>
+</Tabs>
+
+### Endpoint based Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const notificationDataProvider = {
+  config: {
+    getConfig: {
+      url: 'https://your-backend.com/api/velt/notifications/get',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    },
+    deleteConfig: {
+      url: 'https://your-backend.com/api/velt/notifications/delete',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    },
+    resolveTimeout: 5000,
+    getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+    deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+  },
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ notification: notificationDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const notificationDataProvider = {
+  config: {
+    getConfig: {
+      url: 'https://your-backend.com/api/velt/notifications/get',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    },
+    deleteConfig: {
+      url: 'https://your-backend.com/api/velt/notifications/delete',
+      headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+    },
+    resolveTimeout: 5000,
+    getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+    deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+  },
+};
+
+Velt.setDataProviders({ notification: notificationDataProvider });
+```
+</Tab>
+</Tabs>
+
+## Function based DataProvider
+
+Implement custom methods to handle data operations yourself.
+
+### get
+
+Fetch notification PII data from your database. Called when notifications need to be hydrated in the frontend.
+- Param: [`GetNotificationResolverRequest`](/api-reference/sdk/models/data-models#getnotificationresolverrequest)
+- Return: [`Promise<ResolverResponse<Record<string, PartialNotification>>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const getNotificationFromDB = async (request) => {
+  const response = await fetch('/api/velt/notifications/get', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const notificationDataProvider = {
+  get: getNotificationFromDB,
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ notification: notificationDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const getNotificationFromDB = async (request) => {
+  const response = await fetch('/api/velt/notifications/get', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const notificationDataProvider = {
+  get: getNotificationFromDB,
+};
+
+Velt.setDataProviders({ notification: notificationDataProvider });
+```
+</Tab>
+</Tabs>
+
+### delete
+
+Remove notification PII from your database. Called when a custom notification is deleted.
+- Param: [`DeleteNotificationResolverRequest`](/api-reference/sdk/models/data-models#deletenotificationresolverrequest)
+- Return: [`Promise<ResolverResponse<undefined>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const deleteNotificationFromDB = async (request) => {
+  const response = await fetch('/api/velt/notifications/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const notificationDataProvider = {
+  delete: deleteNotificationFromDB,
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ notification: notificationDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const deleteNotificationFromDB = async (request) => {
+  const response = await fetch('/api/velt/notifications/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const notificationDataProvider = {
+  delete: deleteNotificationFromDB,
+};
+
+Velt.setDataProviders({ notification: notificationDataProvider });
+```
+</Tab>
+</Tabs>
+
+### config
+
+Configuration for the notification data provider.
+- Type: [`NotificationResolverConfig`](/api-reference/sdk/models/data-models#notificationresolverconfig). Relevant properties:
+  - `resolveTimeout`: Timeout duration (in milliseconds) for resolver operations
+  - `getRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for get operations.
+  - `deleteRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for delete operations.
+
+```jsx
+const notificationResolverConfig = {
+  resolveTimeout: 5000,
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+};
+```
+
+### Function based Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const getNotificationFromDB = async (request) => {
+  const response = await fetch('/api/velt/notifications/get', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const deleteNotificationFromDB = async (request) => {
+  const response = await fetch('/api/velt/notifications/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const notificationResolverConfig = {
+  resolveTimeout: 5000,
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+};
+
+const notificationDataProvider = {
+  get: getNotificationFromDB,
+  delete: deleteNotificationFromDB,
+  config: notificationResolverConfig,
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ notification: notificationDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const getNotificationFromDB = async (request) => {
+  const response = await fetch('/api/velt/notifications/get', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const deleteNotificationFromDB = async (request) => {
+  const response = await fetch('/api/velt/notifications/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return await response.json();
+};
+
+const notificationResolverConfig = {
+  resolveTimeout: 5000,
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  deleteRetryConfig: { retryCount: 3, retryDelay: 2000 }
+};
+
+const notificationDataProvider = {
+  get: getNotificationFromDB,
+  delete: deleteNotificationFromDB,
+  config: notificationResolverConfig,
+};
+
+Velt.setDataProviders({ notification: notificationDataProvider });
+```
+</Tab>
+</Tabs>
+
+# Resolver Status Field
+
+The [`Notification`](/api-reference/sdk/models/data-models#notification) object includes a field to detect whether the notification resolver was used:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `isNotificationResolverUsed` | `boolean` | `true` once the notification has been enriched via the notification resolver. Use this field to detect resolver usage downstream. |
+
+# Debugging
+
+You can subscribe to `dataProvider` events to monitor and debug notification resolver operations.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useVeltClient } from '@veltdev/react';
+
+const { client } = useVeltClient();
+
+useEffect(() => {
+  if (!client) return;
+
+  const subscription = client.on('dataProvider').subscribe((event) => {
+    console.log('Data Provider Event:', event);
+  });
+
+  return () => subscription?.unsubscribe();
+}, [client]);
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```javascript
+const subscription = Velt.on('dataProvider').subscribe((event) => {
+  console.log('Data Provider Event:', event);
+});
+
+// Unsubscribe when done
+subscription?.unsubscribe();
+```
+</Tab>
+</Tabs>

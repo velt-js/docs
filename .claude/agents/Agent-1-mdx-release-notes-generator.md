@@ -131,7 +131,7 @@ Trigger Agent-2 with the generated release note for planning analysis.
 **For Each Release Note**:
 - **1-line summary**: ≤ 25-30 words
 - **Sections (New/Improvements/Fixes)**:
-  - Default max **3 bullet points** per section unless changelog clearly has more discrete items
+  - **One bullet per release note item** — NEVER combine or merge multiple items into a single bullet, even if they share the same root cause or feature area. If the release note lists 7 items, the changelog must have 7 bullets.
   - Each bullet: ≤ 2 short sentences (preferably 1)
 - **Length ratio**: If generated MDX section is > 1.3× the word/line count of the relevant changelog fragment, compress until average ≤ 1.1×
 
@@ -190,7 +190,7 @@ Do NOT:
 - [ ] Subsection headings use feature names, not generic labels
 - [ ] No duplicate section headings within same version
 - [ ] Verbose phrases eliminated (no "improving workflow efficiency", etc.)
-- [ ] Each bullet ≤ 2 sentences; ≤ 3 bullets per section unless justified
+- [ ] Each bullet ≤ 2 sentences; one bullet per release note item (NEVER combine multiple items)
 - [ ] NO large inline tables, full wireframe trees, or multi-line prop tables — link to docs pages instead
 - [ ] Output length ≤ 1.1× changelog fragment length
 - [ ] Code examples: React/Next.js first, Other Frameworks second
@@ -212,4 +212,4 @@ After completing one release note:
 - Agent-2 will identify which documentation areas need updates
 - Return to Agent-1 after Agent-6 completes to process next release note in queue
 
-**Pipeline Flow**: Agent-1 (current) → Agent-2 → Agent-3 → Agent-4 → Agent-5 → Agent-6 → Return to Agent-1 (next release note)
+**Pipeline Flow**: Agent-1 (current) → Agent-2 → Agent-3 → Agent-4 → Agent-5 → Agent-6 → Agent-7 → Plugin Agent 1 → Plugin Agent 2 → Return to Agent-1 (next release note)

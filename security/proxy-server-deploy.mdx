@@ -1,0 +1,231 @@
+---
+title: Deploy a Proxy Server
+---
+
+Deploy a reverse proxy in front of the Velt SDK's backend services so all Velt traffic flows through infrastructure you own. This page covers the four services most customers need to proxy — **Auth**, **v2Db**, **v1Db**, and **Storage** — on **Cloudflare Workers** or **nginx**. For a field-by-field breakdown of every `proxyConfig.*` option, see [Proxy Server reference](/security/proxy-server).
+
+<Note>
+  `cdnHost` and `apiHost` are not covered by these recipes. Contact Velt support if you need to proxy the SDK CDN or the Velt API.
+</Note>
+
+### Why run a proxy?
+
+- **Egress control** — route all Velt SDK backend traffic through infrastructure you own and monitor.
+- **Compliance** — keep third-party endpoints off your app's public egress rules.
+- **Custom domains** — serve backend traffic from subdomains under your own brand.
+- **Geo-routing** — place the proxy closer to your users than the nearest upstream region.
+
+### Architecture
+
+```
+┌─────────┐     ┌────────────────────────┐     ┌──────────────────────┐
+│ Browser │ ──▶ │  your proxy domains:   │ ──▶ │ Velt SDK backend     │
+│ (Velt   │     │   auth-proxy.*         │     │  services (upstream) │
+│  SDK)   │     │   v2db-proxy.*         │     │                      │
+│         │     │   v1db-proxy.*         │     │                      │
+│         │     │   storage-proxy.*      │     │                      │
+└─────────┘     └────────────────────────┘     └──────────────────────┘
+                    (Cloudflare / nginx)
+```
+
+You deploy four proxy endpoints — one per service — under subdomains you control, then tell the Velt SDK to route through them via `proxyConfig`.
+
+### Services covered
+
+| Service | Routing notes |
+| --- | --- |
+| Auth | Path-based: `/v1/token` → token-refresh upstream, else → identity upstream |
+| v2Db | Straight passthrough |
+| v1Db | Dynamic upstream host from `?ns=` query param. WebSocket upgrade required. |
+| Storage | Straight passthrough |
+
+### Pick your platform
+
+| Platform | Best for | Setup time |
+| --- | --- | --- |
+| [Claude Code](#option-1-claude-code-fastest) | Fastest path — clone, prompt, done | ~5 min |
+| [Cloudflare Workers](#option-2-cloudflare-workers) | Edge-distributed, zero infra | ~15 min |
+| [nginx](#option-3-nginx) | Self-hosted, full control, existing nginx infrastructure | ~45 min |
+
+### Option 1 — Claude Code (fastest)
+
+If you already use Claude Code, the repo ships with a `CLAUDE.md` that teaches Claude how to wire everything up for you.
+
+<Steps>
+  <Step title="Clone the velt-proxy-server repo">
+    {/* TODO: add repo URL once public */}
+    Clone or download the `velt-proxy-server` repo and open it in Claude Code.
+  </Step>
+  <Step title="Prompt Claude Code">
+    Paste this prompt:
+
+    ```
+    I need to route my Velt SDK traffic through my own infrastructure. Can you help me set this up?
+    ```
+
+    Claude Code will ask for your four proxy subdomains (`auth-proxy`, `v2db-proxy`, `v1db-proxy`, `storage-proxy`), pick a platform (Cloudflare or nginx), and generate the deployment configuration.
+  </Step>
+  <Step title="Deploy and configure the SDK">
+    Follow Claude Code's deployment steps, then drop the generated `proxyConfig` into your Velt SDK init (see [Configure the Velt SDK](#configure-the-velt-sdk) below).
+  </Step>
+</Steps>
+
+### Option 2 — Cloudflare Workers
+
+<Steps>
+  <Step title="Create four proxy subdomains">
+    Create CNAME records for `auth-proxy`, `v2db-proxy`, `v1db-proxy`, and `storage-proxy` under a domain you control, and attach them to your Cloudflare zone.
+  </Step>
+  <Step title="Deploy the Worker">
+    {/* TODO: link to cloudflare/worker.js in the repo */}
+    Deploy the Worker from the repo's `cloudflare/` folder and bind the four subdomains to it as routes.
+  </Step>
+  <Step title="Route Auth by path">
+    Auth splits on path: `/v1/token` goes to the token-refresh upstream, everything else goes to identity. The Worker handles this with a simple path check:
+
+    ```js
+    // auth-proxy.* handler (abbreviated)
+    if (url.pathname.startsWith('/v1/token')) {
+      upstream = 'https://securetoken.googleapis.com';
+    } else {
+      upstream = 'https://identitytoolkit.googleapis.com';
+    }
+    ```
+  </Step>
+  <Step title="Rewrite v1Db upstream from ?ns=">
+    v1Db requests carry the Firebase namespace in the `?ns=` query param. The Worker rewrites the upstream Host to the shard that owns that namespace:
+
+    ```js
+    // v1db-proxy.* handler (abbreviated)
+    const ns = url.searchParams.get('ns');
+    const upstream = `https://${ns}.firebaseio.com${url.pathname}${url.search}`;
+    ```
+
+    WebSocket upgrade is handled automatically by Workers — no extra config required.
+  </Step>
+  <Step title="Verify">
+    From any machine, confirm the proxies respond:
+
+    ```bash
+    curl -I https://auth-proxy.customer.com/
+    curl -I https://v2db-proxy.customer.com/
+    ```
+
+    You should see upstream response headers (2xx/4xx are both fine — the proxy is live).
+  </Step>
+</Steps>
+
+### Option 3 — nginx
+
+<Steps>
+  <Step title="Prereqs">
+    nginx built with `ngx_http_proxy_module` and WebSocket support (standard on nginx ≥ 1.3.13). TLS certificates on each of the four subdomains.
+  </Step>
+  <Step title="Route Auth by path">
+    Auth is path-based. Inside the `auth-proxy.customer.com` server block:
+
+    ```nginx
+    location /v1/token {
+      proxy_pass https://securetoken.googleapis.com;
+      proxy_set_header Host securetoken.googleapis.com;
+    }
+
+    location / {
+      proxy_pass https://identitytoolkit.googleapis.com;
+      proxy_set_header Host identitytoolkit.googleapis.com;
+    }
+    ```
+  </Step>
+  <Step title="Dynamic upstream for v1Db">
+    v1Db needs the upstream host picked per-request from `?ns=`. Use an `nginx` `map` at `http` scope:
+
+    ```nginx
+    map $arg_ns $v1db_upstream {
+      default "${arg_ns}.firebaseio.com";
+    }
+
+    server {
+      server_name v1db-proxy.customer.com;
+
+      location / {
+        proxy_pass https://$v1db_upstream;
+        proxy_set_header Host $v1db_upstream;
+
+        # WebSocket upgrade
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+      }
+    }
+    ```
+  </Step>
+  <Step title="Passthrough for v2Db and Storage">
+    v2Db and Storage are straight passthroughs. Use one `server` block each with `proxy_pass` pointing at the upstream and `proxy_set_header Host` set to the upstream hostname.
+    {/* TODO: link to nginx/nginx.conf in the repo */}
+  </Step>
+  <Step title="Verify">
+    ```bash
+    curl -I https://auth-proxy.customer.com/
+    curl -I https://v2db-proxy.customer.com/
+    ```
+  </Step>
+</Steps>
+
+### Configure the Velt SDK
+
+After your proxy is deployed and verified, point the Velt SDK at it. Replace `customer.com` with your actual domain.
+
+<Note>
+  Verified with Velt SDK `v5.0.2-beta.15` and later.
+</Note>
+
+<Tabs>
+  <Tab title="React / Next.js">
+  ```jsx
+  <VeltProvider apiKey="YOUR_API_KEY" config={{
+    proxyConfig: {
+      v2DbHost:    'v2db-proxy.customer.com',
+      v1DbHost:    'v1db-proxy.customer.com',
+      storageHost: 'storage-proxy.customer.com',
+      authHost:    'auth-proxy.customer.com',
+      forceLongPolling: false, // optional, default false
+    },
+  }}>
+    <App />
+  </VeltProvider>
+  ```
+  </Tab>
+  <Tab title="Other Frameworks">
+  ```jsx
+  const client = await initVelt('YOUR_API_KEY', {
+    proxyConfig: {
+      v2DbHost:    'v2db-proxy.customer.com',
+      v1DbHost:    'v1db-proxy.customer.com',
+      storageHost: 'storage-proxy.customer.com',
+      authHost:    'auth-proxy.customer.com',
+      forceLongPolling: false, // optional, default false
+    },
+  });
+  ```
+  </Tab>
+</Tabs>
+
+WebSockets are enabled by default, so no extra SDK configuration is required.
+
+### `proxyConfig` fields
+
+All fields are optional. Omit any field you don't want to proxy and the SDK will talk to the default host directly for that one.
+
+| Field | Purpose | Covered by these recipes? |
+| --- | --- | --- |
+| [`v2DbHost`](/security/proxy-server#proxying-persistence-database) | Proxy host for the v2Db service | ✅ |
+| [`v1DbHost`](/security/proxy-server#proxying-ephemeral-database) | Proxy host for the v1Db service. Replaces the dynamic database host in all v1Db URLs. | ✅ |
+| [`storageHost`](/security/proxy-server#proxying-storage) | Proxy host for the Storage service | ✅ |
+| [`authHost`](/security/proxy-server#proxying-auth) | Proxy host for the Auth service | ✅ |
+| [`cdnHost`](/security/proxy-server#proxying-the-velt-sdk) | Proxy host for the Velt CDN (SDK bundle delivery) | ❌ contact Velt support |
+| [`apiHost`](/security/proxy-server#proxying-velt-api-calls) | Proxy host for the Velt API | ❌ contact Velt support |
+| `forceLongPolling` | Force long-polling for v2Db and v1Db instead of WebSocket | Optional, default `false` |
+
+### Coming soon
+
+AWS (API Gateway + Lambda@Edge), Google Cloud Run, Vercel Edge, and Kubernetes ingress recipes are on the roadmap. Contact Velt support if you need one of these sooner.

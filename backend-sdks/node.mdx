@@ -1,0 +1,1187 @@
+---
+title: "Node"
+description: "Use the Velt Node SDK for self-hosting backend implementation or calling Velt's REST APIs directly from Node.js or TypeScript. Covers both sdk.selfHosting.* (MongoDB + AWS S3) and sdk.api.* (REST API, no database needed)."
+---
+
+## Overview
+
+The [Velt Node SDK](https://www.npmjs.com/package/@veltdev/node) exposes two independent backends:
+
+| Backend | Namespace | Use case |
+|---------|-----------|----------|
+| Self-hosting | `sdk.selfHosting.*` | Store Velt data in your own MongoDB + AWS S3 |
+| REST API | `sdk.api.*` | Call Velt's REST APIs directly — no database required |
+
+**Self-hosting backend** (`sdk.selfHosting.*`) simplifies backend implementation by **90%**. Instead of writing custom database queries and storage logic, you:
+
+1. Pass your DB and storage configs to the SDK
+2. Call the relevant SDK method with the raw request payload
+3. Return the resulting response directly to the client
+
+**REST API backend** (`sdk.api.*`) provides feature parity with the Velt Python SDK. 17 services, fully-typed TypeScript request objects, and raw Velt API responses. No database or AWS configuration needed.
+
+## Installation
+
+```bash
+npm install @veltdev/node
+```
+
+For self-hosting, also install the optional peer dependencies you plan to use:
+
+```bash
+npm install mongodb              # required for self-hosting backend
+npm install @aws-sdk/client-s3   # required only if using S3 for attachments
+```
+
+### Requirements
+
+- Node.js 18+
+- TypeScript 5.x (optional — JavaScript is fully supported)
+- MongoDB 6+ (Percona Server or MongoDB Atlas) for self-hosting
+- `mongodb` ^6 and `@aws-sdk/client-s3` ^3 as optional peer dependencies
+
+## Quick Start
+
+### Initialize the SDK
+
+**Self-hosting initialization** (MongoDB + optional AWS):
+
+```ts
+import { VeltSDK } from '@veltdev/node';
+
+const sdk = VeltSDK.initialize({
+  database: {
+    host: 'localhost:27017',
+    username: 'your-username',
+    password: 'your-password',
+    auth_database: 'admin',
+    database_name: 'velt-integration',
+  },
+  apiKey: 'YOUR_VELT_API_KEY',
+  authToken: 'YOUR_VELT_AUTH_TOKEN'
+});
+```
+
+**REST API-only initialization** (no database needed):
+
+```ts
+import { VeltSDK } from '@veltdev/node';
+
+const sdk = VeltSDK.initialize({
+  apiKey: 'YOUR_VELT_API_KEY',
+  authToken: 'YOUR_VELT_AUTH_TOKEN'
+});
+
+// All sdk.api.* services are now available
+const result = await sdk.api.organizations.getOrganizations({ organizationIds: ['org-123'] });
+```
+
+The `database` section is optional when using only `sdk.api.*`. Set `VELT_API_KEY` and `VELT_AUTH_TOKEN` environment variables as an alternative to passing credentials in the config object.
+
+### Shutdown
+
+Call `await sdk.close()` when your process exits to release the database connection pool.
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Config key equivalent | Purpose |
+|----------|-----------------------|---------|
+| `VELT_API_KEY` | `apiKey` | Velt API key for authenticating REST API calls |
+| `VELT_AUTH_TOKEN` | `authToken` | Velt auth token for authenticating REST API calls |
+| `VELT_WORKSPACE_ID` | — | Default workspace ID for workspace-scoped operations |
+| `VELT_WORKSPACE_AUTH_TOKEN` | — | Auth token scoped to a specific workspace |
+| `AWS_ACCESS_KEY_ID` | — | AWS access key for S3 attachments |
+| `AWS_SECRET_ACCESS_KEY` | — | AWS secret key for S3 attachments |
+| `AWS_REGION` | — | AWS region for S3 |
+| `AWS_S3_BUCKET_NAME` | — | S3 bucket name for attachments |
+| `AWS_S3_ENDPOINT_URL` | — | Custom S3 endpoint (e.g., for MinIO) |
+
+### Self-Hosting Configuration
+
+<Tabs>
+<Tab title="Database">
+
+Configure MongoDB connection for storing comments, reactions, and user data.
+
+```ts
+const sdk = VeltSDK.initialize({
+  database: {
+    // Option 1: Connection string (recommended for MongoDB Atlas)
+    // Overrides host/username/password if provided
+    connection_string: 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
+
+    // Option 2: Individual components
+    // host: 'localhost:27017',
+    // username: 'your-username',
+    // password: 'your-password',
+    // auth_database: 'admin',
+    // database_name: 'velt-db',
+
+    // Optional fields:
+    // type: 'mongodb',       // defaults to 'mongodb'
+    // use_srv: true,         // use mongodb+srv:// (auto-detected for *.mongodb.net hosts)
+  }
+});
+```
+
+</Tab>
+<Tab title="AWS (Attachments)">
+
+Configure AWS S3 for storing file attachments. Alternatively, set the AWS environment variables listed above.
+
+```ts
+const sdk = VeltSDK.initialize({
+  database: { connection_string: 'mongodb+srv://...' },
+  // AWS credentials can also be provided via environment variables
+  apiKey: 'YOUR_VELT_API_KEY',
+  authToken: 'YOUR_VELT_AUTH_TOKEN'
+});
+```
+
+</Tab>
+<Tab title="Complete Example">
+
+Full configuration with database and credentials.
+
+```ts
+import { VeltSDK } from '@veltdev/node';
+
+const sdk = VeltSDK.initialize({
+  database: {
+    connection_string: 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
+  },
+  apiKey: 'YOUR_VELT_API_KEY',
+  authToken: 'YOUR_VELT_AUTH_TOKEN'
+});
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  await sdk.close();
+  process.exit(0);
+});
+```
+
+</Tab>
+</Tabs>
+
+## Self-Hosting Backend
+
+Each self-hosting service is loaded asynchronously on first access via `await sdk.selfHosting.getXxx()`. The service is cached after the first call. The `token` service is the exception — it is available as a direct synchronous property via `sdk.selfHosting.token`.
+
+### API Endpoints
+
+#### Comments
+
+```ts
+import { VeltSDK } from '@veltdev/node';
+
+const commentsService = await sdk.selfHosting.getComments();
+
+// GET Comments
+const getResult = await commentsService.getComments(requestBody);
+// Returns { success: true, statusCode: 200, data: { ... } }
+
+// SAVE Comments
+const saveResult = await commentsService.saveComments(requestBody);
+
+// DELETE Comment
+const deleteResult = await commentsService.deleteComment(requestBody);
+```
+
+#### Reactions
+
+```ts
+const reactionsService = await sdk.selfHosting.getReactions();
+
+// GET Reactions
+const getResult = await reactionsService.getReactions(requestBody);
+
+// SAVE Reactions
+const saveResult = await reactionsService.saveReactions(requestBody);
+
+// DELETE Reaction
+const deleteResult = await reactionsService.deleteReaction(requestBody);
+```
+
+#### Users
+
+```ts
+const usersService = await sdk.selfHosting.getUsers();
+
+// GET Users
+const result = await usersService.getUsers(requestBody);
+```
+
+#### Attachments
+
+```ts
+const attachmentsService = await sdk.selfHosting.getAttachments();
+
+// GET Attachment
+const getResult = await attachmentsService.getAttachment('org-123', 12345);
+
+// SAVE Attachment (with optional S3 upload)
+const saveResult = await attachmentsService.saveAttachment(
+  {
+    metadata: { organizationId: 'org-123', documentId: 'doc-1' },
+    attachment: {
+      attachmentId: 12345,
+      name: 'document.pdf',
+      mimeType: 'application/pdf',
+      size: 1024,
+    },
+  },
+  fileBuffer,        // optional Buffer for S3 upload
+  'document.pdf',
+  'application/pdf'
+);
+
+// DELETE Attachment
+const deleteResult = await attachmentsService.deleteAttachment(requestBody);
+```
+
+#### Token
+
+```ts
+const tokenResult = await sdk.selfHosting.token.getToken(
+  'org-123',
+  'user-1',
+  'john@example.com',
+  false
+);
+const token = (tokenResult.data as { token: string }).token;
+```
+
+#### Notifications
+
+```ts
+const notificationsService = await sdk.selfHosting.getNotifications();
+
+// GET Notifications
+const result = await notificationsService.getNotifications(requestBody);
+
+// SAVE Notifications
+await notificationsService.saveNotifications(requestBody);
+
+// DELETE Notification
+await notificationsService.deleteNotification(requestBody);
+```
+
+#### Activities
+
+```ts
+const activitiesService = await sdk.selfHosting.getActivities();
+
+// GET Activities
+const result = await activitiesService.getActivities(requestBody);
+
+// SAVE Activities
+await activitiesService.saveActivities(requestBody);
+```
+
+#### Recorder
+
+```ts
+const recorderService = await sdk.selfHosting.getRecorder();
+
+// GET Recorder Annotations
+const result = await recorderService.getRecorderAnnotations(requestBody);
+
+// SAVE Recorder Annotation
+await recorderService.saveRecorderAnnotation(requestBody);
+
+// DELETE Recorder Annotation
+await recorderService.deleteRecorderAnnotation(requestBody);
+```
+
+### Response Format
+
+All self-hosting service methods return a standardized response object:
+
+```ts
+// Success response
+{
+  success: true,
+  statusCode: 200,
+  data: { ... }
+}
+
+// Error response
+{
+  success: false,
+  statusCode: 500,
+  error: 'Error message',
+  errorCode: 'INTERNAL_ERROR'
+}
+```
+
+## REST API Backend
+
+The `sdk.api.*` namespace provides 17 services covering all Velt REST API operations. No database or AWS configuration is required — only `apiKey` and `authToken`.
+
+### Services
+
+#### Organizations
+
+**Namespace:** `sdk.api.organizations`
+
+```ts
+// Add
+await sdk.api.organizations.addOrganizations({
+  organizations: [{ organizationId: 'org-123', organizationName: 'My Org' }]
+});
+
+// Get
+await sdk.api.organizations.getOrganizations({
+  organizationIds: ['org-123']
+});
+
+// Update
+await sdk.api.organizations.updateOrganizations({
+  organizations: [{ organizationId: 'org-123', organizationName: 'Updated Name' }]
+});
+
+// Delete
+await sdk.api.organizations.deleteOrganizations({ organizationIds: ['org-123'] });
+
+// Disable/enable
+await sdk.api.organizations.updateOrganizationDisableState({
+  organizationIds: ['org-123'],
+  disabled: true
+});
+```
+
+Available methods: `addOrganizations`, `getOrganizations`, `updateOrganizations`, `deleteOrganizations`, `updateOrganizationDisableState`.
+
+---
+
+#### Folders
+
+**Namespace:** `sdk.api.folders`
+
+```ts
+await sdk.api.folders.addFolder({
+  organizationId: 'org-123',
+  folders: [{ folderId: 'folder-1', folderName: 'My Folder' }]
+});
+await sdk.api.folders.getFolders({ organizationId: 'org-123', folderId: 'folder-1' });
+await sdk.api.folders.updateFolder({ organizationId: 'org-123', folders: [...] });
+await sdk.api.folders.deleteFolder({ organizationId: 'org-123', folderId: 'folder-1' });
+await sdk.api.folders.updateFolderAccess({ organizationId: 'org-123', folderIds: ['folder-1'], accessType: 'restricted' });
+```
+
+Available methods: `addFolder`, `getFolders`, `updateFolder`, `deleteFolder`, `updateFolderAccess`.
+
+---
+
+#### Documents
+
+**Namespace:** `sdk.api.documents`
+
+```ts
+await sdk.api.documents.addDocuments({
+  organizationId: 'org-123',
+  documents: [{ documentId: 'doc-1', documentName: 'My Document' }]
+});
+await sdk.api.documents.getDocuments({ organizationId: 'org-123', documentIds: ['doc-1'] });
+await sdk.api.documents.updateDocuments({ organizationId: 'org-123', documents: [...] });
+await sdk.api.documents.deleteDocuments({ organizationId: 'org-123', documentIds: ['doc-1'] });
+await sdk.api.documents.moveDocuments({ organizationId: 'org-123', documentIds: ['doc-1'], folderId: 'folder-2' });
+await sdk.api.documents.updateDocumentAccess({ organizationId: 'org-123', documentIds: ['doc-1'], accessType: 'restricted' });
+await sdk.api.documents.updateDocumentDisableState({ organizationId: 'org-123', documentIds: ['doc-1'], disabled: true });
+await sdk.api.documents.migrateDocuments({ organizationId: 'org-123', ... });
+await sdk.api.documents.migrateDocumentsStatus({ organizationId: 'org-123', migrationId: 'migration-1' });
+```
+
+Available methods: `addDocuments`, `getDocuments`, `updateDocuments`, `deleteDocuments`, `moveDocuments`, `updateDocumentAccess`, `updateDocumentDisableState`, `migrateDocuments`, `migrateDocumentsStatus`.
+
+---
+
+#### Users
+
+**Namespace:** `sdk.api.users`
+
+```ts
+await sdk.api.users.addUsers({ organizationId: 'org-123', users: [...] });
+await sdk.api.users.getUsers({ organizationId: 'org-123', userIds: ['user-1'] });
+await sdk.api.users.updateUsers({ organizationId: 'org-123', users: [...] });
+await sdk.api.users.deleteUsers({ organizationId: 'org-123', userIds: ['user-1'] });
+```
+
+Available methods: `addUsers`, `getUsers`, `updateUsers`, `deleteUsers`.
+
+---
+
+#### User Groups
+
+**Namespace:** `sdk.api.userGroups`
+
+```ts
+// Add groups
+await sdk.api.userGroups.addUserGroups({
+  organizationId: 'org-123',
+  organizationUserGroups: [{ groupId: 'engineering', groupName: 'Engineering' }],
+  createOrganization: true,
+});
+
+// Add users to a group
+await sdk.api.userGroups.addUsersToGroup({
+  organizationId: 'org-123',
+  organizationUserGroupId: 'engineering',
+  userIds: ['user-1', 'user-2'],
+});
+
+// Remove users from a group
+await sdk.api.userGroups.deleteUsersFromGroup({
+  organizationId: 'org-123',
+  organizationUserGroupId: 'engineering',
+  userIds: ['user-1'],
+});
+```
+
+Available methods: `addUserGroups`, `addUsersToGroup`, `deleteUsersFromGroup`.
+
+---
+
+#### Notifications
+
+**Namespace:** `sdk.api.notifications`
+
+```ts
+// Add
+await sdk.api.notifications.addNotifications({
+  organizationId: 'org-123',
+  documentId: 'doc-1',
+  actionUser: { userId: 'user-1', name: 'John Doe', email: 'john@example.com' },
+  displayHeadlineMessageTemplate: '{actionUser} commented on your document',
+  displayBodyMessage: 'Check out the new comment',
+  notifyUsers: [{ userId: 'user-2', name: 'Jane Doe' }],
+  createOrganization: true,
+  createDocument: true,
+});
+
+// Get (with filters and pagination)
+await sdk.api.notifications.getNotifications({
+  organizationId: 'org-123',
+  userId: 'user-2',
+  pageSize: 10,
+  order: 'desc',
+});
+
+// Set config (notification preferences)
+await sdk.api.notifications.setNotificationConfig({
+  organizationId: 'org-123',
+  userIds: ['user-1', 'user-2'],
+  config: { inbox: 'ALL', email: 'MINE', slack: 'NONE' },
+});
+```
+
+Available methods: `addNotifications`, `getNotifications`, `updateNotifications`, `deleteNotifications`, `setNotificationConfig`, `getNotificationConfig`.
+
+---
+
+#### Comment Annotations
+
+**Namespace:** `sdk.api.commentAnnotations`
+
+```ts
+await sdk.api.commentAnnotations.addCommentAnnotations({ organizationId: 'org-123', documentId: 'doc-1', commentAnnotations: [...] });
+await sdk.api.commentAnnotations.getCommentAnnotations({ organizationId: 'org-123', documentId: 'doc-1' });
+await sdk.api.commentAnnotations.getCommentAnnotationsCount({ organizationId: 'org-123', documentIds: [...] });
+await sdk.api.commentAnnotations.updateCommentAnnotations({ organizationId: 'org-123', documentId: 'doc-1', annotationIds: ['annotation-id-1'], updatedData: { status: { id: 'RESOLVED', name: 'Resolved', type: 'terminal' } } });
+await sdk.api.commentAnnotations.deleteCommentAnnotations({ organizationId: 'org-123', documentId: 'doc-1', annotationIds: [...] });
+await sdk.api.commentAnnotations.addComments({ organizationId: 'org-123', ... });
+await sdk.api.commentAnnotations.getComments({ organizationId: 'org-123', documentId: 'doc-1' });
+await sdk.api.commentAnnotations.updateComments({ organizationId: 'org-123', ... });
+await sdk.api.commentAnnotations.deleteComments({ organizationId: 'org-123', ... });
+```
+
+Available methods: `addCommentAnnotations`, `getCommentAnnotations`, `getCommentAnnotationsCount`, `updateCommentAnnotations`, `deleteCommentAnnotations`, `addComments`, `getComments`, `updateComments`, `deleteComments`.
+
+---
+
+#### Activities
+
+**Namespace:** `sdk.api.activities`
+
+```ts
+await sdk.api.activities.addActivities({ organizationId: 'org-123', activities: [...] });
+await sdk.api.activities.getActivities({ organizationId: 'org-123', documentId: 'doc-1' });
+await sdk.api.activities.updateActivities({ organizationId: 'org-123', activities: [...] });
+await sdk.api.activities.deleteActivities({ organizationId: 'org-123', documentId: 'doc-456' });
+```
+
+Available methods: `addActivities`, `getActivities`, `updateActivities`, `deleteActivities`.
+
+---
+
+#### Access Control
+
+**Namespace:** `sdk.api.accessControl`
+
+```ts
+// Add permissions
+await sdk.api.accessControl.addPermissions({
+  user: { userId: 'user-1' },
+  permissions: {
+    resources: [
+      { type: 'organization', id: 'org-123', accessRole: 'editor' },
+      { type: 'document', id: 'doc-1', organizationId: 'org-123', accessRole: 'viewer', expiresAt: 1728902400 },
+    ],
+  },
+});
+
+// Get permissions
+await sdk.api.accessControl.getPermissions({
+  organizationId: 'org-123',
+  userIds: ['user-1'],
+  documentIds: ['doc-1'],
+});
+
+// Remove permissions
+await sdk.api.accessControl.removePermissions({
+  userId: 'user-1',
+  permissions: {
+    resources: [
+      { type: 'organization', id: 'org-123' },
+      { type: 'document', id: 'doc-1', organizationId: 'org-123' },
+    ],
+  },
+});
+
+// Generate signature for Permission Provider
+await sdk.api.accessControl.generateSignature({
+  permissions: [{
+    userId: 'user-1',
+    resourceId: 'doc-1',
+    type: 'document',
+    hasAccess: true,
+    accessRole: 'viewer',
+  }],
+});
+
+// Generate JWT token
+await sdk.api.accessControl.generateToken({
+  userId: 'user-1',
+  userProperties: { name: 'John Doe', email: 'john@example.com', isAdmin: false },
+  permissions: {
+    resources: [
+      { type: 'organization', id: 'org-123', accessRole: 'viewer' },
+      { type: 'document', id: 'doc-1', organizationId: 'org-123', accessRole: 'editor' },
+    ],
+  },
+});
+```
+
+Available methods: `addPermissions`, `getPermissions`, `removePermissions`, `generateSignature`, `generateToken`.
+
+---
+
+#### CRDT
+
+**Namespace:** `sdk.api.crdt`
+
+Supports `text`, `map`, `array`, and `xml` CRDT data types.
+
+```ts
+// Add editor data
+await sdk.api.crdt.addCrdtData({
+  organizationId: 'org-123',
+  documentId: 'doc-1',
+  editorId: 'my-collab-note',
+  data: 'Hello, collaborative world!',
+  type: 'text',
+});
+
+// Get editor data (with optional editorId filter)
+await sdk.api.crdt.getCrdtData({
+  organizationId: 'org-123',
+  documentId: 'doc-1',
+  editorId: 'my-collab-note',
+});
+
+// Update existing editor data
+await sdk.api.crdt.updateCrdtData({
+  organizationId: 'org-123',
+  documentId: 'doc-1',
+  editorId: 'my-collab-note',
+  data: 'Updated collaborative content!',
+  type: 'text',
+});
+```
+
+Available methods: `addCrdtData`, `getCrdtData`, `updateCrdtData`.
+
+---
+
+#### Presence
+
+**Namespace:** `sdk.api.presence`
+
+```ts
+// Add users to presence
+await sdk.api.presence.addPresence({
+  organizationId: 'org-123',
+  documentId: 'doc-456',
+  users: [
+    { userId: 'user-1', name: 'John Doe', email: 'john@example.com', status: 'online' },
+    { userId: 'user-2', name: 'Jane Doe', status: 'away' },
+  ],
+});
+
+// Update user presence status
+await sdk.api.presence.updatePresence({
+  organizationId: 'org-123',
+  documentId: 'doc-456',
+  users: [{ userId: 'user-1', status: 'away' }],
+});
+
+// Remove users from presence
+await sdk.api.presence.deletePresence({
+  organizationId: 'org-123',
+  documentId: 'doc-456',
+  userIds: ['user-1', 'user-2'],
+});
+```
+
+Available methods: `addPresence`, `updatePresence`, `deletePresence`.
+
+---
+
+#### Livestate
+
+**Namespace:** `sdk.api.livestate`
+
+```ts
+// Broadcast event
+await sdk.api.livestate.broadcastEvent({
+  organizationId: 'org-123',
+  documentId: 'doc-1',
+  liveStateDataId: 'my-live-state',
+  data: { status: 'active', message: 'Hello World' },
+  merge: true,
+});
+```
+
+Available methods: `broadcastEvent`.
+
+---
+
+#### Recordings
+
+**Namespace:** `sdk.api.recordings`
+
+```ts
+await sdk.api.recordings.getRecordings({ organizationId: 'org-123', documentId: 'doc-1' });
+```
+
+Available methods: `getRecordings`.
+
+---
+
+#### Rewriter
+
+**Namespace:** `sdk.api.rewriter`
+
+Supports OpenAI, Anthropic, and Gemini models.
+
+```ts
+await sdk.api.rewriter.askAi({
+  model: 'gpt-4o',
+  prompt: 'Fix the grammar and spelling in the following text.',
+  text: 'Their going to the store to by some apples.',
+});
+```
+
+Available methods: `askAi`.
+
+---
+
+#### GDPR
+
+**Namespace:** `sdk.api.gdpr`
+
+```ts
+// Delete all user data
+await sdk.api.gdpr.deleteAllUserData({
+  userIds: ['user-1', 'user-2'],
+  organizationIds: ['org-123'],
+});
+
+// Get all user data (paginated)
+await sdk.api.gdpr.getAllUserData({
+  organizationId: 'org-123',
+  userId: 'user-1',
+  pageToken: 'next-page-token',
+});
+
+// Get deletion job status
+await sdk.api.gdpr.getDeleteUserDataStatus({ jobId: 'job-id-from-delete-call' });
+```
+
+Available methods: `getAllUserData`, `deleteAllUserData`, `getDeleteUserDataStatus`.
+
+---
+
+#### Workspace
+
+**Namespace:** `sdk.api.workspace`
+
+```ts
+// Create a new workspace
+await sdk.api.workspace.createWorkspace({
+  ownerEmail: 'owner@example.com',
+  workspaceName: 'My Workspace',
+  name: 'John Doe',
+});
+
+// Get workspace details
+await sdk.api.workspace.getWorkspace({});
+
+// Create an API key
+await sdk.api.workspace.createApiKey({
+  ownerEmail: 'owner@example.com',
+  type: 'production',
+  createAuthToken: true,
+  apiKeyName: 'Production Key',
+  allowedDomains: ['example.com', '*.example.com'],
+});
+
+// Update an API key name
+await sdk.api.workspace.updateApiKey({ apiKey: 'velt_api_key_1', apiKeyName: 'Renamed Key' });
+
+// Get API keys (with optional pagination)
+await sdk.api.workspace.getApiKeys({ pageSize: 50, pageToken: 'next-page-token' });
+
+// Get API key metadata
+await sdk.api.workspace.getApiKeyMetadata({});
+
+// Reset auth token for an API key
+await sdk.api.workspace.resetAuthToken({ apiKey: 'velt_api_key_1' });
+
+// Get auth tokens for an API key
+await sdk.api.workspace.getAuthTokens({ apiKey: 'velt_api_key_1' });
+
+// Add allowed domains
+await sdk.api.workspace.addDomains({ domains: ['example.com', '*.firebase.com'] });
+
+// Delete allowed domains
+await sdk.api.workspace.deleteDomains({ domains: ['example.com'] });
+
+// Get allowed domains
+await sdk.api.workspace.getDomains({});
+
+// Check email verification status
+await sdk.api.workspace.getEmailStatus({ ownerEmail: 'owner@example.com' });
+
+// Send login link
+await sdk.api.workspace.sendLoginLink({
+  email: 'user@example.com',
+  continueUrl: 'https://app.example.com/dashboard',
+});
+
+// Get email configuration
+await sdk.api.workspace.getEmailConfig({});
+
+// Update email configuration
+await sdk.api.workspace.updateEmailConfig({
+  useEmailService: true,
+  emailServiceConfig: { type: 'sendgrid', apiKey: 'sg-key', fromEmail: 'noreply@example.com' },
+});
+
+// Get webhook configuration
+await sdk.api.workspace.getWebhookConfig({});
+
+// Update webhook configuration
+await sdk.api.workspace.updateWebhookConfig({
+  useWebhookService: true,
+  webhookServiceConfig: {
+    authToken: 'webhook-secret',
+    rawNotificationUrl: 'https://example.com/webhook/raw',
+    processedNotificationUrl: 'https://example.com/webhook/processed',
+  },
+});
+```
+
+Available methods: `createWorkspace`, `getWorkspace`, `createApiKey`, `updateApiKey`, `getApiKeys`, `getApiKeyMetadata`, `resetAuthToken`, `getAuthTokens`, `addDomains`, `deleteDomains`, `getDomains`, `getEmailStatus`, `sendLoginLink`, `getEmailConfig`, `updateEmailConfig`, `getWebhookConfig`, `updateWebhookConfig`.
+
+---
+
+#### Token
+
+**Namespace:** `sdk.api.token`
+
+```ts
+await sdk.api.token.getToken('org-123', 'user-1');
+```
+
+Available methods: `getToken`.
+
+---
+
+### Response Format
+
+Every method returns the raw Velt API response. No local validation is applied; the Velt API handles validation server-side.
+
+```ts
+// Success response (raw from Velt API):
+// {
+//   result: {
+//     status: 'success',
+//     message: 'Organization(s) added successfully.',
+//     data: {
+//       'org-123': {
+//         success: true,
+//         id: '02cf91e5...',
+//         message: 'Added Successfully'
+//       }
+//     }
+//   }
+// }
+//
+// Error response (raw from Velt API):
+// {
+//   error: {
+//     message: 'Error adding organization(s).',
+//     status: 'INTERNAL',
+//     details: {
+//       'org-123': {
+//         success: false,
+//         message: 'Organization already exists.'
+//       }
+//     }
+//   }
+// }
+```
+
+---
+
+### Data Isolation
+
+All methods require `organizationId` in the request body. Data isolation is enforced per-organization.
+
+---
+
+## Error Handling
+
+The SDK exports five typed error classes:
+
+| Class | Extends | When thrown |
+|-------|---------|-------------|
+| `VeltSDKError` | `Error` | Base class for all SDK errors |
+| `VeltDatabaseError` | `VeltSDKError` | MongoDB connection or query failures |
+| `VeltValidationError` | `VeltSDKError` | Missing or invalid request parameters |
+| `VeltTokenError` | `VeltSDKError` | Token generation failures |
+| `VeltApiError` | `VeltSDKError` | REST API call failures |
+
+```ts
+import { VeltSDK, VeltDatabaseError, VeltApiError } from '@veltdev/node';
+
+try {
+  const result = await sdk.api.organizations.getOrganizations({ organizationIds: ['org-123'] });
+} catch (err) {
+  if (err instanceof VeltApiError) {
+    console.error('API call failed:', err.message);
+  } else if (err instanceof VeltDatabaseError) {
+    console.error('Database error:', err.message);
+  } else {
+    throw err;
+  }
+}
+```
+
+## API Reference
+
+Complete method reference for both backends. All self-hosting methods are accessed via `await sdk.selfHosting.getXxx()` service instances. All REST API methods are under `sdk.api.<service>.<method>`.
+
+<AccordionGroup>
+
+<Accordion title="Self-Hosting: Comments (3 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `commentsService.getComments(request)` | Fetch comments from database |
+| `commentsService.saveComments(request)` | Save comments to database |
+| `commentsService.deleteComment(request)` | Delete a comment from database |
+
+</Accordion>
+
+<Accordion title="Self-Hosting: Reactions (3 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `reactionsService.getReactions(request)` | Fetch reactions from database |
+| `reactionsService.saveReactions(request)` | Save reactions to database |
+| `reactionsService.deleteReaction(request)` | Delete a reaction annotation |
+
+</Accordion>
+
+<Accordion title="Self-Hosting: Users (1 method)">
+
+| Method | Description |
+|--------|-------------|
+| `usersService.getUsers(request)` | Fetch users from database |
+
+</Accordion>
+
+<Accordion title="Self-Hosting: Attachments (3 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `attachmentsService.getAttachment(organizationId, attachmentId)` | Fetch attachment by ID |
+| `attachmentsService.saveAttachment(request, fileData?, fileName?, mimeType?)` | Save metadata, optionally upload file to S3 |
+| `attachmentsService.deleteAttachment(request)` | Delete an attachment |
+
+</Accordion>
+
+<Accordion title="Self-Hosting: Token (1 method)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.selfHosting.token.getToken(orgId, userId, email?, isAdmin?)` | Generate a Velt auth token |
+
+</Accordion>
+
+<Accordion title="Self-Hosting: Notifications (3 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `notificationsService.getNotifications(request)` | Fetch notifications from database |
+| `notificationsService.saveNotifications(request)` | Save notifications to database |
+| `notificationsService.deleteNotification(request)` | Delete a notification from database |
+
+</Accordion>
+
+<Accordion title="Self-Hosting: Activities (2 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `activitiesService.getActivities(request)` | Fetch activities from database |
+| `activitiesService.saveActivities(request)` | Save activity logs to database |
+
+</Accordion>
+
+<Accordion title="Self-Hosting: Recorder (3 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `recorderService.getRecorderAnnotations(request)` | Fetch recorder annotations from database |
+| `recorderService.saveRecorderAnnotation(request)` | Save a recorder annotation |
+| `recorderService.deleteRecorderAnnotation(request)` | Delete a recorder annotation |
+
+</Accordion>
+
+<Accordion title="Organizations (5 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.organizations.addOrganizations(request)` | Create one or more organizations |
+| `sdk.api.organizations.getOrganizations(request)` | Retrieve organizations by ID |
+| `sdk.api.organizations.updateOrganizations(request)` | Update organization properties |
+| `sdk.api.organizations.deleteOrganizations(request)` | Delete organizations |
+| `sdk.api.organizations.updateOrganizationDisableState(request)` | Enable or disable an organization |
+
+</Accordion>
+
+<Accordion title="Folders (5 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.folders.addFolder(request)` | Create a folder |
+| `sdk.api.folders.getFolders(request)` | Retrieve folders |
+| `sdk.api.folders.updateFolder(request)` | Update folder properties |
+| `sdk.api.folders.deleteFolder(request)` | Delete a folder |
+| `sdk.api.folders.updateFolderAccess(request)` | Update folder access permissions |
+
+</Accordion>
+
+<Accordion title="Documents (9 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.documents.addDocuments(request)` | Create documents |
+| `sdk.api.documents.getDocuments(request)` | Retrieve documents |
+| `sdk.api.documents.updateDocuments(request)` | Update document properties |
+| `sdk.api.documents.deleteDocuments(request)` | Delete documents |
+| `sdk.api.documents.moveDocuments(request)` | Move documents to a folder |
+| `sdk.api.documents.updateDocumentAccess(request)` | Update document access permissions |
+| `sdk.api.documents.updateDocumentDisableState(request)` | Enable or disable a document |
+| `sdk.api.documents.migrateDocuments(request)` | Start a document migration job |
+| `sdk.api.documents.migrateDocumentsStatus(request)` | Poll document migration job status |
+
+</Accordion>
+
+<Accordion title="Users (4 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.users.addUsers(request)` | Add users to an organization |
+| `sdk.api.users.getUsers(request)` | Retrieve users |
+| `sdk.api.users.updateUsers(request)` | Update user properties |
+| `sdk.api.users.deleteUsers(request)` | Remove users from an organization |
+
+</Accordion>
+
+<Accordion title="User Groups (3 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.userGroups.addUserGroups(request)` | Create user groups |
+| `sdk.api.userGroups.addUsersToGroup(request)` | Add users to an existing group |
+| `sdk.api.userGroups.deleteUsersFromGroup(request)` | Remove users from a group |
+
+</Accordion>
+
+<Accordion title="Notifications (6 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.notifications.addNotifications(request)` | Add notifications to users |
+| `sdk.api.notifications.getNotifications(request)` | Get notifications with optional filters and pagination |
+| `sdk.api.notifications.updateNotifications(request)` | Update existing notifications |
+| `sdk.api.notifications.deleteNotifications(request)` | Delete notifications |
+| `sdk.api.notifications.getNotificationConfig(request)` | Get notification preferences for a user |
+| `sdk.api.notifications.setNotificationConfig(request)` | Set notification preferences for users |
+
+</Accordion>
+
+<Accordion title="Comment Annotations (9 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.commentAnnotations.addCommentAnnotations(request)` | Create comment annotations |
+| `sdk.api.commentAnnotations.getCommentAnnotations(request)` | Retrieve comment annotations |
+| `sdk.api.commentAnnotations.getCommentAnnotationsCount(request)` | Count comment annotations |
+| `sdk.api.commentAnnotations.updateCommentAnnotations(request)` | Update comment annotations |
+| `sdk.api.commentAnnotations.deleteCommentAnnotations(request)` | Delete comment annotations |
+| `sdk.api.commentAnnotations.addComments(request)` | Add reply comments to an annotation |
+| `sdk.api.commentAnnotations.getComments(request)` | Retrieve individual comments |
+| `sdk.api.commentAnnotations.updateComments(request)` | Update individual comments |
+| `sdk.api.commentAnnotations.deleteComments(request)` | Delete individual comments |
+
+</Accordion>
+
+<Accordion title="Activities (4 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.activities.addActivities(request)` | Log activity events |
+| `sdk.api.activities.getActivities(request)` | Retrieve activity events |
+| `sdk.api.activities.updateActivities(request)` | Update activity events |
+| `sdk.api.activities.deleteActivities(request)` | Delete activity events |
+
+</Accordion>
+
+<Accordion title="Access Control (5 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.accessControl.addPermissions(request)` | Grant permissions |
+| `sdk.api.accessControl.getPermissions(request)` | Retrieve permissions |
+| `sdk.api.accessControl.removePermissions(request)` | Revoke permissions |
+| `sdk.api.accessControl.generateSignature(request)` | Generate a signed payload |
+| `sdk.api.accessControl.generateToken(request)` | Generate an auth token |
+
+</Accordion>
+
+<Accordion title="CRDT (3 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.crdt.addCrdtData(request)` | Store CRDT (Yjs) data |
+| `sdk.api.crdt.getCrdtData(request)` | Retrieve CRDT data |
+| `sdk.api.crdt.updateCrdtData(request)` | Update CRDT data |
+
+</Accordion>
+
+<Accordion title="Presence (3 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.presence.addPresence(request)` | Set user presence |
+| `sdk.api.presence.updatePresence(request)` | Update user presence |
+| `sdk.api.presence.deletePresence(request)` | Remove user presence |
+
+</Accordion>
+
+<Accordion title="Livestate (1 method)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.livestate.broadcastEvent(request)` | Broadcast an ephemeral event to document clients |
+
+</Accordion>
+
+<Accordion title="Recordings (1 method)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.recordings.getRecordings(request)` | Retrieve recording metadata for a document |
+
+</Accordion>
+
+<Accordion title="Rewriter (1 method)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.rewriter.askAi(request)` | Call Velt's AI rewriter with a model, prompt, and text |
+
+</Accordion>
+
+<Accordion title="GDPR (3 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.gdpr.deleteAllUserData(request)` | Request deletion of all user data |
+| `sdk.api.gdpr.getAllUserData(request)` | Export all data for a user |
+| `sdk.api.gdpr.getDeleteUserDataStatus(request)` | Poll the status of a deletion job |
+
+</Accordion>
+
+<Accordion title="Workspace (17 methods)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.workspace.createWorkspace(request)` | Create a new workspace |
+| `sdk.api.workspace.getWorkspace(request)` | Retrieve workspace details |
+| `sdk.api.workspace.createApiKey(request)` | Create a new API key |
+| `sdk.api.workspace.updateApiKey(request)` | Update an existing API key |
+| `sdk.api.workspace.getApiKeys(request)` | List all API keys |
+| `sdk.api.workspace.getApiKeyMetadata(request)` | Get metadata for a specific API key |
+| `sdk.api.workspace.resetAuthToken(request)` | Rotate the auth token |
+| `sdk.api.workspace.getAuthTokens(request)` | List auth tokens |
+| `sdk.api.workspace.addDomains(request)` | Add allowed domains |
+| `sdk.api.workspace.deleteDomains(request)` | Remove allowed domains |
+| `sdk.api.workspace.getDomains(request)` | List allowed domains |
+| `sdk.api.workspace.getEmailStatus(request)` | Check email service status |
+| `sdk.api.workspace.sendLoginLink(request)` | Send a login link email |
+| `sdk.api.workspace.getEmailConfig(request)` | Retrieve email configuration |
+| `sdk.api.workspace.updateEmailConfig(request)` | Update email configuration |
+| `sdk.api.workspace.getWebhookConfig(request)` | Retrieve webhook configuration |
+| `sdk.api.workspace.updateWebhookConfig(request)` | Update webhook configuration |
+
+</Accordion>
+
+<Accordion title="Token (1 method)">
+
+| Method | Description |
+|--------|-------------|
+| `sdk.api.token.getToken(organizationId, userId)` | Generate a Velt auth token for a user |
+
+</Accordion>
+
+</AccordionGroup>
+
+## Distribution
+
+The package ships both CommonJS (CJS) and ES Module (ESM) bundles with rolled-up `.d.ts` type definitions, making it compatible with all modern Node.js project setups.
+
+```ts
+// ESM
+import { VeltSDK } from '@veltdev/node';
+
+// CommonJS
+const { VeltSDK } = require('@veltdev/node');
+```

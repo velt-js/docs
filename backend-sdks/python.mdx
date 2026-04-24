@@ -1,27 +1,43 @@
 ---
 title: "Python"
-description: "Use the Velt Python SDK to simplify self-hosting backend implementation. Pass your DB and storage configs and let the SDK handle the data operations."
+description: "Use the Velt Python SDK for self-hosting backend implementation or calling Velt's REST APIs directly. Covers both sdk.selfHosting.* (MongoDB + AWS S3) and sdk.api.* (REST API, no database needed)."
 ---
 
-# Overview
+## Overview
 
-The [Velt Python SDK](https://pypi.org/project/velt-py) simplifies self-hosting backend implementation by **90%**. Instead of writing custom database queries and storage logic, you:
+The [Velt Python SDK](https://pypi.org/project/velt-py) exposes two independent backends:
+
+| Backend | Namespace | Use case |
+|---------|-----------|----------|
+| Self-hosting | `sdk.selfHosting.*` | Store Velt data in your own MongoDB + AWS S3 |
+| REST API | `sdk.api.*` | Call Velt's REST APIs directly — no database required |
+
+**Self-hosting backend** (`sdk.selfHosting.*`) simplifies backend implementation by **90%**. Instead of writing custom database queries and storage logic, you:
 
 1. Pass your DB and storage configs to the SDK
 2. Pass the raw request object directly to SDK methods
 3. Return the resulting response object straight to the client
 
-No manual processing required.
+**REST API backend** (`sdk.api.*`) — new in v0.1.9 — provides feature parity with the Velt Node SDK. 17 services, typed `@dataclass` request objects, and raw Velt API responses. No database or AWS configuration needed.
 
-# Installation
+## Installation
 
 ```bash
 pip install velt-py
 ```
 
-# Quick Start
+### Requirements
 
-## 1. Initialize the SDK
+- Python 3.8+
+- Django 4.2.26+ (only if using the self-hosting backend)
+- MongoDB (Percona Server or MongoDB Atlas) for self-hosting
+- `requests` for REST API calls (installed automatically)
+
+## Quick Start
+
+### Initialize the SDK
+
+**Self-hosting initialization** (MongoDB + optional AWS):
 
 ```python
 from velt_py import VeltSDK
@@ -53,7 +69,7 @@ config = {
         'attachments': 'attachments',
         'users': 'users'
     },
-    # Optional: Velt API credentials (for token generation)
+    # Required for token generation; also enables sdk.api.*
     'apiKey': 'YOUR_VELT_API_KEY',
     'authToken': 'YOUR_VELT_AUTH_TOKEN'
 }
@@ -61,11 +77,164 @@ config = {
 sdk = VeltSDK.initialize(config)
 ```
 
-## 2. Create API Endpoints
+**REST API-only initialization** (no database needed — new in v0.1.9):
+
+```python
+from velt_py import VeltSDK
+
+# Minimal config for REST API backend only
+config = {
+    'apiKey': 'YOUR_VELT_API_KEY',
+    'authToken': 'YOUR_VELT_AUTH_TOKEN'
+}
+
+sdk = VeltSDK.initialize(config)
+
+# All sdk.api.* services are now available
+result = sdk.api.organizations.getOrganizations(...)
+```
+
+The `database` section is optional when using only `sdk.api.*`. Set `VELT_API_KEY` and `VELT_AUTH_TOKEN` environment variables as an alternative to passing credentials in the config dict.
+
+## Configuration
+
+### Environment Variables
+
+The SDK reads the following environment variables automatically. These can be used instead of (or in addition to) config dict keys.
+
+| Variable | Config key equivalent | Purpose |
+|----------|-----------------------|---------|
+| `VELT_API_KEY` | `apiKey` | Velt API key for authenticating REST API calls |
+| `VELT_AUTH_TOKEN` | `authToken` | Velt auth token for authenticating REST API calls |
+| `VELT_WORKSPACE_ID` | — | Default workspace ID for workspace-scoped operations |
+| `VELT_WORKSPACE_AUTH_TOKEN` | — | Auth token scoped to a specific workspace |
+
+### Self-Hosting Configuration
+
+<Tabs>
+<Tab title="Database">
+
+Configure MongoDB connection for storing comments, reactions, and user data.
+
+```python
+config = {
+    'database': {
+        # Option 1: Connection string (recommended for MongoDB Atlas)
+        'connection_string': 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
+        
+        # Option 2: Individual components (for local MongoDB or custom setup)
+        # 'host': 'localhost:27017',
+        # 'username': 'your_username',
+        # 'password': 'your_password',
+        # 'auth_database': 'admin',
+        # 'database_name': 'velt-db'
+    }
+}
+```
+
+</Tab>
+<Tab title="AWS (Attachments)">
+
+Configure AWS S3 for storing file attachments.
+
+```python
+config = {
+    'aws': {
+        'bucket_name': 'your-bucket-name',
+        'region': 'us-east-1',
+        'access_key_id': 'YOUR_AWS_ACCESS_KEY',
+        'secret_access_key': 'YOUR_AWS_SECRET_KEY'
+    }
+}
+```
+
+</Tab>
+<Tab title="Collections">
+
+Customize collection names for storing Velt data.
+
+```python
+config = {
+    'collections': {
+        'comments': 'comment_annotations',    # Default: 'comment_annotations'
+        'reactions': 'reaction_annotations',  # Default: 'reaction_annotations'
+        'attachments': 'attachments',         # Default: 'attachments'
+        'users': 'users'                      # Default: 'users'
+    }
+}
+```
+
+</Tab>
+<Tab title="User Schema">
+
+Map your user schema fields to Velt's expected fields if your database uses different field names.
+
+```python
+config = {
+    'user_schema': {
+        'userId': 'userId',       # Your field name for user ID
+        'name': 'name',           # Your field name for display name
+        'photoUrl': 'photoUrl',   # Your field name for avatar URL
+        'email': 'email',         # Your field name for email
+        'color': 'color',         # Your field name for user color
+        'textColor': 'textColor', # Your field name for text color
+        'isAdmin': 'isAdmin',     # Your field name for admin flag
+        'initial': 'initial'      # Your field name for user initial
+    }
+}
+```
+
+</Tab>
+<Tab title="Complete Example">
+
+Full configuration with database, AWS, collections, and user schema.
+
+```python
+from velt_py import VeltSDK
+
+config = {
+    'database': {
+        'connection_string': 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
+    },
+    'aws': {
+        'bucket_name': 'your-bucket-name',
+        'region': 'us-east-1',
+        'access_key_id': 'YOUR_AWS_ACCESS_KEY',
+        'secret_access_key': 'YOUR_AWS_SECRET_KEY'
+    },
+    'collections': {
+        'comments': 'comment_annotations',
+        'reactions': 'reaction_annotations',
+        'attachments': 'attachments',
+        'users': 'users'
+    },
+    'user_schema': {
+        'userId': 'userId',
+        'name': 'name',
+        'photoUrl': 'photoUrl',
+        'email': 'email',
+        'color': 'color',
+        'textColor': 'textColor',
+        'isAdmin': 'isAdmin',
+        'initial': 'initial'
+    },
+    'apiKey': 'YOUR_VELT_API_KEY',
+    'authToken': 'YOUR_VELT_AUTH_TOKEN'
+}
+
+sdk = VeltSDK.initialize(config)
+```
+
+</Tab>
+</Tabs>
+
+## Self-Hosting Backend
+
+### API Endpoints
 
 The SDK provides methods that accept the raw request from the frontend and return the properly formatted response.
 
-### Comments
+#### Comments
 
 ```python
 from velt_py import (
@@ -96,7 +265,7 @@ def delete_comment(request):
     return result
 ```
 
-### Reactions
+#### Reactions
 
 ```python
 from velt_py import (
@@ -127,7 +296,7 @@ def delete_reaction(request):
     return result
 ```
 
-### Users
+#### Users
 
 ```python
 from velt_py import GetUserResolverRequest
@@ -140,7 +309,7 @@ def get_users(request):
     return result
 ```
 
-### Attachments
+#### Attachments
 
 <Tabs>
 <Tab title="Django">
@@ -293,7 +462,7 @@ async def delete_attachment(request: Request):
 </Tab>
 </Tabs>
 
-# Framework Examples
+### Framework Examples
 
 <Tabs>
 <Tab title="Django">
@@ -536,126 +705,7 @@ async def delete_comment(request: Request):
 </Tab>
 </Tabs>
 
-# Configuration
-
-<Tabs>
-<Tab title="Database">
-
-Configure MongoDB connection for storing comments, reactions, and user data.
-
-```python
-config = {
-    'database': {
-        # Option 1: Connection string (recommended for MongoDB Atlas)
-        'connection_string': 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
-        
-        # Option 2: Individual components (for local MongoDB or custom setup)
-        # 'host': 'localhost:27017',
-        # 'username': 'your_username',
-        # 'password': 'your_password',
-        # 'auth_database': 'admin',
-        # 'database_name': 'velt-db'
-    }
-}
-```
-
-</Tab>
-<Tab title="AWS (Attachments)">
-
-Configure AWS S3 for storing file attachments.
-
-```python
-config = {
-    'aws': {
-        'bucket_name': 'your-bucket-name',
-        'region': 'us-east-1',
-        'access_key_id': 'YOUR_AWS_ACCESS_KEY',
-        'secret_access_key': 'YOUR_AWS_SECRET_KEY'
-    }
-}
-```
-
-</Tab>
-<Tab title="Collections">
-
-Customize collection names for storing Velt data.
-
-```python
-config = {
-    'collections': {
-        'comments': 'comment_annotations',    # Default: 'comment_annotations'
-        'reactions': 'reaction_annotations',  # Default: 'reaction_annotations'
-        'attachments': 'attachments',         # Default: 'attachments'
-        'users': 'users'                      # Default: 'users'
-    }
-}
-```
-
-</Tab>
-<Tab title="User Schema">
-
-Map your user schema fields to Velt's expected fields if your database uses different field names.
-
-```python
-config = {
-    'user_schema': {
-        'userId': 'userId',       # Your field name for user ID
-        'name': 'name',           # Your field name for display name
-        'photoUrl': 'photoUrl',   # Your field name for avatar URL
-        'email': 'email',         # Your field name for email
-        'color': 'color',         # Your field name for user color
-        'textColor': 'textColor', # Your field name for text color
-        'isAdmin': 'isAdmin',     # Your field name for admin flag
-        'initial': 'initial'      # Your field name for user initial
-    }
-}
-```
-
-</Tab>
-<Tab title="Complete Example">
-
-Full configuration with database, AWS, collections, and user schema.
-
-```python
-from velt_py import VeltSDK
-
-config = {
-    'database': {
-        'connection_string': 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
-    },
-    'aws': {
-        'bucket_name': 'your-bucket-name',
-        'region': 'us-east-1',
-        'access_key_id': 'YOUR_AWS_ACCESS_KEY',
-        'secret_access_key': 'YOUR_AWS_SECRET_KEY'
-    },
-    'collections': {
-        'comments': 'comment_annotations',
-        'reactions': 'reaction_annotations',
-        'attachments': 'attachments',
-        'users': 'users'
-    },
-    'user_schema': {
-        'userId': 'userId',
-        'name': 'name',
-        'photoUrl': 'photoUrl',
-        'email': 'email',
-        'color': 'color',
-        'textColor': 'textColor',
-        'isAdmin': 'isAdmin',
-        'initial': 'initial'
-    },
-    'apiKey': 'YOUR_VELT_API_KEY',
-    'authToken': 'YOUR_VELT_AUTH_TOKEN'
-}
-
-sdk = VeltSDK.initialize(config)
-```
-
-</Tab>
-</Tabs>
-
-# Response Format
+### Response Format
 
 All SDK methods return a consistent response format:
 
@@ -681,9 +731,9 @@ Common error codes:
 - `INTERNAL_ERROR`: Server-side error during processing
 - `NOT_FOUND`: Requested resource was not found
 
-# API Reference
+### API Reference
 
-### Comments
+#### Comments
 
 | Method | Description |
 |--------|-------------|
@@ -691,7 +741,7 @@ Common error codes:
 | `sdk.selfHosting.comments.saveComments(request)` | Save comments to database |
 | `sdk.selfHosting.comments.deleteComment(request)` | Delete a comment from database |
 
-### Reactions
+#### Reactions
 
 | Method | Description |
 |--------|-------------|
@@ -699,20 +749,20 @@ Common error codes:
 | `sdk.selfHosting.reactions.saveReactions(request)` | Save reactions to database |
 | `sdk.selfHosting.reactions.deleteReaction(request)` | Delete a reaction from database |
 
-### Users
+#### Users
 
 | Method | Description |
 |--------|-------------|
 | `sdk.selfHosting.users.getUsers(request)` | Fetch users from database |
 
-### Attachments
+#### Attachments
 
 | Method | Description |
 |--------|-------------|
 | `sdk.selfHosting.attachments.saveAttachment(request, file_data, file_name, mime_type)` | Upload attachment to S3 and save metadata |
 | `sdk.selfHosting.attachments.deleteAttachment(request)` | Delete attachment from S3 and database |
 
-# Request Types
+### Request Types
 
 Import the request types from `velt_py`:
 
@@ -737,7 +787,1327 @@ from velt_py import (
 )
 ```
 
-# Resources
+## REST API Backend
+
+Added in **v0.1.9**. The `sdk.api.*` namespace provides feature parity with the Velt Node SDK for REST. 17 services are available, each accepting typed `@dataclass` request objects and returning the raw Velt API response without local reshaping.
+
+No database or AWS configuration is required — only `apiKey` and `authToken`.
+
+```python
+from velt_py import VeltSDK
+
+sdk = VeltSDK.initialize({
+    'apiKey': 'YOUR_VELT_API_KEY',
+    'authToken': 'YOUR_VELT_AUTH_TOKEN'
+})
+
+# All 17 services are accessible under sdk.api.*
+# e.g. sdk.api.organizations, sdk.api.documents, sdk.api.workspace ...
+```
+
+Every method returns a dict with either a `result` key (success) or an `error` key (failure). See [Response Format](#response-format-1) below.
+
+---
+
+### Services
+
+#### Organizations
+
+**Namespace:** `sdk.api.organizations`
+
+Manage Velt organizations.
+
+```python
+from velt_py.models.organization import (
+    AddOrganizationsRequest,
+    GetOrganizationsRequest,
+    UpdateOrganizationsRequest,
+    DeleteOrganizationsRequest,
+    UpdateOrganizationDisableStateRequest
+)
+
+# Add an organization
+result = sdk.api.organizations.addOrganizations(
+    AddOrganizationsRequest(
+        organizations=[{'organizationId': 'org-123', 'organizationName': 'My Organization'}]
+    )
+)
+
+# Get organizations (with optional pagination)
+result = sdk.api.organizations.getOrganizations(
+    GetOrganizationsRequest(
+        organizationIds=['org-123'],   # optional, omit to get all
+        pageSize=10,                   # optional
+        pageToken='next-page-token'    # optional
+    )
+)
+
+# Update
+result = sdk.api.organizations.updateOrganizations(
+    UpdateOrganizationsRequest(
+        organizations=[{'organizationId': 'org-123', 'organizationName': 'Updated Name'}]
+    )
+)
+
+# Delete
+result = sdk.api.organizations.deleteOrganizations(
+    DeleteOrganizationsRequest(organizationIds=['org-123', 'org-456'])
+)
+
+# Disable/enable access
+result = sdk.api.organizations.updateOrganizationDisableState(
+    UpdateOrganizationDisableStateRequest(
+        organizationIds=['org-123'],
+        disabled=True
+    )
+)
+```
+
+Available methods: `addOrganizations`, `getOrganizations`, `updateOrganizations`, `deleteOrganizations`, `updateOrganizationDisableState`.
+
+---
+
+#### Folders
+
+**Namespace:** `sdk.api.folders`
+
+Manage folders within an organization.
+
+```python
+from velt_py.models.folder import (
+    AddFolderRequest,
+    GetFoldersRequest,
+    UpdateFolderRequest,
+    DeleteFolderRequest,
+    UpdateFolderAccessRequest
+)
+
+# Add folders
+result = sdk.api.folders.addFolder(
+    AddFolderRequest(
+        organizationId='org-123',
+        folders=[{'folderId': 'folder-1', 'folderName': 'My Folder'}],
+        createOrganization=True  # optional
+    )
+)
+
+# Get folders (with optional folderId and maxDepth)
+result = sdk.api.folders.getFolders(
+    GetFoldersRequest(organizationId='org-123', folderId='folder-1', maxDepth=3)
+)
+
+# Update
+result = sdk.api.folders.updateFolder(
+    UpdateFolderRequest(
+        organizationId='org-123',
+        folders=[{'folderId': 'folder-1', 'folderName': 'Renamed Folder'}]
+    )
+)
+
+# Delete
+result = sdk.api.folders.deleteFolder(
+    DeleteFolderRequest(organizationId='org-123', folderId='folder-1')
+)
+
+# Update access type
+result = sdk.api.folders.updateFolderAccess(
+    UpdateFolderAccessRequest(
+        organizationId='org-123',
+        folderIds=['folder-1'],
+        accessType='restricted'
+    )
+)
+```
+
+Available methods: `addFolder`, `getFolders`, `updateFolder`, `deleteFolder`, `updateFolderAccess`.
+
+---
+
+#### Documents
+
+**Namespace:** `sdk.api.documents`
+
+Manage documents, including access control, migration, and disable state.
+
+```python
+from velt_py.models.document import (
+    AddDocumentsRequest,
+    GetDocumentsRequest,
+    UpdateDocumentsRequest,
+    DeleteDocumentsRequest,
+    MoveDocumentsRequest,
+    UpdateDocumentAccessRequest,
+    UpdateDocumentDisableStateRequest,
+    MigrateDocumentsRequest,
+    MigrateDocumentsStatusRequest
+)
+
+# Add documents
+result = sdk.api.documents.addDocuments(
+    AddDocumentsRequest(
+        organizationId='org-123',
+        documents=[
+            {'documentId': 'doc-1', 'documentName': 'My Document'},
+            {'documentId': 'doc-2', 'documentName': 'Another Document'}
+        ],
+        createOrganization=True,   # optional: creates org if it doesn't exist
+        folderId='folder-1',       # optional: add to a specific folder
+        createFolder=True           # optional: creates folder if it doesn't exist
+    )
+)
+
+# Get documents (with optional filters and pagination)
+result = sdk.api.documents.getDocuments(
+    GetDocumentsRequest(
+        organizationId='org-123',
+        documentIds=['doc-1'],    # optional
+        folderId='folder-1',      # optional
+        pageSize=10               # optional
+    )
+)
+
+# Update
+result = sdk.api.documents.updateDocuments(
+    UpdateDocumentsRequest(
+        organizationId='org-123',
+        documents=[{'documentId': 'doc-1', 'documentName': 'Updated Name'}]
+    )
+)
+
+# Delete
+result = sdk.api.documents.deleteDocuments(
+    DeleteDocumentsRequest(
+        organizationId='org-123',
+        documentIds=['doc-1', 'doc-2']
+    )
+)
+
+# Move to a different folder
+result = sdk.api.documents.moveDocuments(
+    MoveDocumentsRequest(
+        organizationId='org-123',
+        documentIds=['doc-1', 'doc-2'],
+        folderId='target-folder-id'
+    )
+)
+
+# Update access type
+result = sdk.api.documents.updateDocumentAccess(
+    UpdateDocumentAccessRequest(
+        organizationId='org-123',
+        documentIds=['doc-1', 'doc-2'],
+        accessType='organizationPrivate'   # 'organizationPrivate', 'restricted', or 'public'
+    )
+)
+
+# Disable/enable access
+result = sdk.api.documents.updateDocumentDisableState(
+    UpdateDocumentDisableStateRequest(
+        organizationId='org-123',
+        documentIds=['doc-1'],
+        disabled=True
+    )
+)
+
+# Migrate to a new document ID
+result = sdk.api.documents.migrateDocuments(
+    MigrateDocumentsRequest(
+        organizationId='org-123',
+        documentId='old-doc-id',
+        newDocumentId='new-doc-id'
+    )
+)
+
+# Poll migration status
+result = sdk.api.documents.migrateDocumentsStatus(
+    MigrateDocumentsStatusRequest(
+        organizationId='org-123',
+        migrationId='migration-id-from-migrate-call'
+    )
+)
+```
+
+Available methods: `addDocuments`, `getDocuments`, `updateDocuments`, `deleteDocuments`, `moveDocuments`, `updateDocumentAccess`, `updateDocumentDisableState`, `migrateDocuments`, `migrateDocumentsStatus`.
+
+---
+
+#### Users (API)
+
+**Namespace:** `sdk.api.users`
+
+Manage users within an organization via the REST API. This is distinct from `sdk.selfHosting.users`, which reads from your own database.
+
+```python
+from velt_py.models.user_api import (
+    AddUsersRequest,
+    GetUsersRequest,
+    UpdateUsersRequest,
+    DeleteUsersRequest
+)
+
+# Add users to organization
+result = sdk.api.users.addUsers(
+    AddUsersRequest(
+        organizationId='org-123',
+        users=[{'userId': 'user-1', 'name': 'John Doe', 'email': 'john@example.com', 'accessRole': 'editor'}],
+        createOrganization=True   # optional: creates org if it doesn't exist
+    )
+)
+
+# Get users by organization (with optional filters and pagination)
+result = sdk.api.users.getUsers(
+    GetUsersRequest(
+        organizationId='org-123',
+        userIds=['user-1'],         # optional
+        documentId='doc-1',         # optional
+        pageSize=100,               # optional
+        allDocuments=True,          # optional: get all document-level users
+        groupByDocumentId=True      # optional: group results by document
+    )
+)
+
+# Update metadata
+result = sdk.api.users.updateUsers(
+    UpdateUsersRequest(
+        organizationId='org-123',
+        users=[{'userId': 'user-1', 'name': 'Jane Doe', 'accessRole': 'viewer'}]
+    )
+)
+
+# Delete from organization
+result = sdk.api.users.deleteUsers(
+    DeleteUsersRequest(
+        organizationId='org-123',
+        userIds=['user-1', 'user-2']
+    )
+)
+```
+
+Available methods: `addUsers`, `getUsers`, `updateUsers`, `deleteUsers`.
+
+---
+
+#### User Groups
+
+**Namespace:** `sdk.api.userGroups`
+
+Create user groups and manage their membership.
+
+```python
+from velt_py.models.user_group import (
+    AddUserGroupsRequest,
+    AddUsersToGroupRequest,
+    DeleteUsersFromGroupRequest
+)
+
+# Create user groups
+result = sdk.api.userGroups.addUserGroups(
+    AddUserGroupsRequest(
+        organizationId='org-123',
+        organizationUserGroups=[{'groupId': 'engineering', 'groupName': 'Engineering'}],
+        createOrganization=True   # optional
+    )
+)
+
+# Add users to a group
+result = sdk.api.userGroups.addUsersToGroup(
+    AddUsersToGroupRequest(
+        organizationId='org-123',
+        organizationUserGroupId='engineering',
+        userIds=['user-1', 'user-2']
+    )
+)
+
+# Remove users from a group
+result = sdk.api.userGroups.deleteUsersFromGroup(
+    DeleteUsersFromGroupRequest(
+        organizationId='org-123',
+        organizationUserGroupId='engineering',
+        userIds=['user-1'],   # specific users
+        # deleteAll=True      # or remove all users from group
+    )
+)
+```
+
+Available methods: `addUserGroups`, `addUsersToGroup`, `deleteUsersFromGroup`.
+
+---
+
+#### Notifications
+
+**Namespace:** `sdk.api.notifications`
+
+Send and retrieve notifications, and manage notification configuration.
+
+```python
+from velt_py.models.notification_api import (
+    AddNotificationsRequest,
+    GetNotificationsRequest,
+    UpdateNotificationsRequest,
+    DeleteNotificationsRequest,
+    GetNotificationConfigRequest,
+    SetNotificationConfigRequest
+)
+
+# Add a notification
+result = sdk.api.notifications.addNotifications(
+    AddNotificationsRequest(
+        organizationId='org-123',
+        documentId='doc-1',
+        actionUser={'userId': 'user-1', 'name': 'John Doe', 'email': 'john@example.com'},
+        displayHeadlineMessageTemplate='{actionUser} commented on your document',
+        displayBodyMessage='Check out the new comment',
+        notifyUsers=[{'userId': 'user-2', 'name': 'Jane Doe'}],
+        createOrganization=True,   # optional
+        createDocument=True         # optional
+    )
+)
+
+# Get notifications (with filters and pagination)
+result = sdk.api.notifications.getNotifications(
+    GetNotificationsRequest(
+        organizationId='org-123',
+        userId='user-2',          # or documentId
+        pageSize=10,              # optional
+        order='desc'              # optional: asc or desc
+    )
+)
+
+# Update existing notifications
+result = sdk.api.notifications.updateNotifications(
+    UpdateNotificationsRequest(
+        organizationId='org-123',
+        notificationIds=['notif-1'],
+        updatedData={'isRead': True}
+    )
+)
+
+# Delete notifications
+result = sdk.api.notifications.deleteNotifications(
+    DeleteNotificationsRequest(
+        organizationId='org-123',
+        notificationIds=['notif-1', 'notif-2']
+    )
+)
+
+# Get notification config (notification preferences)
+result = sdk.api.notifications.getNotificationConfig(
+    GetNotificationConfigRequest(
+        organizationId='org-123',
+        userId='user-1'
+    )
+)
+
+# Set notification config (notification preferences)
+result = sdk.api.notifications.setNotificationConfig(
+    SetNotificationConfigRequest(
+        organizationId='org-123',
+        userIds=['user-1', 'user-2'],
+        config={'inbox': 'ALL', 'email': 'MINE', 'slack': 'NONE'}
+    )
+)
+```
+
+Available methods: `addNotifications`, `getNotifications`, `updateNotifications`, `deleteNotifications`, `getNotificationConfig`, `setNotificationConfig`.
+
+---
+
+#### Comment Annotations
+
+**Namespace:** `sdk.api.commentAnnotations`
+
+Full CRUD for comment annotations and individual comments within an annotation.
+
+```python
+from velt_py.models.comment_annotation_api import (
+    AddCommentAnnotationsRequest,
+    GetCommentAnnotationsRequest,
+    GetCommentAnnotationsCountRequest,
+    UpdateCommentAnnotationsRequest,
+    DeleteCommentAnnotationsRequest,
+    AddCommentsRequest,
+    GetCommentsRequest,
+    UpdateCommentsRequest,
+    DeleteCommentsRequest
+)
+
+# Add a comment annotation
+result = sdk.api.commentAnnotations.addCommentAnnotations(
+    AddCommentAnnotationsRequest(
+        organizationId='org-123',
+        documentId='doc-1',
+        commentAnnotations=[{
+            'location': {'id': 'section-1', 'locationName': 'Introduction'},
+            'commentData': [{
+                'commentText': 'This needs review',
+                'commentHtml': '<p>This needs review</p>',
+                'from': {'userId': 'user-1', 'name': 'John Doe', 'email': 'john@example.com'}
+            }]
+        }]
+    )
+)
+
+# Get comment annotations (with filters and pagination)
+result = sdk.api.commentAnnotations.getCommentAnnotations(
+    GetCommentAnnotationsRequest(
+        organizationId='org-123',
+        documentId='doc-1',
+        statusIds=['OPEN'],      # optional
+        pageSize=10              # optional
+    )
+)
+
+# Get comment count (total and unread per document)
+result = sdk.api.commentAnnotations.getCommentAnnotationsCount(
+    GetCommentAnnotationsCountRequest(
+        organizationId='org-123',
+        documentIds=['doc-1', 'doc-2'],
+        userId='user-1'
+    )
+)
+
+# Update (e.g., change status)
+result = sdk.api.commentAnnotations.updateCommentAnnotations(
+    UpdateCommentAnnotationsRequest(
+        organizationId='org-123',
+        documentId='doc-1',
+        annotationIds=['annotation-id-1'],
+        updatedData={'status': {'id': 'RESOLVED', 'name': 'Resolved', 'type': 'terminal'}}
+    )
+)
+
+# Delete
+result = sdk.api.commentAnnotations.deleteCommentAnnotations(
+    DeleteCommentAnnotationsRequest(
+        organizationId='org-123',
+        documentId='doc-1',
+        annotationIds=['annotation-id-1']
+    )
+)
+
+# Comments — Add to an existing annotation
+result = sdk.api.commentAnnotations.addComments(
+    AddCommentsRequest(
+        organizationId='org-123',
+        documentId='doc-1',
+        annotationId='annotation-id-1',
+        commentData=[{
+            'commentText': 'I agree, let me fix this',
+            'from': {'userId': 'user-2', 'name': 'Jane Doe'}
+        }]
+    )
+)
+
+# Comments — Get from an annotation
+result = sdk.api.commentAnnotations.getComments(
+    GetCommentsRequest(
+        organizationId='org-123',
+        documentId='doc-1',
+        annotationId='annotation-id-1',
+        userIds=['user-1']
+    )
+)
+
+# Comments — Update
+result = sdk.api.commentAnnotations.updateComments(
+    UpdateCommentsRequest(
+        organizationId='org-123',
+        documentId='doc-1',
+        annotationId='annotation-id-1',
+        commentIds=[123456],
+        updatedData={'commentText': 'Updated text', 'commentHtml': '<p>Updated text</p>'}
+    )
+)
+
+# Comments — Delete
+result = sdk.api.commentAnnotations.deleteComments(
+    DeleteCommentsRequest(
+        organizationId='org-123',
+        documentId='doc-1',
+        annotationId='annotation-id-1',
+        commentIds=[123456]   # optional: omit to delete all
+    )
+)
+```
+
+Available methods: `addCommentAnnotations`, `getCommentAnnotations`, `getCommentAnnotationsCount`, `updateCommentAnnotations`, `deleteCommentAnnotations`, `addComments`, `getComments`, `updateComments`, `deleteComments`.
+
+---
+
+#### Activities
+
+**Namespace:** `sdk.api.activities`
+
+Log and retrieve activity events for audit trails or feeds.
+
+```python
+from velt_py.models.activity_api import (
+    AddActivitiesRequest,
+    GetActivitiesRequest,
+    UpdateActivitiesRequest,
+    DeleteActivitiesRequest
+)
+
+# Add activity logs
+result = sdk.api.activities.addActivities(
+    AddActivitiesRequest(
+        organizationId='org-123',
+        documentId='doc-456',
+        activities=[{
+            'featureType': 'comment',
+            'actionType': 'comment.add',
+            'actionUser': {'userId': 'user-1', 'name': 'John Doe', 'email': 'john@example.com'},
+            'displayMessageTemplate': '{{user}} added a comment'
+        }]
+    )
+)
+
+# Get activities (with filters and pagination)
+result = sdk.api.activities.getActivities(
+    GetActivitiesRequest(
+        organizationId='org-123',
+        documentId='doc-456',
+        featureTypes=['comment'],
+        order='desc',
+        pageSize=50
+    )
+)
+
+# Update
+result = sdk.api.activities.updateActivities(
+    UpdateActivitiesRequest(
+        organizationId='org-123',
+        activities=[{
+            'id': 'activity-001',
+            'displayMessageTemplate': '{{user}} updated the comment'
+        }]
+    )
+)
+
+# Delete by document
+result = sdk.api.activities.deleteActivities(
+    DeleteActivitiesRequest(
+        organizationId='org-123',
+        documentId='doc-456'
+    )
+)
+```
+
+Available methods: `addActivities`, `getActivities`, `updateActivities`, `deleteActivities`.
+
+---
+
+#### Access Control
+
+**Namespace:** `sdk.api.accessControl`
+
+Manage fine-grained permissions and generate signatures/tokens for client-side authentication.
+
+```python
+from velt_py.models.access_control import (
+    AddPermissionsRequest,
+    GetPermissionsRequest,
+    RemovePermissionsRequest,
+    GenerateSignatureRequest,
+    GenerateTokenRequest
+)
+
+# Add permissions
+result = sdk.api.accessControl.addPermissions(
+    AddPermissionsRequest(
+        user={'userId': 'user-1'},
+        permissions={'resources': [
+            {'type': 'organization', 'id': 'org-123', 'accessRole': 'editor'},
+            {'type': 'document', 'id': 'doc-1', 'organizationId': 'org-123', 'accessRole': 'viewer', 'expiresAt': 1728902400}
+        ]}
+    )
+)
+
+# Get permissions
+result = sdk.api.accessControl.getPermissions(
+    GetPermissionsRequest(
+        organizationId='org-123',
+        userIds=['user-1'],
+        documentIds=['doc-1']   # optional
+    )
+)
+
+# Remove permissions
+result = sdk.api.accessControl.removePermissions(
+    RemovePermissionsRequest(
+        userId='user-1',
+        permissions={'resources': [
+            {'type': 'organization', 'id': 'org-123'},
+            {'type': 'document', 'id': 'doc-1', 'organizationId': 'org-123'}
+        ]}
+    )
+)
+
+# Generate signature for Permission Provider
+result = sdk.api.accessControl.generateSignature(
+    GenerateSignatureRequest(
+        permissions=[{
+            'userId': 'user-1',
+            'resourceId': 'doc-1',
+            'type': 'document',
+            'hasAccess': True,
+            'accessRole': 'viewer'
+        }]
+    )
+)
+
+# Generate JWT token
+result = sdk.api.accessControl.generateToken(
+    GenerateTokenRequest(
+        userId='user-1',
+        userProperties={'name': 'John Doe', 'email': 'john@example.com', 'isAdmin': False},
+        permissions={'resources': [
+            {'type': 'organization', 'id': 'org-123', 'accessRole': 'viewer'},
+            {'type': 'document', 'id': 'doc-1', 'organizationId': 'org-123', 'accessRole': 'editor'}
+        ]}
+    )
+)
+```
+
+Available methods: `addPermissions`, `getPermissions`, `removePermissions`, `generateSignature`, `generateToken`.
+
+---
+
+#### CRDT
+
+**Namespace:** `sdk.api.crdt`
+
+Read, write, and update CRDT (Yjs) data for collaborative documents.
+
+```python
+from velt_py.models.crdt import (
+    AddCrdtDataRequest,
+    GetCrdtDataRequest,
+    UpdateCrdtDataRequest
+)
+
+# Add editor data (text, map, array, or xml)
+result = sdk.api.crdt.addCrdtData(
+    AddCrdtDataRequest(
+        organizationId='org-123',
+        documentId='doc-1',
+        editorId='my-collab-note',
+        data='Hello, collaborative world!',
+        type='text'
+    )
+)
+
+# Get editor data (with optional editorId filter)
+result = sdk.api.crdt.getCrdtData(
+    GetCrdtDataRequest(
+        organizationId='org-123',
+        documentId='doc-1',
+        editorId='my-collab-note'   # optional: omit to get all editors
+    )
+)
+
+# Update existing editor data
+result = sdk.api.crdt.updateCrdtData(
+    UpdateCrdtDataRequest(
+        organizationId='org-123',
+        documentId='doc-1',
+        editorId='my-collab-note',
+        data='Updated collaborative content!',
+        type='text'
+    )
+)
+```
+
+Available methods: `addCrdtData`, `getCrdtData`, `updateCrdtData`.
+
+---
+
+#### Presence
+
+**Namespace:** `sdk.api.presence`
+
+Manage user presence state for documents.
+
+```python
+from velt_py.models.presence import (
+    AddPresenceRequest,
+    UpdatePresenceRequest,
+    DeletePresenceRequest
+)
+
+# Add users to presence
+result = sdk.api.presence.addPresence(
+    AddPresenceRequest(
+        organizationId='org-123',
+        documentId='doc-456',
+        users=[
+            {'userId': 'user-1', 'name': 'John Doe', 'email': 'john@example.com', 'status': 'online'},
+            {'userId': 'user-2', 'name': 'Jane Doe', 'status': 'away'}
+        ]
+    )
+)
+
+# Update user presence status
+result = sdk.api.presence.updatePresence(
+    UpdatePresenceRequest(
+        organizationId='org-123',
+        documentId='doc-456',
+        users=[{'userId': 'user-1', 'status': 'away'}]
+    )
+)
+
+# Remove users from presence
+result = sdk.api.presence.deletePresence(
+    DeletePresenceRequest(
+        organizationId='org-123',
+        documentId='doc-456',
+        userIds=['user-1', 'user-2']
+    )
+)
+```
+
+Available methods: `addPresence`, `updatePresence`, `deletePresence`.
+
+---
+
+#### Livestate
+
+**Namespace:** `sdk.api.livestate`
+
+Broadcast ephemeral events to all connected clients on a document.
+
+```python
+from velt_py.models.livestate import BroadcastEventRequest
+
+result = sdk.api.livestate.broadcastEvent(
+    BroadcastEventRequest(
+        organizationId='org-123',
+        documentId='doc-1',
+        liveStateDataId='my-live-state',
+        data={'status': 'active', 'message': 'Hello World'},
+        merge=True   # optional: merge with existing data instead of replacing
+    )
+)
+```
+
+Available methods: `broadcastEvent`.
+
+---
+
+#### Recordings
+
+**Namespace:** `sdk.api.recordings`
+
+Retrieve recording metadata for a document.
+
+```python
+from velt_py.models.recording import GetRecordingsRequest
+
+result = sdk.api.recordings.getRecordings(
+    GetRecordingsRequest(
+        organizationId='org-123',
+        documentId='doc-456',         # optional
+        recordingIds=['rec-1'],       # optional: filter by specific IDs
+        pageSize=10,                  # optional
+        pageToken='next-page-token'   # optional
+    )
+)
+```
+
+Available methods: `getRecordings`.
+
+---
+
+#### Rewriter
+
+**Namespace:** `sdk.api.rewriter`
+
+Call Velt's AI rewriter to process or transform text via a model prompt.
+
+```python
+from velt_py.models.rewriter import AskAiRequest
+
+result = sdk.api.rewriter.askAi(
+    AskAiRequest(
+        model='gpt-4o',
+        prompt='Fix the grammar and spelling in the following text.',
+        text='Their going to the store to by some apples.'
+    )
+)
+```
+
+Available methods: `askAi`. Fields: `model`, `prompt`, `text`.
+
+---
+
+#### GDPR
+
+**Namespace:** `sdk.api.gdpr`
+
+Delete or export all user data for GDPR compliance.
+
+```python
+from velt_py.models.gdpr import (
+    DeleteAllUserDataRequest,
+    GetAllUserDataRequest,
+    GetDeleteUserDataStatusRequest
+)
+
+# Delete all user data
+result = sdk.api.gdpr.deleteAllUserData(
+    DeleteAllUserDataRequest(
+        userIds=['user-1', 'user-2'],
+        organizationIds=['org-123']   # optional, speeds up deletion
+    )
+)
+
+# Get all user data (paginated)
+result = sdk.api.gdpr.getAllUserData(
+    GetAllUserDataRequest(
+        organizationId='org-123',
+        userId='user-1',
+        pageToken='next-page-token'   # optional
+    )
+)
+
+# Poll deletion job status
+result = sdk.api.gdpr.getDeleteUserDataStatus(
+    GetDeleteUserDataStatusRequest(jobId='job-id-from-delete-call')
+)
+```
+
+Available methods: `deleteAllUserData`, `getAllUserData`, `getDeleteUserDataStatus`.
+
+---
+
+#### Workspace
+
+**Namespace:** `sdk.api.workspace`
+
+Manage workspaces, API keys, auth tokens, domains, email configuration, and webhooks. 17 methods total.
+
+```python
+from velt_py.models.workspace import (
+    CreateWorkspaceRequest,
+    GetWorkspaceRequest,
+    CreateApiKeyRequest,
+    UpdateApiKeyRequest,
+    GetApiKeysRequest,
+    GetApiKeyMetadataRequest,
+    ResetAuthTokenRequest,
+    GetAuthTokensRequest,
+    AddDomainsRequest,
+    DeleteDomainsRequest,
+    GetDomainsRequest,
+    GetEmailStatusRequest,
+    SendLoginLinkRequest,
+    GetEmailConfigRequest,
+    UpdateEmailConfigRequest,
+    GetWebhookConfigRequest,
+    UpdateWebhookConfigRequest
+)
+
+# Create a new workspace
+result = sdk.api.workspace.createWorkspace(
+    CreateWorkspaceRequest(
+        ownerEmail='owner@example.com',
+        workspaceName='My Workspace',
+        name='John Doe'
+    )
+)
+
+# Get workspace details
+result = sdk.api.workspace.getWorkspace(GetWorkspaceRequest())
+
+# Create an API key
+result = sdk.api.workspace.createApiKey(
+    CreateApiKeyRequest(
+        ownerEmail='owner@example.com',
+        type='production',
+        createAuthToken=True,
+        apiKeyName='Production Key',
+        allowedDomains=['example.com', '*.example.com']
+    )
+)
+
+# Update an API key name
+result = sdk.api.workspace.updateApiKey(
+    UpdateApiKeyRequest(apiKey='velt_api_key_1', apiKeyName='Renamed Key')
+)
+
+# Get API keys (with optional pagination)
+result = sdk.api.workspace.getApiKeys(
+    GetApiKeysRequest(pageSize=50, pageToken='next-page-token')
+)
+
+# Get API key metadata
+result = sdk.api.workspace.getApiKeyMetadata(GetApiKeyMetadataRequest())
+
+# Reset auth token for an API key
+result = sdk.api.workspace.resetAuthToken(
+    ResetAuthTokenRequest(apiKey='velt_api_key_1')
+)
+
+# Get auth tokens for an API key
+result = sdk.api.workspace.getAuthTokens(
+    GetAuthTokensRequest(apiKey='velt_api_key_1')
+)
+
+# Add allowed domains
+result = sdk.api.workspace.addDomains(
+    AddDomainsRequest(domains=['example.com', '*.firebase.com'])
+)
+
+# Delete allowed domains
+result = sdk.api.workspace.deleteDomains(
+    DeleteDomainsRequest(domains=['example.com'])
+)
+
+# Get allowed domains
+result = sdk.api.workspace.getDomains(GetDomainsRequest())
+
+# Check email verification status
+result = sdk.api.workspace.getEmailStatus(
+    GetEmailStatusRequest(ownerEmail='owner@example.com')
+)
+
+# Send login link
+result = sdk.api.workspace.sendLoginLink(
+    SendLoginLinkRequest(email='user@example.com', continueUrl='https://app.example.com/dashboard')
+)
+
+# Get email configuration
+result = sdk.api.workspace.getEmailConfig(GetEmailConfigRequest())
+
+# Update email configuration
+result = sdk.api.workspace.updateEmailConfig(
+    UpdateEmailConfigRequest(
+        useEmailService=True,
+        emailServiceConfig={'type': 'sendgrid', 'apiKey': 'sg-key', 'fromEmail': 'noreply@example.com'}
+    )
+)
+
+# Get webhook configuration
+result = sdk.api.workspace.getWebhookConfig(GetWebhookConfigRequest())
+
+# Update webhook configuration
+result = sdk.api.workspace.updateWebhookConfig(
+    UpdateWebhookConfigRequest(
+        useWebhookService=True,
+        webhookServiceConfig={
+            'authToken': 'webhook-secret',
+            'rawNotificationUrl': 'https://example.com/webhook/raw',
+            'processedNotificationUrl': 'https://example.com/webhook/processed'
+        }
+    )
+)
+```
+
+Available methods: `createWorkspace`, `getWorkspace`, `createApiKey`, `updateApiKey`, `getApiKeys`, `getApiKeyMetadata`, `resetAuthToken`, `getAuthTokens`, `addDomains`, `deleteDomains`, `getDomains`, `getEmailStatus`, `sendLoginLink`, `getEmailConfig`, `updateEmailConfig`, `getWebhookConfig`, `updateWebhookConfig`.
+
+---
+
+#### Token
+
+**Namespace:** `sdk.api.token`
+
+Generate a Velt auth token for a user. This method uses positional arguments — it does **not** accept a dataclass request object.
+
+```python
+# getToken uses positional args, not a request dataclass
+result = sdk.api.token.getToken(
+    organizationId='org-123',
+    userId='user-1',
+    email='user@example.com',   # optional
+    isAdmin=False               # optional, default False
+)
+```
+
+Signature: `getToken(organizationId, userId, email=None, isAdmin=False)`
+
+Available methods: `getToken`.
+
+---
+
+### Response Format
+
+All `sdk.api.*` methods return raw Velt API responses. The shape differs from the self-hosting backend (`sdk.selfHosting.*`).
+
+```python
+# Success response
+{
+    'result': {
+        'status': 'success',
+        'message': 'Organization(s) added successfully.',
+        'data': {
+            'org-123': {
+                'success': True,
+                'id': '02cf91e5...',
+                'message': 'Added Successfully'
+            }
+        }
+    }
+}
+
+# Error response
+{
+    'error': {
+        'message': 'Error adding organization(s).',
+        'status': 'INTERNAL',
+        'details': {
+            'org-123': {
+                'success': False,
+                'message': 'Organization already exists.'
+            }
+        }
+    }
+}
+```
+
+Check for the `error` key to detect failures. The `details` field contains per-item results when operating on multiple entities.
+
+---
+
+### Data Isolation
+
+Every `sdk.api.*` method requires an `organizationId` in its request payload. Velt's API enforces data isolation server-side — requests without a valid `organizationId` will be rejected.
+
+---
+
+### API Reference
+
+Complete method lists per service. All methods are under `sdk.api.<service>.<method>`.
+
+<AccordionGroup>
+
+<Accordion title="Organizations (5 methods)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.organizations.addOrganizations` | `AddOrganizationsRequest` | Create one or more organizations |
+| `sdk.api.organizations.getOrganizations` | `GetOrganizationsRequest` | Retrieve organizations by ID |
+| `sdk.api.organizations.updateOrganizations` | `UpdateOrganizationsRequest` | Update organization properties |
+| `sdk.api.organizations.deleteOrganizations` | `DeleteOrganizationsRequest` | Delete organizations |
+| `sdk.api.organizations.updateOrganizationDisableState` | `UpdateOrganizationDisableStateRequest` | Enable or disable an organization |
+
+</Accordion>
+
+<Accordion title="Folders (5 methods)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.folders.addFolder` | `AddFolderRequest` | Create a folder |
+| `sdk.api.folders.getFolders` | `GetFoldersRequest` | Retrieve folders |
+| `sdk.api.folders.updateFolder` | `UpdateFolderRequest` | Update folder properties |
+| `sdk.api.folders.deleteFolder` | `DeleteFolderRequest` | Delete a folder |
+| `sdk.api.folders.updateFolderAccess` | `UpdateFolderAccessRequest` | Update folder access permissions |
+
+</Accordion>
+
+<Accordion title="Documents (9 methods)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.documents.addDocuments` | `AddDocumentsRequest` | Create documents |
+| `sdk.api.documents.getDocuments` | `GetDocumentsRequest` | Retrieve documents |
+| `sdk.api.documents.updateDocuments` | `UpdateDocumentsRequest` | Update document properties |
+| `sdk.api.documents.deleteDocuments` | `DeleteDocumentsRequest` | Delete documents |
+| `sdk.api.documents.moveDocuments` | `MoveDocumentsRequest` | Move documents to a folder |
+| `sdk.api.documents.updateDocumentAccess` | `UpdateDocumentAccessRequest` | Update document access permissions |
+| `sdk.api.documents.updateDocumentDisableState` | `UpdateDocumentDisableStateRequest` | Enable or disable a document |
+| `sdk.api.documents.migrateDocuments` | `MigrateDocumentsRequest` | Start a document migration job |
+| `sdk.api.documents.migrateDocumentsStatus` | `MigrateDocumentsStatusRequest` | Poll document migration job status |
+
+</Accordion>
+
+<Accordion title="Users (4 methods)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.users.addUsers` | `AddUsersRequest` | Add users to an organization |
+| `sdk.api.users.getUsers` | `GetUsersRequest` | Retrieve users |
+| `sdk.api.users.updateUsers` | `UpdateUsersRequest` | Update user properties |
+| `sdk.api.users.deleteUsers` | `DeleteUsersRequest` | Remove users from an organization |
+
+</Accordion>
+
+<Accordion title="User Groups (3 methods)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.userGroups.addUserGroups` | `AddUserGroupsRequest` | Create user groups |
+| `sdk.api.userGroups.addUsersToGroup` | `AddUsersToGroupRequest` | Add users to an existing group |
+| `sdk.api.userGroups.deleteUsersFromGroup` | `DeleteUsersFromGroupRequest` | Remove users from a group |
+
+</Accordion>
+
+<Accordion title="Notifications (6 methods)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.notifications.addNotifications` | `AddNotificationsRequest` | Add notifications to users |
+| `sdk.api.notifications.getNotifications` | `GetNotificationsRequest` | Get notifications with optional filters and pagination |
+| `sdk.api.notifications.updateNotifications` | `UpdateNotificationsRequest` | Update existing notifications |
+| `sdk.api.notifications.deleteNotifications` | `DeleteNotificationsRequest` | Delete notifications |
+| `sdk.api.notifications.getNotificationConfig` | `GetNotificationConfigRequest` | Get notification preferences for a user |
+| `sdk.api.notifications.setNotificationConfig` | `SetNotificationConfigRequest` | Set notification preferences for users |
+
+</Accordion>
+
+<Accordion title="Comment Annotations (9 methods)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.commentAnnotations.addCommentAnnotations` | `AddCommentAnnotationsRequest` | Create comment annotations |
+| `sdk.api.commentAnnotations.getCommentAnnotations` | `GetCommentAnnotationsRequest` | Retrieve comment annotations |
+| `sdk.api.commentAnnotations.getCommentAnnotationsCount` | `GetCommentAnnotationsCountRequest` | Count comment annotations |
+| `sdk.api.commentAnnotations.updateCommentAnnotations` | `UpdateCommentAnnotationsRequest` | Update comment annotations |
+| `sdk.api.commentAnnotations.deleteCommentAnnotations` | `DeleteCommentAnnotationsRequest` | Delete comment annotations |
+| `sdk.api.commentAnnotations.addComments` | `AddCommentsRequest` | Add reply comments to an annotation |
+| `sdk.api.commentAnnotations.getComments` | `GetCommentsRequest` | Retrieve individual comments |
+| `sdk.api.commentAnnotations.updateComments` | `UpdateCommentsRequest` | Update individual comments |
+| `sdk.api.commentAnnotations.deleteComments` | `DeleteCommentsRequest` | Delete individual comments |
+
+</Accordion>
+
+<Accordion title="Activities (4 methods)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.activities.addActivities` | `AddActivitiesRequest` | Log activity events |
+| `sdk.api.activities.getActivities` | `GetActivitiesRequest` | Retrieve activity events |
+| `sdk.api.activities.updateActivities` | `UpdateActivitiesRequest` | Update activity events |
+| `sdk.api.activities.deleteActivities` | `DeleteActivitiesRequest` | Delete activity events |
+
+</Accordion>
+
+<Accordion title="Access Control (5 methods)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.accessControl.addPermissions` | `AddPermissionsRequest` | Grant permissions |
+| `sdk.api.accessControl.getPermissions` | `GetPermissionsRequest` | Retrieve permissions |
+| `sdk.api.accessControl.removePermissions` | `RemovePermissionsRequest` | Revoke permissions |
+| `sdk.api.accessControl.generateSignature` | `GenerateSignatureRequest` | Generate a signed payload |
+| `sdk.api.accessControl.generateToken` | `GenerateTokenRequest` | Generate an auth token |
+
+</Accordion>
+
+<Accordion title="CRDT (3 methods)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.crdt.addCrdtData` | `AddCrdtDataRequest` | Store CRDT (Yjs) data |
+| `sdk.api.crdt.getCrdtData` | `GetCrdtDataRequest` | Retrieve CRDT data |
+| `sdk.api.crdt.updateCrdtData` | `UpdateCrdtDataRequest` | Update CRDT data |
+
+</Accordion>
+
+<Accordion title="Presence (3 methods)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.presence.addPresence` | `AddPresenceRequest` | Set user presence |
+| `sdk.api.presence.updatePresence` | `UpdatePresenceRequest` | Update user presence |
+| `sdk.api.presence.deletePresence` | `DeletePresenceRequest` | Remove user presence |
+
+</Accordion>
+
+<Accordion title="Livestate (1 method)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.livestate.broadcastEvent` | `BroadcastEventRequest` | Broadcast an ephemeral event to document clients |
+
+</Accordion>
+
+<Accordion title="Recordings (1 method)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.recordings.getRecordings` | `GetRecordingsRequest` | Retrieve recording metadata for a document |
+
+</Accordion>
+
+<Accordion title="Rewriter (1 method)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.rewriter.askAi` | `AskAiRequest` | Call Velt's AI rewriter with a model, prompt, and text |
+
+</Accordion>
+
+<Accordion title="GDPR (3 methods)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.gdpr.deleteAllUserData` | `DeleteAllUserDataRequest` | Request deletion of all user data |
+| `sdk.api.gdpr.getAllUserData` | `GetAllUserDataRequest` | Export all data for a user |
+| `sdk.api.gdpr.getDeleteUserDataStatus` | `GetDeleteUserDataStatusRequest` | Poll the status of a deletion job |
+
+</Accordion>
+
+<Accordion title="Workspace (17 methods)">
+
+| Method | Request type | Description |
+|--------|-------------|-------------|
+| `sdk.api.workspace.createWorkspace` | `CreateWorkspaceRequest` | Create a new workspace |
+| `sdk.api.workspace.getWorkspace` | `GetWorkspaceRequest` | Retrieve workspace details |
+| `sdk.api.workspace.createApiKey` | `CreateApiKeyRequest` | Create a new API key |
+| `sdk.api.workspace.updateApiKey` | `UpdateApiKeyRequest` | Update an existing API key |
+| `sdk.api.workspace.getApiKeys` | `GetApiKeysRequest` | List all API keys |
+| `sdk.api.workspace.getApiKeyMetadata` | `GetApiKeyMetadataRequest` | Get metadata for a specific API key |
+| `sdk.api.workspace.resetAuthToken` | `ResetAuthTokenRequest` | Rotate the auth token |
+| `sdk.api.workspace.getAuthTokens` | `GetAuthTokensRequest` | List auth tokens |
+| `sdk.api.workspace.addDomains` | `AddDomainsRequest` | Add allowed domains |
+| `sdk.api.workspace.deleteDomains` | `DeleteDomainsRequest` | Remove allowed domains |
+| `sdk.api.workspace.getDomains` | `GetDomainsRequest` | List allowed domains |
+| `sdk.api.workspace.getEmailStatus` | `GetEmailStatusRequest` | Check email service status |
+| `sdk.api.workspace.sendLoginLink` | `SendLoginLinkRequest` | Send a login link email |
+| `sdk.api.workspace.getEmailConfig` | `GetEmailConfigRequest` | Retrieve email configuration |
+| `sdk.api.workspace.updateEmailConfig` | `UpdateEmailConfigRequest` | Update email configuration |
+| `sdk.api.workspace.getWebhookConfig` | `GetWebhookConfigRequest` | Retrieve webhook configuration |
+| `sdk.api.workspace.updateWebhookConfig` | `UpdateWebhookConfigRequest` | Update webhook configuration |
+
+</Accordion>
+
+<Accordion title="Token (1 method)">
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `sdk.api.token.getToken` | `getToken(organizationId, userId, email=None, isAdmin=False)` | Generate a Velt auth token for a user (positional args, no dataclass) |
+
+</Accordion>
+
+</AccordionGroup>
+
+## Error Handling
+
+The SDK raises typed exceptions for different failure modes. All exceptions extend `VeltSDKError`.
+
+| Exception | When raised |
+|-----------|-------------|
+| `VeltSDKError` | Base class; catch for any SDK-level error |
+| `VeltValidationError` | SDK-level validation (e.g., missing required config); `sdk.api.*` methods do not validate request payloads locally |
+| `VeltTokenError` | Token generation or authentication failure |
+| `VeltApiError` | REST API errors (network failures, unexpected responses) |
+
+```python
+from velt_py.exceptions import VeltSDKError, VeltApiError
+
+try:
+    result = sdk.api.organizations.addOrganizations(
+        AddOrganizationsRequest(organizations=[{'organizationId': 'org-123'}])
+    )
+except VeltApiError as e:
+    print(f'API error: {e.message}')
+except VeltSDKError as e:
+    print(f'SDK error: {e.message}')
+```
+
+Import path: `from velt_py.exceptions import VeltSDKError, VeltValidationError, VeltTokenError, VeltApiError`
+
+## Resources
 
 - [Velt-Py PyPI Package](https://pypi.org/project/velt-py)
 - [Self-Host Data Documentation](/self-host-data/overview)

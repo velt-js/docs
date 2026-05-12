@@ -156,7 +156,7 @@ Routes Persistence Database (Velt v2 database) traffic through your proxy. Set `
   <VeltProvider
     config={{
       proxyConfig: {
-        v2DbHost: 'https://persistence-proxy.yourdomain.com',
+        v2DbHost: 'https://v2db-proxy.yourdomain.com',
       },
     }}
   ></VeltProvider>
@@ -166,7 +166,7 @@ Routes Persistence Database (Velt v2 database) traffic through your proxy. Set `
   ```jsx
   const client = await initVelt('YOUR_API_KEY', {
     proxyConfig: {
-      v2DbHost: 'https://persistence-proxy.yourdomain.com',
+      v2DbHost: 'https://v2db-proxy.yourdomain.com',
     },
   });
   ```
@@ -192,7 +192,7 @@ Routes Ephemeral Database (Velt v1 database) traffic through your proxy. Set `pr
   <VeltProvider
     config={{
       proxyConfig: {
-        v1DbHost: 'https://rtdb-proxy.yourdomain.com',
+        v1DbHost: 'https://v1db-proxy.yourdomain.com',
       },
     }}
   ></VeltProvider>
@@ -202,7 +202,7 @@ Routes Ephemeral Database (Velt v1 database) traffic through your proxy. Set `pr
   ```jsx
   const client = await initVelt('YOUR_API_KEY', {
     proxyConfig: {
-      v1DbHost: 'https://rtdb-proxy.yourdomain.com',
+      v1DbHost: 'https://v1db-proxy.yourdomain.com',
     },
   });
   ```
@@ -333,34 +333,39 @@ You'll deploy four proxy endpoints — one per service — under subdomains you 
     Then bind each Worker to its subdomain via **Cloudflare dashboard → Workers & Pages → Settings → Triggers → Add Custom Domain**. See the [Cloudflare README](https://github.com/velt-js/velt-proxy-server/blob/main/cloudflare/README.md) for the full walkthrough.
   </Step>
   <Step title="Route Auth by path">
-    Auth splits on path: `/v1/token` goes to the token-refresh upstream, everything else goes to identity. The Worker handles this with a simple path check:
+    Auth splits on path: `/v1/token` and `/v2/token` go to the token-refresh upstream, everything else goes to identity. The Worker handles this with a simple path check:
 
     ```js
     // auth-proxy.* handler (abbreviated)
-    if (url.pathname.startsWith('/v1/token')) {
-      upstream = 'https://securetoken.googleapis.com';
+    if (url.pathname.startsWith('/v1/token') || url.pathname.startsWith('/v2/token')) {
+      url.hostname = 'securetoken.googleapis.com';
     } else {
-      upstream = 'https://identitytoolkit.googleapis.com';
+      url.hostname = 'identitytoolkit.googleapis.com';
     }
     ```
   </Step>
   <Step title="Rewrite v1Db upstream from ?ns=">
-    v1Db requests carry the Firebase namespace in the `?ns=` query param. The Worker rewrites the upstream Host to the shard that owns that namespace:
+    v1Db requests carry the Firebase namespace in the `?ns=` query param. The Worker rewrites the upstream Host to the shard that owns that namespace, and special-cases the `Upgrade: websocket` header so RTDB streams survive:
 
     ```js
     // v1db-proxy.* handler (abbreviated)
     const ns = url.searchParams.get('ns');
-    const upstream = `https://${ns}.firebaseio.com${url.pathname}${url.search}`;
-    ```
+    if (!ns) return new Response('Missing ns parameter', { status: 400 });
 
-    WebSocket upgrade is handled automatically by Workers — no extra config required.
+    url.hostname = `${ns}.firebaseio.com`;
+
+    // Forward the raw Request on WebSocket upgrades so the stream survives
+    if (request.headers.get('Upgrade') === 'websocket') {
+      return fetch(new Request(url, request));
+    }
+    ```
   </Step>
   <Step title="Verify">
     From any machine, confirm the proxies respond:
 
     ```bash
-    curl -I https://auth-proxy.customer.com/
-    curl -I https://v2db-proxy.customer.com/
+    curl -I https://auth-proxy.yourdomain.com/
+    curl -I https://v2db-proxy.yourdomain.com/
     ```
 
     You should see upstream response headers (2xx/4xx are both fine — the proxy is live).
@@ -376,39 +381,52 @@ The [`nginx/`](https://github.com/velt-js/velt-proxy-server/tree/main/nginx) fol
 
 <Steps>
   <Step title="Prereqs">
-    nginx ≥ 1.18 (1.25+ for the `http2 on;` directive used in the configs) built with `ngx_http_proxy_module` and WebSocket support, or Docker. TLS certificates covering all four subdomains (a wildcard `*.customer.com` from Let's Encrypt is the simplest option).
+    nginx ≥ 1.18 (1.25+ for the `http2 on;` directive used in the configs) built with `ngx_http_proxy_module` and WebSocket support, or Docker. TLS certificates covering all four subdomains (a wildcard `*.yourdomain.com` from Let's Encrypt is the simplest option).
   </Step>
   <Step title="Route Auth by path">
-    Auth is path-based. Inside the `auth-proxy.customer.com` server block:
+    Auth is path-based. Inside the `auth-proxy.yourdomain.com` server block, route `/v1/token` to the token-refresh upstream and everything else to identity. The `proxy_ssl_*` directives are required so the upstream TLS handshake uses the correct SNI:
 
     ```nginx
     location /v1/token {
       proxy_pass https://securetoken.googleapis.com;
       proxy_set_header Host securetoken.googleapis.com;
+      proxy_ssl_server_name on;
+      proxy_ssl_name securetoken.googleapis.com;
     }
 
     location / {
       proxy_pass https://identitytoolkit.googleapis.com;
       proxy_set_header Host identitytoolkit.googleapis.com;
+      proxy_ssl_server_name on;
+      proxy_ssl_name identitytoolkit.googleapis.com;
     }
     ```
   </Step>
   <Step title="Dynamic upstream for v1Db">
-    v1Db needs the upstream host picked per-request from `?ns=`. Use an `nginx` `map` at `http` scope:
+    v1Db needs the upstream host picked per-request from `?ns=`. Three things are required: a `resolver` directive (nginx needs runtime DNS for dynamic hostnames), input validation on `?ns=`, and the WebSocket upgrade headers so RTDB streams open:
 
     ```nginx
-    map $arg_ns $v1db_upstream {
-      default "${arg_ns}.firebaseio.com";
-    }
-
     server {
-      server_name v1db-proxy.customer.com;
+      server_name v1db-proxy.yourdomain.com;
+
+      # Required for dynamic upstream hostnames
+      resolver 8.8.8.8 1.1.1.1 valid=300s;
+      resolver_timeout 5s;
 
       location / {
-        proxy_pass https://$v1db_upstream;
-        proxy_set_header Host $v1db_upstream;
+        # Reject malformed ns values before interpolating into the hostname
+        if ($arg_ns !~ "^[a-z0-9-]+$") {
+          return 400 "Invalid or missing ns parameter\n";
+        }
 
-        # WebSocket upgrade
+        set $v1db_host "$arg_ns.firebaseio.com";
+
+        proxy_pass https://$v1db_host;
+        proxy_set_header Host $v1db_host;
+        proxy_ssl_server_name on;
+        proxy_ssl_name $v1db_host;
+
+        # WebSocket upgrade — required for real-time listeners
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -421,8 +439,8 @@ The [`nginx/`](https://github.com/velt-js/velt-proxy-server/tree/main/nginx) fol
   </Step>
   <Step title="Verify">
     ```bash
-    curl -I https://auth-proxy.customer.com/
-    curl -I https://v2db-proxy.customer.com/
+    curl -I https://auth-proxy.yourdomain.com/
+    curl -I https://v2db-proxy.yourdomain.com/
     ```
   </Step>
   <Step title="Configure the Velt SDK">

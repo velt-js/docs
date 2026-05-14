@@ -1,144 +1,147 @@
 ---
 title: "Approval Engine"
 sidebarTitle: "Overview"
-description: "Declarative workflow runtime for multi-step agent + human approval processes."
+description: "Multi-step approval workflows where AI agents and humans review work together."
 ---
 
 ## What is the Approval Engine?
 
-The Approval Engine is a declarative workflow runtime for multi-step agent + human approval processes. Author a workflow definition once (nodes + edges + optional parallel groups), then dispatch it against a trigger to spawn a running execution. Every state change is persisted, replayable, and — when you configure a webhook — pushed to your receiver in real time.
+Build approval flows as a graph. Define the workflow once, dispatch it against a trigger, and the engine runs everything: state, retries, fan-out, parallel review, SLAs, and webhooks.
 
-You describe your approval flow as a DAG of `agent`, `human`, and `webhook` nodes connected by edges. The engine handles state, fan-out, parallel groups with quorum policies, SLA breaches, retries, idempotency, and event delivery. You record reviewer decisions and agent resolutions through the REST API; the engine advances the workflow and notifies your systems.
+You write nodes (`agent`, `human`) and connect them with edges. You record reviewer decisions and agent resolutions through the REST API. The engine does the rest. Every state change is persisted, replayable, and (when you configure a webhook) pushed to your receiver in real time.
 
-## Key capabilities
+This is the part of an approval system you don't want to build yourself: the runtime that keeps state, handles concurrent reviewers, enforces quorum, fires events, and survives outages.
 
-- **Declarative workflow definitions** — Describe nodes (`agent` / `human` / `webhook`), edges with optional `when` expressions, and parallel groups with quorum policies. Definitions are versioned, with in-flight executions immune to updates.
-- **Agent + human steps** — Run AI agents non-blocking by default, or park them with `blocking: true` until an external resolution arrives. Human steps support multiple reviewers with mandatory/optional flags.
-- **Parallel groups with quorum** — Run reviewers in parallel and gate downstream work behind quorum policies: `waitAll`, `cancelOnQuorum`, or `joinOnQuorum`. Optionally require specific reviewers (`requiredNodeIds`) for quorum to count.
-- **Idempotent dispatch** — Replaying with the same `idempotencyKey` returns the original execution id rather than spawning duplicates.
-- **Real-time webhooks** — Every externally-visible state change is POSTed to your receiver with an HMAC-SHA256 signature and exponential-backoff retries. Missed events recoverable via `/executions/getEvents`.
-- **SLA-aware** — Set `slaMs` per step; the engine transitions to `breached` and routes via dedicated `breached` edges.
-- **Static linting** — Definitions are validated at create/update time for cycles, dangling edges, unreachable nodes, quorum misconfiguration, and group-membership conflicts.
+## What you get
+
+- **Agent + human steps in one flow.** Run AI agents inline. Park them for human review when needed. Mix and match without writing glue code.
+
+- **Parallel review with quorum.** Run reviewers in parallel. Gate downstream work behind a quorum policy: wait for everyone, advance once N approve, or require specific people regardless of count.
+
+- **Real-time webhooks.** Every state change is POSTed to your receiver with an HMAC-SHA256 signature and exponential-backoff retry. Missed events are recoverable via `/executions/getEvents`.
+
+- **Idempotent dispatch.** Replay safely. Same `idempotencyKey`, same execution id, no duplicates. Even concurrent dispatches with the same key return the original id.
+
+- **SLA-aware.** Set a deadline per step. The engine transitions to `breached` and routes through dedicated `breached` edges.
+
+- **Versioned definitions.** Updates increment the version. In-flight executions stay pinned to the version they started on.
+
+- **Static linting.** Definitions are validated at write time for cycles, dangling edges, unreachable nodes, and quorum misconfiguration. No surprises at runtime.
 
 ## Use cases
 
 <CardGroup cols={2}>
+  <Card title="Marketing copy approval" icon="newspaper">
+    An AI agent drafts copy. Legal and brand reviewers approve in parallel. A publish agent ships the asset once both approve.
+  </Card>
 
-<Card title="Marketing copy approval" icon="newspaper">
-An AI agent drafts marketing copy, parallel human reviewers from legal and brand approve in parallel, and a publish agent ships the asset once both approve.
-</Card>
+  <Card title="AI agent + human review" icon="robot">
+    Park a blocking agent step until N external resolutions arrive, then continue. Useful for agent-assisted moderation or QA pipelines where humans review specific outputs.
+  </Card>
 
-<Card title="AI agent + human review" icon="robot">
-Park a blocking agent step until N external resolutions arrive, then continue the workflow. Great for agent-assisted moderation or QA pipelines where humans review specific outputs.
-</Card>
+  <Card title="Regulated workflows" icon="shield-check">
+    Multi-stakeholder sign-off where specific reviewers (compliance, legal) must approve even if a numeric quorum is otherwise met. Every decision is auditable with correlation IDs.
+  </Card>
 
-<Card title="Regulated workflows" icon="shield-check">
-Multi-stakeholder sign-off where specific reviewers (e.g. compliance + legal) must approve even if a numeric quorum is otherwise met. Every decision is auditable with correlation IDs.
-</Card>
+  <Card title="Multi-stakeholder review" icon="users">
+    3-of-5 quorum with `cancelOnQuorum` stops bothering remaining reviewers once the threshold is met. System-actor cancellation events go into the audit trail.
+  </Card>
 
-<Card title="Multi-stakeholder review" icon="users">
-3-of-5 quorum with `cancelOnQuorum` automatically stops bothering the remaining reviewers once the threshold is met, with system-actor cancellation events for the audit trail.
-</Card>
+  <Card title="Contract sign-off" icon="file-signature">
+    Sequential or parallel approval chains with SLAs. If a step breaches its deadline, route to an escalation node or fail-fast the execution.
+  </Card>
 
-<Card title="Contract sign-off" icon="file-signature">
-Sequential or parallel approval chains with SLAs. If a step breaches its deadline, route to an escalation node or fail-fast the execution.
-</Card>
-
-<Card title="Document approval" icon="file-check">
-Scope workflows per-document so each instance is bound to a specific `documentId`, with per-execution webhook receivers for downstream integrations.
-</Card>
-
+  <Card title="Document approval" icon="file-check">
+    Scope workflows per-document so each instance is bound to a specific `documentId`, with per-execution webhook receivers for downstream integrations.
+  </Card>
 </CardGroup>
 
-## Key concepts
+## How it works
+
+1. **Define the workflow.** Register a definition with nodes, edges, and optional parallel groups. The engine lints it at write time.
+2. **Dispatch an execution.** POST a `definitionId`, an idempotency key, and optional `triggerContext` (exposed as `execution.input.*` in edge expressions). The engine pins the current version and enqueues the first step.
+3. **The engine drives the flow.** Agent nodes run immediately. Human nodes (and blocking agent nodes) park in `waiting` until decisions arrive.
+4. **Record decisions.** Call `/steps/recordReviewerDecision` for humans and `/steps/recordAgentResolution` for blocking agents. Matching edges fire. Quorum policies trigger their side effects.
+5. **Consume events.** Subscribe via webhook for real-time delivery. Poll `/executions/getEvents` with `sinceSeq` to reconcile after an outage.
+
+## Mental model
 
 ### Definition
 
-A definition is the static blueprint of your approval workflow. It has:
+A **definition** is the blueprint. An **execution** is one live run of that blueprint. A **step** is one node executing inside an execution.
 
-- `definitionId` — stable identifier used in every dispatch
-- `name` — human-readable label
-- `nodes` — work units that can run
-- `edges` — connections between nodes
-- `groups` (optional) — parallel-group declarations with quorum policies
+### Nodes
 
-Definitions are versioned. Every update increments the version and snapshots the prior content. In-flight executions are immune to updates.
+Work units that can run.
 
-**Node types:**
+| Type    | What it does                                                                                              | Parks in `waiting`?        |
+| ------- | --------------------------------------------------------------------------------------------------------- | -------------------------- |
+| `agent` | Runs an agent. Non-blocking by default. With `blocking: true`, parks until external resolutions arrive.   | Only when `blocking: true` |
+| `human` | Requires reviewer approval. Use `reviewers: [{ userId, mandatory }]`. Legacy `reviewerIds[]` still works. | Yes                        |
 
-| Node type | Purpose | Parks in `waiting`? |
-|-----------|---------|---------------------|
-| `agent`   | Runs an agent (synthetic in v1; real-agent integration drops in without contract changes). Non-blocking by default. With `blocking: true`, the step parks until external resolutions arrive via `/steps/recordAgentResolution`. | Only when `blocking: true` |
-| `human`   | Requires reviewer approval. Use `reviewers: [{ userId, mandatory }]` and drive via `/steps/recordReviewerDecision`. Legacy `reviewerIds[]` is still accepted for back-compat. | Yes |
-| `webhook` | Schema-accepted for forward-compatibility; runtime handler is deferred in v1. | N/A |
+### Edges
 
-Edges can carry an optional `when` expression (e.g. `output.passesBrandCheck == true`). Expressions are compiled at write time (pure AST, no eval) and walked at runtime. Supported operators: equality / comparison / boolean / regex / includes / startsWith / endsWith / length / isEmpty. Path roots: `output.*`, `step.*`, `execution.input.*`.
+Connections between nodes. Edges optionally carry a `when` expression like `output.passesBrandCheck == true`. Expressions compile at write time (pure AST, no `eval`) and walk at runtime.
+
+Supported operators: equality, comparison, boolean, regex, `includes`, `startsWith`, `endsWith`, `length`, `isEmpty`.
+
+Path roots: `output.*`, `step.*`, `execution.input.*`.
 
 ### Execution
 
 An execution is one live run of a definition. Dispatch pins the definition version, stamps a correlation ID and idempotency key, and enqueues the first step(s).
 
-| Field | Description |
-|-------|-------------|
-| `executionId`       | Server-generated. The handle for every subsequent operation. |
-| `status`            | `pending → running → completed \| failed \| cancelled` |
-| `correlationId`     | Threaded through every log line, event, and webhook for end-to-end tracing. |
-| `idempotencyKey`    | Client-supplied or server-generated. Dispatching twice with the same key returns the same `executionId`. |
-| `definitionVersion` | The pinned version. Updates to the definition after dispatch don't affect this execution. |
-| `steps[]`           | One entry per step that has been scheduled or completed. |
+**Lifecycle:**
+
+```
+pending → running → completed | failed | cancelled
+```
 
 ### Step
 
-A step is one runtime instance of a node. Status flow:
+A step is one runtime instance of a node.
 
+**Lifecycle:**
 ```
 pending → running → (waiting) → completed | failed | skipped | cancelled | breached
 ```
 
 `waiting` only applies to human steps and blocking agent steps.
 
-Step IDs are deterministic so retries land on the same doc:
+Step IDs are deterministic, so retries land on the same doc:
 
-- Root steps (no incoming edges): `step_<nodeId>_<timestamp>_<rand>`
-- Per-edge fan-out: `${parentStepId}__to__${childNodeId}`
-- `joinOnQuorum` group fan-out: `group_<groupId>__to__<childNodeId>` (single instance regardless of how many group members ran)
+- **Root steps** (no incoming edges): `step_<nodeId>_<timestamp>_<rand>`
+- **Per-edge fan-out**: `${parentStepId}__to__${childNodeId}`
+- **`joinOnQuorum` fan-out**: `group_<groupId>__to__<childNodeId>` (one instance regardless of how many group members ran)
 
-### Scope
+## Scope
 
-| Level | Meaning |
-|-------|---------|
-| `apiKey`       | Workspace-wide. |
-| `organization` | Bound to a specific `organizationId`. |
-| `document`     | Bound to a specific `documentId` under an organization. |
+Pick the level that matches how your product is structured.
 
-Defaults to `{ level: "apiKey" }` if omitted on create.
+| Level          | Bound to                              |
+| -------------- | ------------------------------------- |
+| `apiKey`       | Workspace-wide                        |
+| `organization` | A specific `organizationId`           |
+| `document`     | A specific `documentId` under an org  |
 
-### Idempotency
+Defaults to `{ level: "apiKey" }`.
 
-Dispatch is idempotent on `idempotencyKey`. Replaying with the same key returns `{ deduplicated: true, executionId: <original> }` rather than spawning a duplicate. Even a true contention race (two concurrent dispatches with the same key) returns the original execution id.
+## Idempotency
 
-### Events and webhooks
+Dispatch is idempotent on `idempotencyKey`. Replay with the same key returns `{ deduplicated: true, executionId: <original> }`. Safe to retry from clients and queues.
 
-Every state change writes an event doc with a monotonic `seq`. If you set `webhookUrl` + `webhookSecret` on dispatch, externally-visible event types are POSTed to your receiver with an HMAC-SHA256 signature and exponential-backoff retry. Missed events can be recovered via `/executions/getEvents` using `sinceSeq`.
+## Events and webhooks
 
-## How it works
-
-1. **Create a definition** — Register a workflow blueprint with nodes (`agent`, `human`, `webhook`), edges that connect them, and optional parallel groups with quorum policies. The definition is linted at write time.
-2. **Dispatch an execution** — POST a `definitionId`, an idempotency key, and an optional `triggerContext` (exposed as `execution.input.*` in edge expressions). The engine pins the current definition version and enqueues the first step(s).
-3. **Engine drives the workflow** — Agent nodes run immediately. Human nodes (and blocking agent nodes) park in `waiting` until you record decisions or resolutions through the REST API.
-4. **Record decisions** — Call `/steps/recordReviewerDecision` for human steps and `/steps/recordAgentResolution` for blocking agent steps. Edges with matching `when` expressions fire; quorum policies trigger their configured side effects.
-5. **Consume events** — Subscribe via webhook for real-time delivery, or poll `/executions/getEvents` with `sinceSeq` to reconcile after an outage.
+Every state change writes an event doc with a monotonic `seq`. Set `webhookUrl` and `webhookSecret` on dispatch and externally-visible events are POSTed to your receiver with an HMAC-SHA256 signature and exponential-backoff retry. Recover missed events via `/executions/getEvents` with `sinceSeq`.
 
 ## Get started
 
 <CardGroup cols={2}>
+  <Card title="Setup" icon="gear" href="/ai/approval-engine/setup">
+    Author a workflow definition, dispatch an execution, configure your webhook receiver, and record decisions end-to-end.
+  </Card>
 
-<Card title="Setup" icon="gear" href="/ai/approval-engine/setup">
-Step-by-step guide to author a workflow definition, dispatch an execution, configure your webhook receiver, and record decisions end-to-end.
-</Card>
-
-<Card title="Customize Behavior" icon="sliders" href="/ai/approval-engine/customize-behavior">
-Deep dive on node configuration, edge gating expressions, parallel groups & quorum policies, SLAs, linter rules, event reference, and the error vocabulary.
-</Card>
-
+  <Card title="Customize Behavior" icon="sliders" href="/ai/approval-engine/customize-behavior">
+    Node configuration, edge gating expressions, parallel groups and quorum policies, SLAs, linter rules, event reference, and the error vocabulary.
+  </Card>
 </CardGroup>

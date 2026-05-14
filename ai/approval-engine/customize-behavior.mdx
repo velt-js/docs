@@ -3,25 +3,25 @@ title: "Customize Behavior"
 description: "Node configuration, edge expressions, parallel groups, SLAs, linter rules, events, errors, and the full object reference."
 ---
 
-This reference covers the advanced configuration surface of the Approval Engine: how nodes are wired up, what edge expressions can express, how parallel groups satisfy quorum, the event catalog delivered to your webhook, and every canonical error code.
+This is the deep-dive reference. Setup covers the happy path. This page covers everything you reach for when you need precise control over node behavior, edge routing, quorum policies, SLA breaches, and event consumption.
 
 ## Node configuration
 
-Every node has a `nodeId`, a `type` (`agent` / `human` / `webhook`), a `config` block, and an optional `slaMs` deadline.
+Every node has a `nodeId`, a `type` (`agent` or `human`), a `config` block, and an optional `slaMs` deadline.
 
 ### Agent nodes
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `agentId` | string | Required. |
-| `promptOverride` | string | ≤ 8000 chars. |
-| `inputMapping` | object | Pass step inputs to the agent. |
-| `blocking` | boolean | Default `false`. When `true`, the step parks in `waiting` until external resolutions arrive via `/steps/recordAgentResolution`. |
-| `resolutionPolicy` | object | Required when `blocking: true`. `{ kind: "allResolved" \| "minResolved", minCount?: integer }` — `minCount` is required when `kind === "minResolved"`. |
-| `agentMaxRuntimeMs` | integer | ≤ 86400000. |
-| `requireNonEmptyOutput` | boolean | Fail the step if the agent returns an empty output. |
+| Field                   | Type    | Notes                                                                                                                                                |
+| ----------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agentId`               | string  | Required.                                                                                                                                            |
+| `promptOverride`        | string  | `≤ 8000` chars.                                                                                                                                      |
+| `inputMapping`          | object  | Pass step inputs to the agent.                                                                                                                       |
+| `blocking`              | boolean | Default `false`. When `true`, the step parks in `waiting` until external resolutions arrive via `/steps/recordAgentResolution`.                      |
+| `resolutionPolicy`      | object  | Required when `blocking: true`. `{ kind: "allResolved" \| "minResolved", minCount?: integer }`. `minCount` is required when `kind === "minResolved"`. |
+| `agentMaxRuntimeMs`     | integer | `≤ 86400000`.                                                                                                                                        |
+| `requireNonEmptyOutput` | boolean | Fail the step if the agent returns an empty output.                                                                                                  |
 
-```json
+```json theme={null}
 {
   "nodeId": "brand-check",
   "type": "agent",
@@ -38,13 +38,13 @@ Every node has a `nodeId`, a `type` (`agent` / `human` / `webhook`), a `config` 
 
 Exactly one of `reviewers[]` (preferred) or `reviewerIds[]` (legacy) must be provided.
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `reviewers` | array | Preferred: `[{ userId, mandatory }]`. Must include at least one `mandatory: true`. UserIds must be unique. |
-| `reviewerIds` | string[] | Legacy. Accepted for back-compat only. |
-| `commentBody` | string | ≤ 8000 chars. Initial comment surfaced to reviewers. |
+| Field         | Type      | Notes                                                                                                      |
+| ------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| `reviewers`   | array     | Preferred: `[{ userId, mandatory }]`. Must include at least one `mandatory: true`. UserIds must be unique. |
+| `reviewerIds` | string\[] | Legacy. Accepted for back-compat only.                                                                     |
+| `commentBody` | string    | `≤ 8000` chars. Initial comment surfaced to reviewers.                                                     |
 
-```json
+```json theme={null}
 {
   "nodeId": "human-legal",
   "type": "human",
@@ -55,26 +55,22 @@ Exactly one of `reviewers[]` (preferred) or `reviewerIds[]` (legacy) must be pro
 }
 ```
 
-### Webhook nodes
-
-Schema-accepted for forward-compatibility; the runtime handler is deferred in v1.
-
 ## Edge gating expressions
 
-Edges can carry an optional `when` expression evaluated against the source step's output. Expressions are compiled at write time (pure AST, no eval) and walked at runtime — no untrusted code ever runs.
+Edges can carry an optional `when` expression evaluated against the source step's output. Expressions compile at write time (pure AST, no `eval`) and walk at runtime. No untrusted code ever runs.
 
-```json
+```json theme={null}
 { "from": "brand-check", "to": "legal-review", "when": "output.passesBrandCheck == true" }
 ```
 
-**Supported operators:** equality / comparison / boolean / regex / includes / startsWith / endsWith / length / isEmpty.
+**Supported operators:** equality, comparison, boolean, regex, `includes`, `startsWith`, `endsWith`, `length`, `isEmpty`.
 
 **Path roots:**
 
-| Root | Resolves to |
-|------|-------------|
-| `output.*` | The source step's `output` object. |
-| `step.*` | The source step's metadata (status, timing). |
+| Root                | Resolves to                                  |
+| ------------------- | -------------------------------------------- |
+| `output.*`          | The source step's `output` object.           |
+| `step.*`            | The source step's metadata (status, timing). |
 | `execution.input.*` | The `triggerContext` you passed on dispatch. |
 
 If `when` is omitted, the edge always fires.
@@ -83,13 +79,13 @@ If `when` is omitted, the edge always fires.
 
 Set `slaMs` on any node to give the step a deadline. If the step doesn't complete within the window, it transitions to `breached` and emits a `step.breached` event.
 
-To handle breaches, declare an outgoing edge that routes on the breached status; otherwise the engine emits the `missing-breach-edge` linter rule and rejects the definition (silent dead-ends are a bug).
+To handle breaches, declare an outgoing edge that routes on the breached status. Otherwise the engine emits the `missing-breach-edge` linter rule and rejects the definition. Silent dead-ends are a bug.
 
 ## Parallel groups and quorum policies
 
 A parallel group declares a set of member nodes that conceptually run in parallel and share an approval threshold.
 
-```json
+```json theme={null}
 {
   "groupId": "parallel-review",
   "memberNodeIds": ["human-legal", "human-brand"],
@@ -99,37 +95,37 @@ A parallel group declares a set of member nodes that conceptually run in paralle
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `groupId`         | string   | yes | 1–64 chars. Stable identifier. |
-| `memberNodeIds`   | string[] | yes | 1–500 nodes. Each must be declared as a top-level node. A node may belong to at most one group. |
-| `expectedSteps`   | integer  | yes | 1–500. Total members the group expects to terminate. Must equal `memberNodeIds.length`. |
-| `quorum`          | integer  | yes | 1–`expectedSteps`. The number of approvals required to fire the policy's side effect. |
-| `onQuorumMet`     | enum     | no  | `waitAll` (default) / `cancelOnQuorum` / `joinOnQuorum`. |
-| `requiredNodeIds` | string[] | no  | Specific members whose approval is required for quorum to be met. Every entry must also be in `memberNodeIds`. `length` must be `<= quorum`. |
+| Field             | Type      | Required | Description                                                                                                                                  |
+| ----------------- | --------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `groupId`         | string    | yes      | 1 to 64 chars. Stable identifier.                                                                                                            |
+| `memberNodeIds`   | string\[] | yes      | 1 to 500 nodes. Each must be declared as a top-level node. A node may belong to at most one group.                                           |
+| `expectedSteps`   | integer   | yes      | 1 to 500. Total members the group expects to terminate. Must equal `memberNodeIds.length`.                                                   |
+| `quorum`          | integer   | yes      | 1 to `expectedSteps`. The number of approvals required to fire the policy's side effect.                                                     |
+| `onQuorumMet`     | enum      | no       | `waitAll` (default), `cancelOnQuorum`, or `joinOnQuorum`.                                                                                    |
+| `requiredNodeIds` | string\[] | no       | Specific members whose approval is required for quorum to be met. Every entry must also be in `memberNodeIds`. `length` must be `<= quorum`. |
 
 ### Quorum is approval count, not completion count
 
-A member counts as an approval when its terminal status is `completed` AND its `output.decision === 'approve'`. Rejections, failures, breaches, and cancellations contribute to the completion counter only — never the approval counter.
+A member counts as an approval when its terminal status is `completed` AND its `output.decision === 'approve'`. Rejections, failures, breaches, and cancellations contribute to the completion counter only, never the approval counter.
 
 Two consequences:
 
-1. Non-blocking agent members never satisfy quorum — they have no decision concept. Only place human or blocking agent nodes inside groups whose policy is `cancelOnQuorum` or `joinOnQuorum`.
-2. A `reject` does not block the group from rolling up to "complete" — it just keeps `approvedShards` from advancing. Group-completion (`expectedSteps` met) and group-quorum (approval threshold) are tracked separately.
+1. Non-blocking agent members never satisfy quorum. They have no decision concept. Only place human or blocking agent nodes inside groups whose policy is `cancelOnQuorum` or `joinOnQuorum`.
+2. A `reject` does not block the group from rolling up to "complete". It just keeps `approvedShards` from advancing. Group-completion (`expectedSteps` met) and group-quorum (approval threshold) are tracked separately.
 
 ### `onQuorumMet` policies
 
-| Policy | Side effect on first-time approval-quorum-met | Per-member fan-out |
-|--------|------------------------------------------------|--------------------|
-| `waitAll` (default) | Emits `group.quorum-met` event only. Group is purely informational. | Each member's outgoing edges fire on its own completion. If two members both fan out to the same downstream node, you get two downstream step instances. |
-| `cancelOnQuorum`    | Emits `group.quorum-met` AND cancels every sibling member step still in `waiting` (system-actor cancellation, audit reason `group-quorum-met`). | Each completing member still fans out per-edge. Cancelled siblings do not fan out. |
-| `joinOnQuorum`      | Emits `group.quorum-met`, cancels waiting siblings, AND fires a single group-owned downstream fan-out: one new step per shared outgoing-edge target with deterministic stepId `group_<groupId>__to__<childNodeId>`. The successor's input is `{ groupOutputs, groupId, quorum, totalApproved }`. | Suppressed for group members — the group container owns fan-out, so downstream successors run exactly once. |
+| Policy              | Side effect on first-time approval-quorum-met                                                                                                                                                                                                                                                  | Per-member fan-out                                                                                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `waitAll` (default) | Emits `group.quorum-met` event only. Group is purely informational.                                                                                                                                                                                                                            | Each member's outgoing edges fire on its own completion. If two members both fan out to the same downstream node, you get two downstream step instances. |
+| `cancelOnQuorum`    | Emits `group.quorum-met` AND cancels every sibling member step still in `waiting` (system-actor cancellation, audit reason `group-quorum-met`).                                                                                                                                                | Each completing member still fans out per-edge. Cancelled siblings do not fan out.                                                                       |
+| `joinOnQuorum`      | Emits `group.quorum-met`, cancels waiting siblings, AND fires a single group-owned downstream fan-out: one new step per shared outgoing-edge target with deterministic stepId `group_<groupId>__to__<childNodeId>`. The successor's input is `{ groupOutputs, groupId, quorum, totalApproved }`. | Suppressed for group members. The group container owns fan-out, so downstream successors run exactly once.                                               |
 
 ### Specific-must-approve quorum
 
 By default, quorum is anonymous: any N approvals out of M members trigger the policy. To express "these specific members must approve", declare them in `requiredNodeIds`:
 
-```json
+```json theme={null}
 {
   "groupId": "approver-group",
   "memberNodeIds": ["legal", "finance", "brand"],
@@ -144,148 +140,114 @@ Quorum-met now requires both:
 1. Every `nodeId` in `requiredNodeIds` is among the approvers, AND
 2. Total approval count reaches the numeric `quorum`.
 
-In the example, `brand` alone approving doesn't satisfy quorum even if `quorum: 2` is reached numerically — `legal` AND `finance` must both also approve. If `requiredNodeIds` is omitted or empty, behavior collapses back to anonymous quorum.
-
-## Cancellation reason vocabulary
-
-`step.cancelled` events carry a `data.reason` string. This is an open string set — consumers should switch on `event.type` for control flow, not `data.reason`.
-
-| Reason | Source | Meaning |
-|--------|--------|---------|
-| `group-quorum-met` | system | Cancelled by the engine when the parent group's approval quorum was met under `cancelOnQuorum` or `joinOnQuorum`. Audit shows `actorId: "system:group-quorum"`. |
-| (admin-supplied)   | admin  | Free-form reason passed to `/steps/cancel`. |
+In the example, `brand` alone approving doesn't satisfy quorum even if `quorum: 2` is reached numerically. `legal` AND `finance` must both also approve. If `requiredNodeIds` is omitted or empty, behavior collapses back to anonymous quorum.
 
 ## Linter rules
 
-Definitions are linted at create/update time. Any rule violation is rejected with `INVALID_ARGUMENT` and an explicit code in the error message.
+Definitions are linted at create and update time. Any rule violation is rejected with `INVALID_ARGUMENT` and an explicit code in the error message.
 
-| Code | Meaning |
-|------|---------|
-| `duplicate-node-id` | Two nodes share the same `nodeId`. |
-| `dangling-edge` | Edge references a `from` or `to` that isn't declared. |
-| `cycle-detected` | The graph contains a cycle. v1 is DAG-only. |
-| `unreachable-node` | A node has no path from any root. |
-| `node-missing-config` | A node has no config block. |
-| `missing-breach-edge` | A node has `slaMs` set but no outgoing edge that routes on `status == 'breached'` — breaches would silently dead-end. |
-| `group-duplicate-id` | Two groups share the same `groupId`. |
-| `group-members-empty` | `memberNodeIds` is empty. |
-| `group-member-missing` | A member references an unknown node. |
-| `group-expected-steps-invalid` | `expectedSteps < 1`. |
-| `group-quorum-invalid` | `quorum < 1` or `quorum > expectedSteps`. |
-| `group-cancelonquorum-requires-quorum-lt-expected` | `cancelOnQuorum` requires `quorum < expectedSteps`. |
-| `group-joinonquorum-members-must-share-successors` | `joinOnQuorum` requires every member to have an identical set of outgoing-edge target nodes. |
-| `group-required-not-in-members` | An entry in `requiredNodeIds` is not in `memberNodeIds`. |
-| `group-required-exceeds-quorum` | `requiredNodeIds.length > quorum`. |
-| `group-node-in-multiple-groups` | A node appears as a member of two or more groups. |
+| Code                                               | Meaning                                                                                                                |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `duplicate-node-id`                                | Two nodes share the same `nodeId`.                                                                                     |
+| `dangling-edge`                                    | Edge references a `from` or `to` that isn't declared.                                                                  |
+| `cycle-detected`                                   | The graph contains a cycle. v1 is DAG-only.                                                                            |
+| `unreachable-node`                                 | A node has no path from any root.                                                                                      |
+| `node-missing-config`                              | A node has no config block.                                                                                            |
+| `missing-breach-edge`                              | A node has `slaMs` set but no outgoing edge that routes on `status == 'breached'`. Breaches would silently dead-end. |
+| `group-duplicate-id`                               | Two groups share the same `groupId`.                                                                                   |
+| `group-members-empty`                              | `memberNodeIds` is empty.                                                                                              |
+| `group-member-missing`                             | A member references an unknown node.                                                                                   |
+| `group-expected-steps-invalid`                     | `expectedSteps < 1`.                                                                                                   |
+| `group-quorum-invalid`                             | `quorum < 1` or `quorum > expectedSteps`.                                                                              |
+| `group-cancelonquorum-requires-quorum-lt-expected` | `cancelOnQuorum` requires `quorum < expectedSteps`.                                                                    |
+| `group-joinonquorum-members-must-share-successors` | `joinOnQuorum` requires every member to have an identical set of outgoing-edge target nodes.                           |
+| `group-required-not-in-members`                    | An entry in `requiredNodeIds` is not in `memberNodeIds`.                                                               |
+| `group-required-exceeds-quorum`                    | `requiredNodeIds.length > quorum`.                                                                                     |
+| `group-node-in-multiple-groups`                    | A node appears as a member of two or more groups.                                                                      |
 
-## Webhook delivery
+## Events
 
-When an execution is dispatched with `webhookUrl` + `webhookSecret`, every externally-visible event is POSTed to your receiver.
+For receiver setup (signature verification, security rules, delivery basics), see [Setup, Configure your webhook receiver](/ai/approval-engine/setup#step-3-configure-your-webhook-receiver).
 
-**Delivery:** POST, JSON body, 10s timeout, no redirects.
-
-**Headers:**
-
-| Header | Description |
-|--------|-------------|
-| `x-velt-signature` | `sha256=<hex>` — HMAC-SHA256 of the raw request body. |
-| `x-velt-event-id` | Stable event ID, unchanged across retries. |
-| `x-velt-attempt` | 0-based attempt counter. |
-
-**Payload fields:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `event`         | string             | External event type. See [Event reference](#event-reference). |
-| `executionId`   | string             | The execution this event belongs to. |
-| `definitionId`  | string             | The pinned definition id for this execution. |
-| `stepId`        | string \| null     | Set for step-level events; `null` for execution-level. |
-| `status`        | string \| undefined | Optional. Extracted from `data.status` when present. |
-| `seq`           | integer            | Monotonic per-execution sequence. Use for ordering and reconciliation. |
-| `timestamp`     | string             | ISO 8601 timestamp of the event. |
-| `correlationId` | string             | End-to-end trace id (echoed from dispatch). |
-| `data`          | object             | Event-specific payload. |
-
-For signature verification, see [Setup — Verifying the signature](/ai/approval-engine/setup#verifying-the-signature).
-
-### Retry policy
-
-| Attempt | Delay before retry |
-|---------|--------------------|
-| 1 (initial) | — |
-| 2 | 2 s |
-| 3 | 8 s |
-| 4 | 32 s |
-| 5 | 2 min |
-| 6 | 8 min → DLQ |
-
-After 5 failed retries, the payload is written to a dead-letter queue. Recover missed events via [Get Execution Events](/api-reference/rest-apis/v2/approval-engine/executions/get-execution-events) with `sinceSeq`.
-
-**At-least-once delivery:** the same `eventId` + `seq` appear on retries — make your receiver idempotent on `(executionId, seq)`.
-
-## Event reference
+### Event reference
 
 Externally-visible events delivered via webhook and returned from [Get Execution Events](/api-reference/rest-apis/v2/approval-engine/executions/get-execution-events):
 
-| Event type (external) | Internal name | When emitted | `data` highlights |
-|-----------------------|---------------|--------------|-------------------|
-| `execution.dispatched` | same | Execution created; first step(s) scheduled. | `{ definitionId, definitionVersion, rootStepIds }` |
-| `execution.completed`  | same | All steps terminal, no unhandled failures. | null |
-| `execution.failed`     | same | Any blocking step ended in `failed` or `breached` without a recovery edge. | `{ failureReason }` |
-| `execution.cancelled`  | same | `/executions/cancel` or full-execution rollback. | `{ reason? }` |
-| `step.awaiting-approval` | `step.waiting` | A human or blocking-agent step entered `waiting`. | `{ waitingForReviewers, mandatoryCount, resumeKey }` |
-| `step.completed`       | same | Step transitioned to `completed`. | For human/blocking-agent: `{ aggregatorStatus, nodeType, decision, aggregatorBacked }`. For non-blocking agents: `{ agentId }`. |
-| `step.failed`          | same | Step transitioned to `failed` (retry budget exhausted). | `{ error: { code, message } }` |
-| `step.breached`        | same | Step exceeded its configured SLA before completing. | `{ reason }` |
-| `step.cancelled`       | same | Step cancelled via `/steps/cancel` or by quorum-met side effect. | `{ actorId, reason }` |
-| `group.quorum-met`     | `parallel-group.quorum-met` | A parallel group's approval threshold was first satisfied. | `{ groupId, total, quorum, completedTotal, expectedSteps }` |
+| Event type (external)    | Internal name               | When emitted                                                               | `data` highlights                                                                                                               |
+| ------------------------ | --------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `execution.dispatched`   | same                        | Execution created. First step(s) scheduled.                                | `{ definitionId, definitionVersion, rootStepIds }`                                                                              |
+| `execution.completed`    | same                        | All steps terminal, no unhandled failures.                                 | null                                                                                                                            |
+| `execution.failed`       | same                        | Any blocking step ended in `failed` or `breached` without a recovery edge. | `{ failureReason }`                                                                                                             |
+| `execution.cancelled`    | same                        | `/executions/cancel` or full-execution rollback.                           | `{ reason? }`                                                                                                                   |
+| `step.awaiting-approval` | `step.waiting`              | A human or blocking-agent step entered `waiting`.                          | `{ waitingForReviewers, mandatoryCount, resumeKey }`                                                                            |
+| `step.completed`         | same                        | Step transitioned to `completed`.                                          | For human or blocking-agent: `{ aggregatorStatus, nodeType, decision, aggregatorBacked }`. For non-blocking agents: `{ agentId }`. |
+| `step.failed`            | same                        | Step transitioned to `failed` (retry budget exhausted).                    | `{ error: { code, message } }`                                                                                                  |
+| `step.breached`          | same                        | Step exceeded its configured SLA before completing.                        | `{ reason }`                                                                                                                    |
+| `step.cancelled`         | same                        | Step cancelled via `/steps/cancel` or by quorum-met side effect.           | `{ actorId, reason }`                                                                                                           |
+| `group.quorum-met`       | `parallel-group.quorum-met` | A parallel group's approval threshold was first satisfied.                 | `{ groupId, total, quorum, completedTotal, expectedSteps }`                                                                     |
 
 <Note>
-Internal-only events (`step.scheduled`, `step.started`, `step.retried`, `step.resumed`, `step.response-recorded`, `step.overridden`, `parallel-group.completed`, `idempotency.suppressed`) fill `seq` gaps but are filtered from external delivery. Your stream may have non-contiguous `seq` values.
+  Internal-only events (`step.scheduled`, `step.started`, `step.retried`, `step.resumed`, `step.response-recorded`, `step.overridden`, `parallel-group.completed`, `idempotency.suppressed`) fill `seq` gaps but are filtered from external delivery. Your stream may have non-contiguous `seq` values.
 </Note>
 
-## Error reference
+### Cancellation reasons
+
+`step.cancelled` events carry a `data.reason` string. This is an open string set. Consumers should switch on `event.type` for control flow, not on `data.reason`.
+
+| Reason             | Source | Meaning                                                                                                                                                         |
+| ------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `group-quorum-met` | system | Cancelled by the engine when the parent group's approval quorum was met under `cancelOnQuorum` or `joinOnQuorum`. Audit shows `actorId: "system:group-quorum"`. |
+| (admin-supplied)   | admin  | Free-form reason passed to `/steps/cancel`.                                                                                                                     |
+
+### Webhook retry policy
+
+| Attempt     | Delay before retry        |
+| ----------- | ------------------------- |
+| 1 (initial) | n/a                       |
+| 2           | 2 s                       |
+| 3           | 8 s                       |
+| 4           | 32 s                      |
+| 5           | 2 min                     |
+| 6           | 8 min, then dead-letter   |
+
+After 5 failed retries, the payload is written to a dead-letter queue. Recover missed events via [Get Execution Events](/api-reference/rest-apis/v2/approval-engine/executions/get-execution-events) with `sinceSeq`.
+
+**At-least-once delivery.** The same `eventId` and `seq` appear on retries. Make your receiver idempotent on `(executionId, seq)`.
+
+## Errors
 
 All errors follow the standard envelope:
 
-```json
+```json theme={null}
 { "error": { "message": "...", "status": "INVALID_ARGUMENT", "details": {} } }
 ```
 
 ### Canonical codes
 
-| Code | Meaning | Typical cause |
-|------|---------|---------------|
-| `INVALID_ARGUMENT`     | Schema or linter failure. | Missing field, wrong type, value out of range, linter rule violation. |
-| `UNAUTHENTICATED`      | Missing or invalid `x-velt-auth-token`. | |
-| `PERMISSION_DENIED`    | Auth token valid but lacks the required scope. | Non-admin attempting `/steps/cancel` or `/steps/resolve`. |
-| `NOT_FOUND`            | Target doc does not exist. | Unknown `executionId`, `definitionId`, or `stepId`. |
-| `ALREADY_EXISTS`       | Conflicting create. | Creating a definition with a `definitionId` already in use. |
-| `FAILED_PRECONDITION`  | Optimistic lock or state-machine violation. | `ifVersion` mismatch on update; cancelling a terminal step; deleting a definition with in-flight executions. |
-| `RESOURCE_EXHAUSTED`   | Rate limit exceeded. | Per-IP or per-API-key quota. |
-| `DEADLINE_EXCEEDED`    | Internal timeout. | Retry with idempotency. |
+| Code                  | Meaning                                        | Typical cause                                                                                                |
+| --------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `INVALID_ARGUMENT`    | Schema or linter failure.                      | Missing field, wrong type, value out of range, linter rule violation.                                        |
+| `UNAUTHENTICATED`     | Missing or invalid `x-velt-auth-token`.        |                                                                                                              |
+| `PERMISSION_DENIED`   | Auth token valid but lacks the required scope. | Non-admin attempting `/steps/cancel` or `/steps/resolve`.                                                    |
+| `NOT_FOUND`           | Target doc does not exist.                     | Unknown `executionId`, `definitionId`, or `stepId`.                                                          |
+| `ALREADY_EXISTS`      | Conflicting create.                            | Creating a definition with a `definitionId` already in use.                                                  |
+| `FAILED_PRECONDITION` | Optimistic lock or state-machine violation.    | `ifVersion` mismatch on update. Cancelling a terminal step. Deleting a definition with in-flight executions. |
+| `RESOURCE_EXHAUSTED`  | Rate limit exceeded.                           | Per-IP or per-API-key quota.                                                                                 |
+| `DEADLINE_EXCEEDED`   | Internal timeout.                              | Retry with idempotency.                                                                                      |
 
 ### Schema-level validation errors
 
-| `message` | Trigger |
-|-----------|---------|
-| `webhookUrl and webhookSecret must be provided together` | Dispatch supplied one but not the other. |
-| `webhookUrl must use https scheme` | Non-HTTPS scheme. |
-| `webhookUrl host resolves to a private, loopback, or link-local address` | Literal private IP, localhost, metadata.google.internal, or *.internal. |
-| `at least one of reviewerIds or reviewers must be provided` | Human node with no reviewers. |
-| `cannot set both reviewerIds and reviewers — use one` | Both populated — pick the modern `reviewers[]` form. |
-| `reviewer userIds must be unique` | Duplicate userId in `reviewers[]`. |
-| `reviewers must include at least one mandatory reviewer (allMandatoryApproved would otherwise never resolve)` | Every `reviewer.mandatory === false`. |
-| `resolutionPolicy required when blocking === true` | Blocking agent node without a policy. |
-| `minCount required when kind === "minResolved"` | `resolutionPolicy.kind = "minResolved"` with no `minCount`. |
-
-## Versioning and stability
-
-- `/v1/...` and `/v2/...` are active aliases for the same controllers. New integrations should use V2.
-- The event surface, webhook payload shape, and error envelope are stable for v1.
-- Internal-only event types may change without notice; do not build on them.
-- Definition updates always produce a new version — in-flight executions never change shape under you.
-- The `data.reason` field on `step.cancelled` events is an open string set; new reasons may be added without a breaking change.
+| `message`                                                                                                     | Trigger                                                                  |
+| ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `webhookUrl and webhookSecret must be provided together`                                                      | Dispatch supplied one but not the other.                                 |
+| `webhookUrl must use https scheme`                                                                            | Non-HTTPS scheme.                                                        |
+| `webhookUrl host resolves to a private, loopback, or link-local address`                                      | Literal private IP, localhost, metadata.google.internal, or `*.internal`. |
+| `at least one of reviewerIds or reviewers must be provided`                                                   | Human node with no reviewers.                                            |
+| `cannot set both reviewerIds and reviewers, use one`                                                          | Both populated. Pick the modern `reviewers[]` form.                      |
+| `reviewer userIds must be unique`                                                                             | Duplicate userId in `reviewers[]`.                                       |
+| `reviewers must include at least one mandatory reviewer (allMandatoryApproved would otherwise never resolve)` | Every `reviewer.mandatory === false`.                                    |
+| `resolutionPolicy required when blocking === true`                                                            | Blocking agent node without a policy.                                    |
+| `minCount required when kind === "minResolved"`                                                               | `resolutionPolicy.kind = "minResolved"` with no `minCount`.              |
 
 ## Rate limiting
 
@@ -293,7 +255,7 @@ Rate limits are applied per API key, with additional per-endpoint tiers on high-
 
 ## Object reference
 
-```typescript
+```typescript theme={null}
 interface ExecutionView {
   executionId: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -311,7 +273,7 @@ interface ExecutionView {
 interface StepView {
   stepId: string;
   nodeId: string;
-  nodeType: 'agent' | 'human' | 'webhook';
+  nodeType: 'agent' | 'human';
   status: 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'breached';
   groupId: string | null;
   startedAt: number | null;
@@ -340,7 +302,7 @@ interface DefinitionView {
 interface ApprovalEventView {
   eventId: string;
   seq: number;             // monotonic per-execution
-  type: string;            // external event type, see Event Reference
+  type: string;            // external event type, see Event reference
   stepId: string | null;
   timestamp: number;       // epoch ms
   correlationId: string;
@@ -350,7 +312,7 @@ interface ApprovalEventView {
 
 For **human steps**, `output` (after resume) includes the aggregator rollup:
 
-```typescript
+```typescript theme={null}
 {
   reviewers: Array<{ userId: string; mandatory: boolean }>;
   reviewerIds: string[];
@@ -371,7 +333,7 @@ For **human steps**, `output` (after resume) includes the aggregator rollup:
 
 For **`joinOnQuorum` group successor steps**, `input` includes:
 
-```typescript
+```typescript theme={null}
 {
   groupOutputs: Record<string /* memberNodeId */, Record<string, unknown> /* member's output */>;
   groupId: string;

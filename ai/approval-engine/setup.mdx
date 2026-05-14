@@ -1,153 +1,47 @@
 ---
 title: "Setup"
-description: "Author a workflow definition, dispatch an execution, configure your webhook receiver, and record decisions end-to-end."
+description: "Build an approval flow end to end: define, dispatch, receive events, drive decisions."
 ---
 
-This guide walks through a complete Approval Engine setup: defining a workflow, dispatching an execution, receiving webhook events, and driving the workflow forward by recording reviewer decisions.
+This guide walks through the five steps to get an approval flow running. Each step links to the full API reference for request and response details.
 
-## Authentication
-
-Every request must include these headers:
-
-| Header | Description |
-|--------|-------------|
-| `x-velt-api-key` | Your workspace API key. |
-| `x-velt-auth-token` | A short-lived auth token. See [Generate Auth Token](/api-reference/rest-apis/v2/auth/generate-token). |
-| `content-type` | Must be `application/json`. |
-
-<Note>
-You do not need to duplicate `apiKey` / `authToken` in the request body. The controller reads them from headers; the schemas accept body data without any auth fields. Requests that omit either header, or present an invalid token, are rejected with `UNAUTHENTICATED`.
-</Note>
-
-All endpoints use the Firebase Callable HTTP shape:
-
-```json Request
-{ "data": { /* endpoint-specific fields */ } }
-```
-
-```json Success
-{ "result": { /* endpoint-specific payload */ } }
-```
-
-```json Error
-{ "error": { "message": "...", "status": "INVALID_ARGUMENT", "details": {} } }
-```
-
-## Step 1: Create a workflow definition
+## Step 1: Define the workflow
 
 A definition is the static blueprint: nodes (work units), edges (connections), and optional parallel groups with quorum policies.
 
-This example creates a marketing-copy approval flow: an agent drafts the copy, legal and brand reviewers approve in parallel, and a publish agent ships the asset once both approve.
+Definitions are linted at write time. Cycles, dangling edges, unreachable nodes, and quorum misconfiguration all fail before you ever dispatch. You write one definition per workflow type (marketing copy approval, contract sign-off, etc.) and reuse it across many dispatches.
 
-```bash
-curl -X POST https://api.velt.dev/v2/workflow/definitions/create \
-  -H "x-velt-api-key: $VELT_API_KEY" \
-  -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{
-    "data": {
-      "definitionId": "marketing-copy-approval",
-      "name": "Marketing copy approval",
-      "scope": { "level": "apiKey" },
-      "nodes": [
-        { "nodeId": "agent-draft",   "type": "agent",  "config": { "agentId": "copy-agent-v1" } },
-        { "nodeId": "human-legal",   "type": "human",  "config": { "reviewers": [{ "userId": "u_legal_01", "mandatory": true }] } },
-        { "nodeId": "human-brand",   "type": "human",  "config": { "reviewers": [{ "userId": "u_brand_01", "mandatory": true }] } },
-        { "nodeId": "agent-publish", "type": "agent",  "config": { "agentId": "publish-agent-v1" } }
-      ],
-      "edges": [
-        { "from": "agent-draft",  "to": "human-legal" },
-        { "from": "agent-draft",  "to": "human-brand" },
-        { "from": "human-legal",  "to": "agent-publish" },
-        { "from": "human-brand",  "to": "agent-publish" }
-      ],
-      "groups": [{
-        "groupId": "parallel-review",
-        "memberNodeIds": ["human-legal", "human-brand"],
-        "expectedSteps": 2,
-        "quorum": 2,
-        "onQuorumMet": "joinOnQuorum"
-      }]
-    }
-  }'
-```
-
-The `joinOnQuorum` policy means the engine fires a single shared downstream step (`agent-publish`) once both reviewers approve — rather than firing it once per approver.
-
-For full parameters, see [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition).
+→ [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition)
 
 ## Step 2: Dispatch an execution
 
-Dispatching creates a live run of a definition. The engine pins the current definition version, stamps a correlation ID, and enqueues the first step(s).
+Dispatching creates a live run of a definition. The engine pins the current definition version, stamps a correlation ID, and enqueues the first step.
 
-```bash
-curl -X POST https://api.velt.dev/v2/workflow/executions/dispatch \
-  -H "x-velt-api-key: $VELT_API_KEY" \
-  -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{
-    "data": {
-      "definitionId": "marketing-copy-approval",
-      "idempotencyKey": "campaign-42-dispatch",
-      "correlationId": "corr_campaign_42",
-      "triggerContext": { "assetId": "asset_8f3", "campaign": "Q2 launch" },
-      "webhookUrl": "https://hooks.acme.com/velt/approvals",
-      "webhookSecret": "whsec_9a8fS2l..."
-    }
-  }'
-```
+Always supply an `idempotencyKey`. Replays with the same key return the original `executionId` instead of spawning a duplicate. This makes dispatch safe to retry from clients, queues, and event handlers.
 
-```json Response
-{
-  "result": {
-    "executionId": "exec_1777374504255_xzy43k9q",
-    "correlationId": "corr_campaign_42",
-    "deduplicated": false
-  }
-}
-```
+Supply `webhookUrl` and `webhookSecret` here if you want real-time event delivery (covered in the next step).
 
-`deduplicated: true` indicates a replay (including in-tx contention) — the returned `executionId` is the original execution's id.
-
-<Tip>
-Always supply an `idempotencyKey`. Replaying with the same key returns the original `executionId` rather than spawning a duplicate execution.
-</Tip>
-
-For full parameters, see [Dispatch Execution](/api-reference/rest-apis/v2/approval-engine/executions/dispatch-execution).
+→ [Dispatch Execution](/api-reference/rest-apis/v2/approval-engine/executions/dispatch-execution)
 
 ## Step 3: Configure your webhook receiver
 
-When dispatch supplies `webhookUrl` + `webhookSecret`, every externally-visible event is POSTed to your receiver.
+When dispatch supplies `webhookUrl` and `webhookSecret`, every externally-visible state change is POSTed to your receiver.
 
 **Delivery:** POST, JSON body, 10s timeout, no redirects.
 
-**Headers:**
+**Headers your receiver sees:**
 
-| Header | Description |
-|--------|-------------|
-| `x-velt-signature` | `sha256=<hex>` — HMAC-SHA256 of the raw request body. |
-| `x-velt-event-id` | Stable event ID, unchanged across retries. |
-| `x-velt-attempt` | 0-based attempt counter. |
+| Header             | What it is                                              |
+| ------------------ | ------------------------------------------------------- |
+| `x-velt-signature` | `sha256=<hex>`. HMAC-SHA256 of the raw request body.    |
+| `x-velt-event-id`  | Stable event ID, unchanged across retries.              |
+| `x-velt-attempt`   | 0-based attempt counter.                                |
 
-**Payload example:**
+### Verify the signature
 
-```json
-{
-  "event": "step.awaiting-approval",
-  "executionId": "exec_...",
-  "definitionId": "marketing-copy-approval",
-  "stepId": "step_agent-draft_..._lwofay__to__human-legal",
-  "status": "waiting",
-  "seq": 7,
-  "timestamp": "2026-04-28T08:05:00.000Z",
-  "correlationId": "corr_campaign_42",
-  "data": { "waitingForReviewers": 1, "mandatoryCount": 1, "resumeKey": "human:..." }
-}
-```
+Hash the raw request body bytes. Do not re-serialize the parsed JSON object.
 
-### Verifying the signature
-
-```javascript Node.js
+```javascript Node.js theme={null}
 const crypto = require('crypto');
 
 function verifyVeltSignature(rawBody, headerValue, secret) {
@@ -163,154 +57,94 @@ function verifyVeltSignature(rawBody, headerValue, secret) {
 }
 ```
 
-<Note>
-Hash the raw request body bytes — do not re-serialize the parsed JSON object.
-</Note>
-
 <Warning>
-`webhookUrl` is validated at the schema boundary and re-checked at delivery time. Scheme must be `https://`. Literal IP hosts in loopback, private (RFC 1918), link-local, or IPv4-mapped-private ranges are rejected. Forbidden hostnames include `localhost`, `metadata.google.internal`, `metadata`, and any `*.internal`. At delivery, DNS resolution is repeated; if any resolved address is private, the request is not sent. Redirects are never followed.
+  `webhookUrl` is validated at the schema boundary and re-checked at delivery time. Scheme must be `https://`. Literal IP hosts in loopback, private (RFC 1918), link-local, or IPv4-mapped-private ranges are rejected. Forbidden hostnames include `localhost`, `metadata.google.internal`, `metadata`, and any `*.internal`. At delivery, DNS resolution is repeated; if any resolved address is private, the request is not sent. Redirects are never followed.
 </Warning>
 
-**At-least-once delivery:** the same `eventId` + `seq` appear on retries — make your receiver idempotent on `(executionId, seq)`.
+**At-least-once delivery.** The same `eventId` and `seq` appear on retries. Make your receiver idempotent on `(executionId, seq)`.
 
-For the full event catalog, see [Customize Behavior — Event reference](/ai/approval-engine/customize-behavior#event-reference).
+For the full event catalog, see [Customize Behavior, Event reference](/ai/approval-engine/customize-behavior#event-reference).
 
-## Step 4: Record reviewer decisions
+## Step 4: Record decisions
 
 When a human step parks in `waiting`, the engine emits `step.awaiting-approval`. Drive the workflow forward by recording each reviewer's decision.
 
-```bash
-curl -X POST https://api.velt.dev/v2/workflow/steps/recordReviewerDecision \
-  -H "x-velt-api-key: $VELT_API_KEY" \
-  -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{
-    "data": {
-      "executionId": "exec_1777374504255_xzy43k9q",
-      "stepId": "step_agent-draft_..._lwofay__to__human-legal",
-      "reviewerId": "u_legal_01",
-      "decision": "approve",
-      "reason": "looks good"
-    }
-  }'
-```
+When all mandatory reviewers approve (or any reviewer rejects), the step's aggregator transitions terminal and the step resumes.
 
-```json Response
-{
-  "result": {
-    "recorded": true,
-    "aggregatorStatus": "resolved",
-    "resumeScheduled": true
-  }
-}
-```
+→ [Record Reviewer Decision](/api-reference/rest-apis/v2/approval-engine/steps/record-reviewer-decision)
 
-When all mandatory reviewers approve (or any reviewer rejects), the step's aggregator transitions terminal and the step resumes. For blocking agent steps, use [Record Agent Resolution](/api-reference/rest-apis/v2/approval-engine/steps/record-agent-resolution) instead.
+For blocking agent steps, use Record Agent Resolution instead.
 
-See [Record Reviewer Decision](/api-reference/rest-apis/v2/approval-engine/steps/record-reviewer-decision) for full parameters.
+→ [Record Agent Resolution](/api-reference/rest-apis/v2/approval-engine/steps/record-agent-resolution)
 
-## Step 5: Monitor execution progress
+## Step 5: Monitor and reconcile
 
-Pull the current state of any execution at any time:
+Pull the current state of any execution at any time.
 
-```bash
-curl -X POST https://api.velt.dev/v2/workflow/executions/get \
-  -H "x-velt-api-key: $VELT_API_KEY" \
-  -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{ "data": { "executionId": "exec_1777374504255_xzy43k9q" } }'
-```
+→ [Get Execution](/api-reference/rest-apis/v2/approval-engine/executions/get-execution)
 
-To reconcile after a webhook outage, poll [Get Execution Events](/api-reference/rest-apis/v2/approval-engine/executions/get-execution-events) with `sinceSeq` set to the last `seq` your receiver durably stored:
+If your receiver missed events during an outage, reconcile by calling Get Execution Events with `sinceSeq` set to the last `seq` you durably stored. Returns every event after that seq, in order.
 
-```bash
-curl -X POST https://api.velt.dev/v2/workflow/executions/getEvents \
-  -H "x-velt-api-key: $VELT_API_KEY" \
-  -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{ "data": { "executionId": "exec_1777374504255_xzy43k9q", "sinceSeq": 5 } }'
-```
-
-Returns every event after `seq: 5`, in order. Make your receiver idempotent on `(executionId, seq)`.
+→ [Get Execution Events](/api-reference/rest-apis/v2/approval-engine/executions/get-execution-events)
 
 <Note>
-Only externally-visible event types are returned. Internal-only events fill `seq` gaps but are filtered out — your stream may have non-contiguous `seq` values.
+  Only externally-visible event types are returned. Internal-only events fill `seq` gaps but are filtered out, so your stream may have non-contiguous `seq` values.
 </Note>
 
-## End-to-end examples
+## End-to-end flows
 
 <AccordionGroup>
   <Accordion title="Happy path with joinOnQuorum">
+    Marketing copy approval: agent drafts, legal and brand approve in parallel, publish agent ships once both approve.
 
-```
-1. POST /v2/workflow/definitions/create
-     → definition with parallel-review group, onQuorumMet: joinOnQuorum
+    ```
+    1. Create Definition
+         → definition with parallel-review group, onQuorumMet: joinOnQuorum
 
-2. POST /v2/workflow/executions/dispatch
-     → executionId returned, status=running
-       webhook: execution.dispatched
-       webhook: step.completed (agent-draft)
-       webhook: step.awaiting-approval (human-legal)
-       webhook: step.awaiting-approval (human-brand)
+    2. Dispatch Execution
+         → executionId returned, status=running
+           webhook: execution.dispatched
+           webhook: step.completed (agent-draft)
+           webhook: step.awaiting-approval (human-legal)
+           webhook: step.awaiting-approval (human-brand)
 
-3. POST /v2/workflow/steps/recordReviewerDecision
-     { reviewerId: "u_legal_01", decision: "approve" }
-       webhook: step.completed (human-legal)
+    3. Record Reviewer Decision (u_legal_01, approve)
+           webhook: step.completed (human-legal)
 
-4. POST /v2/workflow/steps/recordReviewerDecision
-     { reviewerId: "u_brand_01", decision: "approve" }
-       webhook: step.completed (human-brand)
-       webhook: group.quorum-met (parallel-review)
-       [engine fires single group fan-out:
-        creates step group_parallel-review__to__agent-publish]
-       webhook: step.completed (agent-publish — single instance)
-       webhook: execution.completed
-```
+    4. Record Reviewer Decision (u_brand_01, approve)
+           webhook: step.completed (human-brand)
+           webhook: group.quorum-met (parallel-review)
+           [engine fires single group fan-out:
+            creates step group_parallel-review__to__agent-publish]
+           webhook: step.completed (agent-publish, single instance)
+           webhook: execution.completed
+    ```
 
+    `joinOnQuorum` fires one shared downstream step instead of firing it once per approver.
   </Accordion>
 
   <Accordion title="Stop-bothering-reviewers with cancelOnQuorum">
+    Group with 3 reviewers, `quorum: 2`, `onQuorumMet: cancelOnQuorum`:
 
-Group with 3 reviewers, `quorum: 2`, `onQuorumMet: cancelOnQuorum`:
+    ```
+    2 of 3 approve → engine fires:
+      webhook: group.quorum-met (parallel-review)
+      webhook: step.cancelled (third-reviewer-step)
+               data: { actorId: "system:group-quorum", reason: "group-quorum-met" }
+    ```
 
-```
-2 of 3 approve → engine fires:
-  webhook: group.quorum-met (parallel-review)
-  webhook: step.cancelled (third-reviewer-step)
-           data: { actorId: "system:group-quorum", reason: "group-quorum-met" }
-```
-
-The two approvers' downstream paths still each fan out per-edge. The cancelled third reviewer's edges do not fire.
-
-  </Accordion>
-
-  <Accordion title="Recovering from a webhook outage">
-
-```bash
-POST /v2/workflow/executions/getEvents
-{
-  "data": {
-    "executionId": "exec_...",
-    "sinceSeq": 5
-  }
-}
-```
-
-Returns every event after `seq: 5`, in order. Make your receiver idempotent on `(executionId, seq)`.
-
+    The two approvers' downstream paths still fan out per edge. The cancelled third reviewer's edges do not fire.
   </Accordion>
 </AccordionGroup>
 
 ## Next steps
 
 <CardGroup cols={2}>
+  <Card title="Customize Behavior" icon="sliders" href="/ai/approval-engine/customize-behavior">
+    Node configuration, edge expressions, parallel groups, SLAs, linter rules, the event catalog, and the error vocabulary.
+  </Card>
 
-<Card title="Customize Behavior" icon="sliders" href="/ai/approval-engine/customize-behavior">
-Deep dive on node configuration, edge expressions, parallel groups, SLAs, linter rules, the event catalog, and the error vocabulary.
-</Card>
-
-<Card title="REST API Reference" icon="code" href="/api-reference/rest-apis/v2/approval-engine/definitions/create-definition">
-All 14 endpoints organized into Definitions, Executions, and Steps subgroups, with full request and response schemas.
-</Card>
-
+  <Card title="REST API Reference" icon="code" href="/api-reference/rest-apis/v2/approval-engine/definitions/create-definition">
+    All endpoints organized into Definitions, Executions, and Steps, with full request and response schemas.
+  </Card>
 </CardGroup>

@@ -42,7 +42,8 @@ Exactly one of `reviewers[]` (preferred) or `reviewerIds[]` (legacy) must be pro
 | ------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
 | `reviewers`   | array     | Preferred: `[{ userId, mandatory }]`. Must include at least one `mandatory: true`. UserIds must be unique. |
 | `reviewerIds` | string\[] | Legacy. Accepted for back-compat only.                                                                     |
-| `commentBody` | string    | `≤ 8000` chars. Initial comment surfaced to reviewers.                                                     |
+| `reviewerEmails` | string[]  | Optional. 0–50 reviewer email addresses. Surfaced in the human step's `output.reviewerEmails` for downstream notification UIs.       |
+| `commentBody` | string    | `≤ 8000` chars. Stored on the human step's output for use by your reviewer-facing UI. The engine does not auto-create a Velt annotation per human step in v1 — your application is responsible for surfacing this string to reviewers (and, if you use the legacy comment-resolution flow, for creating the comment thread the reviewer replies to). |
 
 ```json theme={null}
 {
@@ -54,6 +55,80 @@ Exactly one of `reviewers[]` (preferred) or `reviewerIds[]` (legacy) must be pro
   }
 }
 ```
+
+### Per-human-node `onReject` shorthand
+
+Authors can express the rejection path directly on a `human` node instead of declaring a top-level `loops[]` region or hand-writing an edge with `when: decision == 'reject'`. Two mutually-exclusive forms:
+
+**Form A — route on reject (synthesizes an edge):**
+
+```json theme={null}
+{
+  "nodeId": "human-review",
+  "type": "human",
+  "config": {
+    "reviewers": [{ "userId": "u1", "mandatory": true }],
+    "onReject": { "routeToNodeId": "human-escalate" }
+  }
+}
+```
+
+**Form B — loop back on reject (synthesizes a top-level loop region):**
+
+```json theme={null}
+{
+  "nodeId": "human-review",
+  "type": "human",
+  "config": {
+    "reviewers": [{ "userId": "u1", "mandatory": true }],
+    "onReject": {
+      "loopBack": {
+        "toNodeId": "agent-draft",
+        "maxIterations": 3,
+        "onExhausted": { "routeToNodeId": "human-final-call" }
+      }
+    }
+  }
+}
+```
+
+| Field                                         | Type              | Required        | Description                                                                                                                                                                                                                                                            |
+| --------------------------------------------- | ----------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onReject.routeToNodeId`                      | string            | one of          | Synthesizes an edge `{ from: <thisNode>, to: routeToNodeId, when: 'output.decision == \'reject\'' }`.                                                                                                                                                                  |
+| `onReject.loopBack.toNodeId`                  | string            | one of          | Synthesizes a top-level [loop region](#loop-regions) with `entryNodeId = toNodeId`. Body inferred from the topological closure (forward-reachable from `toNodeId` ∩ backward-reachable to the rejecting node).                                                          |
+| `onReject.loopBack.maxIterations`             | integer           | no              | Default 5. Range 1–20.                                                                                                                                                                                                                                                 |
+| `onReject.loopBack.onExhausted.routeToNodeId` | string            | no              | Same semantics as `LoopRegionDef.onExhausted.routeToNodeId`.                                                                                                                                                                                                            |
+| `onReject.loopBack.when`                      | string (JSON-AST) | no              | Custom predicate. Defaults to mandatory-reject.                                                                                                                                                                                                                         |
+
+### Strict-mode validation
+
+Every `human` node MUST satisfy ONE of:
+
+1. `config.onReject` is set (any form), OR
+2. The node is a body member of a top-level `loops[]` entry.
+
+Otherwise the API returns `INVALID_ARGUMENT` with message `Human nodes missing a reject path: <list>`. This forces explicit rejection routing — silent dead-ends on rejection are a bug.
+
+### What desugaring rejects
+
+The `onReject` shorthand is converted to canonical `edges[]` + `loops[]` at definition write time. The pass returns `INVALID_ARGUMENT` for:
+
+| Condition                                                                                                                                       | Why                                                                                                                                                            |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `routeToNodeId` (or `loopBack.toNodeId` / `loopBack.onExhausted.routeToNodeId`) references a node that doesn't exist.                            | Target must be declared.                                                                                                                                       |
+| The synthesized reject edge would duplicate an existing user-supplied edge.                                                                     | Pick one — declare the edge yourself or use the shorthand.                                                                                                     |
+| The rejecting node has an unconditional outgoing edge alongside `routeToNodeId`.                                                                | The unconditional edge would also fire on rejection. Add an explicit `when` (e.g. `decision == 'approve'`) to the forward edge, or switch to `loopBack`.       |
+| `loopBack` body-inference returns empty (no path from `toNodeId` to this node along `edges[]`).                                                  | Customer must add edges or declare a top-level `loops[]` region.                                                                                                |
+| The rejecting node is already a body member of another top-level loop, OR the inferred body would overlap another loop's body.                  | A node may belong to at most one loop. Restructure or remove the conflicting loop.                                                                              |
+| `loopBack.toNodeId` equals the node itself (degenerate self-loop).                                                                              | No valid body can be inferred.                                                                                                                                 |
+
+### `onReject.routeToNodeId` on a `joinOnQuorum` group member is dead code
+
+The shorthand satisfies the strict-mode reject-path rule, but at runtime `joinOnQuorum` suppresses per-member fan-out — so the synthesized reject-gated edge can never fire. If you want per-rejecter routing on parallel reviewers, use `cancelOnQuorum` or `waitAll` (per-member fan-out preserved), or wrap the group in a top-level `loops[]` body so the loop interceptor handles rejections.
+
+### Canonical form after desugaring
+
+The stored definition has `onReject` STRIPPED from human node configs and the synthesized edges/loops appended to the top-level arrays. `GET /definitions/get` returns the canonical form (auto-synthesized loops carry a `loopId` prefix `auto_<nodeId>_loopback`). If you want to preserve your original input, store it on your side.
 
 ## Edge gating expressions
 
@@ -99,7 +174,7 @@ A parallel group declares a set of member nodes that conceptually run in paralle
 | ----------------- | --------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `groupId`         | string    | yes      | 1 to 64 chars. Stable identifier.                                                                                                            |
 | `memberNodeIds`   | string\[] | yes      | 1 to 500 nodes. Each must be declared as a top-level node. A node may belong to at most one group.                                           |
-| `expectedSteps`   | integer   | yes      | 1 to 500. Total members the group expects to terminate. Must equal `memberNodeIds.length`.                                                   |
+| `expectedSteps`   | integer   | yes      | 1 to 500. Total members the group expects to terminate (any status) before it considers itself "fully done." Should equal `memberNodeIds.length` in practice — values higher than the member count cause the group to never roll up to "complete."   |
 | `quorum`          | integer   | yes      | 1 to `expectedSteps`. The number of approvals required to fire the policy's side effect.                                                     |
 | `onQuorumMet`     | enum      | no       | `waitAll` (default), `cancelOnQuorum`, or `joinOnQuorum`.                                                                                    |
 | `requiredNodeIds` | string\[] | no       | Specific members whose approval is required for quorum to be met. Every entry must also be in `memberNodeIds`. `length` must be `<= quorum`. |
@@ -142,6 +217,82 @@ Quorum-met now requires both:
 
 In the example, `brand` alone approving doesn't satisfy quorum even if `quorum: 2` is reached numerically. `legal` AND `finance` must both also approve. If `requiredNodeIds` is omitted or empty, behavior collapses back to anonymous quorum.
 
+## Loop regions
+
+A loop region lets a workflow re-enter an earlier node when a reviewer rejects, instead of failing outright. Declare loops at the top level of a definition, peer to `groups[]`:
+
+```json theme={null}
+{
+  "loops": [
+    {
+      "loopId": "draft-revision",
+      "entryNodeId": "agent-draft",
+      "bodyNodeIds": ["agent-draft", "human-legal", "human-brand"],
+      "onIterationReject": {
+        "when": "{\"op\":\"and\",\"args\":[{\"op\":\"eq\",\"args\":[{\"var\":\"output.decision\"},\"reject\"]},{\"op\":\"eq\",\"args\":[{\"var\":\"output.rejectorMandatory\"},true]}]}"
+      },
+      "onExhausted": { "routeToNodeId": "human-escalate" },
+      "maxIterations": 5
+    }
+  ]
+}
+```
+
+| Field                       | Type              | Required | Description                                                                                                                                                                                                                                                                       |
+| --------------------------- | ----------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `loopId`                    | string            | yes      | 1–64 chars. Stable identifier for this loop.                                                                                                                                                                                                                                      |
+| `entryNodeId`               | string            | yes      | Node spawned first on each iteration. Must be a member of `bodyNodeIds`.                                                                                                                                                                                                          |
+| `bodyNodeIds`               | string[]          | yes      | 1–50 nodes inside the loop's iteration scope. May include parallel-group members.                                                                                                                                                                                                  |
+| `onIterationReject.when`    | string (JSON-AST) | no       | JSON-AST predicate evaluated when the loop body's iteration-terminal step finishes. If it matches, iteration N+1 spawns. Default: `decision == 'reject' && rejectorMandatory == true`.                                                                                            |
+| `onExhausted.routeToNodeId` | string            | no       | Node spawned when `maxIterations` is reached. Receives `previousAttempts` like a regular iteration entry. If omitted, the execution rolls up to `failed`.                                                                                                                          |
+| `maxIterations`             | integer           | yes      | 1–20. Hard cap per execution.                                                                                                                                                                                                                                                     |
+
+### Body-shape constraint
+
+The body must be one of:
+
+1. **Single-terminal sequential.** Exactly one body node has outgoing edges that leave the body — that node is the iteration-terminal.
+2. **Group-bounded.** The set of exit-bearing body nodes equals the `memberNodeIds` of one parallel group with `onQuorumMet: 'joinOnQuorum'`, every member lies inside the body, and the group has `quorum === expectedSteps`.
+
+The linter rejects other shapes with `loop-body-must-have-single-terminal`.
+
+### When to use a loop vs. the `onReject` shorthand
+
+- **Use a loop region** when multiple parallel reviewers should share a single retry counter, when the retry zone needs to contain a `joinOnQuorum` group as a unit, or when you want explicit control over the `loopId`.
+- **Use the [`onReject` shorthand](#per-human-node-onreject-shorthand) on a single human node** for simple per-node reject routing (route to a different node on reject, or kick back to a single earlier node).
+
+### `previousAttempts` payload threaded into iteration N+1
+
+The entry step of iteration N+1 receives:
+
+```ts
+{
+  iteration: number;            // N+1
+  loopId: string;
+  previousAttempts: Array<{
+    iteration: number;
+    authorOutput: Record<string, unknown>;  // the body's iteration-terminal output
+    rejectedBy: string;
+    rejectorMandatory: boolean;
+    rejectionReason: string | null;
+    rejectedAt: number;
+  }>;
+}
+```
+
+### Iteration-scoped parallel groups
+
+When a parallel group lives inside a loop body, each iteration gets fresh quorum state — the container path becomes `parallelGroups/<groupId>_iter_<N>` internally. You don't address this directly, but it explains why per-iteration quorum starts from zero.
+
+### Loop events
+
+Two new event types fire alongside the standard `step.*` and `execution.*` events. Both are returned from [Get Execution Events](/api-reference/rest-apis/v2/approval-engine/executions/get-execution-events).
+
+| Event type               | When emitted                                                                          | `data`                                                                          |
+| ------------------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `loop.iteration-started` | Iteration N+1 spawns after a body iteration terminated rejected and the cap wasn't hit. | `{ loopId, iteration, triggeredBy: 'rejection' }`                              |
+| `loop.exhausted`         | Cap reached. Either the `onExhausted.routeToNodeId` step is spawned next, or the execution rolls up to `failed` if no route node was declared. | `{ loopId, iteration, lastRejectedBy?, lastRejectionReason? }` |
+
 ## Linter rules
 
 Definitions are linted at create and update time. Any rule violation is rejected with `INVALID_ARGUMENT` and an explicit code in the error message.
@@ -164,6 +315,15 @@ Definitions are linted at create and update time. Any rule violation is rejected
 | `group-required-not-in-members`                    | An entry in `requiredNodeIds` is not in `memberNodeIds`.                                                               |
 | `group-required-exceeds-quorum`                    | `requiredNodeIds.length > quorum`.                                                                                     |
 | `group-node-in-multiple-groups`                    | A node appears as a member of two or more groups.                                                                      |
+| `loop-duplicate-id`                                | Two loops share the same `loopId`.                                                                                                                                                                                                                          |
+| `loop-entry-must-be-in-body`                       | `entryNodeId` is not listed in `bodyNodeIds`.                                                                                                                                                                                                               |
+| `loop-body-member-missing`                         | A `bodyNodeIds` entry isn't a declared node.                                                                                                                                                                                                                |
+| `loop-body-unreachable-from-entry`                 | Some body node is unreachable from `entryNodeId` along body-internal edges.                                                                                                                                                                                 |
+| `loop-body-must-have-single-terminal`              | Body shape is neither single-terminal sequential nor group-bounded — see [Loop regions › Body-shape constraint](#body-shape-constraint).                                                                                                                    |
+| `loop-node-in-multiple-loops`                      | A node appears in more than one loop body. A node may belong to at most one loop.                                                                                                                                                                           |
+| `loop-on-exhausted-route-to-not-found`             | `onExhausted.routeToNodeId` references an unknown node.                                                                                                                                                                                                     |
+| `loop-on-exhausted-route-to-in-body`               | `onExhausted.routeToNodeId` is itself a body node — exhausted-exit must escape the loop body.                                                                                                                                                               |
+| `loop-group-bounded-quorum-must-equal-expected`    | Body is group-bounded but the bounding `joinOnQuorum` group has `quorum < expectedSteps`. Force `quorum === expectedSteps` so iteration-terminal coincides with all-members-done; otherwise a late rejection races against an already-fired join successor. |
 
 ## Events
 
@@ -185,6 +345,8 @@ Externally-visible events delivered via webhook and returned from [Get Execution
 | `step.breached`          | same                        | Step exceeded its configured SLA before completing.                        | `{ reason }`                                                                                                                    |
 | `step.cancelled`         | same                        | Step cancelled via `/steps/cancel` or by quorum-met side effect.           | `{ actorId, reason }`                                                                                                           |
 | `group.quorum-met`       | `parallel-group.quorum-met` | A parallel group's approval threshold was first satisfied.                 | `{ groupId, total, quorum, completedTotal, expectedSteps }`                                                                     |
+| `loop.iteration-started` | same                        | Iteration N+1 spawns after a body iteration terminated rejected and the cap wasn't hit. | `{ loopId, iteration, triggeredBy: 'rejection' }`                                                                  |
+| `loop.exhausted`         | same                        | The loop's `maxIterations` cap was reached. If `onExhausted.routeToNodeId` is set, that step is spawned next; otherwise the execution rolls up to `failed`. | `{ loopId, iteration, lastRejectedBy?, lastRejectionReason? }`                                  |
 
 <Note>
   Internal-only events (`step.scheduled`, `step.started`, `step.retried`, `step.resumed`, `step.response-recorded`, `step.overridden`, `parallel-group.completed`, `idempotency.suppressed`) fill `seq` gaps but are filtered from external delivery. Your stream may have non-contiguous `seq` values.
@@ -197,6 +359,7 @@ Externally-visible events delivered via webhook and returned from [Get Execution
 | Reason             | Source | Meaning                                                                                                                                                         |
 | ------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `group-quorum-met` | system | Cancelled by the engine when the parent group's approval quorum was met under `cancelOnQuorum` or `joinOnQuorum`. Audit shows `actorId: "system:group-quorum"`. |
+| `loop-restart`     | system | Cancelled by the engine when a [loop region](#loop-regions) is starting iteration N+1 and an in-flight body step from iteration N is still running. Audit shows `actorId: "system:loop-restart"`. |
 | (admin-supplied)   | admin  | Free-form reason passed to `/steps/cancel`.                                                                                                                     |
 
 ### Webhook retry policy
@@ -228,7 +391,7 @@ All errors follow the standard envelope:
 | --------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `INVALID_ARGUMENT`    | Schema or linter failure.                      | Missing field, wrong type, value out of range, linter rule violation.                                        |
 | `UNAUTHENTICATED`     | Missing or invalid `x-velt-auth-token`.        |                                                                                                              |
-| `PERMISSION_DENIED`   | Auth token valid but lacks the required scope. | Non-admin attempting `/steps/cancel` or `/steps/resolve`.                                                    |
+| `PERMISSION_DENIED`   | Auth token valid but lacks the required scope. | `/steps/resolve` with `reviewer-approve` / `reviewer-reject` and `actorId` not in the step's reviewer list. |
 | `NOT_FOUND`           | Target doc does not exist.                     | Unknown `executionId`, `definitionId`, or `stepId`.                                                          |
 | `ALREADY_EXISTS`      | Conflicting create.                            | Creating a definition with a `definitionId` already in use.                                                  |
 | `FAILED_PRECONDITION` | Optimistic lock or state-machine violation.    | `ifVersion` mismatch on update. Cancelling a terminal step. Deleting a definition with in-flight executions. |

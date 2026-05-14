@@ -3,7 +3,12 @@ title: "Resolve Step"
 api: "POST https://api.velt.dev/v2/workflow/steps/resolve"
 ---
 
-Use this API to admin-override a step into a terminal `completed` state with an admin-supplied output. The step's aggregator is skipped; downstream edges fire as if the step had completed normally.
+Use this API to resolve a step that's currently `running` or `waiting`. The endpoint supports two families of actions:
+
+- **Admin-grade overrides** (`force-approve`, `force-reject`, `force-complete`, `force-fail`) — break a stuck step out of `waiting` or terminate a running step with an admin-supplied output. Audit log records the actor as an operator override.
+- **Reviewer-scoped decisions** (`reviewer-approve`, `reviewer-reject`) — record a reviewer's approve/reject decision through the API instead of through the comment-reply flow. Auth-gated to userIds in the step's declared reviewer list.
+
+Every resolve writes a `step.overridden` audit event with `{ actorId, action, reason, decision }`.
 
 # Endpoint
 
@@ -30,39 +35,87 @@ Use this API to admin-override a step into a terminal `completed` state with an 
     </ParamField>
 
     <ParamField body="stepId" type="string" required>
-      The step to admin-override.
+      The step to resolve.
+    </ParamField>
+
+    <ParamField body="action" type="string" required>
+      One of `force-approve` / `force-reject` / `force-complete` / `force-fail` / `reviewer-approve` / `reviewer-reject`. See the action matrix below.
+    </ParamField>
+
+    <ParamField body="actorId" type="string" required>
+      1–256 chars. For `force-*` actions, the operator's identifier. For `reviewer-*` actions, **must equal a userId declared in the step's reviewer list** — otherwise the request is rejected with `PERMISSION_DENIED`.
     </ParamField>
 
     <ParamField body="output" type="object">
-      Admin-supplied output. Capped (each value ≤ 16k chars).
+      Optional. Admin-supplied output for `force-complete` / `force-fail`. Ignored for approve/reject actions — `decision`, `approved`, and `approvalReply` are computed authoritatively by the engine.
     </ParamField>
 
     <ParamField body="reason" type="string">
-      ≤ 500 chars. Audit reason for the override.
-    </ParamField>
-
-    <ParamField body="actorId" type="string">
-      ≤ 200 chars. Identifier of the administrator initiating the override.
+      ≤ 2000 chars. Recorded on the audit event.
     </ParamField>
   </Expandable>
 </ParamField>
 
+#### Action matrix
+
+| Action              | Auth gate                                  | Allowed step states          | Resulting step status | Notes                                                                                                                  |
+| ------------------- | ------------------------------------------ | ---------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `force-approve`     | auth token                                 | `waiting` (human only)       | `completed`           | Synthesizes `output.decision = 'approve'`. Downstream edges that gate on `decision == 'approve'` fire.                 |
+| `force-reject`      | auth token                                 | `waiting` (human only)       | `completed`           | Synthesizes `output.decision = 'reject'`. Downstream edges that gate on `decision == 'reject'` fire.                   |
+| `force-complete`    | auth token                                 | `running` or `waiting` (any) | `completed`           | Caller-supplied `output` (or `{}`) is written through. Downstream edges fire as if the step completed normally.        |
+| `force-fail`        | auth token                                 | `running` or `waiting` (any) | `failed`              | Caller-supplied `output` is recorded. Edges that gate on the `failed` terminal status fire (e.g. escalation routing).  |
+| `reviewer-approve`  | auth token + `actorId ∈ step.reviewerIds`  | `waiting` (human only)       | `completed`           | Mechanically identical to `force-approve` but distinguished in the audit log so "reviewer acted" ≠ "operator overrode". |
+| `reviewer-reject`   | auth token + `actorId ∈ step.reviewerIds`  | `waiting` (human only)       | `completed`           | Mechanically identical to `force-reject`. Same audit distinction.                                                       |
+
 <Note>
-Requires an admin-scoped auth token. Non-admin tokens are rejected with `PERMISSION_DENIED`.
+  **Authority-of-record.** For all approve/reject actions (admin and reviewer), the engine computes `decision`, `approved`, and `approvalReply` itself. Caller-supplied `output` keys with the same names cannot override them. Other keys in `output` pass through. This prevents a reviewer from sending `action: 'reviewer-reject'` with `output: { decision: 'approve' }` and routing edges as an approval while the audit log records a rejection.
 </Note>
+
+<Warning>
+  **`reviewer-reject` and `force-reject` do not populate `output.rejectedBy` / `output.rejectorMandatory`.** Those fields are only set on the natural [Record Reviewer Decision](/api-reference/rest-apis/v2/approval-engine/steps/record-reviewer-decision) aggregator path. If you drive [loop regions](/ai/approval-engine/customize-behavior#loop-regions) via `reviewer-reject`, the default loop predicate (`decision == 'reject' && rejectorMandatory == true`) won't fire — supply an explicit `onIterationReject.when` predicate that filters on `decision` alone.
+</Warning>
 
 ## **Example Requests**
 
-#### Admin-override a stuck step
+#### Reviewer approves through the API
 
-```JSON
+```JSON theme={null}
+{
+  "data": {
+    "executionId": "exec_1777374504255_xzy43k9q",
+    "stepId": "step_agent-draft_..._lwofay__to__human-legal",
+    "action": "reviewer-approve",
+    "actorId": "u_legal_01",
+    "reason": "looks good"
+  }
+}
+```
+
+#### Admin force-completes a stuck blocking-agent step
+
+```JSON theme={null}
+{
+  "data": {
+    "executionId": "exec_1777374504255_xzy43k9q",
+    "stepId": "step_blocking-agent_...",
+    "action": "force-complete",
+    "actorId": "ops_jane",
+    "output": { "summary": "Manually closed; agent hung past deadline" },
+    "reason": "Agent stuck on retry; closing to unblock execution"
+  }
+}
+```
+
+#### Admin force-fails a step to trigger an escalation edge
+
+```JSON theme={null}
 {
   "data": {
     "executionId": "exec_1777374504255_xzy43k9q",
     "stepId": "step_agent-draft_..._lwofay__to__human-brand",
-    "output": { "decision": "approve", "note": "approved by admin in emergency" },
-    "reason": "Reviewer on PTO; emergency override",
-    "actorId": "admin_jane"
+    "action": "force-fail",
+    "actorId": "ops_jane",
+    "reason": "Reviewer on PTO indefinitely; routing to escalation edge"
   }
 }
 ```
@@ -71,35 +124,50 @@ Requires an admin-scoped auth token. Non-admin tokens are rejected with `PERMISS
 
 #### Success Response
 
-```JSON
+```JSON theme={null}
 {
   "result": {
-    "overridden": true,
-    "stepId": "step_agent-draft_..._lwofay__to__human-brand"
+    "resolved": true,
+    "executionId": "exec_1777374504255_xzy43k9q",
+    "stepId": "step_agent-draft_..._lwofay__to__human-brand",
+    "action": "force-complete"
   }
 }
 ```
 
 #### Failure Response
 
-```JSON
+```JSON theme={null}
 {
   "error": {
     "message": "ERROR_MESSAGE",
-    "status": "PERMISSION_DENIED"
+    "status": "FAILED_PRECONDITION"
   }
 }
 ```
 
-**Errors:** `FAILED_PRECONDITION` (step already terminal) / `PERMISSION_DENIED` / `NOT_FOUND`.
+**Errors:**
+
+| Code                  | Cause                                                                                                                                                                       |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INVALID_ARGUMENT`    | Schema validation (missing `action`, missing `actorId`, etc.).                                                                                                              |
+| `PERMISSION_DENIED`   | `reviewer-approve` / `reviewer-reject` with `actorId` not in the step's declared reviewer list.                                                                             |
+| `FAILED_PRECONDITION` | Step is already terminal, step is not in an allowed state for the action (e.g. `force-approve` on a non-human step), or the underlying transition CAS rejected the change.  |
+| `NOT_FOUND`           | `executionId` or `stepId` does not exist.                                                                                                                                   |
+
+<Note>
+  **Workspace-admin RBAC is post-GA.** Today the `force-*` actions gate on the standard auth token only. Until role-based access lands, restrict who can call this endpoint inside your own application.
+</Note>
 
 <ResponseExample>
-```js
-{
-  "result": {
-    "overridden": true,
-    "stepId": "step_agent-draft_..._lwofay__to__human-brand"
+  ```js theme={null}
+  {
+    "result": {
+      "resolved": true,
+      "executionId": "exec_1777374504255_xzy43k9q",
+      "stepId": "step_agent-draft_..._lwofay__to__human-brand",
+      "action": "force-complete"
+    }
   }
-}
-```
+  ```
 </ResponseExample>

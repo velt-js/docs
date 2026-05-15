@@ -7,6 +7,7 @@ description: "Self-host your reactions data while using Velt's components. Keep 
   - This is currently only compatible with `setDocuments` method.
   - Ensure that the data providers are set prior to calling `identify` method.
   - The data provider methods must return the correct status code (e.g. 200 for success, 500 for errors) and success boolean in the response object. This ensures proper error handling and retries.
+  - **Known Issue (VEL-16):** When using self-hosted reactions, REST API endpoints may return `reactionAnnotations: []` (empty array) even though `reactionAnnotationIds` are populated and reactions are visible in the UI. The REST API may not properly hydrate reactions from your self-hosted data provider. Use the `reactionAnnotationIds` to fetch full reaction data from your own database, or use SDK client-side methods which properly handle data provider hydration.
 </Warning>
 
 # Overview
@@ -794,3 +795,134 @@ subscription?.unsubscribe();
 ```
 </Tab>
 </Tabs>
+
+# Known Issues
+
+## VEL-16: REST API returns empty reactionAnnotations array
+
+<Warning>
+**Issue:** When using self-hosted reactions, REST API endpoints (`/v2/commentannotations/get` and `/v2/commentannotations/comments/get`) return `reactionAnnotations: []` (empty array) even though `reactionAnnotationIds` are populated and reactions are visible in the UI.
+</Warning>
+
+### Why this happens
+
+When reactions are self-hosted:
+1. Reaction IDs (`reactionAnnotationIds`) are stored on Velt servers and returned immediately
+2. Full reaction objects (icon, fromUsers, etc.) are stored in your self-hosted database
+3. The REST API endpoints do not currently hydrate the `reactionAnnotations` array from your configured `ReactionAnnotationDataProvider`
+4. SDK client-side methods DO properly hydrate reactions from your data provider, which is why reactions appear correctly in the UI
+
+### Workarounds
+
+<AccordionGroup>
+<Accordion title="Option 1: Fetch from your database (Recommended)">
+Use the `reactionAnnotationIds` from the API response to fetch full reaction objects from your own database:
+
+```javascript
+// 1. Get comment annotations from Velt API
+const response = await fetch('https://api.velt.dev/v2/commentannotations/get', {
+  method: 'POST',
+  headers: {
+    'x-velt-api-key': 'YOUR_API_KEY',
+    'x-velt-auth-token': 'YOUR_AUTH_TOKEN',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    data: {
+      organizationId: 'yourOrgId',
+      documentId: 'yourDocId'
+    }
+  })
+});
+
+const { result } = await response.json();
+
+// 2. Extract reaction IDs from comments
+for (const annotation of result.data) {
+  for (const comment of annotation.comments) {
+    if (comment.reactionAnnotationIds?.length > 0) {
+      // 3. Fetch full reaction data from YOUR database
+      const reactions = await fetchReactionsFromYourDB(comment.reactionAnnotationIds);
+      comment.reactionAnnotations = reactions;
+    }
+  }
+}
+```
+</Accordion>
+
+<Accordion title="Option 2: Use SDK client-side methods">
+Instead of using REST API endpoints, use the SDK's client-side methods which properly hydrate reactions:
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useCommentAnnotations } from '@veltdev/react';
+
+function MyComponent() {
+  const commentAnnotations = useCommentAnnotations({
+    documentId: 'yourDocId',
+    locationId: 'yourLocationId'
+  });
+
+  // commentAnnotations will include properly hydrated reactionAnnotations
+  // from your self-hosted data provider
+  return (
+    <div>
+      {commentAnnotations.map(annotation => (
+        <div key={annotation.annotationId}>
+          {annotation.comments.map(comment => (
+            <div key={comment.commentId}>
+              <p>{comment.commentText}</p>
+              {/* reactionAnnotations will be properly populated */}
+              {comment.reactionAnnotations?.map(reaction => (
+                <span key={reaction.annotationId}>{reaction.icon}</span>
+              ))}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```javascript
+const commentClient = Velt.getCommentClient();
+
+commentClient.getAllCommentAnnotations().subscribe((annotations) => {
+  // annotations will include properly hydrated reactionAnnotations
+  // from your self-hosted data provider
+  annotations.forEach(annotation => {
+    annotation.comments.forEach(comment => {
+      console.log('Reactions:', comment.reactionAnnotations);
+    });
+  });
+});
+```
+</Tab>
+</Tabs>
+</Accordion>
+
+<Accordion title="Option 3: Use Python SDK self-hosting backend">
+If you're using the Python SDK for self-hosting, use the `sdk.selfHosting.comments.getComments()` method which properly hydrates reactions:
+
+```python
+from velt_py import GetCommentResolverRequest
+
+def get_comments(request):
+    data = request.json
+    comment_request = GetCommentResolverRequest.from_dict(data)
+    
+    # This will properly hydrate reactionAnnotations from your database
+    result = sdk.selfHosting.comments.getComments(comment_request)
+    
+    return result
+```
+</Accordion>
+</AccordionGroup>
+
+### Status
+
+This issue is tracked as **VEL-16** and is being actively worked on. The fix will ensure REST API endpoints properly hydrate `reactionAnnotations` from configured data providers.

@@ -38,7 +38,13 @@ Use this API to register a new workflow definition (the static blueprint of node
     </ParamField>
 
     <ParamField body="scope" type="object">
-      Defaults to `{ level: "apiKey" }`. Options: `apiKey` / `organization` / `document`.
+      Defaults to `{ level: "apiKey" }`. Options:
+
+      - `{ level: "apiKey" }` — workspace-wide.
+      - `{ level: "organization", organizationId: "<id>" }` — bound to one organization. `organizationId` is required (returns `INVALID_ARGUMENT` if omitted).
+      - `{ level: "document", organizationId: "<id>", documentId: "<id>" }` — bound to one document under an organization. Both fields required.
+
+      When the response echoes `scope.organizationId` / `scope.documentId`, the values are the engine's server-namespaced ids (hashed from your client ids), not the literal strings you sent. Don't try to use them as your own identifiers — keep your client ids on your side.
     </ParamField>
 
     <ParamField body="nodes" type="array" required>
@@ -53,8 +59,20 @@ Use this API to register a new workflow definition (the static blueprint of node
       0–100 parallel-group definitions. See [parallel groups and quorum policies](/ai/approval-engine/customize-behavior#parallel-groups-and-quorum-policies).
     </ParamField>
 
+    <ParamField body="loops" type="array">
+      0–20 loop region declarations. A loop region lets a workflow re-enter an earlier node when a reviewer rejects, with previous-attempt context threaded forward and a hard cap on iterations. See [loop regions](/ai/approval-engine/customize-behavior#loop-regions) for the full schema, body-shape constraints, and linter rules.
+    </ParamField>
+
     <ParamField body="triggers" type="array">
-      0–50 trigger configs.
+      0–50 trigger declarations. Each trigger has the shape `{ triggerId, eventName?, filters? }`:
+
+      | Field        | Type    | Required | Description                                                                                       |
+      | ------------ | ------- | -------- | ------------------------------------------------------------------------------------------------- |
+      | `triggerId`  | string  | yes      | 1–128 chars. Stable identifier for this trigger.                                                  |
+      | `eventName`  | string  | no       | ≤ 128 chars. The event name your application emits when the workflow should dispatch.             |
+      | `filters`    | object  | no       | Free-form filter map; consumed by your dispatch wrapper to decide whether to fire this trigger.   |
+
+      Triggers are descriptive metadata in v1 — the engine does not auto-dispatch from them. Use them to label which definition belongs to which application event so your own dispatcher can resolve `eventName → definitionId`.
     </ParamField>
 
     <ParamField body="tags" type="string[]">

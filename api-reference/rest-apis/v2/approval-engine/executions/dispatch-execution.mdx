@@ -1,0 +1,126 @@
+---
+title: "Dispatch Execution"
+api: "POST https://api.velt.dev/v2/workflow/executions/dispatch"
+---
+
+Use this API to start a new execution of a workflow definition. Dispatch pins the current definition version, stamps a correlation ID and idempotency key, and enqueues the first step(s).
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/workflow/executions/dispatch`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="definitionId" type="string" required>
+      Must exist with `status: "active"`.
+    </ParamField>
+
+    <ParamField body="idempotencyKey" type="string">
+      `^[A-Za-z0-9:_\-.]{1,200}$`. Replaying with the same key returns the prior `executionId`.
+    </ParamField>
+
+    <ParamField body="correlationId" type="string">
+      `^[A-Za-z0-9:_\-.]{1,200}$`. Server-generated if omitted.
+    </ParamField>
+
+    <ParamField body="triggerContext" type="object">
+      Free-form payload exposed as `execution.input.*` in edge expressions.
+    </ParamField>
+
+    <ParamField body="organizationId" type="string">
+      Required when the definition is scoped to an organization or document.
+    </ParamField>
+
+    <ParamField body="documentId" type="string">
+      Required when the definition is scoped to a document.
+    </ParamField>
+
+    <ParamField body="folderId" type="string">
+      Optional folder association.
+    </ParamField>
+
+    <ParamField body="webhookUrl" type="string">
+      HTTPS-only per-execution receiver. Must be paired with `webhookSecret`.
+    </ParamField>
+
+    <ParamField body="webhookSecret" type="string">
+      16–512 chars. Used to sign webhook deliveries with HMAC-SHA256.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<Warning>
+`webhookUrl` is validated at the schema boundary and re-checked at delivery time. Scheme must be `https://`. Literal IP hosts in loopback, private (RFC 1918), link-local, or IPv4-mapped-private ranges are rejected. Forbidden hostnames include `localhost`, `metadata.google.internal`, `metadata`, and any `*.internal`. At delivery, DNS resolution is repeated; if any resolved address is private, the request is not sent. Redirects are never followed.
+</Warning>
+
+## **Example Requests**
+
+#### Dispatch with idempotency and webhook
+
+```JSON
+{
+  "data": {
+    "definitionId": "marketing-copy-approval",
+    "idempotencyKey": "campaign-42-dispatch",
+    "correlationId": "corr_campaign_42",
+    "triggerContext": { "assetId": "asset_8f3", "campaign": "Q2 launch" },
+    "webhookUrl": "https://hooks.acme.com/velt/approvals",
+    "webhookSecret": "whsec_9a8fS2l..."
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "executionId": "exec_1777374504255_xzy43k9q",
+    "correlationId": "corr_campaign_42",
+    "deduplicated": false
+  }
+}
+```
+
+`deduplicated: true` indicates a replay (including in-tx contention) — the returned `executionId` is the original execution's id.
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "NOT_FOUND"
+  }
+}
+```
+
+**Errors:** `NOT_FOUND` (no definition or tombstoned) / `FAILED_PRECONDITION` (tombstoned) / `INVALID_ARGUMENT` (schema validation).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "executionId": "exec_1777374504255_xzy43k9q",
+    "correlationId": "corr_campaign_42",
+    "deduplicated": false
+  }
+}
+```
+</ResponseExample>

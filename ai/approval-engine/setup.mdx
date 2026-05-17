@@ -1,0 +1,150 @@
+---
+title: "Setup"
+description: "Build an approval flow end to end: define, dispatch, receive events, drive decisions."
+---
+
+This guide walks through the five steps to get an approval flow running. Each step links to the full API reference for request and response details.
+
+## Step 1: Define the workflow
+
+A definition is the static blueprint: nodes (work units), edges (connections), and optional parallel groups with quorum policies.
+
+Definitions are linted at write time. Cycles, dangling edges, unreachable nodes, and quorum misconfiguration all fail before you ever dispatch. You write one definition per workflow type (marketing copy approval, contract sign-off, etc.) and reuse it across many dispatches.
+
+→ [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition)
+
+## Step 2: Dispatch an execution
+
+Dispatching creates a live run of a definition. The engine pins the current definition version, stamps a correlation ID, and enqueues the first step.
+
+Always supply an `idempotencyKey`. Replays with the same key return the original `executionId` instead of spawning a duplicate. This makes dispatch safe to retry from clients, queues, and event handlers.
+
+Supply `webhookUrl` and `webhookSecret` here if you want real-time event delivery (covered in the next step).
+
+→ [Dispatch Execution](/api-reference/rest-apis/v2/approval-engine/executions/dispatch-execution)
+
+## Step 3: Configure your webhook receiver
+
+When dispatch supplies `webhookUrl` and `webhookSecret`, every externally-visible state change is POSTed to your receiver.
+
+**Delivery:** POST, JSON body, 10s timeout, no redirects.
+
+**Headers your receiver sees:**
+
+| Header             | What it is                                              |
+| ------------------ | ------------------------------------------------------- |
+| `x-velt-signature` | `sha256=<hex>`. HMAC-SHA256 of the raw request body.    |
+| `x-velt-event-id`  | Stable event ID, unchanged across retries.              |
+| `x-velt-attempt`   | 0-based attempt counter.                                |
+
+### Verify the signature
+
+Hash the raw request body bytes. Do not re-serialize the parsed JSON object.
+
+```javascript Node.js theme={null}
+const crypto = require('crypto');
+
+function verifyVeltSignature(rawBody, headerValue, secret) {
+  const [scheme, hex] = String(headerValue).split('=');
+  if (scheme !== 'sha256' || !hex) return false;
+  const computed = crypto
+    .createHmac('sha256', secret)
+    .update(rawBody, 'utf8')
+    .digest('hex');
+  const a = Buffer.from(hex, 'hex');
+  const b = Buffer.from(computed, 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+```
+
+<Warning>
+  `webhookUrl` is validated at the schema boundary and re-checked at delivery time. Scheme must be `https://`. Literal IP hosts in loopback, private (RFC 1918), link-local, or IPv4-mapped-private ranges are rejected. Forbidden hostnames include `localhost`, `metadata.google.internal`, `metadata`, and any `*.internal`. At delivery, DNS resolution is repeated; if any resolved address is private, the request is not sent. Redirects are never followed.
+</Warning>
+
+**At-least-once delivery.** The same `eventId` and `seq` appear on retries. Make your receiver idempotent on `(executionId, seq)`.
+
+For the full event catalog, see [Customize Behavior, Event reference](/ai/approval-engine/customize-behavior#event-reference).
+
+## Step 4: Record decisions
+
+When a human step parks in `waiting`, the engine emits `step.awaiting-approval`. Drive the workflow forward by recording each reviewer's decision.
+
+When all mandatory reviewers approve (or any reviewer rejects), the step's aggregator transitions terminal and the step resumes.
+
+→ [Record Reviewer Decision](/api-reference/rest-apis/v2/approval-engine/steps/record-reviewer-decision)
+
+For blocking agent steps, use Record Agent Resolution instead.
+
+→ [Record Agent Resolution](/api-reference/rest-apis/v2/approval-engine/steps/record-agent-resolution)
+
+## Step 5: Monitor and reconcile
+
+Pull the current state of any execution at any time.
+
+→ [Get Execution](/api-reference/rest-apis/v2/approval-engine/executions/get-execution)
+
+If your receiver missed events during an outage, reconcile by calling Get Execution Events with `sinceSeq` set to the last `seq` you durably stored. Returns every event after that seq, in order.
+
+→ [Get Execution Events](/api-reference/rest-apis/v2/approval-engine/executions/get-execution-events)
+
+<Note>
+  Only externally-visible event types are returned. Internal-only events fill `seq` gaps but are filtered out, so your stream may have non-contiguous `seq` values.
+</Note>
+
+## End-to-end flows
+
+<AccordionGroup>
+  <Accordion title="Happy path with joinOnQuorum">
+    Marketing copy approval: agent drafts, legal and brand approve in parallel, publish agent ships once both approve.
+
+    ```
+    1. Create Definition
+         → definition with parallel-review group, onQuorumMet: joinOnQuorum
+
+    2. Dispatch Execution
+         → executionId returned, status=running
+           webhook: execution.dispatched
+           webhook: step.completed (agent-draft)
+           webhook: step.awaiting-approval (human-legal)
+           webhook: step.awaiting-approval (human-brand)
+
+    3. Record Reviewer Decision (u_legal_01, approve)
+           webhook: step.completed (human-legal)
+
+    4. Record Reviewer Decision (u_brand_01, approve)
+           webhook: step.completed (human-brand)
+           webhook: group.quorum-met (parallel-review)
+           [engine fires single group fan-out:
+            creates step group_parallel-review__to__agent-publish]
+           webhook: step.completed (agent-publish, single instance)
+           webhook: execution.completed
+    ```
+
+    `joinOnQuorum` fires one shared downstream step instead of firing it once per approver.
+  </Accordion>
+
+  <Accordion title="Stop-bothering-reviewers with cancelOnQuorum">
+    Group with 3 reviewers, `quorum: 2`, `onQuorumMet: cancelOnQuorum`:
+
+    ```
+    2 of 3 approve → engine fires:
+      webhook: group.quorum-met (parallel-review)
+      webhook: step.cancelled (third-reviewer-step)
+               data: { actorId: "system:group-quorum", reason: "group-quorum-met" }
+    ```
+
+    The two approvers' downstream paths still fan out per edge. The cancelled third reviewer's edges do not fire.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Customize Behavior" icon="sliders" href="/ai/approval-engine/customize-behavior">
+    Node configuration, edge expressions, parallel groups, SLAs, linter rules, the event catalog, and the error vocabulary.
+  </Card>
+
+  <Card title="REST API Reference" icon="code" href="/api-reference/rest-apis/v2/approval-engine/definitions/create-definition">
+    All endpoints organized into Definitions, Executions, and Steps, with full request and response schemas.
+  </Card>
+</CardGroup>

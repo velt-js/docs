@@ -1,0 +1,127 @@
+---
+title: "Record Reviewer Decision"
+api: "POST https://api.velt.dev/v2/workflow/steps/recordReviewerDecision"
+---
+
+Use this API to record a single reviewer's decision against a human step. When all mandatory reviewers approve (or any reviewer rejects), the step's aggregator transitions terminal and the step resumes.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/workflow/steps/recordReviewerDecision`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="executionId" type="string" required>
+      The execution containing the step.
+    </ParamField>
+
+    <ParamField body="stepId" type="string" required>
+      Must reference a human step in `waiting`.
+    </ParamField>
+
+    <ParamField body="reviewerId" type="string" required>
+      Must match a `userId` declared on the node's `reviewers[]`.
+    </ParamField>
+
+    <ParamField body="decision" type="string" required>
+      `approve` / `reject`.
+    </ParamField>
+
+    <ParamField body="reason" type="string">
+      ≤ 2000 chars.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## **Example Requests**
+
+#### Approve as a reviewer
+
+```JSON
+{
+  "data": {
+    "executionId": "exec_1777374504255_xzy43k9q",
+    "stepId": "step_agent-draft_..._lwofay__to__human-legal",
+    "reviewerId": "u_legal_01",
+    "decision": "approve",
+    "reason": "looks good"
+  }
+}
+```
+
+#### Reject as a reviewer
+
+```JSON
+{
+  "data": {
+    "executionId": "exec_1777374504255_xzy43k9q",
+    "stepId": "step_agent-draft_..._lwofay__to__human-legal",
+    "reviewerId": "u_legal_01",
+    "decision": "reject",
+    "reason": "compliance issue on line 3"
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "recorded": true,
+    "aggregatorStatus": "resolved",
+    "resumeScheduled": true
+  }
+}
+```
+
+`recorded: false` only on idempotent replay. `aggregatorStatus`: `pending` / `resolved` / `rejected`. `resumeScheduled: true` when this decision triggered the resume task.
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "FAILED_PRECONDITION"
+  }
+}
+```
+
+**Errors:**
+
+| Code                  | Cause                                                                                                                                              |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FAILED_PRECONDITION` | Step is not in `waiting`, step is not a `human` node, or the step is the legacy comment-resolution variant (use the comment-reply flow instead).   |
+| `NOT_FOUND`           | `executionId` or `stepId` does not exist.                                                                                                          |
+| `INVALID_ARGUMENT`    | Schema validation (missing field, wrong type).                                                                                                     |
+
+A `reviewerId` not listed on the node's `reviewers[]` does not throw — the aggregator records the response as an unknown responder, and the response payload's `aggregatorStatus` reflects whether quorum has shifted.
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "recorded": true,
+    "aggregatorStatus": "resolved",
+    "resumeScheduled": true
+  }
+}
+```
+</ResponseExample>

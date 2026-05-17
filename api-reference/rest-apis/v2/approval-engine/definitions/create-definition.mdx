@@ -1,0 +1,205 @@
+---
+title: "Create Definition"
+api: "POST https://api.velt.dev/v2/workflow/definitions/create"
+---
+
+Use this API to register a new workflow definition (the static blueprint of nodes, edges, and optional parallel groups). Definitions are linted at write time — invalid graphs are rejected with an explicit linter code.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/workflow/definitions/create`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="definitionId" type="string" required>
+      `^[a-z0-9][a-z0-9-]{2,63}$`. Stable identifier for this definition.
+    </ParamField>
+
+    <ParamField body="name" type="string" required>
+      1–200 chars. Human-readable label.
+    </ParamField>
+
+    <ParamField body="description" type="string">
+      0–2000 chars.
+    </ParamField>
+
+    <ParamField body="scope" type="object">
+      Defaults to `{ level: "apiKey" }`. Options:
+
+      - `{ level: "apiKey" }` — workspace-wide.
+      - `{ level: "organization", organizationId: "<id>" }` — bound to one organization. `organizationId` is required (returns `INVALID_ARGUMENT` if omitted).
+      - `{ level: "document", organizationId: "<id>", documentId: "<id>" }` — bound to one document under an organization. Both fields required.
+
+      When the response echoes `scope.organizationId` / `scope.documentId`, the values are the engine's server-namespaced ids (hashed from your client ids), not the literal strings you sent. Don't try to use them as your own identifiers — keep your client ids on your side.
+    </ParamField>
+
+    <ParamField body="nodes" type="array" required>
+      1–100 nodes. Each node has `nodeId`, `type` (`agent` / `human` / `webhook`), and a `config` block. See node configuration details in [Customize Behavior](/ai/approval-engine/customize-behavior#node-configuration). Each node also accepts an optional `slaMs` (integer, ms) — SLA deadline for the step.
+    </ParamField>
+
+    <ParamField body="edges" type="array" required>
+      0–500 edges. Each edge: `{ from, to, when? }`. The optional `when` expression is evaluated against the source step's output — see [edge gating expressions](/ai/approval-engine/customize-behavior#edge-gating-expressions).
+    </ParamField>
+
+    <ParamField body="groups" type="array">
+      0–100 parallel-group definitions. See [parallel groups and quorum policies](/ai/approval-engine/customize-behavior#parallel-groups-and-quorum-policies).
+    </ParamField>
+
+    <ParamField body="loops" type="array">
+      0–20 loop region declarations. A loop region lets a workflow re-enter an earlier node when a reviewer rejects, with previous-attempt context threaded forward and a hard cap on iterations. See [loop regions](/ai/approval-engine/customize-behavior#loop-regions) for the full schema, body-shape constraints, and linter rules.
+    </ParamField>
+
+    <ParamField body="triggers" type="array">
+      0–50 trigger declarations. Each trigger has the shape `{ triggerId, eventName?, filters? }`:
+
+      | Field        | Type    | Required | Description                                                                                       |
+      | ------------ | ------- | -------- | ------------------------------------------------------------------------------------------------- |
+      | `triggerId`  | string  | yes      | 1–128 chars. Stable identifier for this trigger.                                                  |
+      | `eventName`  | string  | no       | ≤ 128 chars. The event name your application emits when the workflow should dispatch.             |
+      | `filters`    | object  | no       | Free-form filter map; consumed by your dispatch wrapper to decide whether to fire this trigger.   |
+
+      Triggers are descriptive metadata in v1 — the engine does not auto-dispatch from them. Use them to label which definition belongs to which application event so your own dispatcher can resolve `eventName → definitionId`.
+    </ParamField>
+
+    <ParamField body="tags" type="string[]">
+      0–20 tags, each ≤ 64 chars.
+    </ParamField>
+
+    <ParamField body="custom" type="object">
+      Free-form metadata.
+    </ParamField>
+
+    <ParamField body="organizationId" type="string">
+      Required when `scope.level` is `organization` or `document`.
+    </ParamField>
+
+    <ParamField body="documentId" type="string">
+      Required when `scope.level` is `document`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+#### Node object example
+
+```JSON
+{
+  "nodeId": "brand-check",
+  "type": "agent",
+  "config": { "agentId": "brand-agent-v1", "blocking": false, "requireNonEmptyOutput": true },
+  "slaMs": 3600000
+}
+```
+
+#### Edge object example
+
+```JSON
+{ "from": "brand-check", "to": "legal-review", "when": "output.passesBrandCheck == true" }
+```
+
+## **Example Requests**
+
+#### Create a marketing-copy approval workflow
+
+```JSON
+{
+  "data": {
+    "definitionId": "marketing-copy-approval",
+    "name": "Marketing copy approval",
+    "scope": { "level": "apiKey" },
+    "nodes": [
+      { "nodeId": "agent-draft",   "type": "agent",  "config": { "agentId": "copy-agent-v1" } },
+      { "nodeId": "human-legal",   "type": "human",  "config": { "reviewers": [{ "userId": "u_legal_01", "mandatory": true }] } },
+      { "nodeId": "human-brand",   "type": "human",  "config": { "reviewers": [{ "userId": "u_brand_01", "mandatory": true }] } },
+      { "nodeId": "agent-publish", "type": "agent",  "config": { "agentId": "publish-agent-v1" } }
+    ],
+    "edges": [
+      { "from": "agent-draft",  "to": "human-legal" },
+      { "from": "agent-draft",  "to": "human-brand" },
+      { "from": "human-legal",  "to": "agent-publish" },
+      { "from": "human-brand",  "to": "agent-publish" }
+    ],
+    "groups": [{
+      "groupId": "parallel-review",
+      "memberNodeIds": ["human-legal", "human-brand"],
+      "expectedSteps": 2,
+      "quorum": 2,
+      "onQuorumMet": "joinOnQuorum"
+    }]
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "definitionId": "marketing-copy-approval",
+    "name": "Marketing copy approval",
+    "description": null,
+    "version": 1,
+    "scope": { "level": "apiKey", "organizationId": null, "documentId": null },
+    "nodes": [ /* echoed back with resolved defaults */ ],
+    "edges": [ /* echoed back with when: null for unset gates */ ],
+    "groups": [ /* echoed back */ ],
+    "triggers": null,
+    "tags": null,
+    "custom": null,
+    "createdAt": 1731432000000,
+    "updatedAt": 1731432000000,
+    "status": "active"
+  }
+}
+```
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+**Errors:** `INVALID_ARGUMENT` (schema or linter failure; message includes the linter code) / `ALREADY_EXISTS` (definitionId already in use).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "definitionId": "marketing-copy-approval",
+    "name": "Marketing copy approval",
+    "description": null,
+    "version": 1,
+    "scope": { "level": "apiKey", "organizationId": null, "documentId": null },
+    "nodes": [],
+    "edges": [],
+    "groups": [],
+    "triggers": null,
+    "tags": null,
+    "custom": null,
+    "createdAt": 1731432000000,
+    "updatedAt": 1731432000000,
+    "status": "active"
+  }
+}
+```
+</ResponseExample>

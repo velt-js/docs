@@ -50,3 +50,12 @@ npm install @veltdev/react
 
 - [X](https://x.com/veltjs): To receive updates, announcements,
   and general Velt tips.
+
+---
+
+<sub>**For internal contributors:** On every merge to `main` touching a watched docs path, the
+[`docs-sync-skills`](.github/workflows/docs-sync-skills.yml) pipeline runs automatically. It opens
+(or updates, if one is already open) a `skills-sync` PR against
+[`velt-js/agent-skills`](https://github.com/velt-js/agent-skills) requesting `@yoen-velt` as the reviewer,
+covering any rule that drifted from docs. No manual coordination required. See
+[`scripts/skills-sync/README.md`](scripts/skills-sync/README.md) for pipeline details.</sub>

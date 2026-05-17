@@ -1,0 +1,1037 @@
+---
+title: XML Store
+description: Add real-time collaborative XML/tree data to your application using Velt CRDT.
+---
+
+<Info>Complete [Steps 1-2](/realtime-collaboration/crdt/setup/core#setup) on the Core setup page before continuing. Those steps install dependencies and initialize Velt.</Info>
+
+The XML store requires direct Yjs manipulation, so you also need the `yjs` package:
+
+```bash
+npm i yjs
+```
+
+## Setup
+
+### Step 1: Create a CRDT XML store
+
+<Tabs>
+<Tab title="React / Next.js">
+
+Use the `useStore` hook with `type: 'xml'` to create a CRDT store backed by a Yjs `Y.XmlFragment`. Unlike text/map/array stores, the XML store does **not** use the hook's `update()` method. All mutations must go through Yjs APIs directly via `store.getXml()`.
+
+```tsx
+import { useStore } from '@veltdev/crdt-react';
+import * as Y from 'yjs';
+import { useEffect, useRef } from 'react';
+
+function Component() {
+  const xmlRef = useRef<Y.XmlFragment | null>(null);
+
+  const {
+    store,
+    isLoading,
+    error,
+  } = useStore<string>({
+    storeId: 'my-xml-store',
+    type: 'xml',
+  });
+
+  // When store is ready, get the XML fragment and set up the tree
+  useEffect(() => {
+    if (!store) return;
+
+    const xml = store.getXml() as unknown as Y.XmlFragment | null;
+    if (!xml) return;
+    xmlRef.current = xml;
+
+    // Populate with initial content if the document is empty
+    if (xml.length === 0) {
+      const doc = store.getDoc();
+      doc.transact(() => {
+        populateInitialContent(xml);
+      });
+    }
+  }, [store]);
+}
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Use `createVeltStore` with `type: 'xml'` to create a CRDT store backed by a Yjs `Y.XmlFragment`. Unlike text/map/array stores, all mutations must go through Yjs APIs directly.
+
+```js
+import { createVeltStore } from '@veltdev/crdt';
+import * as Y from 'yjs';
+
+async function initializeStore(client) {
+  const store = await createVeltStore({
+    id: 'my-xml-store',
+    type: 'xml',
+    veltClient: client,
+  });
+  if (!store) return;
+
+  // Get the XML fragment for direct Yjs manipulation
+  const xml = store.getXml();
+  if (!xml) return;
+
+  // Populate with initial content if the document is empty
+  if (xml.length === 0) {
+    const doc = store.getDoc();
+    doc.transact(() => {
+      populateInitialContent(xml);
+    });
+  }
+
+  // Seed the UI with the current tree
+  renderTree(xmlFragmentToNodes(xml));
+}
+```
+
+</Tab>
+</Tabs>
+
+### Step 2: Manipulate the XML tree with Yjs APIs
+
+Use `Y.XmlElement` and `Y.XmlFragment` APIs to read and modify the tree. Fine-grained Yjs operations (`setAttribute`, `insert`, `delete`) give better CRDT merge behavior than whole-document replacement.
+
+```tsx
+import * as Y from 'yjs';
+
+// Create a new XML element
+function createNewElement(tag: string, attributes: Record<string, string>): Y.XmlElement {
+  const element = new Y.XmlElement(tag);
+  for (const [key, value] of Object.entries(attributes)) {
+    element.setAttribute(key, value);
+  }
+  return element;
+}
+
+// Add a new element to the root fragment
+function addElement(xml: Y.XmlFragment) {
+  const element = createNewElement('item', { id: 'item-1', name: 'New Item' });
+  xml.insert(xml.length, [element]);
+}
+
+// Find an element by attribute and update it
+function updateElementAttribute(xml: Y.XmlFragment, elementId: string, key: string, value: string) {
+  const element = findElementById(xml, elementId);
+  if (element) {
+    element.setAttribute(key, value);
+  }
+}
+
+// Delete an element from its parent
+function deleteElement(parent: Y.XmlFragment | Y.XmlElement, index: number) {
+  parent.delete(index, 1);
+}
+```
+
+### Step 3: Subscribe to real-time changes
+
+For XML stores, use `store.subscribe()` to listen for changes from all collaborators. Re-read the `Y.XmlFragment` in the callback to rebuild your in-memory data structure.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+useEffect(() => {
+  if (!store) return;
+
+  const unsub = store.subscribe(() => {
+    if (xmlRef.current) {
+      // Re-read the Y.XmlFragment and convert to your data structure
+      const updatedData = readXmlFragment(xmlRef.current);
+      setData(updatedData);
+    }
+  });
+
+  return () => unsub();
+}, [store]);
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+// Subscribe to all future changes (local and remote)
+const unsubscribe = store.subscribe(() => {
+  if (xml) {
+    // Re-read the Y.XmlFragment and convert to your data structure
+    const updatedNodes = readXmlFragment(xml);
+    renderTree(updatedNodes);
+  }
+});
+
+// Call unsubscribe to stop listening when no longer needed
+unsubscribe();
+```
+
+</Tab>
+</Tabs>
+
+### Step 4: Save and restore versions (optional)
+
+Create checkpoints and roll back when needed.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+The `useStore` hook exposes version management methods directly:
+
+```tsx
+import { Version } from '@veltdev/crdt-react';
+
+const {
+  store,
+  saveVersion,
+  getVersions,
+  getVersionById,
+  restoreVersion,
+  setStateFromVersion,
+} = useStore<string>({
+  storeId: 'my-xml-store',
+  type: 'xml',
+});
+
+// Save a named snapshot of the current state
+await saveVersion('Draft v1');
+
+// Retrieve the list of all saved versions
+const versions: Version[] = await getVersions();
+
+// Restore the store to a previously saved version
+await restoreVersion(versionId);
+const version = await getVersionById(versionId);
+if (version) {
+  await setStateFromVersion(version);
+}
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+import { Version } from '@veltdev/crdt';
+
+// Save a named snapshot of the current state
+const versionId = await store.saveVersion('Draft v1');
+
+// List all saved versions
+const versions = await store.getVersions();
+
+// Restore the store to a previously saved version
+await store.restoreVersion(versionId);
+const version = await store.getVersionById(versionId);
+if (version) {
+  await store.setStateFromVersion(version);
+}
+```
+
+</Tab>
+</Tabs>
+
+### Step 5: Initial content with forceResetInitialContent (optional)
+
+For XML stores, initial content is applied manually by checking if the `Y.XmlFragment` is empty. To force-reset, clear the fragment and re-populate inside a Yjs transaction.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+const xml = store.getXml() as unknown as Y.XmlFragment | null;
+if (!xml) return;
+
+const doc = store.getDoc();
+
+// Force-reset: clear existing content and re-populate
+doc.transact(() => {
+  if (xml.length > 0) xml.delete(0, xml.length);
+  populateInitialContent(xml);
+});
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```js
+const xml = store.getXml();
+if (!xml) return;
+
+const doc = store.getDoc();
+
+// Force-reset: clear existing content and re-populate
+doc.transact(() => {
+  if (xml.length > 0) xml.delete(0, xml.length);
+  populateInitialContent(xml);
+});
+```
+
+</Tab>
+</Tabs>
+
+
+## Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+
+A complete collaborative outline editor built with `useStore` and direct Yjs manipulation:
+
+**OutlineNode type and Yjs helpers**
+
+```tsx Yjs Helpers expandable lines
+import * as Y from 'yjs';
+
+interface OutlineNode {
+  id: string;
+  text: string;
+  collapsed: boolean;
+  children: OutlineNode[];
+}
+
+// Generate a random ID
+function generateId(): string {
+  return Math.random().toString(36).substring(2, 9);
+}
+
+// Convert a Y.XmlFragment to an array of OutlineNode objects
+function xmlFragmentToNodes(container: Y.XmlFragment | Y.XmlElement): OutlineNode[] {
+  const nodes: OutlineNode[] = [];
+  for (let i = 0; i < container.length; i++) {
+    const child = container.get(i);
+    if (child instanceof Y.XmlElement && child.nodeName === 'node') {
+      nodes.push({
+        id: child.getAttribute('id') || generateId(),
+        text: child.getAttribute('text') || '',
+        collapsed: child.getAttribute('collapsed') === 'true',
+        children: xmlFragmentToNodes(child),
+      });
+    }
+  }
+  return nodes;
+}
+
+// Create a Y.XmlElement from an OutlineNode
+function createXmlElement(node: OutlineNode): Y.XmlElement {
+  const el = new Y.XmlElement('node');
+  el.setAttribute('id', node.id);
+  el.setAttribute('text', node.text);
+  el.setAttribute('collapsed', String(node.collapsed));
+  for (const child of node.children) {
+    el.insert(el.length, [createXmlElement(child)]);
+  }
+  return el;
+}
+
+// Populate a Y.XmlFragment with an array of OutlineNode objects
+function populateTree(fragment: Y.XmlFragment, nodes: OutlineNode[]): void {
+  for (const node of nodes) {
+    fragment.insert(fragment.length, [createXmlElement(node)]);
+  }
+}
+
+// Find a Y.XmlElement by its 'id' attribute
+function findElementById(
+  container: Y.XmlFragment | Y.XmlElement,
+  id: string
+): Y.XmlElement | null {
+  for (let i = 0; i < container.length; i++) {
+    const child = container.get(i);
+    if (child instanceof Y.XmlElement) {
+      if (child.getAttribute('id') === id) return child;
+      const found = findElementById(child, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// Find an element and its parent for deletion
+function findElementWithParent(
+  container: Y.XmlFragment | Y.XmlElement,
+  id: string
+): { element: Y.XmlElement; parent: Y.XmlFragment | Y.XmlElement; index: number } | null {
+  for (let i = 0; i < container.length; i++) {
+    const child = container.get(i);
+    if (child instanceof Y.XmlElement) {
+      if (child.getAttribute('id') === id) {
+        return { element: child, parent: container, index: i };
+      }
+      const found = findElementWithParent(child, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+```
+
+**OutlineEditor component**
+
+```tsx Complete Implementation expandable lines
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useStore, Version } from '@veltdev/crdt-react';
+import * as Y from 'yjs';
+
+const DEFAULT_INITIAL_NODES: OutlineNode[] = [
+  {
+    id: 'n1', text: 'Getting Started', collapsed: false,
+    children: [
+      { id: 'n1a', text: 'Installation', collapsed: false, children: [] },
+      { id: 'n1b', text: 'Quick Start Guide', collapsed: false, children: [] },
+    ],
+  },
+  {
+    id: 'n2', text: 'Core Concepts', collapsed: false,
+    children: [
+      { id: 'n2a', text: 'Real-time Collaboration', collapsed: false, children: [] },
+      { id: 'n2b', text: 'CRDT Types', collapsed: false, children: [] },
+    ],
+  },
+];
+
+export const OutlineEditor = () => {
+  const [newNodeText, setNewNodeText] = useState('');
+  const [versionName, setVersionName] = useState('');
+  const [versions, setVersions] = useState<Version[]>([]);
+  const [nodes, setNodes] = useState<OutlineNode[]>([]);
+  const xmlRef = useRef<Y.XmlFragment | null>(null);
+
+  // Use the useStore hook — handles initialization automatically
+  const {
+    store,
+    saveVersion: storeSaveVersion,
+    getVersions: storeGetVersions,
+    restoreVersion: storeRestoreVersion,
+    getVersionById,
+    setStateFromVersion,
+  } = useStore<string>({
+    storeId: 'my-outline-store',
+    type: 'xml',
+  });
+
+  // When store is ready, get the XML fragment and set up the tree
+  useEffect(() => {
+    if (!store) return;
+
+    const xml = store.getXml() as unknown as Y.XmlFragment | null;
+    if (!xml) return;
+    xmlRef.current = xml;
+
+    // Populate with initial content if the document is empty
+    if (xml.length === 0 && DEFAULT_INITIAL_NODES.length > 0) {
+      const doc = store.getDoc();
+      doc.transact(() => {
+        populateTree(xml, DEFAULT_INITIAL_NODES);
+      });
+    }
+
+    // Seed React state with current tree
+    setNodes(xmlFragmentToNodes(xml));
+
+    // Subscribe to all future changes (local and remote)
+    const unsub = store.subscribe(() => {
+      if (xmlRef.current) {
+        setNodes(xmlFragmentToNodes(xmlRef.current));
+      }
+    });
+
+    return () => unsub();
+  }, [store]);
+
+  // Tree operations via direct Yjs manipulation
+  const addRootNode = useCallback((text: string) => {
+    const xml = xmlRef.current;
+    if (!xml) return;
+    const newNode: OutlineNode = {
+      id: generateId(),
+      text,
+      collapsed: false,
+      children: [],
+    };
+    xml.insert(xml.length, [createXmlElement(newNode)]);
+  }, []);
+
+  const updateNodeText = useCallback((nodeId: string, newText: string) => {
+    const xml = xmlRef.current;
+    if (!xml) return;
+    const el = findElementById(xml, nodeId);
+    if (el) {
+      el.setAttribute('text', newText);
+    }
+  }, []);
+
+  const addChildNode = useCallback((parentId: string) => {
+    const xml = xmlRef.current;
+    if (!xml) return;
+    const parentEl = findElementById(xml, parentId);
+    if (!parentEl) return;
+    parentEl.setAttribute('collapsed', 'false');
+    const newChild: OutlineNode = {
+      id: generateId(),
+      text: 'New item',
+      collapsed: false,
+      children: [],
+    };
+    parentEl.insert(parentEl.length, [createXmlElement(newChild)]);
+  }, []);
+
+  const deleteNode = useCallback((nodeId: string) => {
+    const xml = xmlRef.current;
+    if (!xml) return;
+    const result = findElementWithParent(xml, nodeId);
+    if (result) {
+      result.parent.delete(result.index, 1);
+    }
+  }, []);
+
+  // Version management
+  const refreshVersions = useCallback(async () => {
+    const v = await storeGetVersions();
+    setVersions(v);
+  }, [storeGetVersions]);
+
+  useEffect(() => {
+    if (store) refreshVersions();
+  }, [refreshVersions, store]);
+
+  const handleAddNode = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newNodeText.trim()) {
+      addRootNode(newNodeText.trim());
+      setNewNodeText('');
+    }
+  };
+
+  const handleSaveVersion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (versionName.trim()) {
+      await storeSaveVersion(versionName.trim());
+      setVersionName('');
+      await refreshVersions();
+    }
+  };
+
+  const handleRestoreVersion = async (versionId: string) => {
+    await storeRestoreVersion(versionId);
+    const version = await getVersionById(versionId);
+    if (version) {
+      await setStateFromVersion(version);
+    }
+    await refreshVersions();
+  };
+
+  return (
+    <div>
+      <form onSubmit={handleAddNode}>
+        <input
+          type="text"
+          value={newNodeText}
+          onChange={(e) => setNewNodeText(e.target.value)}
+          placeholder="New node text..."
+        />
+        <button type="submit">Add Node</button>
+      </form>
+
+      <ul>
+        {nodes.map((node) => (
+          <li key={node.id}>
+            <input
+              type="text"
+              value={node.text}
+              onChange={(e) => updateNodeText(node.id, e.target.value)}
+            />
+            <button onClick={() => addChildNode(node.id)}>+</button>
+            <button onClick={() => deleteNode(node.id)}>&times;</button>
+          </li>
+        ))}
+      </ul>
+
+      <h3>Versions</h3>
+      <form onSubmit={handleSaveVersion}>
+        <input
+          type="text"
+          value={versionName}
+          onChange={(e) => setVersionName(e.target.value)}
+          placeholder="Version name..."
+        />
+        <button type="submit">Save Version</button>
+      </form>
+
+      <ul>
+        {versions.map((version) => (
+          <li key={version.versionId}>
+            <span>{version.versionName}</span>
+            <button onClick={() => handleRestoreVersion(version.versionId)}>Restore</button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+};
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+A complete collaborative outline editor with SDK initialization, direct Yjs manipulation, full DOM rendering, and version control.
+
+**utils.ts**
+
+```ts Complete utils.ts expandable lines
+import * as Y from 'yjs';
+
+interface OutlineNode {
+  id: string;
+  text: string;
+  collapsed: boolean;
+  children: OutlineNode[];
+}
+
+// Generate a random 7-character ID for new nodes
+function generateId(): string {
+  return Math.random().toString(36).substring(2, 9);
+}
+
+// Convert a Y.XmlFragment to an array of OutlineNode objects
+function xmlFragmentToNodes(container: Y.XmlFragment | Y.XmlElement): OutlineNode[] {
+  const nodes: OutlineNode[] = [];
+  for (let i = 0; i < container.length; i++) {
+    const child = container.get(i);
+    if (child instanceof Y.XmlElement && child.nodeName === 'node') {
+      nodes.push({
+        id: child.getAttribute('id') || generateId(),
+        text: child.getAttribute('text') || '',
+        collapsed: child.getAttribute('collapsed') === 'true',
+        children: xmlFragmentToNodes(child),
+      });
+    }
+  }
+  return nodes;
+}
+
+// Create a Y.XmlElement from an OutlineNode (recursive)
+function createXmlElement(node: OutlineNode): Y.XmlElement {
+  const element = new Y.XmlElement('node');
+  element.setAttribute('id', node.id);
+  element.setAttribute('text', node.text);
+  element.setAttribute('collapsed', String(node.collapsed));
+  for (const child of node.children) {
+    element.insert(element.length, [createXmlElement(child)]);
+  }
+  return element;
+}
+
+// Populate a Y.XmlFragment with an array of OutlineNode definitions
+function populateTree(fragment: Y.XmlFragment, nodes: OutlineNode[]): void {
+  for (const node of nodes) {
+    fragment.insert(fragment.length, [createXmlElement(node)]);
+  }
+}
+
+// Find a Y.XmlElement by its 'id' attribute (recursive search)
+function findElementById(
+  container: Y.XmlFragment | Y.XmlElement,
+  id: string
+): Y.XmlElement | null {
+  for (let i = 0; i < container.length; i++) {
+    const child = container.get(i);
+    if (child instanceof Y.XmlElement) {
+      if (child.getAttribute('id') === id) return child;
+      const found = findElementById(child, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// Find a Y.XmlElement with its parent container and index (needed for delete)
+function findElementWithParent(
+  container: Y.XmlFragment | Y.XmlElement,
+  id: string
+): { element: Y.XmlElement; parent: Y.XmlFragment | Y.XmlElement; index: number } | null {
+  for (let i = 0; i < container.length; i++) {
+    const child = container.get(i);
+    if (child instanceof Y.XmlElement) {
+      if (child.getAttribute('id') === id) {
+        return { element: child, parent: container, index: i };
+      }
+      const found = findElementWithParent(child, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// Count the total number of nodes in the tree (all levels)
+function countNodes(nodes: OutlineNode[]): number {
+  return nodes.reduce((sum, node) => sum + 1 + countNodes(node.children), 0);
+}
+```
+
+**velt.ts**
+
+```ts Complete velt.ts expandable lines
+import { initVelt } from '@veltdev/client';
+import type { Velt } from '@veltdev/types';
+
+let client: Velt | null = null;
+let veltInitialized = false;
+
+// Subscriber registry for SDK-ready notifications
+const veltInitSubscribers = new Map<string, (velt: Velt) => void>();
+
+async function initializeVelt() {
+  // Initialize the Velt SDK
+  client = await initVelt('YOUR_API_KEY');
+
+  // Scope all collaboration to the configured document
+  client.setDocument('crdt-xml-demo-doc-1', { documentName: 'CRDT XML Demo' });
+
+  // Track user login/logout
+  client.getCurrentUser().subscribe((currentUser) => {
+    renderUserControls(currentUser);
+  });
+
+  // Track SDK-ready state and notify subscribers
+  client.getVeltInitState().subscribe((isReady) => {
+    veltInitialized = isReady;
+    if (isReady && client) {
+      veltInitSubscribers.forEach((callback) => callback(client));
+    }
+  });
+}
+
+// Subscribe to the SDK being fully initialized and ready
+export const subscribeToVeltInit = (subscriberId: string, callback: (velt: Velt) => void) => {
+  veltInitSubscribers.set(subscriberId, callback);
+  if (veltInitialized && client) {
+    callback(client);
+  }
+};
+
+// Authenticate a user with the Velt backend
+export async function loginWithUser(userId: string) {
+  await client?.identify({ userId, name: userId });
+}
+
+// Sign the current user out
+export async function logout() {
+  await client?.signOutUser();
+}
+
+// Start SDK initialization on module load
+initializeVelt();
+```
+
+**outline.ts**
+
+```ts Complete outline.ts expandable lines
+import { Store, Version, createVeltStore } from '@veltdev/crdt';
+import * as Y from 'yjs';
+import type { Velt } from '@veltdev/types';
+import { subscribeToVeltInit } from './velt';
+
+let store: Store<string> | null = null;
+let xmlFragment: Y.XmlFragment | null = null;
+let nodes: OutlineNode[] = [];
+let versions: Version[] = [];
+
+// Default tree content for brand-new documents
+const defaultNodes: OutlineNode[] = [
+  {
+    id: 'n1', text: 'Getting Started', collapsed: false,
+    children: [
+      { id: 'n1a', text: 'Installation', collapsed: false, children: [] },
+      { id: 'n1b', text: 'Quick Start Guide', collapsed: false, children: [] },
+    ],
+  },
+  {
+    id: 'n2', text: 'Core Concepts', collapsed: false,
+    children: [
+      { id: 'n2a', text: 'Real-time Collaboration', collapsed: false, children: [] },
+    ],
+  },
+];
+
+// Initialize the store when the SDK is ready
+async function initStore(veltClient: Velt) {
+  // Create the CRDT XML store
+  const xmlStore = await createVeltStore<string>({
+    id: 'my-outline-store',
+    type: 'xml',
+    veltClient: veltClient,
+  });
+  if (!xmlStore) return;
+  store = xmlStore;
+
+  // Get the raw Y.XmlFragment for direct manipulation
+  const xml = xmlStore.getXml();
+  if (!xml) return;
+  xmlFragment = xml;
+
+  // Populate with initial content if the document is empty
+  if (xml.length === 0 && defaultNodes.length > 0) {
+    const doc = xmlStore.getDoc();
+    doc.transact(() => {
+      populateTree(xml, defaultNodes);
+    });
+  }
+
+  // Seed local state with the current tree
+  nodes = xmlFragmentToNodes(xml);
+  renderTree();
+
+  // Subscribe to all future changes (local and remote)
+  xmlStore.subscribe(() => {
+    if (xmlFragment) {
+      nodes = xmlFragmentToNodes(xmlFragment);
+      renderTree();
+    }
+  });
+
+  // Load saved versions
+  await refreshVersions();
+}
+
+// Wait for the SDK to be ready, then initialize the store
+subscribeToVeltInit('outline', (velt) => {
+  initStore(velt);
+});
+
+// Add a new top-level node to the end of the tree
+function addRootNode(text: string) {
+  if (!xmlFragment) return;
+  const newNode: OutlineNode = { id: generateId(), text, collapsed: false, children: [] };
+  xmlFragment.insert(xmlFragment.length, [createXmlElement(newNode)]);
+}
+
+// Update the text of any node in the tree by ID
+function updateNodeText(nodeId: string, newText: string) {
+  if (!xmlFragment) return;
+  const element = findElementById(xmlFragment, nodeId);
+  if (element) {
+    element.setAttribute('text', newText);
+  }
+}
+
+// Toggle the collapsed state of a node (expand / collapse)
+function toggleNode(nodeId: string) {
+  if (!xmlFragment) return;
+  const element = findElementById(xmlFragment, nodeId);
+  if (element) {
+    const isCollapsed = element.getAttribute('collapsed') === 'true';
+    element.setAttribute('collapsed', String(!isCollapsed));
+  }
+}
+
+// Add a new child node to the specified parent (auto-expands parent)
+function addChildNode(parentId: string) {
+  if (!xmlFragment) return;
+  const parentElement = findElementById(xmlFragment, parentId);
+  if (!parentElement) return;
+  parentElement.setAttribute('collapsed', 'false');
+  const newChild: OutlineNode = { id: generateId(), text: 'New item', collapsed: false, children: [] };
+  parentElement.insert(parentElement.length, [createXmlElement(newChild)]);
+}
+
+// Remove a node and all its descendants from the tree
+function deleteNode(nodeId: string) {
+  if (!xmlFragment) return;
+  const result = findElementWithParent(xmlFragment, nodeId);
+  if (result) {
+    result.parent.delete(result.index, 1);
+  }
+}
+
+// Save a named snapshot of the current state
+async function saveVersionHandler(name: string) {
+  if (!store) return;
+  await store.saveVersion(name);
+  await refreshVersions();
+}
+
+// Restore the store to a previously saved version
+async function restoreVersionHandler(versionId: string) {
+  if (!store) return;
+  await store.restoreVersion(versionId);
+  const version = await store.getVersionById(versionId);
+  if (version) {
+    await store.setStateFromVersion(version);
+  }
+  await refreshVersions();
+}
+
+// Fetch the latest version list from the backend
+async function refreshVersions() {
+  if (!store) return;
+  versions = await store.getVersions();
+  renderVersions();
+}
+
+// Create a DOM element for a single outline node (recursive)
+function createNodeElement(node: OutlineNode): HTMLLIElement {
+  const li = document.createElement('li');
+  const hasChildren = node.children.length > 0;
+
+  // Toggle button (expand/collapse/leaf indicator)
+  const toggle = document.createElement('button');
+  toggle.textContent = hasChildren ? (node.collapsed ? '\u25B6' : '\u25BC') : '\u2022';
+  if (hasChildren) {
+    toggle.addEventListener('click', () => toggleNode(node.id));
+  }
+
+  // Editable text input — pushes changes into the CRDT on every keystroke
+  const textInput = document.createElement('input');
+  textInput.type = 'text';
+  textInput.value = node.text;
+  textInput.addEventListener('input', () => {
+    updateNodeText(node.id, textInput.value);
+  });
+
+  // Add child button
+  const addBtn = document.createElement('button');
+  addBtn.textContent = '+';
+  addBtn.addEventListener('click', () => addChildNode(node.id));
+
+  // Delete button
+  const deleteBtn = document.createElement('button');
+  deleteBtn.innerHTML = '&times;';
+  deleteBtn.addEventListener('click', () => deleteNode(node.id));
+
+  li.appendChild(toggle);
+  li.appendChild(textInput);
+  li.appendChild(addBtn);
+  li.appendChild(deleteBtn);
+
+  // Render children recursively when expanded
+  if (hasChildren && !node.collapsed) {
+    const childrenUl = document.createElement('ul');
+    for (const child of node.children) {
+      childrenUl.appendChild(createNodeElement(child));
+    }
+    li.appendChild(childrenUl);
+  }
+
+  return li;
+}
+
+// Rebuild the entire outline tree from the current nodes array
+function renderTree() {
+  const tree = document.querySelector('.outline-tree');
+  if (!tree) return;
+
+  const total = countNodes(nodes);
+
+  // Update the node count label
+  const nodeCountEl = document.querySelector('.node-count');
+  if (nodeCountEl) {
+    nodeCountEl.textContent = `${total} node${total !== 1 ? 's' : ''}`;
+  }
+
+  // Clear and rebuild the entire tree
+  tree.innerHTML = '';
+  for (const node of nodes) {
+    tree.appendChild(createNodeElement(node));
+  }
+}
+
+// Render the version list into the DOM
+function renderVersions() {
+  const versionList = document.querySelector('.version-list');
+  if (!versionList) return;
+
+  versionList.innerHTML = '';
+  for (const version of versions) {
+    const li = document.createElement('li');
+
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = version.versionName;
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.textContent = 'Restore';
+    restoreBtn.addEventListener('click', () => restoreVersionHandler(version.versionId));
+
+    li.appendChild(nameSpan);
+    li.appendChild(restoreBtn);
+    versionList.appendChild(li);
+  }
+}
+
+// Attach form submit handlers to the DOM
+export function setupOutlineForm() {
+  // Handle add node form submission
+  const addNodeForm = document.getElementById('add-node-form');
+  if (addNodeForm) {
+    addNodeForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const textInput = addNodeForm.querySelector('.node-text-input') as HTMLInputElement;
+      if (textInput && textInput.value.trim()) {
+        addRootNode(textInput.value.trim());
+        textInput.value = '';
+      }
+    });
+  }
+
+  // Handle version form submission
+  const versionForm = document.getElementById('version-form');
+  if (versionForm) {
+    versionForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const input = versionForm.querySelector('.version-input') as HTMLInputElement;
+      if (input && input.value.trim()) {
+        saveVersionHandler(input.value.trim());
+        input.value = '';
+      }
+    });
+  }
+}
+```
+
+**main.ts**
+
+```ts Complete main.ts expandable lines
+import './style.css';
+import './velt';
+import { setupOutlineForm } from './outline';
+
+// Attach form handlers once the DOM is ready
+setupOutlineForm();
+```
+
+**HTML structure**
+
+```html Complete index.html expandable lines
+<div class="app-container">
+  <header class="app-header">
+    <h1>CRDT XML Demo</h1>
+    <div id="user-controls"></div>
+  </header>
+
+  <main class="app-content">
+    <div id="outline-header">Collaborative Outline - Please login to start editing</div>
+
+    <form id="add-node-form">
+      <input type="text" class="node-text-input" placeholder="New node text..." />
+      <button type="submit">Add Node</button>
+    </form>
+
+    <div class="node-count">0 nodes</div>
+    <ul class="outline-tree"></ul>
+
+    <div class="versions-section">
+      <h3>Versions</h3>
+      <form id="version-form">
+        <input type="text" class="version-input" placeholder="Version name..." />
+        <button type="submit">Save Version</button>
+      </form>
+      <ul class="version-list"></ul>
+    </div>
+  </main>
+</div>
+```
+
+</Tab>
+</Tabs>

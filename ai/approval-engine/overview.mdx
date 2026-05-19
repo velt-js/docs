@@ -134,6 +134,121 @@ Dispatch is idempotent on `idempotencyKey`. Replay with the same key returns `{ 
 
 Every state change writes an event doc with a monotonic `seq`. Set `webhookUrl` and `webhookSecret` on dispatch and externally-visible events are POSTed to your receiver with an HMAC-SHA256 signature and exponential-backoff retry. Recover missed events via `/executions/getEvents` with `sinceSeq`.
 
+## Glossary
+
+Plain-English definitions of every load-bearing term in the Approval Engine, grouped so each concept's "where it lives" is obvious from the bucket. If a term shows up across multiple pages and you're not sure what it means, search this section first.
+
+### Identifiers
+
+Header- or body-level identifiers threaded through every request.
+
+| Term                | What it is                                                                                                                                                              | Where it lives                                                                              |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `apiKey`            | Your tenant identifier — the entire engine partitions data by this.                                                                                                     | Header `x-velt-api-key`.                                                                    |
+| `authToken`         | Short-lived caller-identity token — proves the request is allowed to act under this `apiKey`.                                                                           | Header `x-velt-auth-token`.                                                                 |
+| `definitionId`      | Stable name you choose for a workflow blueprint, e.g. `marketing-copy-approval`.                                                                                        | Body of every Definition endpoint and Dispatch. Format `^[a-z0-9][a-z0-9-]{2,63}$`.         |
+| `executionId`       | Server-generated handle for one live run. Returned by Dispatch; the handle for every later operation.                                                                   | Body of every Execution and Step endpoint.                                                  |
+| `stepId`            | Server-generated id for one node *instance* within an execution. Deterministic, so retries land on the same step.                                                       | Body of every Step endpoint; on the `StepView` and on every `step.*` event.                 |
+| `idempotencyKey`    | Caller-supplied string on Dispatch. Replays with the same key within 24h return the **same** `executionId` instead of spawning a duplicate.                             | Optional body field on Dispatch. If you don't pass one, the server makes one up.            |
+| `correlationId`     | A trace id you (or the server) stamp at Dispatch and that flows through every log line and event for the execution.                                                     | Optional body field on Dispatch. Echoed on every event payload.                             |
+| `reviewerId`        | A `userId` from the human node's declared `reviewers[]` list — proves the caller is recording a decision *as that reviewer*.                                            | Body of `recordReviewerDecision`; auth gate for `reviewer-*` resolve actions.               |
+
+### Definition shape
+
+The static blueprint of a workflow.
+
+| Term              | What it is                                                                                                                                                                                                                                                       |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Definition        | Versioned blueprint of a workflow: nodes + edges + optional groups + optional loops.                                                                                                                                                                             |
+| Version           | Every `update` increments it and snapshots the prior content. **In-flight executions stay pinned** to the version they started with — they never see your edits mid-flight.                                                                                      |
+| `ifVersion`       | Optimistic-lock parameter on update. Must equal the stored version, otherwise `FAILED_PRECONDITION` (no silent overwrites).                                                                                                                                      |
+| Tombstoned        | Soft-deleted. Filtered from `get`/`list`. Definitions can only be deleted when no executions are still running on them.                                                                                                                                          |
+| Node              | One work unit in the graph: `agent` or `human`.                                                                                                                                                                                                                  |
+| Edge              | A directional connection from one node to another with an optional `when` predicate.                                                                                                                                                                             |
+| `when` expression | A **JSON-AST string** (not JavaScript) evaluated against the source step's `output`, the step's metadata, or `execution.input` (i.e. the `triggerContext` you passed on dispatch). Compiled at write time, walked at runtime — never `eval`'d.                   |
+| DAG               | "Directed acyclic graph" — i.e. no cycles. v1 enforces this via the `cycle-detected` linter rule. Loop regions are the controlled exception.                                                                                                                     |
+| Scope             | Whether the definition applies workspace-wide (`apiKey`), to one organization, or to one document. Most-specific scope wins at dispatch time (document > organization > apiKey).                                                                                 |
+
+### Runtime state
+
+What actually runs when you dispatch a definition.
+
+| Term         | What it is                                                                                                                                                                                                  |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Execution    | One live run of one definition. Has its own status (`pending → running → completed/failed/cancelled`), its own steps, its own event log.                                                                    |
+| Step         | One runtime instance of a node inside an execution. Has its own status (`pending → running → (waiting) → completed / failed / skipped / cancelled / breached`).                                             |
+| `waiting`    | A step is parked, waiting for an external signal. Only happens for **human** steps (waiting for reviewer decisions) and **blocking agent** steps (waiting for `recordAgentResolution` calls).               |
+| Aggregator   | A small server-side state machine attached to a `waiting` step that counts incoming reviewer decisions or agent resolutions and decides when the step has enough input to resume.                           |
+| Fan-out      | The act of spawning successor steps after a step completes — one per outgoing edge whose `when` predicate holds.                                                                                            |
+| Resume       | The act of waking a `waiting` step back into `running` once its aggregator has a verdict (or once an admin force-resolves it).                                                                              |
+| Cascade      | Knock-on cancellation. e.g. cancelling an execution cancels all its non-terminal steps; restarting a loop cancels in-flight body steps from the previous iteration.                                         |
+
+### Parallel groups and quorum
+
+<Note>
+**`quorum` vs `expectedSteps`:** Quorum counts *approvals only* — members that completed with `output.decision === 'approve'`. `expectedSteps` counts members that reached *any* terminal status (approve, reject, fail, breach, cancel). They are not interchangeable.
+</Note>
+
+| Term                       | What it is                                                                                                                                                                                                                                  |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Group                      | A declaration that a set of nodes (`memberNodeIds`) conceptually run in parallel and share an approval threshold. Lives in `groups[]` on the definition.                                                                                    |
+| `quorum`                   | Number of *approvals* required to fire the group's policy. **Approvals** = members that terminated `completed` with `output.decision === 'approve'`. Rejections, failures, breaches, and cancellations don't count toward quorum.           |
+| `expectedSteps`            | Number of members that must reach *any* terminal status before the group considers itself "fully done." Different from quorum — quorum is approvals only, this is completion of any kind.                                                   |
+| `requiredNodeIds`          | Optional list of *specific* members that must be among the approvers (e.g. "legal AND finance must approve, brand is bonus"). Layered on top of the numeric `quorum`.                                                                       |
+| `waitAll` (default)        | Quorum policy: emit a `group.quorum-met` event when the threshold is reached but otherwise do nothing. Each member fans out per-edge on its own completion.                                                                                 |
+| `cancelOnQuorum`           | Once approval-quorum is hit, cancel every sibling member still in `waiting`. Each completing approver still fans out per its own edges.                                                                                                     |
+| `joinOnQuorum`             | Once approval-quorum is hit, cancel waiting siblings AND fire one *single* group-owned downstream step per shared successor — instead of one per approver. The successor's input gets `groupOutputs: { [memberNodeId]: stepOutput }`.       |
+
+### Loop regions
+
+Bounded "kick-back-for-revision" blocks.
+
+| Term                          | What it is                                                                                                                                                                |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Loop region                   | A bounded re-entry block. When a body step terminates rejected, the engine spawns iteration N+1 starting from the loop's `entryNodeId`.                                   |
+| `bodyNodeIds`                 | The set of nodes that belong to one iteration. Body steps carry a `loopId` and `iteration` number internally.                                                             |
+| Iteration-terminal moment     | The point at which the engine decides whether to start iteration N+1. For sequential bodies, it's when the body's exit-bearing node terminates; for group-bounded bodies, it's when the last group member terminates. |
+| `previousAttempts`            | Array threaded forward into iteration N+1's entry step's input — contains the rejected output of every prior iteration plus who rejected and why.                          |
+| `onIterationReject.when`      | JSON-AST predicate that decides whether a body iteration's terminal step should trigger a restart. Default: `decision == 'reject' && rejectorMandatory == true`.          |
+| `onExhausted.routeToNodeId`   | Node spawned when `maxIterations` is hit. If omitted, exhaustion rolls the execution up to `failed`.                                                                       |
+
+### SLAs and time
+
+| Term                  | What it is                                                                                                                                                            |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `slaMs`               | Per-node deadline in milliseconds. If the step doesn't complete within the window, it transitions to `breached` (a terminal status) and emits `step.breached`.        |
+| `breached`            | Terminal status meaning "ran past its SLA." Distinct from `failed` (which means the step itself errored). Both fail the execution unless an outgoing edge routes around the breach. |
+| `missing-breach-edge` | Linter rule that rejects any node with `slaMs` set but no outgoing edge that handles the breach — prevents silent dead-ends.                                          |
+| `agentMaxRuntimeMs`   | Hard wall-clock cap for agent nodes (default 10 min). Hung agents auto-breach instead of running forever.                                                             |
+
+### Events and sequencing
+
+In v1 the only way to consume the event log is by polling `Get Execution Events`. `seq` and `sinceSeq` are the load-bearing primitives for any catch-up or reconciliation loop.
+
+<Note>
+**Non-contiguous `seq` is expected.** Some engine-internal events (scheduling, retries, audit overrides) consume `seq` numbers but are filtered out of the customer-facing surface returned by `getEvents`. If you see seq values like `0, 1, 3, 7, 8`, the gaps are internal events — not missing data.
+</Note>
+
+| Term            | What it is                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Event           | A durable record of one state change inside an execution (a step entered `waiting`, a group hit quorum, etc.). Stored in an append-only log per execution.                                                                                                                                                                                                                              |
+| `eventId`       | Unique id for one event. Stable; safe to dedupe on if your consumer might process the same event twice.                                                                                                                                                                                                                                                                                 |
+| `seq`           | A **monotonically increasing integer per execution**, assigned by the server when the event is committed. Think of it as the line number in the execution's event log: seq 0 is the first event for that execution, seq 1 is the second, etc. Lets your consumer order events deterministically and detect missed reads.                                                                |
+| `sinceSeq`      | Cursor parameter on `Get Execution Events`: "give me everything with `seq > sinceSeq`." Used for **catch-up** after your event consumer was offline — you store the highest `seq` you've successfully processed, and on the next poll you call `getEvents(sinceSeq=<that number>)`. The response's `nextCursor` is the highest `seq` returned, which you pass back to keep paging. |
+| External event  | One of the event types the engine surfaces externally (e.g. `step.completed`, `group.quorum-met`, `loop.iteration-started`). The customer-facing surface returned by `getEvents`.                                                                                                                                                                                                       |
+| Internal event  | Engine-internal types (`step.scheduled`, `step.retried`, `step.overridden`, etc.) that fill `seq` gaps but are filtered out of the customer-facing surface. This is why `getEvents` may return non-contiguous `seq` values.                                                                                                                                                              |
+
+### Auth and audit
+
+For the step-admin endpoints.
+
+| Term                      | What it is                                                                                                                                                                                                                                                                                                                                |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Admin-grade action        | `force-approve` / `force-reject` / `force-complete` / `force-fail` on `/steps/resolve`. Operator overriding the system. Recorded as such in the audit log.                                                                                                                                                                                |
+| Reviewer-scoped action    | `reviewer-approve` / `reviewer-reject` on `/steps/resolve`. Auth-gated to `actorId ∈ step.reviewerIds`. Recorded as a reviewer's decision in the audit log, not an override.                                                                                                                                                              |
+| Authority-of-record       | The rule that the engine — not the caller — is authoritative for `output.decision`, `output.approved`, and `output.approvalReply` on approve/reject actions. Even if a reviewer sends `action: reviewer-reject` with `output: { decision: 'approve' }`, the audit log and downstream edges see "reject." Other keys in `output` pass through. |
+| `step.overridden` event   | Audit event written on every `/steps/resolve` call with `{ actorId, action, reason, decision }`. Internal-only — not surfaced via `getEvents`.                                                                                                                                                                                            |
+
 ## Get started
 
 <CardGroup cols={2}>

@@ -2975,6 +2975,8 @@ Set the default visibility for all new comments created by the current user.
 
 <Note>When `type` is `'restricted'`, the SDK automatically appends the current user's `userId` to `userIds` if it is not already present. This applies whether `userIds` is empty or contains an explicit list that excludes the author.</Note>
 
+<Note>**Privacy precedence (v5.0.2-beta.27+):** An annotation whose legacy `iam.accessMode` is `'private'` (set by the deprecated `enablePrivateCommentMode()` flow) is treated as private unconditionally — [`visibilityConfig.type`](/api-reference/sdk/models/data-models#commentannotationvisibilityconfig) is only consulted when the legacy flag is absent. This is internal behaviour; no migration is required when using either API.</Note>
+
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
@@ -6444,6 +6446,32 @@ subscription?.unsubscribe();
 
 </Tab>
 </Tabs>
+
+#### CommentDialogActionService
+
+<Tip>Advanced — intended for custom-actions hosts that intercept the comment submit flow (e.g. sidebars that drive their list via `commentElement.setCommentSidebarData()` with `filter-comments-on-dom="true"`). Most integrations never need to call this directly.</Tip>
+
+`CommentDialogActionService` is a low-level service exposed on the Velt client for hosts that need to introspect the comment-dialog submit lifecycle. As of v5.0.2-beta.27, it exposes a public `isSubmitInFlight()` helper used internally to suppress spurious auto-draft saves and abandon-draft events when a real submit is already in flight.
+
+##### isSubmitInFlight()
+
+Returns `true` while a real (non-draft) `addComment` call is in flight for the given dialog instance. Use this to guard against duplicate submits or skip auto-draft-save logic during an active submit.
+
+- Params: `dialogInstanceId?: string` — optional; if omitted, returns `false` (the in-flight flag is only tracked when a `dialogInstanceId` is supplied).
+- Returns: `boolean`
+
+Forward-only semantics:
+
+- Draft autosaves never arm the flag (`isDraft=true` calls are exempt) — otherwise an autosave would mask future legitimate abandon flows on the same dialog instance.
+- Calls without a `dialogInstanceId` never arm the flag — there is nothing to attribute the in-flight state to.
+- Instance isolation — two dialogs submitting concurrently get independently-armed flags; one dialog's submit cannot suppress another's abandon path.
+
+```jsx
+const actionService = client.getCommentDialogActionService();
+if (actionService.isSubmitInFlight(dialogInstanceId)) {
+  return;
+}
+```
 
 #### onSignIn
 

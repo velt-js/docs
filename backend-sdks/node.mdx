@@ -2677,6 +2677,175 @@ Common self-hosting error codes returned in the response `errorCode` field:
 - `INTERNAL_ERROR` — Server-side error during processing
 - `NOT_FOUND` — Requested resource was not found
 
+## Data Models
+
+Key interfaces and serializer helpers exported from `@veltdev/node`. All symbols are available at the package top level:
+
+```ts
+import {
+  PartialCommentAnnotation, partialCommentAnnotationFromDict, partialCommentAnnotationToDict,
+  PartialTargetTextRange, partialTargetTextRangeFromDict, partialTargetTextRangeToDict,
+  PartialComment, partialCommentFromDict, partialCommentToDict,
+  BaseMetadata, baseMetadataFromDict, baseMetadataToDict,
+} from '@veltdev/node';
+```
+
+<Note>
+  `PartialUser` and `PartialAttachment` referenced in the interfaces below are minimal pass-through shapes. `PartialUser` is `{ userId: string }` (any additional fields the frontend sends are preserved but not strongly typed). Full user/attachment shapes are documented in the central [Data Models reference](/api-reference/sdk/models/data-models#partialuser).
+</Note>
+
+### PartialCommentAnnotation
+
+Represents a single comment annotation thread. Used as the payload shape when reading or writing annotation data in self-hosting event handlers.
+
+```ts
+interface PartialCommentAnnotation {
+  annotationId: string;
+  metadata?: BaseMetadata;
+  comments?: Record<string, PartialComment>;
+  from?: PartialUser;              // Typed in v1.0.2; previously pass-through
+  assignedTo?: PartialUser;        // Typed in v1.0.2; previously pass-through
+  targetTextRange?: PartialTargetTextRange;  // Typed in v1.0.2; previously pass-through
+  resolvedByUserId?: string | null; // Three-state — see resolvedByUserId Semantics below
+  [key: string]: unknown;          // Unknown keys are preserved on round-trip
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `annotationId` | `string` | Required. Stable identifier for the annotation thread. |
+| `metadata` | `BaseMetadata` | Optional context (document, org, API key). |
+| `comments` | `Record<string, PartialComment>` | Keyed by `commentId` string. |
+| `from` | `PartialUser` | User who created the annotation. |
+| `assignedTo` | `PartialUser` | User currently assigned to the annotation. |
+| `targetTextRange` | `PartialTargetTextRange` | Text selection the annotation is anchored to. |
+| `resolvedByUserId` | `string \| null` | Three-state field — see below. |
+| `[key]` | `unknown` | Extra keys pass through serialization unchanged. |
+
+**Serializers:**
+
+```ts
+declare function partialCommentAnnotationFromDict(data: Record<string, unknown>): PartialCommentAnnotation;
+declare function partialCommentAnnotationToDict(annotation: PartialCommentAnnotation): Record<string, unknown>;
+```
+
+### PartialTargetTextRange
+
+The text selection an annotation is anchored to. New interface in v1.0.2.
+
+```ts
+interface PartialTargetTextRange {
+  text: string;
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `text` | `string` | Required. The selected text content the annotation references. |
+
+**Serializers:**
+
+```ts
+declare function partialTargetTextRangeFromDict(data: Record<string, unknown>): PartialTargetTextRange;
+declare function partialTargetTextRangeToDict(range: PartialTargetTextRange): Record<string, unknown>;
+```
+
+### resolvedByUserId Semantics
+
+`resolvedByUserId` on `PartialCommentAnnotation` is a three-state field. TypeScript has no sentinel value, so the three states map to property presence and value:
+
+| State | Representation | Meaning |
+|-------|---------------|---------|
+| **Absent** | Property not set on the object | No resolution information — do not write to the database |
+| **Explicit `null`** | `resolvedByUserId: null` | Annotation was un-resolved (cleared) |
+| **String** | `resolvedByUserId: "user-123"` | Resolved by the user with this ID |
+
+Use `Object.hasOwn` (or `'resolvedByUserId' in annotation`) to distinguish absent from explicit `null`:
+
+```ts
+const annotation = partialCommentAnnotationFromDict(payload);
+
+if (!Object.hasOwn(annotation, 'resolvedByUserId')) {
+  // Field absent — skip; do not overwrite existing resolution state
+} else if (annotation.resolvedByUserId === null) {
+  // Explicit null — un-resolve the annotation
+} else {
+  // String — mark resolved by annotation.resolvedByUserId
+}
+```
+
+### PartialComment
+
+A single comment within an annotation thread. Round-trip serializers preserve unknown keys, so custom fields added by your application are not dropped.
+
+```ts
+interface PartialComment {
+  commentId: string | number;
+  commentHtml?: string;
+  commentText?: string;
+  attachments?: Record<string, PartialAttachment>;
+  from?: PartialUser;
+  to?: PartialUser[];
+  taggedUserContacts?: PartialTaggedUserContacts[];
+  [key: string]: unknown;   // Pass-through for unknown keys
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `commentId` | `string \| number` | Required. Unique within the annotation. |
+| `commentHtml` | `string` | Raw HTML body of the comment. |
+| `commentText` | `string` | Plain-text body, used for search and notifications. |
+| `attachments` | `Record<string, PartialAttachment>` | Keyed by attachment ID. |
+| `from` | `PartialUser` | Author of the comment. |
+| `to` | `PartialUser[]` | Explicit recipients (direct-mention replies). |
+| `taggedUserContacts` | `PartialTaggedUserContacts[]` | Users @-mentioned in the comment body. |
+| `[key]` | `unknown` | Extra keys pass through serialization unchanged. |
+
+**Serializers (new in v1.0.2):**
+
+```ts
+declare function partialCommentFromDict(data: Record<string, unknown>): PartialComment;
+declare function partialCommentToDict(comment: PartialComment): Record<string, unknown>;
+```
+
+### BaseMetadata
+
+Contextual identifiers attached to annotations and events. Provides both Velt-internal IDs and your application's client-facing IDs for the same resources.
+
+```ts
+interface BaseMetadata {
+  apiKey?: string;
+  documentId?: string;
+  clientDocumentId?: string;
+  organizationId?: string;
+  clientOrganizationId?: string;
+  folderId?: string;
+  veltFolderId?: string;
+  documentMetadata?: Record<string, unknown>;
+  sdkVersion?: string | null;   // New in v1.0.2
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `apiKey` | `string` | Velt project API key. |
+| `documentId` | `string` | Velt-internal document identifier. |
+| `clientDocumentId` | `string` | Your application's document identifier. |
+| `organizationId` | `string` | Velt-internal organization identifier. |
+| `clientOrganizationId` | `string` | Your application's organization identifier. |
+| `folderId` | `string` | Your application's folder identifier. |
+| `veltFolderId` | `string` | Velt-internal folder identifier. |
+| `documentMetadata` | `Record<string, unknown>` | Arbitrary key-value metadata attached to the document. |
+| `sdkVersion` | `string \| null` | SDK version string. `null` means version is known to be absent. New in v1.0.2. |
+
+**Serializers (exposed on public surface in v1.0.2):**
+
+```ts
+declare function baseMetadataFromDict(data: Record<string, unknown>): BaseMetadata;
+declare function baseMetadataToDict(meta: BaseMetadata): Record<string, unknown>;
+```
+
 ## Distribution
 
 The package ships both CommonJS (CJS) and ES Module (ESM) bundles with rolled-up `.d.ts` type definitions, making it compatible with all modern Node.js project setups.

@@ -1,0 +1,194 @@
+---
+title: "Chat SDK Adapter"
+sidebarTitle: "Chat SDK Adapter"
+description: "Build a bot that reads and responds to Velt comment threads using the Chat SDK and @velt-js/chat-sdk-adapter."
+---
+
+[Chat SDK](https://chat-sdk.dev) lets you build cross-platform bots whose logic
+stays platform-agnostic. The
+[`@velt-js/chat-sdk-adapter`](https://www.npmjs.com/package/@velt-js/chat-sdk-adapter)
+connects a Chat SDK bot to **Velt comment threads**, so the same bot can run on
+Velt, Slack, Discord, and every other Chat SDK adapter.
+
+When a user @-mentions your bot or reacts in a comment thread, Velt sends a
+webhook to your app and the bot responds — replying in the thread, following the
+conversation, and reacting to events.
+
+## How it maps
+
+| Chat SDK | Velt |
+| --- | --- |
+| Thread | Comment annotation inside a document |
+| Message | Comment |
+| Channel | Document |
+| `onNewMention` | A comment that @-mentions the bot |
+| `onReaction` | A reaction added to / removed from a comment |
+| `thread.post()` | A reply added to the comment thread |
+
+## Quickstart
+
+<Steps>
+  <Step title="Install the adapter and Chat SDK">
+    ```bash
+    npm install @velt-js/chat-sdk-adapter chat @chat-adapter/state-memory
+    ```
+  </Step>
+
+  <Step title="Add your environment variables">
+    Create a `.env.local` file with your Velt API key, the bot's auth token, and
+    the webhook secret. You'll get the webhook secret in the final step.
+
+    ```env .env.local
+    VELT_API_KEY="your-velt-api-key"
+    VELT_AUTH_TOKEN=""
+    VELT_WEBHOOK_SECRET="whsec_..."
+    VELT_ORGANIZATION_ID="your-organization-id"
+    ```
+
+    `VELT_AUTH_TOKEN` is optional — if omitted, the adapter generates a bot token
+    from your API key, scoped to `VELT_ORGANIZATION_ID`.
+  </Step>
+
+  <Step title="Create a user database">
+    The `resolveUsers` function converts Velt user ids into display names.
+
+    ```tsx app/database.ts
+    export const BOT_USER_ID = "velt-bot";
+    export const BOT_USER_NAME = "Velt Bot";
+
+    const USERS = [
+      { userId: "user-1", name: "Charlie Layne" },
+      { userId: "user-2", name: "Mislav Abha" },
+      { userId: BOT_USER_ID, name: BOT_USER_NAME },
+    ];
+
+    export function getUser(userId: string) {
+      const user = USERS.find((u) => u.userId === userId);
+      return user ? { name: user.name } : undefined;
+    }
+
+    export function resolveUsers({ userIds }: { userIds: string[] }) {
+      return userIds.map((id) => getUser(id));
+    }
+    ```
+  </Step>
+
+  <Step title="Create the bot instance">
+    Create a Chat instance with the Velt adapter and register handlers for
+    mentions and reactions.
+
+    ```tsx app/bot.ts
+    import { Chat } from "chat";
+    import { createMemoryState } from "@chat-adapter/state-memory";
+    import { createVeltAdapter, type VeltAdapter } from "@velt-js/chat-sdk-adapter";
+    import { BOT_USER_ID, BOT_USER_NAME, resolveUsers } from "./database";
+
+    let chatSingleton: Chat<{ velt: VeltAdapter }> | null = null;
+
+    export function getChat() {
+      if (chatSingleton) return chatSingleton;
+
+      const chat = new Chat<{ velt: VeltAdapter }>({
+        userName: BOT_USER_NAME,
+        adapters: {
+          velt: createVeltAdapter({
+            botUserId: BOT_USER_ID,
+            botUserName: BOT_USER_NAME,
+            organizationId: process.env.VELT_ORGANIZATION_ID,
+            resolveUsers,
+          }),
+        },
+        state: createMemoryState(),
+      });
+
+      // Reply when a user @-mentions the bot.
+      chat.onNewMention(async (thread, message) => {
+        await thread.subscribe();
+        await thread.post(`Hi ${message.author.fullName}! How can I help?`);
+      });
+
+      // React to reactions (read-only on the managed backend).
+      chat.onReaction(async (event) => {
+        console.log(
+          `${event.user.fullName} ${event.added ? "added" : "removed"} ${event.emoji}`,
+        );
+      });
+
+      chatSingleton = chat;
+      return chat;
+    }
+    ```
+
+    <Note>
+      The bot is created lazily so importing the module doesn't require
+      credentials at build time. Credentials are read on the first webhook
+      request.
+    </Note>
+  </Step>
+
+  <Step title="Create the webhook endpoint">
+    The bot processes incoming comments and reactions through this route. It must
+    run on the Node.js runtime because signature verification needs the raw body
+    and Node's `crypto`.
+
+    ```tsx app/api/webhooks/velt/route.ts
+    import { after } from "next/server";
+    import { getChat } from "../../../bot";
+
+    export const runtime = "nodejs";
+    export const dynamic = "force-dynamic";
+
+    export async function POST(request: Request) {
+      return getChat().webhooks.velt(request, { waitUntil: (p) => after(() => p) });
+    }
+    ```
+
+    On Vercel, use `waitUntil` from `@vercel/functions` instead of `after`.
+  </Step>
+
+  <Step title="Set up the Velt webhook">
+    1. Expose your endpoint publicly (e.g. with a tunnel during development).
+    2. In the Velt Console → **Configurations → Webhook Service**, set the
+       endpoint URL and enable these events:
+       - `comment.add`
+       - `comment_annotation.add`
+       - `comment.reaction_add`
+       - `comment.reaction_delete`
+    3. Copy your **webhook secret** (`whsec_...`) into `VELT_WEBHOOK_SECRET`.
+
+    You can also configure the webhook via
+    [`POST /v2/workspace/webhookconfig/update`](/api-reference/rest-apis/v2/workspace/webhookconfig-update).
+
+    Now when users @-mention your bot or react to messages in comment threads,
+    your bot responds automatically.
+  </Step>
+</Steps>
+
+## Webhook versions
+
+The adapter supports both Velt webhook systems:
+
+- **Advanced (v2)** — verified with Svix-style HMAC-SHA256 using the `whsec_...`
+  secret. This is the default.
+- **Basic (v1)** — verified against the `Authorization: Basic <token>` header.
+  Set `webhookVersion: "v1"` and pass that token as `webhookSecret`.
+
+## Reactions
+
+Reading reactions (`onReaction`) works on all Velt plans.
+
+<Warning>
+  **Writing** reactions (`addReaction` / `removeReaction`) is not supported on
+  the managed Velt backend — there is no managed REST endpoint to add a reaction
+  as a user, so these methods throw a clear error. To enable reaction writes,
+  pass a `selfHostingConfig.reactionsService` (a self-hosted reactions service
+  backed by your own database) and the adapter delegates to it.
+</Warning>
+
+## What to read next
+
+- [Chat SDK documentation](https://chat-sdk.dev)
+- [`@velt-js/chat-sdk-adapter` on npm](https://www.npmjs.com/package/@velt-js/chat-sdk-adapter)
+- [Velt Webhooks](/webhooks/advanced)
+- [Velt REST API — Comments](/api-reference/rest-apis/v2/comments-feature/comments/add-comments)
+

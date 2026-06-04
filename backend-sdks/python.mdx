@@ -3671,6 +3671,97 @@ Common self-hosting error codes returned in the response `errorCode` field:
 - `INTERNAL_ERROR` — Server-side error during processing
 - `NOT_FOUND` — Requested resource was not found
 
+## Data Models
+
+Python-SDK-specific dataclasses used by the self-hosting backend. These are not in the shared API reference because they are only relevant to `sdk.selfHosting.*` implementations.
+
+### `PartialCommentAnnotation`
+
+Represents a partial update payload for a comment annotation. Starting in **v0.1.10**, `from`, `assignedTo`, `targetTextRange`, and `resolvedByUserId` are first-class typed fields (previously silent pass-through via `extra_fields`).
+
+```python
+from velt_py.models import (
+    PartialCommentAnnotation,
+    PartialTargetTextRange,
+    PartialUser,
+    PartialComment,
+    BaseMetadata,
+)
+from velt_py.models.comment import UNSET
+
+@dataclass
+class PartialCommentAnnotation:
+    annotationId: str
+    metadata: Optional[BaseMetadata] = None
+    comments: Optional[Dict[str, PartialComment]] = None
+    from_: Optional[PartialUser] = None             # 'from' on the wire; from_ avoids Python keyword.
+    assignedTo: Optional[PartialUser] = None
+    targetTextRange: Optional[PartialTargetTextRange] = None
+    resolvedByUserId: Any = UNSET                   # Tri-state: UNSET | None | str. See below.
+    extra_fields: Optional[Dict[str, Any]] = None   # Catch-all for customer-configured custom keys.
+```
+
+**Field notes**
+
+- `from_` — Python alias for the JSON key `from` (reserved keyword). Serialized as `from` in the Mongo document.
+- `assignedTo` — Typed as `PartialUser`. Omit to leave unchanged; the Mongo write skips the field when `None`.
+- `targetTextRange` — Typed `PartialTargetTextRange` for the selected text snippet a comment is anchored to.
+- `resolvedByUserId` — See [UNSET sentinel](#unset-sentinel) for the difference between absent (`UNSET`) and explicit `None`.
+- `extra_fields` — Retained as a catch-all because the frontend contract includes `[key: string]: any` for customer-configured `fieldsToRemove` and `additionalFields`.
+
+### `PartialTargetTextRange`
+
+Anchors a comment to a selected text snippet.
+
+```python
+from velt_py.models import PartialTargetTextRange
+
+@dataclass
+class PartialTargetTextRange:
+    text: str = ''        # The selected text content.
+```
+
+### UNSET Sentinel
+
+`UNSET` is a sentinel value exported from `velt_py.models.comment`. It signals that a field was not included in the incoming request payload and should be skipped entirely during the MongoDB write.
+
+```python
+from velt_py.models.comment import UNSET
+
+# Field absent from payload → UNSET → field is NOT written to Mongo
+annotation = PartialCommentAnnotation()
+# annotation.resolvedByUserId is UNSET → Mongo $set will not include this field
+
+# Field explicitly set to None → None → field IS written as null to Mongo
+annotation = PartialCommentAnnotation(resolvedByUserId=None)
+# annotation.resolvedByUserId is None → Mongo $set writes null (frontend unresolve action)
+```
+
+| Value | Payload | Mongo write |
+|-------|---------|-------------|
+| `UNSET` | Field absent | Field skipped — no change |
+| `None` | Field present, value `null` | Field written as `null` |
+
+### `BaseMetadata`
+
+Base metadata attached to every comment annotation. Starting in **v0.1.10**, `sdkVersion` and `documentMetadata` are fully modeled and preserved in MongoDB writes. These fields were previously sent by the frontend on every annotation save but silently dropped.
+
+```python
+@dataclass
+class BaseMetadata:
+    apiKey: Optional[str] = None
+    documentId: Optional[str] = None
+    clientDocumentId: Optional[str] = None
+    organizationId: Optional[str] = None
+    clientOrganizationId: Optional[str] = None
+    folderId: Optional[str] = None
+    veltFolderId: Optional[str] = None
+    documentMetadata: Optional[Dict[str, Any]] = None   # New in v0.1.10.
+    sdkVersion: Optional[str] = None                    # New in v0.1.10.
+```
+
+No import change is required — `BaseMetadata` is populated automatically from the incoming request payload. The fix applies transparently to all `saveComments` calls.
+
 ## Resources
 
 - [Velt-Py PyPI Package](https://pypi.org/project/velt-py)

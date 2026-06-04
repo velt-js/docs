@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# run-claude-agent.sh — Thin wrapper around the claude-code CLI for skills-sync agents.
+# run-claude-agent.sh — Run a skills-sync agent via the Claude Code CLI.
 #
 # Usage:
 #   bash run-claude-agent.sh <agent-name>
@@ -19,7 +19,7 @@
 #
 # Optional env:
 #   AGENT_MAX_TURNS  (default: 40)
-#   AGENT_MODEL      (default: leave unset; the agent's frontmatter `model:` controls)
+#   AGENT_MODEL      (default: parsed from the agent file's frontmatter; falls back to claude-opus-4-7)
 #   DOCS_DIR         (default: $PWD/docs)
 
 set -euo pipefail
@@ -48,12 +48,39 @@ fi
 AGENT_FILE="${AGENT_FILES[0]}"
 echo "[run-claude-agent] Using $AGENT_FILE (max-turns=$MAX_TURNS)"
 
-# Invoke claude-code CLI.
-# NOTE: The exact flags depend on the claude-code CLI version in the runner.
-# This wrapper assumes the same invocation pattern as the release-note pipeline.
-# Tune flags here when integrating with the chosen CLI.
-claude-code \
-  --agent "$AGENT_FILE" \
+# Extract model from frontmatter (override with AGENT_MODEL env var).
+# Falls back to a recent Opus if neither source provides one.
+MODEL="${AGENT_MODEL:-}"
+if [ -z "$MODEL" ]; then
+  MODEL="$(awk '/^---$/{f++; next} f==1 && $1=="model:"{print $2; exit}' "$AGENT_FILE" | tr -d '[:space:]')"
+fi
+MODEL="${MODEL:-claude-opus-4-7}"
+
+# Strip the YAML frontmatter so we pass just the agent body as the user prompt.
+# Convention: frontmatter is fenced by two `---` lines at the top.
+BODY="$(awk 'BEGIN{f=0} /^---$/{f++; next} f>=2{print}' "$AGENT_FILE")"
+
+if [ -z "${BODY//[[:space:]]/}" ]; then
+  echo "run-claude-agent.sh: agent body is empty after stripping frontmatter — refusing to run" >&2
+  exit 1
+fi
+
+echo "[run-claude-agent] model=$MODEL pwd=$PWD"
+echo "[run-claude-agent] body length: $(printf '%s' "$BODY" | wc -c) chars"
+
+# Invoke Claude Code CLI in print (non-interactive) mode.
+#  --print                       run once and exit (no REPL)
+#  --permission-mode acceptEdits unattended: auto-approve file writes
+#  --allowed-tools               only the tools the agents actually need
+#  --add-dir "$PWD"              grant the agent access to the workspace root
+#                                (it expects to read inputs/* and write outputs/*)
+#  --max-turns                   safety bound for the run
+#  --model                       from the agent's frontmatter
+exec claude \
+  --print \
+  --model "$MODEL" \
   --max-turns "$MAX_TURNS" \
-  --output-dir "$PWD/outputs" \
-  --allowed-tools "Read,Edit,Write,Glob,Grep,Bash"
+  --permission-mode acceptEdits \
+  --allowed-tools "Read,Edit,Write,Glob,Grep,Bash" \
+  --add-dir "$PWD" \
+  -p "$BODY"

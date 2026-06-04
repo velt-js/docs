@@ -36,6 +36,14 @@ Use this API to add comment annotations to a document within an organization.
       Document ID
     </ParamField>
 
+    <ParamField body="createOrganization" type="boolean">
+      If set to true, a new organization will be created (if it doesn't exist) before the annotation is added.
+    </ParamField>
+
+    <ParamField body="createDocument" type="boolean">
+      If set to true, a new document will be created (if it doesn't exist) before the annotation is added.
+    </ParamField>
+
     <ParamField body="verifyUserPermissions" type="boolean">
       When enabled, verifies the user has access to the document before creating comment annotations.
       This ensures annotations respect document access permissions configured via Access Control or Permission Provider.
@@ -150,6 +158,71 @@ Use this API to add comment annotations to a document within an organization.
                 </ParamField>
               </Expandable>
             </ParamField>
+
+            <ParamField body="agent" type="object">
+              Marks this comment as agent-authored (an agent finding or an agent reply). V2 only. When set, the server stamps `sourceType: "agent"` on the comment. When set on the root comment (`commentData[0]`), the server also generates the annotation-level agent block and stamps `sourceType: "agent"` on the annotation. Discriminated on `agentSource`.
+              <Expandable title="properties">
+                <ParamField body="agentSource" type="string" required>
+                  Origin of the agent. Must be one of: `velt` or `external`.
+                </ParamField>
+                <ParamField body="agentId" type="string">
+                  Agent ID. Required when `agentSource` is `velt` (a built-in agent like `spell-check`, or a custom agent ID that is verified server-side). Optional and opaque (never validated) when `agentSource` is `external`.
+                </ParamField>
+                <ParamField body="executionId" type="string">
+                  Execution / run ID for this agent invocation.
+                </ParamField>
+                <ParamField body="agentName" type="string">
+                  Display name for the agent. Used only when `agentSource` is `external` (for `velt` agents the name is resolved server-side).
+                </ParamField>
+                <ParamField body="url" type="string">
+                  Page URL associated with the finding.
+                </ParamField>
+                <ParamField body="reason" type="object" required>
+                  Finding details produced by the agent. Additional custom fields are preserved.
+                  <Expandable title="properties">
+                    <ParamField body="title" type="string" required>
+                      Short finding title.
+                    </ParamField>
+                    <ParamField body="description" type="string" required>
+                      Finding description.
+                    </ParamField>
+                    <ParamField body="severity" type="string" required>
+                      Severity of the finding. Must be one of: `critical`, `high`, `medium`, `low`, or `info`.
+                    </ParamField>
+                    <ParamField body="findingId" type="string">
+                      Unique identifier for the finding.
+                    </ParamField>
+                    <ParamField body="findingType" type="string">
+                      Type of finding. Must be one of: `text`, `pin`, or `page`.
+                    </ParamField>
+                    <ParamField body="issueType" type="string">
+                      Custom issue classification.
+                    </ParamField>
+                    <ParamField body="confidence" type="number">
+                      Confidence score for the finding. Integer between 0 and 100.
+                    </ParamField>
+                    <ParamField body="suggestion" type="string">
+                      Suggested change in plain text.
+                    </ParamField>
+                    <ParamField body="suggestedFix" type="string">
+                      Suggested fix for the finding.
+                    </ParamField>
+                    <ParamField body="htmlSnippet" type="string">
+                      Relevant HTML snippet for the finding.
+                    </ParamField>
+                    <ParamField body="htmlSelector" type="string">
+                      CSS/HTML selector pointing to the finding location.
+                    </ParamField>
+                    <ParamField body="source" type="string">
+                      Provenance of the rule that triggered the finding. Must be one of: `instructions` or `knowledge`.
+                    </ParamField>
+                    <ParamField body="knowledgeSection" type="string">
+                      Knowledge section that triggered the finding.
+                    </ParamField>
+                  </Expandable>
+                </ParamField>
+              </Expandable>
+            </ParamField>
           </Expandable>
         </ParamField>
         
@@ -222,6 +295,36 @@ Use this API to add comment annotations to a document within an organization.
                 Priority Light Color
               </ParamField>
             </Expandable>
+        </ParamField>
+
+        <ParamField body="type" type="string">
+          Annotation kind. Must be one of: `comment` or `suggestion`. This is the source of truth for the suggestion classification; agent-produced findings should set `suggestion`. Defaults to `comment` when omitted.
+        </ParamField>
+
+        <ParamField body="commentType" type="string">
+          Caller-driven comment classification. Must be one of: `manual` or `chart`. Defaults to `manual` when omitted.
+
+          <Note>
+          The legacy value `commentType: "suggestion"` is still accepted and preserved for backward compatibility, but it no longer drives the suggestion classification. Use the annotation-level `type: "suggestion"` field instead.
+          </Note>
+        </ParamField>
+
+        <ParamField body="visibility" type="object">
+          Controls who can see the annotation. Discriminated on `type`. When omitted, the annotation defaults to `public`.
+          <Expandable title="properties">
+            <ParamField body="type" type="string" required>
+              Visibility type. Must be one of: `public`, `organizationPrivate`, or `restricted`.
+              - `public`: Visible to everyone.
+              - `organizationPrivate`: Visible only to users in the specified organization. Requires `organizationId`.
+              - `restricted`: Visible only to the specified users (private comment). Requires `userIds`.
+            </ParamField>
+            <ParamField body="organizationId" type="string">
+              Organization ID whose users can see the annotation. Required when `type` is `organizationPrivate`.
+            </ParamField>
+            <ParamField body="userIds" type="string[]">
+              User IDs allowed to see the annotation. Required (non-empty) when `type` is `restricted`.
+            </ParamField>
+          </Expandable>
         </ParamField>
       </Expandable>
     </ParamField>
@@ -380,6 +483,114 @@ When `verifyUserPermissions` is enabled, the API verifies the user has access to
         "commentData": [
           {
             "commentText": "Traffic numbers look unusual today",
+            "from": {
+              "userId": "user_john_smith",
+              "name": "John Smith",
+              "email": "john.smith@acme-corp.com"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### Add an agent suggestion (finding)
+
+Set `type: "suggestion"` and attach an `agent` block to the root comment (`commentData[0]`). The server generates the annotation-level agent block and stamps `sourceType: "agent"`.
+
+```JSON
+{
+  "data": {
+    "organizationId": "acme-corp",
+    "documentId": "design-mockup-v2",
+    "commentAnnotations": [
+      {
+        "type": "suggestion",
+        "commentData": [
+          {
+            "commentText": "Heading has a spelling mistake: 'Welcom' should be 'Welcome'.",
+            "from": {
+              "userId": "spell-check",
+              "name": "Spell Check Agent"
+            },
+            "agent": {
+              "agentSource": "velt",
+              "agentId": "spell-check",
+              "executionId": "exec_123",
+              "url": "https://example.com/design-mockup-v2",
+              "reason": {
+                "title": "Spelling error",
+                "description": "The word 'Welcom' is misspelled.",
+                "severity": "low",
+                "findingType": "text",
+                "confidence": 98,
+                "suggestedFix": "Welcome",
+                "source": "instructions"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+To attach a finding from an agent run through your own framework, use `agentSource: "external"` and supply your own `agentName` (and optionally `agentId` / `executionId`):
+
+```JSON
+{
+  "data": {
+    "organizationId": "acme-corp",
+    "documentId": "design-mockup-v2",
+    "commentAnnotations": [
+      {
+        "type": "suggestion",
+        "commentData": [
+          {
+            "commentText": "This button has insufficient color contrast.",
+            "from": {
+              "userId": "a11y-bot"
+            },
+            "agent": {
+              "agentSource": "external",
+              "agentName": "Accessibility Bot",
+              "agentId": "a11y-bot",
+              "reason": {
+                "title": "Low color contrast",
+                "description": "Contrast ratio is 2.1:1, below the 4.5:1 WCAG AA threshold.",
+                "severity": "high",
+                "findingType": "pin"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### Add a private (restricted) comment annotation
+
+Use `visibility` to limit who can see the annotation.
+
+```JSON
+{
+  "data": {
+    "organizationId": "acme-corp",
+    "documentId": "design-mockup-v2",
+    "commentAnnotations": [
+      {
+        "visibility": {
+          "type": "restricted",
+          "userIds": ["user_sarah_chen", "user_john_smith"]
+        },
+        "commentData": [
+          {
+            "commentText": "Internal note: don't ship this section yet.",
             "from": {
               "userId": "user_john_smith",
               "name": "John Smith",

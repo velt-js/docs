@@ -126,6 +126,10 @@ Pick the level that matches how your product is structured.
 
 Defaults to `{ level: "apiKey" }`.
 
+<Note>
+  Approval Engine state is partitioned per tenant: each tenant's executions, definitions, and events are routed to that tenant's dedicated `storeDbId`.
+</Note>
+
 ## Idempotency
 
 Dispatch is idempotent on `idempotencyKey`. Replay with the same key returns `{ deduplicated: true, executionId: <original> }`. Safe to retry from clients and queues.
@@ -133,6 +137,24 @@ Dispatch is idempotent on `idempotencyKey`. Replay with the same key returns `{ 
 ## Events and webhooks
 
 Every state change writes an event doc with a monotonic `seq`. Set `webhookUrl` and `webhookSecret` on dispatch and externally-visible events are POSTed to your receiver with an HMAC-SHA256 signature and exponential-backoff retry. Recover missed events via `/executions/getEvents` with `sinceSeq`.
+
+### Inbound webhook handler
+
+In addition to outbound delivery (above), the Approval Engine exposes an **inbound** webhook handler — an `onRequest` Cloud Function with a stable URL — that external systems such as Salesforce, Stripe, or GitHub can POST raw JSON to.
+
+Unlike `onCall` surfaces, payloads do **not** need to be wrapped in a `{data: ...}` envelope. The handler accepts raw JSON bodies directly.
+
+The inbound handler enforces:
+
+- **Bearer-token validation** — requests must carry a valid bearer token; unauthenticated requests are rejected before any processing.
+- **Signed callback tokens** — callbacks issued by the handler are signed, allowing downstream consumers to verify authenticity end-to-end.
+- **Rate limiting** — per-source request rate is capped to prevent abuse.
+- **Byte-correct body-size limits** — oversized payloads are rejected at the boundary before parsing.
+- **SSRF URL guard** — any URL values in the incoming payload are validated against an allowlist to block server-side request forgery.
+
+<Note>
+  The inbound and outbound webhook surfaces are complementary, not duplicative. **Inbound**: external systems push events into the Approval Engine. **Outbound**: the Approval Engine pushes state-change events out to your receiver. Both paths are active independently and can coexist on the same workflow.
+</Note>
 
 ## Get started
 

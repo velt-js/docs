@@ -1,31 +1,456 @@
 ---
 title: "Suggestions (Beta)"
-sidebarTitle: "Overview"
+sidebarTitle: "Suggestions"
 ---
 
-The Suggestions API lets you wire any DOM element as a suggestion target. When suggestion mode is active, the SDK captures before/after values, persists them as typed [`Suggestion`](/api-reference/sdk/models/data-models#suggestiont) annotations, and surfaces accept/reject actions on the comment dialog. Accepting fires the comment element's `suggestionAccepted` event, which your app handles to apply the change.
+The Suggestions API adds **suggestion mode** to any input, editor, or custom component in your app. When it's on, edits from a human (or an AI agent) aren't written straight to your data — they're captured as proposed changes that a reviewer accepts or rejects from the comment dialog, diff-style, like Google Docs suggestions. On accept, your app applies the change.
 
-## Key Concepts
+You wire any DOM element as a **suggestion target** with a single attribute. The SDK captures before/after values, persists each as a typed [`Suggestion`](/api-reference/sdk/models/data-models#suggestiont) (backed by a [`CommentAnnotation`](/api-reference/sdk/models/data-models#commentannotation) with `type: 'suggestion'`), and surfaces accept/reject actions on the comment dialog.
 
-- **Suggestion target**: Any DOM element tagged with `data-velt-suggestion-target="<targetId>"`.
-- **Suggestion mode**: When enabled, the SDK listens for edits on registered targets and wraps them as pending suggestions rather than committing them immediately.
-- **Suggestion lifecycle**: `pending` → `accepted` / `rejected` / `stale` / `apply_failed`.
-- **SuggestionElement**: The singleton object returned by [`client.getSuggestionElement()`](/api-reference/sdk/api/api-methods#getsuggestionelement) (HTML/Vanilla) or the [`useSuggestionUtils()`](/api-reference/sdk/api/react-hooks#usesuggestionutils) hook (React). All Suggestions API methods live on this object.
+<Note>
+The accept/reject UI renders on the Velt comment dialog, so your app needs Velt **Comments** set up — that's where reviewers act on a suggestion.
+</Note>
 
-## How It Works
+All Suggestions methods live on the `SuggestionElement` singleton. Get it once and reuse it:
 
-1. Register one or more DOM elements as suggestion targets using [`registerTarget()`](/api-reference/sdk/api/api-methods#registertarget).
-2. Enable suggestion mode via [`enableSuggestionMode()`](/api-reference/sdk/api/api-methods#enablesuggestionmode-1).
-3. The SDK intercepts edits, captures before/after values, and creates a pending [`Suggestion`](/api-reference/sdk/models/data-models#suggestiont) backed by a [`CommentAnnotation`](/api-reference/sdk/models/data-models#commentannotation) with `type === 'suggestion'`.
-4. The accept/reject actions appear in the comment dialog. Because that UI lives on the comment element, accepting fires the comment element's `suggestionAccepted` event (and rejecting fires `suggestionRejected`); your handler reads `commentAnnotation.suggestion.newValue` and applies the change to your data.
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useSuggestionUtils } from '@veltdev/react';
 
-## Data Model
+// The hooks shown throughout this page wrap this for you, so you rarely need the element directly.
+const suggestionElement = useSuggestionUtils();
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+const suggestionElement = Velt.getSuggestionElement();
+```
+</Tab>
+</Tabs>
+
+## How it works
+
+Suggestion mode turns ordinary edits into reviewable proposals instead of letting them write straight to your app. Understanding the pipeline makes every method below make sense:
+
+<Steps>
+<Step title="You enable suggestion mode">
+The SDK starts watching the page. It installs a `MutationObserver` plus delegated `focusin` / `change` / `focusout` listeners on the document, so every element tagged with `data-velt-suggestion-target="<targetId>"` is tracked — including elements added to the DOM later.
+</Step>
+
+<Step title="A user focuses a target">
+The SDK snapshots the target's current value as the `oldValue` for that edit session.
+</Step>
+
+<Step title="A user edits and commits">
+On commit, the SDK reads the new value, compares it to the snapshot, and — only if they differ — creates a **pending** [`Suggestion`](/api-reference/sdk/models/data-models#suggestiont) (stored as a `CommentAnnotation` with `type: 'suggestion'`). Focusing and blurring without changing anything never creates a suggestion.
+</Step>
+
+<Step title="A reviewer accepts or rejects">
+Accept/reject buttons render on the comment dialog. Accepting moves the suggestion to `accepted`; rejecting moves it to `rejected`. Because that UI lives on the comment element, the outcome is emitted there as `suggestionAccepted` / `suggestionRejected`.
+</Step>
+
+<Step title="Your app applies the change">
+Your `suggestionAccepted` handler reads `commentAnnotation.suggestion.newValue` and writes it into your own state or backend. **The SDK never mutates your data for you** — it captures intent and orchestrates review; applying the change is your code's job.
+</Step>
+</Steps>
+
+<Note>
+**"Commit" depends on the input type.** For text-like inputs (text, number, date, textarea, contenteditable) the commit signal is `focusout`, so each focus session produces at most one suggestion. For atomic inputs (`<select>`, checkbox, radio) the commit signal is `change`, because the selection itself is the intent. This is deliberate — the SDK captures *intent*, not keystrokes.
+</Note>
+
+<Note>
+**Accept/reject outcomes are emitted on the comment element, not the SuggestionElement.** Accepting fires `suggestionAccepted` and rejecting fires `suggestionRejected` — subscribe with `useCommentEventCallback` (React) or `commentElement.on()` (other frameworks). The SuggestionElement emits the rest of the lifecycle: `suggestionCreated`, `suggestionStale`, `targetEditStart`, and `targetEditCommit`. See [Apply changes when a suggestion is accepted](#apply-changes-when-a-suggestion-is-accepted).
+</Note>
+
+## Define suggestion targets
+
+A **target** is any element you tag with `data-velt-suggestion-target="<targetId>"`. The `targetId` is a stable, app-owned identifier — use the same id you use in your own state, not a random UUID (which changes across re-renders and breaks matching).
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<input data-velt-suggestion-target="row.123.qty" type="number" defaultValue="5" />
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```html
+<input data-velt-suggestion-target="row.123.qty" type="number" value="5">
+```
+</Tab>
+</Tabs>
+
+**When do you need a getter?** When the SDK reads a target's value, it tries, in order: a registered getter → the native form value (`.value` / `.checked`) → `textContent`. For a single primitive input that's enough, so **a plain `<input>` needs no `registerTarget` call**. But when one target represents a **complex value** (an object spanning several controls — e.g. a table row with `qty` and `price`), there is no single `.value` to read. Register a getter so the SDK can snapshot and diff the whole object:
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useRegisterTarget, useUnregisterTarget } from '@veltdev/react';
+import { useEffect } from 'react';
+
+function EditableRow() {
+  const { registerTarget } = useRegisterTarget();
+  const { unregisterTarget } = useUnregisterTarget();
+
+  useEffect(() => {
+    registerTarget({
+      targetId: 'row.123',
+      getter: () => ({
+        qty: Number(document.getElementById('qty-input').value),
+        price: Number(document.getElementById('price-input').value),
+      }),
+    });
+    return () => unregisterTarget('row.123');
+  }, []);
+
+  return (
+    <div data-velt-suggestion-target="row.123">
+      <input id="qty-input" type="number" defaultValue="5" />
+      <input id="price-input" type="number" defaultValue="99" />
+    </div>
+  );
+}
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+suggestionElement.registerTarget({
+  targetId: 'row.123',
+  getter: () => ({
+    qty: Number(document.getElementById('qty-input').value),
+    price: Number(document.getElementById('price-input').value),
+  }),
+});
+
+// Later, to remove the getter:
+suggestionElement.unregisterTarget('row.123');
+```
+</Tab>
+</Tabs>
+
+<Warning>
+**A getter must return edit-time state, not persisted state.** The SDK calls your getter to snapshot `oldValue` on focus and to read `newValue` on commit. If your getter reads from app state that only updates *after* the user commits (common when suggestion mode is on), both reads return the same value, the diff short-circuits, and no suggestion is ever created. Read from the live source the user is editing — usually the DOM (`input.value`). For controlled inputs whose state updates on every keystroke, reading from that state is fine.
+</Warning>
+
+<Note>
+`registerTarget()` returns `void`. To remove a registration, call `unregisterTarget(targetId)` — don't expect an unsubscribe function back.
+</Note>
+
+## Enable and disable suggestion mode
+
+Enabling suggestion mode is what activates the whole pipeline above. It's global for the current user and **not persisted** — a page reload returns to normal editing until you enable it again. Pass an optional [`EnableSuggestionModeConfig`](/api-reference/sdk/models/data-models#enablesuggestionmodeconfig) to hook into the capture flow (see [Choose how edits are captured](#choose-how-edits-are-captured)).
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useEnableSuggestionMode, useDisableSuggestionMode } from '@veltdev/react';
+
+function Toolbar() {
+  const { enableSuggestionMode } = useEnableSuggestionMode();
+  const { disableSuggestionMode } = useDisableSuggestionMode();
+
+  return (
+    <button onClick={() => enableSuggestionMode()}>Suggest changes</button>
+  );
+}
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+suggestionElement.enableSuggestionMode();
+
+// Later, return targets to normal editing:
+suggestionElement.disableSuggestionMode();
+```
+</Tab>
+</Tabs>
+
+To reactively reflect the current state in your UI (for example, to highlight a "Suggesting" toggle), observe it rather than reading it once:
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useSuggestionModeState } from '@veltdev/react';
+
+const isSuggesting = useSuggestionModeState(); // boolean, updates reactively
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+// Synchronous read
+const isSuggesting = suggestionElement.isSuggestionModeEnabled();
+
+// Reactive stream
+suggestionElement.isSuggestionModeEnabled$().subscribe((isEnabled) => {
+  console.log('Suggestion mode:', isEnabled);
+});
+```
+</Tab>
+</Tabs>
+
+## Choose how edits are captured
+
+Once a commit is detected, you decide how it becomes a suggestion. There are three approaches, from least to most control. Pick one per target — they're mutually exclusive for a given edit.
+
+### Auto-commit with `onTargetEditCommit` (simplest)
+
+Provide `onTargetEditCommit` in the enable config. Return an object and the SDK **immediately creates the suggestion** using your `summary` / `metadata`. This is the default path most apps want. `onTargetEditStart` is informational in v1 (its return value is reserved for future use).
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const { enableSuggestionMode } = useEnableSuggestionMode();
+
+enableSuggestionMode({
+  onTargetEditStart: ({ targetId, oldValue }) => {
+    // Informational: a user just started editing `targetId` (oldValue snapshotted).
+  },
+  onTargetEditCommit: ({ targetId, oldValue, newValue }) => {
+    // Returning a result auto-creates the suggestion.
+    return {
+      summary: `${targetId}: ${oldValue} → ${newValue}`,
+      metadata: { source: 'inline-edit' },
+    };
+  },
+});
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+suggestionElement.enableSuggestionMode({
+  onTargetEditCommit: ({ targetId, oldValue, newValue }) => {
+    return {
+      summary: `${targetId}: ${oldValue} → ${newValue}`,
+      metadata: { source: 'inline-edit' },
+    };
+  },
+});
+```
+</Tab>
+</Tabs>
+
+<Tip>
+Return `null` (or omit `onTargetEditCommit`) to **not** auto-commit and instead handle the commit yourself via the `targetEditCommit` event below — useful when you need to validate or prompt the user before creating the suggestion.
+</Tip>
+
+### Defer the commit with the `targetEditCommit` event
+
+If you skip `onTargetEditCommit`, subscribe to the `targetEditCommit` event. Its payload carries a pre-bound `commitSuggestion` builder: call it to finalize (optionally overriding `summary` / `metadata`), or don't call it to drop the edit. This lets you gate suggestion creation behind your own logic.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useSuggestionEventCallback } from '@veltdev/react';
+import { useEffect } from 'react';
+
+function CommitGate() {
+  const commitEvent = useSuggestionEventCallback('targetEditCommit');
+
+  useEffect(() => {
+    if (!commitEvent) return;
+    const { details, commitSuggestion } = commitEvent;
+    if (isValid(details.newValue)) {
+      commitSuggestion({ summary: `Update ${details.targetId}` });
+    }
+  }, [commitEvent]);
+
+  return null;
+}
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+suggestionElement.on('targetEditCommit').subscribe(({ details, commitSuggestion }) => {
+  // `commitSuggestion` is a pre-bound builder. Call it to finalize the suggestion,
+  // or skip it to discard this edit.
+  if (isValid(details.newValue)) {
+    commitSuggestion({ summary: `Update ${details.targetId}` });
+  }
+});
+```
+</Tab>
+</Tabs>
+
+### Drive it manually with `startSuggestion` / `commitSuggestion`
+
+For non-DOM flows — custom widgets, canvas elements, or an "AI proposes a change" button — bypass auto-detection entirely. Call `startSuggestion(targetId)` to snapshot the current value, then `commitSuggestion(config)` to create the proposal.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useStartSuggestion, useCommitSuggestion } from '@veltdev/react';
+
+function ProposeButton() {
+  const { startSuggestion } = useStartSuggestion();
+  const { commitSuggestion } = useCommitSuggestion();
+
+  const propose = async () => {
+    startSuggestion('row.123'); // snapshot oldValue now
+    const { id } = await commitSuggestion({
+      targetId: 'row.123',
+      newValue: { qty: 7, price: 99 },
+      summary: 'Bump qty + price',
+      metadata: { source: 'manual' },
+    });
+    console.log('Created suggestion', id);
+  };
+
+  return <button onClick={propose}>Propose change</button>;
+}
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+suggestionElement.startSuggestion('row.123');
+
+const { id } = await suggestionElement.commitSuggestion({
+  targetId: 'row.123',
+  newValue: { qty: 7, price: 99 },
+  summary: 'Bump qty + price',
+  metadata: { source: 'manual' },
+});
+```
+</Tab>
+</Tabs>
+
+<Note>
+`commitSuggestion` requires suggestion mode to be enabled and the `targetId` to be registered (tagged or via `registerTarget`). It rejects (and creates nothing) when mode is off, the target is unknown, or `newValue` is deeply equal to the snapshot — guarding against no-op suggestions.
+</Note>
+
+## Apply changes when a suggestion is accepted
+
+This is the step you can't skip. The accept/reject buttons live on the comment dialog, so the outcome is emitted on the **comment element** as `suggestionAccepted` (and `suggestionRejected`). The SDK records the outcome and persists the suggestion — but it's **your** handler that applies `newValue` to your data. Read the change from `commentAnnotation.suggestion`.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useCommentEventCallback } from '@veltdev/react';
+import { useEffect } from 'react';
+
+function ApplyAcceptedSuggestions() {
+  const accepted = useCommentEventCallback('suggestionAccepted');
+  const rejected = useCommentEventCallback('suggestionRejected');
+
+  useEffect(() => {
+    const suggestion = accepted?.commentAnnotation?.suggestion;
+    if (!suggestion) return;
+    applyToYourState(suggestion.targetId, suggestion.newValue); // your code writes the change
+  }, [accepted]);
+
+  useEffect(() => {
+    if (rejected?.commentAnnotation) {
+      console.log('Rejected:', rejected.rejectReason);
+    }
+  }, [rejected]);
+
+  return null;
+}
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+
+commentElement.on('suggestionAccepted').subscribe(({ commentAnnotation }) => {
+  const suggestion = commentAnnotation?.suggestion; // suggestion.status === 'accepted'
+  applyToYourState(suggestion.targetId, suggestion.newValue);
+});
+
+commentElement.on('suggestionRejected').subscribe(({ commentAnnotation, rejectReason }) => {
+  console.log('Rejected:', rejectReason);
+});
+```
+</Tab>
+</Tabs>
+
+<Note>
+If the target DOM node can't be resolved when a reviewer accepts, the suggestion goes to `stale` instead — listen for that on the SuggestionElement with `useSuggestionEventCallback('suggestionStale')` (React) or `suggestionElement.on('suggestionStale')` (other frameworks).
+</Note>
+
+<Warning>
+**Make your accept handler idempotent.** It can fire more than once — across reconnects, multiple tabs, and multiple clients all viewing the same document. Applying `newValue` should be safe to run repeatedly (e.g. set the field to `newValue` rather than incrementing it). If your handler throws while applying, the SDK marks the suggestion `apply_failed`.
+</Warning>
+
+## Read suggestions for your own UI
+
+Beyond the built-in accept/reject buttons, you'll often want to render your own indicators — a "1 pending change" badge on a row, a custom review panel, or a count in a toolbar. Query suggestions reactively with an optional [`SuggestionGetSuggestionsFilter`](/api-reference/sdk/models/data-models#suggestiongetsuggestionsfilter), or fetch the single pending suggestion for a target.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useSuggestions, usePendingSuggestion } from '@veltdev/react';
+
+// All suggestions, or filter by target / status
+const all = useSuggestions();
+const pendingForRow = useSuggestions({ targetId: 'row.123', status: 'pending' });
+
+// The newest pending suggestion for one target (or null)
+const pending = usePendingSuggestion('row.123');
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+// Synchronous snapshot
+const pending = suggestionElement.getSuggestions({ status: 'pending' });
+
+// Reactive stream
+suggestionElement.getSuggestions$({ targetId: 'row.123' }).subscribe((list) => {
+  console.log('Suggestions for row.123:', list);
+});
+
+// Newest pending suggestion for a single target
+suggestionElement.getPendingSuggestion$('row.123').subscribe((s) => {
+  console.log('Pending:', s);
+});
+```
+</Tab>
+</Tabs>
+
+## Behavior notes
+
+- **Drift detection is best-effort**: On accept, if a getter is registered, the live value is compared against `oldValue`. A mismatch sets `driftDetected: true` on the suggestion. v1 records the flag; a future release will surface a confirmation prompt.
+- **Stale wins over drift**: If the target DOM node can't be resolved at accept time, the suggestion transitions to `stale` immediately and drift detection is skipped.
+- **One suggestion per edit session**: For text-like inputs, one suggestion is captured per focus session (`focusout`); for atomic inputs (e.g. `<select>`), one per `change`.
+- **Mode is not persisted**: Suggestion mode is per-user-per-session. A page reload returns it to disabled.
+
+## Lifecycle and events reference
+
+A suggestion moves forward through these states (see [`SuggestionStatus`](/api-reference/sdk/models/data-models#suggestionstatus)):
+
+| Status | Meaning |
+|---|---|
+| `pending` | Created and awaiting review. |
+| `accepted` | A reviewer accepted it; your `suggestionAccepted` handler applies `newValue`. |
+| `rejected` | A reviewer rejected it (optional `rejectReason`). Nothing is applied. |
+| `stale` | The target DOM node couldn't be resolved at accept time, so the change can't be applied. |
+| `apply_failed` | Your accept handler threw while applying. Surfaced as a status only — there's no separate event in v1. |
+
+Events come from **two elements**. Accept/reject outcomes are emitted on the **comment element** — subscribe with `useCommentEventCallback` (React) or `commentElement.on()` (other frameworks):
+
+| Event (comment element) | Fires when | Payload |
+|---|---|---|
+| `suggestionAccepted` | A reviewer accepts a suggestion (`status: 'accepted'`) | `SuggestionAcceptEvent` (`annotationId`, `commentAnnotation`, `metadata`, `actionUser`) |
+| `suggestionRejected` | A reviewer rejects a suggestion | `SuggestionRejectEvent` (adds `rejectReason`) |
+
+The remaining lifecycle events are emitted on the **SuggestionElement** — subscribe with `useSuggestionEventCallback` (React) or `suggestionElement.on()` (other frameworks). They're defined in [`SuggestionEventType`](/api-reference/sdk/models/data-models#suggestioneventtype):
+
+| Event (SuggestionElement) | Fires when | Payload |
+|---|---|---|
+| `suggestionCreated` | A pending suggestion is created | [`SuggestionCreatedEvent`](/api-reference/sdk/models/data-models#suggestioncreatedevent) |
+| `suggestionStale` | A suggestion goes stale at accept time | [`SuggestionStaleEvent`](/api-reference/sdk/models/data-models#suggestionstaleevent) |
+| `targetEditStart` | A user focuses a target and editing begins | [`TargetEditStartEvent`](/api-reference/sdk/models/data-models#targeteditstartevent) |
+| `targetEditCommit` | An edit is committed (carries the `commitSuggestion` builder) | [`TargetEditCommitEvent`](/api-reference/sdk/models/data-models#targeteditcommitevent) |
+
+## Data model
 
 Suggestions are stored as [`CommentAnnotation`](/api-reference/sdk/models/data-models#commentannotation) objects with `type === 'suggestion'` and a populated [`suggestion`](/api-reference/sdk/models/data-models#suggestiondata) field. The full type hierarchy lives in the [`Suggestions`](/api-reference/sdk/models/data-models#suggestions) section of the Data Models reference.
-
-## Behavior Notes
-
-- **Stale wins over drift**: If the target DOM node cannot be resolved at accept time, the suggestion transitions to `stale` immediately and drift detection is skipped.
-- **Drift detection is best-effort**: On accept, if a getter is registered, the live value is compared against `oldValue`. A mismatch sets `driftDetected: true` on the suggestion. v1 records the flag; a future release will surface a confirmation prompt.
-- **One suggestion per edit session**: For text-like inputs, one suggestion is captured per focus session (`focusout`). For atomic inputs (e.g., `<select>`), one suggestion is captured per `change` event.
-- **Mode is not persisted**: Suggestion mode is per-user-per-session. A page reload returns suggestion mode to disabled.

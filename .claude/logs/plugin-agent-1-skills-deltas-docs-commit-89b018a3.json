@@ -1,0 +1,73 @@
+{
+  "version": "5.0.2-beta.22",
+  "timestamp": "2026-05-14T00:00:00Z",
+  "sourceCommit": "89b018a349838c25c6930cecb892fd706b565c16",
+  "commitMessage": "save",
+  "skillSet": "rest-apis",
+  "hasDeltas": true,
+  "deltas": [
+    {
+      "id": "delta-001",
+      "type": "new_feature",
+      "releaseNoteText": "Approval Engine v1 (REST API): Declarative workflow runtime for multi-step agent + human review and approvals. Author definitions, dispatch executions, and receive webhook events via new `/v2/workflow/definitions/*`, `/v2/workflow/executions/*`, and `/v2/workflow/steps/*` endpoints.",
+      "releaseNoteVersion": "5.0.2-beta.22",
+      "skillTarget": "rest-apis",
+      "action": "create_rule",
+      "targetFile": "rules/shared/rest-api/rest-approval-engine.md",
+      "targetSection": null,
+      "summary": "Create a new rule covering all 14 Approval Engine REST endpoints under /v2/workflow/, including definitions CRUD, execution dispatch/cancel/list/get/events, and step recording/resolution/cancel/resolve — with key request/response fields, idempotency guidance, and webhook event delivery pattern.",
+      "details": {
+        "apiName": "Approval Engine REST API",
+        "apiType": "endpoint",
+        "signature": null,
+        "parameters": [],
+        "returnType": null,
+        "codeExample": "// All endpoints: POST https://api.velt.dev/v2/workflow/<resource>/<action>\n// Required headers on every request:\n//   x-velt-api-key: <workspace API key>\n//   x-velt-auth-token: <short-lived auth token>\n//   content-type: application/json\n// Request envelope: { \"data\": { ...fields } }\n// Success envelope: { \"result\": { ...fields } }\n// Error envelope: { \"error\": { \"message\": \"...\", \"status\": \"INVALID_ARGUMENT\", \"details\": {} } }\n\n// ── DEFINITIONS ──────────────────────────────────────────────────────────────\n// POST /v2/workflow/definitions/create\n// Body fields: definitionId (string, required), name (string, required),\n//   description (string), scope ({ level: 'apiKey'|'organization'|'document',\n//   organizationId?, documentId? }), nodes (array, required), edges (array, required),\n//   groups (array), triggers (array), tags (string[]), custom (object)\n// Node shape: { nodeId, type: 'agent'|'human'|'webhook', config, slaMs? }\n//   agent config: { agentId, promptOverride?, inputMapping?, blocking?, resolutionPolicy?, agentMaxRuntimeMs?, requireNonEmptyOutput? }\n//   human config: { reviewers: [{ userId, mandatory }], commentBody? }  -- use reviewers[], not legacy reviewerIds[]\n// Edge shape: { from, to, when? }  -- when is a gating expression evaluated at runtime\n// Group shape: { groupId, memberNodeIds, expectedSteps, quorum, onQuorumMet?: 'waitAll'|'cancelOnQuorum'|'joinOnQuorum', requiredNodeIds? }\n// Response: { result: { definitionId, version, ... } }\n\n// POST /v2/workflow/definitions/update\n// Body fields: definitionId (required) + same optional fields as create\n// Supports ifVersion (integer) for optimistic-lock updates\n// Each update increments version; in-flight executions are immune to changes\n\n// POST /v2/workflow/definitions/get\n// Body fields: definitionId (required)\n// Response: { result: DefinitionView }\n\n// POST /v2/workflow/definitions/list\n// Body fields: scope?, status?, tags?, cursor?, limit?\n// Response: { result: { definitions: DefinitionView[], nextCursor? } }\n\n// POST /v2/workflow/definitions/delete\n// Body fields: definitionId (required)\n// Rejected (FAILED_PRECONDITION) if the definition has in-flight executions\n\n// ── EXECUTIONS ───────────────────────────────────────────────────────────────\n// POST /v2/workflow/executions/dispatch\n// Body fields: definitionId (required), idempotencyKey (string, highly recommended),\n//   correlationId?, triggerContext?, webhookUrl? (must be https://), webhookSecret?\n//   webhookUrl and webhookSecret must be provided together\n// Response: { result: { executionId, correlationId, deduplicated: boolean } }\n// deduplicated: true means the idempotencyKey was already used — same executionId returned, no duplicate spawned\n\n// POST /v2/workflow/executions/get\n// Body fields: executionId (required)\n// Response: { result: ExecutionView }  -- includes steps[] array\n\n// POST /v2/workflow/executions/list\n// Body fields: definitionId?, status?, cursor?, limit?\n// Response: { result: { executions: ExecutionView[], nextCursor? } }\n\n// POST /v2/workflow/executions/cancel\n// Body fields: executionId (required), reason? (string)\n// Rejected if execution is already terminal\n\n// POST /v2/workflow/executions/getEvents\n// Body fields: executionId (required), sinceSeq? (integer)\n// Response: { result: { events: ApprovalEventView[] } }\n// Use sinceSeq to recover missed webhook events after an outage\n// seq values may be non-contiguous (internal-only events fill gaps but are filtered)\n\n// ── STEPS ────────────────────────────────────────────────────────────────────\n// POST /v2/workflow/steps/recordReviewerDecision\n// Body fields: executionId (required), stepId (required), reviewerId (required),\n//   decision: 'approve'|'reject' (required), reason? (string)\n// Response: { result: { recorded: boolean, aggregatorStatus: string, resumeScheduled: boolean } }\n\n// POST /v2/workflow/steps/recordAgentResolution\n// Body fields: executionId (required), stepId (required), resolutionId (required),\n//   output? (object)\n// Used for blocking agent steps (blocking: true)\n\n// POST /v2/workflow/steps/cancel\n// Body fields: executionId (required), stepId (required), reason? (string)\n// Requires admin scope (PERMISSION_DENIED for non-admins)\n\n// POST /v2/workflow/steps/resolve\n// Body fields: executionId (required), stepId (required), output? (object)\n// Admin-level override to force-complete a step\n\n// ── WEBHOOK EVENTS DELIVERED TO webhookUrl ───────────────────────────────────\n// Headers: x-velt-signature (sha256=<hex> HMAC-SHA256 of raw body),\n//          x-velt-event-id, x-velt-attempt (0-based)\n// Payload: { event, executionId, definitionId, stepId, status?, seq, timestamp, correlationId, data }\n// Externally-visible event types:\n//   execution.dispatched, execution.completed, execution.failed, execution.cancelled\n//   step.awaiting-approval, step.completed, step.failed, step.breached, step.cancelled\n//   group.quorum-met\n// Verify signature: HMAC-SHA256(rawBodyBytes, webhookSecret) — hash raw bytes, not re-serialized JSON\n// At-least-once delivery: make receiver idempotent on (executionId, seq)\n// Retry schedule: immediate, +2s, +8s, +32s, +2min, +8min → DLQ after 5 retries"
+      },
+      "confidence": "high",
+      "ambiguityNote": null
+    }
+  ],
+  "skipped": [
+    {
+      "item": "ai/approval-engine/overview.mdx, setup.mdx, customize-behavior.mdx — frontend SDK components/hooks",
+      "reason": "Approval Engine has no frontend SDK components, hooks, or props. All interaction is via REST API. No velt-setup-best-practices, velt-comments-best-practices, or other frontend skill is applicable."
+    },
+    {
+      "item": "docs.json navigation updates",
+      "reason": "Navigation structure only — no API or behavior change."
+    },
+    {
+      "item": "webhooks/advanced.mdx minor changes",
+      "reason": "Minor prose changes only — no new API, webhook type, or behavior change documented in the diff."
+    },
+    {
+      "item": "REST API reference split (old overview.mdx deleted, per-method pages added)",
+      "reason": "Documentation restructure only — same endpoint surface, same API contracts. The new per-method pages don't change the API; they just reorganize reference docs. All endpoint information is captured in delta-001."
+    }
+  ],
+  "gap_flags": [
+    {
+      "id": "gap-001",
+      "severity": "major",
+      "description": "No velt-approval-engine-best-practices skill exists. The Approval Engine is a significant new REST-only feature area (14 endpoints, parallel groups, quorum policies, SLA handling, event catalog). The delta above adds coverage to velt-rest-apis-best-practices as the closest existing home, but if the Approval Engine becomes a first-class product surface, a dedicated skill should be created.",
+      "recommendation": "Consider creating a velt-approval-engine-best-practices skill once the API stabilizes (currently v1). For now, delta-001 adds a rest-approval-engine.md rule to velt-rest-apis-best-practices."
+    }
+  ],
+  "endpointInventory": [
+    { "method": "POST", "path": "/v2/workflow/definitions/create", "keyFields": "definitionId, name, scope, nodes[], edges[], groups[]" },
+    { "method": "POST", "path": "/v2/workflow/definitions/update", "keyFields": "definitionId, ifVersion (optimistic lock), same optional fields as create" },
+    { "method": "POST", "path": "/v2/workflow/definitions/get", "keyFields": "definitionId" },
+    { "method": "POST", "path": "/v2/workflow/definitions/list", "keyFields": "scope?, status?, tags?, cursor?, limit?" },
+    { "method": "POST", "path": "/v2/workflow/definitions/delete", "keyFields": "definitionId; rejected if in-flight executions exist" },
+    { "method": "POST", "path": "/v2/workflow/executions/dispatch", "keyFields": "definitionId, idempotencyKey, correlationId?, triggerContext?, webhookUrl?, webhookSecret?" },
+    { "method": "POST", "path": "/v2/workflow/executions/get", "keyFields": "executionId" },
+    { "method": "POST", "path": "/v2/workflow/executions/list", "keyFields": "definitionId?, status?, cursor?, limit?" },
+    { "method": "POST", "path": "/v2/workflow/executions/cancel", "keyFields": "executionId, reason?" },
+    { "method": "POST", "path": "/v2/workflow/executions/getEvents", "keyFields": "executionId, sinceSeq?" },
+    { "method": "POST", "path": "/v2/workflow/steps/recordReviewerDecision", "keyFields": "executionId, stepId, reviewerId, decision ('approve'|'reject'), reason?" },
+    { "method": "POST", "path": "/v2/workflow/steps/recordAgentResolution", "keyFields": "executionId, stepId, resolutionId, output?" },
+    { "method": "POST", "path": "/v2/workflow/steps/cancel", "keyFields": "executionId, stepId, reason? (admin only)" },
+    { "method": "POST", "path": "/v2/workflow/steps/resolve", "keyFields": "executionId, stepId, output? (admin override)" }
+  ]
+}

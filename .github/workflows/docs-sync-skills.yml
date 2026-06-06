@@ -1,0 +1,407 @@
+name: docs-sync-skills
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 4: push trigger is ENABLED. The workflow runs automatically on every
+# merge to main that touches a watched path. Only enable in production after
+# the Phase 3 test matrix in docs/scripts/skills-sync/README.md is green.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'async-collaboration/**'
+      - 'realtime-collaboration/**'
+      - 'api-reference/rest-apis/**'
+      - 'self-host-data/**'
+      - 'security/**'
+      - 'webhooks/**'
+      - 'get-started/**'
+      - 'backend-sdks/**'
+      - 'ui-customization/**'
+      - 'permission-management/**'
+      - 'in-app-user-feedback/**'
+
+  workflow_dispatch:
+    inputs:
+      before_sha:
+        description: "Base SHA (the commit to diff FROM). Defaults to HEAD~1."
+        required: false
+        type: string
+      target_sha:
+        description: "Target SHA (the commit to diff TO). Defaults to the workflow's checkout SHA."
+        required: false
+        type: string
+
+concurrency:
+  group: skills-sync-${{ github.ref }}
+  cancel-in-progress: false   # never cancel a running sync — risk of partial PR
+
+permissions:
+  contents: read
+
+env:
+  AGENT_SKILLS_REPO: velt-js/agent-skills
+
+jobs:
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Job 1: plan — Stage 0 (script) + Agent 1 (docs-diff-planner)
+  # ───────────────────────────────────────────────────────────────────────────
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      has_work:    ${{ steps.gate.outputs.has_work }}
+      tickets:     ${{ steps.gate.outputs.tickets }}
+      target_sha:  ${{ steps.resolve-shas.outputs.target_sha }}
+      before_sha:  ${{ steps.resolve-shas.outputs.before_sha }}
+
+    steps:
+      - name: Checkout docs (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: docs
+
+      - name: Checkout agent-skills
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.AGENT_SKILLS_REPO }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: agent-skills
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install claude-code CLI
+        # NOTE: Adjust this to match your actual CLI install method.
+        # The release-note pipeline may already install it differently.
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Resolve before/target SHAs
+        id: resolve-shas
+        working-directory: docs
+        run: |
+          TARGET="${{ inputs.target_sha }}"
+          BEFORE="${{ inputs.before_sha }}"
+          if [ -z "$TARGET" ]; then TARGET=$(git rev-parse HEAD); fi
+          if [ -z "$BEFORE" ]; then BEFORE=$(git rev-parse "${TARGET}~1"); fi
+          echo "target_sha=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "before_sha=$BEFORE" >> "$GITHUB_OUTPUT"
+          echo "Resolved: before=$BEFORE  target=$TARGET"
+
+      - name: Stage 0 — compute diff
+        env:
+          BEFORE_SHA: ${{ steps.resolve-shas.outputs.before_sha }}
+          AFTER_SHA:  ${{ steps.resolve-shas.outputs.target_sha }}
+          DOCS_DIR:   ${{ github.workspace }}/docs
+        run: bash docs/scripts/skills-sync/compute-diff.sh
+
+      - name: Stage 1a — prepare Agent 1 inputs
+        env:
+          DOCS_DIR:   ${{ github.workspace }}/docs
+          SKILLS_DIR: ${{ github.workspace }}/agent-skills/skills
+        run: bash docs/scripts/skills-sync/prepare-agent-1-inputs.sh
+
+      - name: Stage 1b — run Agent 1 (docs-diff-planner)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DOCS_DIR: ${{ github.workspace }}/docs
+        run: bash docs/scripts/skills-sync/run-claude-agent.sh docs-diff-planner
+
+      - name: Gate — does the plan have any work?
+        id: gate
+        run: |
+          if [ ! -f outputs/plan.json ]; then
+            echo "Agent 1 did not produce plan.json — aborting"
+            exit 1
+          fi
+          TICKET_COUNT=$(jq '.tickets | length' outputs/plan.json)
+          UNMAPPED_COUNT=$(jq '.unmapped | length' outputs/plan.json)
+          echo "tickets=$TICKET_COUNT  unmapped=$UNMAPPED_COUNT"
+          if [ "$TICKET_COUNT" -eq 0 ] && [ "$UNMAPPED_COUNT" -eq 0 ]; then
+            echo "has_work=false" >> "$GITHUB_OUTPUT"
+            echo "tickets=[]"     >> "$GITHUB_OUTPUT"
+          else
+            echo "has_work=true" >> "$GITHUB_OUTPUT"
+            echo "tickets=$(jq -c '[.tickets[].skill]' outputs/plan.json)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload plan artifact
+        if: steps.gate.outputs.has_work == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-${{ github.run_id }}
+          path: |
+            outputs/plan.json
+            outputs/hunks/
+          retention-days: 7
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Job 2: update-skill — Agent 2 (one of 6 variants), fan-out per impacted skill
+  # ───────────────────────────────────────────────────────────────────────────
+  update-skill:
+    name: Update ${{ matrix.skill }}
+    needs: plan
+    if: needs.plan.outputs.has_work == 'true' && needs.plan.outputs.tickets != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        skill: ${{ fromJson(needs.plan.outputs.tickets) }}
+
+    steps:
+      - name: Checkout docs
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.target_sha }}
+          path: docs
+
+      - name: Checkout agent-skills
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.AGENT_SKILLS_REPO }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: agent-skills
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install claude-code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: plan-${{ github.run_id }}
+          path: outputs
+
+      - name: Resolve updater variant for ${{ matrix.skill }}
+        id: variant
+        run: |
+          VARIANT=$(bash docs/scripts/skills-sync/dispatch-updater-variant.sh "${{ matrix.skill }}")
+          echo "name=$VARIANT" >> "$GITHUB_OUTPUT"
+          echo "Resolved variant: $VARIANT"
+
+      - name: Prepare Agent 2 inputs for ${{ matrix.skill }}
+        env:
+          DOCS_DIR:   ${{ github.workspace }}/docs
+          SKILLS_DIR: ${{ github.workspace }}/agent-skills/skills
+        run: bash docs/scripts/skills-sync/prepare-agent-2-inputs.sh "${{ matrix.skill }}"
+
+      - name: Run Agent 2 — ${{ steps.variant.outputs.name }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DOCS_DIR: ${{ github.workspace }}/docs
+        run: bash docs/scripts/skills-sync/run-claude-agent.sh "${{ steps.variant.outputs.name }}"
+
+      - name: Build patch artifact
+        id: patch
+        run: |
+          mkdir -p agent-skills-patches
+          # The updater edited files in inputs/skill/ — rsync them back onto the real skill dir,
+          # then capture the diff as a patch (so apply-patches.sh can merge across matrix jobs).
+          rsync -a --delete inputs/skill/ agent-skills/skills/${{ matrix.skill }}/
+          cd agent-skills
+          if git diff --quiet -- skills/${{ matrix.skill }}/; then
+            echo "No changes for ${{ matrix.skill }} — agent declined"
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            git diff -- skills/${{ matrix.skill }}/ > ../agent-skills-patches/${{ matrix.skill }}.patch
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload changes artifact for ${{ matrix.skill }}
+        if: steps.patch.outputs.has_changes == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: changes-${{ matrix.skill }}-${{ github.run_id }}
+          path: |
+            outputs/changes.json
+            agent-skills-patches/${{ matrix.skill }}.patch
+          retention-days: 7
+
+      - name: Upload decline artifact for ${{ matrix.skill }}
+        if: steps.patch.outputs.has_changes == 'false' && hashFiles('outputs/decline.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: decline-${{ matrix.skill }}-${{ github.run_id }}
+          path: outputs/decline.json
+          retention-days: 7
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Job 3: validate-and-pr — apply patches, Agent 3 validator, Agent 4 PR composer
+  # ───────────────────────────────────────────────────────────────────────────
+  validate-and-pr:
+    name: Validate & PR
+    needs: [plan, update-skill]
+    if: always() && needs.plan.outputs.has_work == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout docs
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.target_sha }}
+          path: docs
+
+      - name: Checkout agent-skills
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.AGENT_SKILLS_REPO }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: agent-skills
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install claude-code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure git identity
+        working-directory: agent-skills
+        run: |
+          git config user.name  "skills-sync[bot]"
+          git config user.email "skills-sync[bot]@users.noreply.github.com"
+
+      - name: Resolve branch (reuse existing skills-sync PR if one is open)
+        working-directory: agent-skills
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+        run: |
+          SHORT_SHA="$(echo "${{ needs.plan.outputs.target_sha }}" | cut -c1-7)"
+          echo "SHORT_SHA=$SHORT_SHA" >> "$GITHUB_ENV"
+
+          # 1. Prefer reusing the branch of any already-open skills-sync PR so
+          #    a new run lands as a commit on the existing PR instead of
+          #    opening a parallel one. We pick the most recently-updated open
+          #    PR labeled `skills-sync` (there should be at most one in
+          #    steady state, but we sort just in case).
+          EXISTING=$(gh pr list \
+            --repo velt-js/agent-skills \
+            --state open \
+            --label skills-sync \
+            --json number,headRefName,updatedAt \
+            --jq 'sort_by(.updatedAt) | reverse | .[0] // empty')
+
+          if [ -n "$EXISTING" ]; then
+            BRANCH=$(echo "$EXISTING" | jq -r '.headRefName')
+            EXISTING_PR_NUMBER=$(echo "$EXISTING" | jq -r '.number')
+            echo "Reusing open skills-sync PR #$EXISTING_PR_NUMBER on branch $BRANCH"
+            git fetch origin "$BRANCH"
+            git checkout "$BRANCH"
+            echo "EXISTING_PR_NUMBER=$EXISTING_PR_NUMBER" >> "$GITHUB_ENV"
+            echo "EXISTING_PR_BRANCH=$BRANCH" >> "$GITHUB_ENV"
+            echo "BRANCH=$BRANCH" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # 2. No open skills-sync PR — fall back to the per-SHA branch.
+          BRANCH="skills-sync/$SHORT_SHA"
+          if git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1; then
+            # Same-SHA re-run scenario: branch exists but no PR was opened
+            # (or the PR was closed). Reuse the branch but treat as new-PR path
+            # so Agent 4 opens a fresh PR.
+            git fetch origin "$BRANCH"
+            git checkout "$BRANCH"
+          else
+            git checkout -b "$BRANCH"
+          fi
+          echo "BRANCH=$BRANCH" >> "$GITHUB_ENV"
+
+      - name: Download all change artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: changes-*-${{ github.run_id }}
+          path: incoming
+          merge-multiple: true
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: plan-${{ github.run_id }}
+          path: outputs
+
+      - name: Apply matrix patches
+        env:
+          INCOMING_DIR:      ${{ github.workspace }}/incoming/agent-skills-patches
+          AGENT_SKILLS_DIR:  ${{ github.workspace }}/agent-skills
+        run: bash docs/scripts/skills-sync/apply-patches.sh
+
+      - name: Run Agent 3 (skill-format-validator)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DOCS_DIR: ${{ github.workspace }}/docs
+          # Validator consolidates output from N matrix-parallel updaters,
+          # runs npm run build, and may fix formatting drift across all
+          # touched rule files — 40 turns is too tight when 2+ skills update.
+          AGENT_MAX_TURNS: "120"
+        run: bash docs/scripts/skills-sync/run-claude-agent.sh skill-format-validator
+
+      - name: Commit validator output (if any)
+        working-directory: agent-skills
+        run: |
+          if ! git diff --quiet; then
+            git add -A
+            git commit -m "skills-sync: format fixups + regenerated AGENTS.md/AGENTS.full.md"
+          else
+            echo "No validator-driven changes"
+          fi
+
+      - name: Build source-commit.json for Agent 4
+        run: |
+          mkdir -p inputs
+          cd docs
+          DOCS_SHA="${{ needs.plan.outputs.target_sha }}"
+          DOCS_AUTHOR="$(git log -1 --format='%an' "$DOCS_SHA")"
+          DOCS_MSG="$(git log -1 --format='%s' "$DOCS_SHA")"
+          cd ..
+          jq -n \
+            --arg sha       "$DOCS_SHA" \
+            --arg short_sha "$SHORT_SHA" \
+            --arg author    "$DOCS_AUTHOR" \
+            --arg message   "$DOCS_MSG" \
+            --arg url       "${{ github.server_url }}/${{ github.repository }}/commit/$DOCS_SHA" \
+            --arg run_url   "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{sha: $sha, short_sha: $short_sha, author: $author, message: $message, url: $url, run_url: $run_url}' \
+            > inputs/source-commit.json
+          # Also stage what Agent 4 reads
+          cp outputs/plan.json                  inputs/plan.json
+          cp outputs/changes-merged.json        inputs/changes-merged.json 2>/dev/null || echo '[]' > inputs/changes-merged.json
+          cp outputs/validator-status.json      inputs/validator-status.json 2>/dev/null || true
+          cp outputs/abort.json                 inputs/abort.json 2>/dev/null || true
+
+      - name: Run Agent 4 (skill-pr-composer)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN:          ${{ secrets.CROSS_REPO_PAT }}
+          DOCS_DIR: ${{ github.workspace }}/docs
+        run: bash docs/scripts/skills-sync/run-claude-agent.sh skill-pr-composer
+
+      - name: Upload pipeline run summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-summary-${{ github.run_id }}
+          path: |
+            outputs/plan.json
+            outputs/changes-merged.json
+            outputs/validator-status.json
+            outputs/abort.json
+            outputs/pr-composer-result.json
+          if-no-files-found: ignore
+          retention-days: 30

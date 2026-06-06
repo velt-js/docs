@@ -4,7 +4,7 @@ title: "Customize Behavior"
 
 [Setup](/async-collaboration/suggestions/setup) gets you a working accept/reject flow using the SDK's defaults. This page explains *what* each piece does and *why*, so you can shape the behavior to your app: how the SDK turns an edit into a suggestion, how to control what gets captured, and how to apply a change once it's accepted.
 
-Every method below lives on the `SuggestionElement` singleton. Get it once and reuse it:
+Most methods below live on the `SuggestionElement` singleton — except the accept/reject events in [section 4](#4-apply-changes-when-a-suggestion-is-accepted), which come from the comment element. Get the `SuggestionElement` once and reuse it:
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -41,11 +41,11 @@ On commit, the SDK reads the new value, compares it to the snapshot, and — onl
 </Step>
 
 <Step title="A reviewer accepts or rejects">
-Accept/reject buttons render on the comment dialog. Accepting moves the suggestion to `accepted` and fires `suggestionApproved`; rejecting moves it to `rejected` and fires `suggestionRejected`.
+Accept/reject buttons render on the comment dialog. Accepting moves the suggestion to `accepted`; rejecting moves it to `rejected`. Because that UI lives on the comment element, the outcome is emitted there as `suggestionAccepted` / `suggestionRejected`.
 </Step>
 
 <Step title="Your app applies the change">
-Your `suggestionApproved` handler reads `suggestion.newValue` and writes it into your own state or backend. **The SDK never mutates your data for you** — it captures intent and orchestrates review; applying the change is your code's job.
+Your `suggestionAccepted` handler reads `commentAnnotation.suggestion.newValue` and writes it into your own state or backend. **The SDK never mutates your data for you** — it captures intent and orchestrates review; applying the change is your code's job.
 </Step>
 </Steps>
 
@@ -53,9 +53,9 @@ Your `suggestionApproved` handler reads `suggestion.newValue` and writes it into
 **"Commit" depends on the input type.** For text-like inputs (text, number, date, textarea, contenteditable) the commit signal is `focusout`, so each focus session produces at most one suggestion. For atomic inputs (`<select>`, checkbox, radio) the commit signal is `change`, because the selection itself is the intent. This is deliberate — the SDK captures *intent*, not keystrokes.
 </Note>
 
-<Warning>
-The lifecycle **status** is `accepted`, but the **event** you subscribe to is named `suggestionApproved` (and the type is `ApprovedSuggestion`). Subscribe to `suggestionApproved`, then check `suggestion.status === 'accepted'`.
-</Warning>
+<Note>
+**Accept/reject outcomes are emitted on the comment element, not the SuggestionElement.** Accepting fires `suggestionAccepted` and rejecting fires `suggestionRejected` — subscribe with `useCommentEventCallback` (React) or `commentElement.on()` (other frameworks). The SuggestionElement emits the rest of the lifecycle: `suggestionCreated`, `suggestionStale`, `targetEditStart`, and `targetEditCommit`. See [section 4](#4-apply-changes-when-a-suggestion-is-accepted).
+</Note>
 
 ## 1. Enable and disable suggestion mode
 
@@ -306,27 +306,27 @@ const { id } = await suggestionElement.commitSuggestion({
 
 ## 4. Apply changes when a suggestion is accepted
 
-This is the step you can't skip. When a reviewer accepts a suggestion, the SDK records the outcome and emits `suggestionApproved` — but it's **your** handler that applies `newValue` to your data. Subscribe and write the change into your state or backend.
+This is the step you can't skip. The accept/reject buttons live on the comment dialog, so the outcome is emitted on the **comment element** as `suggestionAccepted` (and `suggestionRejected`). The SDK records the outcome and persists the suggestion — but it's **your** handler that applies `newValue` to your data. Read the change from `commentAnnotation.suggestion`.
 
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
-import { useSuggestionEventCallback } from '@veltdev/react';
+import { useCommentEventCallback } from '@veltdev/react';
 import { useEffect } from 'react';
 
 function ApplyAcceptedSuggestions() {
-  const approved = useSuggestionEventCallback('suggestionApproved');
-  const rejected = useSuggestionEventCallback('suggestionRejected');
+  const accepted = useCommentEventCallback('suggestionAccepted');
+  const rejected = useCommentEventCallback('suggestionRejected');
 
   useEffect(() => {
-    if (!approved?.suggestion) return;
-    const { targetId, newValue } = approved.suggestion;
-    applyToYourState(targetId, newValue); // your code writes the change
-  }, [approved]);
+    const suggestion = accepted?.commentAnnotation?.suggestion;
+    if (!suggestion) return;
+    applyToYourState(suggestion.targetId, suggestion.newValue); // your code writes the change
+  }, [accepted]);
 
   useEffect(() => {
-    if (rejected?.suggestion) {
-      console.log('Rejected:', rejected.suggestion.rejectReason);
+    if (rejected?.commentAnnotation) {
+      console.log('Rejected:', rejected.rejectReason);
     }
   }, [rejected]);
 
@@ -337,25 +337,26 @@ function ApplyAcceptedSuggestions() {
 
 <Tab title="Other Frameworks">
 ```js
-suggestionElement.on('suggestionApproved').subscribe(({ suggestion }) => {
-  // suggestion.status === 'accepted'
+const commentElement = Velt.getCommentElement();
+
+commentElement.on('suggestionAccepted').subscribe(({ commentAnnotation }) => {
+  const suggestion = commentAnnotation?.suggestion; // suggestion.status === 'accepted'
   applyToYourState(suggestion.targetId, suggestion.newValue);
 });
 
-suggestionElement.on('suggestionRejected').subscribe(({ suggestion }) => {
-  console.log('Rejected:', suggestion.rejectReason);
-});
-
-suggestionElement.on('suggestionStale').subscribe(({ suggestion }) => {
-  // Target couldn't be resolved at accept time — nothing to apply.
-  console.log('Stale:', suggestion.targetId);
+commentElement.on('suggestionRejected').subscribe(({ commentAnnotation, rejectReason }) => {
+  console.log('Rejected:', rejectReason);
 });
 ```
 </Tab>
 </Tabs>
 
+<Note>
+If the target DOM node can't be resolved when a reviewer accepts, the suggestion goes to `stale` instead — listen for that on the SuggestionElement with `useSuggestionEventCallback('suggestionStale')` (React) or `suggestionElement.on('suggestionStale')` (other frameworks).
+</Note>
+
 <Warning>
-**Make your `suggestionApproved` handler idempotent.** It can fire more than once — across reconnects, multiple tabs, and multiple clients all viewing the same document. Applying `newValue` should be safe to run repeatedly (e.g. set the field to `newValue` rather than incrementing it). If your handler throws while applying, the SDK marks the suggestion `apply_failed`.
+**Make your accept handler idempotent.** It can fire more than once — across reconnects, multiple tabs, and multiple clients all viewing the same document. Applying `newValue` should be safe to run repeatedly (e.g. set the field to `newValue` rather than incrementing it). If your handler throws while applying, the SDK marks the suggestion `apply_failed`.
 </Warning>
 
 ## 5. Read suggestions for your own UI
@@ -401,18 +402,23 @@ A suggestion moves forward through these states (see [`SuggestionStatus`](/api-r
 | Status | Meaning |
 |---|---|
 | `pending` | Created and awaiting review. |
-| `accepted` | A reviewer accepted it; your `suggestionApproved` handler applies `newValue`. |
+| `accepted` | A reviewer accepted it; your `suggestionAccepted` handler applies `newValue`. |
 | `rejected` | A reviewer rejected it (optional `rejectReason`). Nothing is applied. |
 | `stale` | The target DOM node couldn't be resolved at accept time, so the change can't be applied. |
-| `apply_failed` | Your `suggestionApproved` handler threw while applying. Surfaced as a status only — there's no separate event in v1. |
+| `apply_failed` | Your accept handler threw while applying. Surfaced as a status only — there's no separate event in v1. |
 
-Subscribe to lifecycle events with `on(eventType)` (Other Frameworks) or `useSuggestionEventCallback(eventType)` (React). All event names are defined in [`SuggestionEventType`](/api-reference/sdk/models/data-models#suggestioneventtype):
+Events come from **two elements**. Accept/reject outcomes are emitted on the **comment element** — subscribe with `useCommentEventCallback` (React) or `commentElement.on()` (other frameworks):
 
-| Event | Fires when | Payload |
+| Event (comment element) | Fires when | Payload |
+|---|---|---|
+| `suggestionAccepted` | A reviewer accepts a suggestion (`status: 'accepted'`) | `SuggestionAcceptEvent` (`annotationId`, `commentAnnotation`, `metadata`, `actionUser`) |
+| `suggestionRejected` | A reviewer rejects a suggestion | `SuggestionRejectEvent` (adds `rejectReason`) |
+
+The remaining lifecycle events are emitted on the **SuggestionElement** — subscribe with `useSuggestionEventCallback` (React) or `suggestionElement.on()` (other frameworks). They're defined in [`SuggestionEventType`](/api-reference/sdk/models/data-models#suggestioneventtype):
+
+| Event (SuggestionElement) | Fires when | Payload |
 |---|---|---|
 | `suggestionCreated` | A pending suggestion is created | [`SuggestionCreatedEvent`](/api-reference/sdk/models/data-models#suggestioncreatedevent) |
-| `suggestionApproved` | A suggestion is accepted (`status: 'accepted'`) | [`SuggestionApprovedEvent`](/api-reference/sdk/models/data-models#suggestionapprovedevent) |
-| `suggestionRejected` | A suggestion is rejected | [`SuggestionRejectedEvent`](/api-reference/sdk/models/data-models#suggestionrejectedevent) |
 | `suggestionStale` | A suggestion goes stale at accept time | [`SuggestionStaleEvent`](/api-reference/sdk/models/data-models#suggestionstaleevent) |
 | `targetEditStart` | A user focuses a target and editing begins | [`TargetEditStartEvent`](/api-reference/sdk/models/data-models#targeteditstartevent) |
 | `targetEditCommit` | An edit is committed (carries the `commitSuggestion` builder) | [`TargetEditCommitEvent`](/api-reference/sdk/models/data-models#targeteditcommitevent) |

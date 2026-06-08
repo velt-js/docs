@@ -21,6 +21,7 @@
 | `locationId`              | `number \| null`                                                          | No       | Unique location id generated from provided location                                                                                                                                       |
 | `location`                | `Location \| null`                                                        | No       | Set location to identify user on sub document                                                                                                                                             |
 | `type`                    | `string`                                                                  | No       | Type of the comment annotation                                                                                                                                                            |
+| `commentType`             | `string`                                                                  | No       | Secondary discriminator for the comment annotation; e.g. `'suggestion'` for agent suggestion comments                                                                                     |
 | `selectAllContent`        | `boolean`                                                                 | No       | If true, sets text comment annotation on all the text content                                                                                                                             |
 | `approved`                | `boolean`                                                                 | No       | Whether the comment annotation is approved                                                                                                                                                |
 | `status`                  | `CustomStatus`                                                            | Yes      | Status of the comment annotation. Default: CommentAnnotationStatusMap.OPEN                                                                                                                |
@@ -42,8 +43,10 @@
 | `viewedBy`                | [`Users[]`](#user)                                                        | No       | List of users who have viewed/read this comment annotation                                                                                                                                |
 | `unread`                  | `boolean`                                                                 | No       | Whether the annotation is unread by current user                                                                                                                                          |
 | `visibilityConfig`        | [`CommentAnnotationVisibilityConfig`](#commentannotationvisibilityconfig) | No       | Human-readable visibility configuration for the annotation. Contains type, organizationId, and userIds. Defaults to `{ type: 'public' }` for new annotations without explicit visibility. |
+| `agent`                   | [`CommentAnnotationAgent`](#commentannotationagent)                       | No       | Present when the annotation was authored by an AI agent. Carries the agent identity and structured result used to render the Agent Suggestion card. |
+| `sourceType`              | `string`                                                                  | No       | Origin of the annotation. Selects the agent-identity vs human-author header variant rendered for suggestion comments. |
+| `suggestion`              | [`CommentAnnotationSuggestion`](#commentannotationsuggestion)             | No       | Suggestion state for typed-suggestion annotations. Mutated by [`acceptSuggestion()`](/api-reference/sdk/api/api-methods#acceptsuggestion) / [`rejectSuggestion()`](/api-reference/sdk/api/api-methods#rejectsuggestion). |
 | `basicAnchorData`         | `{ xpath: string; topPercentage: number; leftPercentage: number }`        | No       | Client-safe anchor data derived from the target element's xpath. `xpath` is sourced from `targetElement.anchor.fXPath`, falling back to the legacy `targetElement.fXpath`. `topPercentage` and `leftPercentage` default to `0` when not set. Omitted entirely when no xpath source is present. |
-| `suggestion`              | [`SuggestionData`](#suggestiondata)                                       | No       | Present only when `annotation.type === 'suggestion'`; SDK-managed. |
 
 #### Enum
 
@@ -320,6 +323,42 @@ Human-readable visibility configuration stored on a comment annotation.
 | `userIdHash` | `string`             | Yes      | The user ID of the unsubscribed user                                                                                                                                                          |
 | `user`       | `User`               | Yes      | The user object of the unsubscribed user                                                                                                                                                      |
 | `type`       | `'manual' \| 'auto'` | Yes      | Manual: if the user used the UI option to unsubscribe; Auto: When the system automatically removes the user from the unsubscribed list. eg: when the comment where user was tagged is deleted |
+
+#### CommentAnnotationAgent
+
+---
+
+Identity and structured output for an AI agent that authored a comment annotation. Present on [`CommentAnnotation.agent`](#commentannotation) when the annotation is agent-authored. Drives the Agent Suggestion card header and body.
+
+| Property      | Type                          | Required | Description                                                                                                                           |
+| ------------- | ----------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`        | `string`                      | No       | Agent display name shown in the suggestion header.                                                                                    |
+| `photoUrl`    | `string`                      | No       | Agent avatar URL. Falls back to a default agent icon when missing.                                                                    |
+| `result`      | [`AgentResult`](#agentresult) | No       | Structured output produced by the agent.                                                                                              |
+| `agentFields` | `string[]`                    | No       | Agent field tags. Used to filter annotation/count queries via `agentFields` on [`CommentRequestQuery`](#commentrequestquery).         |
+
+#### AgentResult
+
+---
+
+Structured output produced by an AI agent for a suggestion comment.
+
+| Property | Type     | Required | Description                                                                                            |
+| -------- | -------- | -------- | ------------------------------------------------------------------------------------------------------ |
+| `title`  | `string` | No       | Bold title rendered at the top of the Agent Suggestion card body. Sourced from `agent.result.title`.   |
+
+#### CommentAnnotationSuggestion
+
+---
+
+Suggestion state for a typed-suggestion annotation. Mutated by [`acceptSuggestion()`](/api-reference/sdk/api/api-methods#acceptsuggestion) and [`rejectSuggestion()`](/api-reference/sdk/api/api-methods#rejectsuggestion).
+
+| Property       | Type                                    | Required | Description                                                                                                          |
+| -------------- | --------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------- |
+| `status`       | `'pending' \| 'accepted' \| 'rejected'` | Yes      | Current suggestion state. Transitions are forward-only from `pending`, making repeat accept/reject calls idempotent. |
+| `rejectReason` | `string`                                | No       | Reason recorded when the suggestion is rejected.                                                                    |
+| `resolvedBy`   | `string`                                | No       | ID of the user who accepted or rejected the suggestion.                                                             |
+| `resolvedAt`   | `number`                                | No       | Timestamp (epoch milliseconds) when the suggestion was accepted or rejected.                                        |
 
 #### AddCommentAnnotationRequest
 
@@ -1582,6 +1621,8 @@ class ReactionMetadata extends BaseMetadata {
 | `APPROVE_COMMENT_ANNOTATION` | `approveCommentAnnotation` | Approve a comment annotation     |
 | `ACCEPT_COMMENT_ANNOTATION`  | `acceptCommentAnnotation`  | Accept a comment annotation      |
 | `REJECT_COMMENT_ANNOTATION`  | `rejectCommentAnnotation`  | Reject a comment annotation      |
+| `SUGGESTION_ACCEPTED`        | `suggestionAccepted`       | AI agent suggestion accepted. |
+| `SUGGESTION_REJECTED`        | `suggestionRejected`       | AI agent suggestion rejected.|
 
 #### UpdateStatusRequest
 
@@ -1638,6 +1679,25 @@ class ReactionMetadata extends BaseMetadata {
 | -------------- | ---------------- | -------- | -------------------- |
 | `annotationId` | `string`         | Yes      | ID of the annotation |
 | `options`      | `RequestOptions` | No       | Request options      |
+
+#### AcceptSuggestionRequest
+
+---
+
+| Property       | Type             | Required | Description          |
+| -------------- | ---------------- | -------- | -------------------- |
+| `annotationId` | `string`         | Yes      | ID of the annotation |
+| `options`      | `RequestOptions` | No       | Request options      |
+
+#### RejectSuggestionRequest
+
+---
+
+| Property       | Type             | Required | Description                      |
+| -------------- | ---------------- | -------- | -------------------------------- |
+| `annotationId` | `string`         | Yes      | ID of the annotation             |
+| `rejectReason` | `string`         | No       | Optional reason for rejection    |
+| `options`      | `RequestOptions` | No       | Request options                  |
 
 #### CustomPriority
 
@@ -1733,9 +1793,30 @@ class ReactionMetadata extends BaseMetadata {
 | `replaceContentHtml` | `string`            | No       | HTML content to replace with  |
 | `replaceContentText` | `string`            | No       | Text content to replace with  |
 
+#### SuggestionAcceptEvent
+
+---
+
+| Property            | Type                | Required | Description               |
+| ------------------- | ------------------- | -------- | ------------------------- |
+| `annotationId`      | `string`            | Yes      | ID of the annotation      |
+| `commentAnnotation` | `CommentAnnotation` | Yes      | Comment annotation object |
+| `metadata`          | `VeltEventMetadata` | Yes      | Event metadata            |
+
+#### SuggestionRejectEvent
+
+---
+
+| Property            | Type                | Required | Description               |
+| ------------------- | ------------------- | -------- | ------------------------- |
+| `annotationId`      | `string`            | Yes      | ID of the annotation      |
+| `commentAnnotation` | `CommentAnnotation` | Yes      | Comment annotation object |
+| `rejectReason`      | `string`            | No       | Reason provided for rejection |
+| `metadata`          | `VeltEventMetadata` | Yes      | Event metadata            |
+
 ### Comment Dialog Primitives
 
-Types for the 92+ primitive components used to build custom comment dialog interfaces. See [Comment Dialog Primitives Overview](/ui-customization/features/async/comments/comment-dialog/primitives) for usage examples and [API Methods](/api-reference/sdk/api/api-methods#comment-dialog-primitives) for component documentation.
+Types for the 92+ primitive components used to build custom comment dialog interfaces. See [Comment Dialog Primitives Overview](/ui-customization/features/async/comments/comment-dialog/primitives) for usage examples.
 
 #### CommentDialogCommonProps
 
@@ -1898,6 +1979,14 @@ Props for VeltCommentDialogReplyAvatarsListItem.
 | -------- | --------------- | -------- | --------------------- |
 | `user`   | [`User`](#user) | Yes      | User data object      |
 | `index`  | `number`        | Yes      | Index of user in list |
+
+Inherits all properties from [`CommentDialogCommonProps`](#commentdialogcommonprops).
+
+#### CommentDialogAgentSuggestionProps
+
+## [Usage Examples →](/ui-customization/features/async/comments/comment-dialog/primitives#veltcommentdialogagentsuggestion)
+
+Props for VeltCommentDialogAgentSuggestion and its sub-components.
 
 Inherits all properties from [`CommentDialogCommonProps`](#commentdialogcommonprops).
 

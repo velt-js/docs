@@ -46,6 +46,7 @@
 | `agent`                   | [`CommentAnnotationAgent`](#commentannotationagent)                       | No       | Present when the annotation was authored by an AI agent. Carries the agent identity and structured result used to render the Agent Suggestion card. |
 | `sourceType`              | `string`                                                                  | No       | Origin of the annotation. Selects the agent-identity vs human-author header variant rendered for suggestion comments. |
 | `suggestion`              | [`CommentAnnotationSuggestion`](#commentannotationsuggestion)             | No       | Suggestion state for typed-suggestion annotations. Mutated by [`acceptSuggestion()`](/api-reference/sdk/api/api-methods#acceptsuggestion) / [`rejectSuggestion()`](/api-reference/sdk/api/api-methods#rejectsuggestion). |
+| `basicAnchorData`         | `{ xpath: string; topPercentage: number; leftPercentage: number }`        | No       | Client-safe anchor data derived from the target element's xpath. `xpath` is sourced from `targetElement.anchor.fXPath`, falling back to the legacy `targetElement.fXpath`. `topPercentage` and `leftPercentage` default to `0` when not set. Omitted entirely when no xpath source is present. |
 
 #### Enum
 
@@ -301,6 +302,7 @@ Human-readable visibility configuration stored on a comment annotation.
 | `type`           | [`CommentVisibilityType`](#commentvisibilitytype) | Yes      | The visibility type for the comment annotation.                                                       |
 | `organizationId` | `string`                                          | No       | The organization ID for organization-private visibility.                                              |
 | `userIds`        | `string[]`                                        | No       | The user IDs for restricted visibility. Always includes the current user when type is `'restricted'`. |
+
 
 #### CommentAnnotationSubscribedUsers
 
@@ -2451,10 +2453,22 @@ type SidebarSortingCriteria = 'date' | 'unread' | null;
 | `tagged`   | `{userId: string}[]` | No       | Filter by users who were tagged/mentioned in the comment                                 |
 | `assigned` | `{userId: string}[]` | No       | Filter by users who were assigned to the comment annotation                              |
 | `involved` | `{userId: string}[]` | No       | Filter by users who are involved in the comment annotation (author, mentioned, assigned) |
-| `priority` | `string[]`           | No       | Filter by priority ids                                                                   |
-| `status`   | `string[]`           | No       | Filter by status ids                                                                     |
-| `category` | `string[]`           | No       | Filter by category ids                                                                   |
-| `version`  | `{id: string}[]`     | No       | Filter by version Ids                                                                    |
+| `priority`    | `string[]`              | No       | Filter by priority ids                                                                   |
+| `status`      | `string[]`              | No       | Filter by status ids                                                                     |
+| `category`    | `string[]`              | No       | Filter by category ids                                                                   |
+| `version`     | `{id: string}[]`        | No       | Filter by version Ids                                                                    |
+| `accessModes` | [`CommentAccessMode`](#commentaccessmode)`[]` | No | Filter by access mode. Recognizes both legacy `iam.accessMode` and `visibilityConfig` (`restricted`, `organizationPrivate` → `'private'`; `public` → `'public'`). |
+
+#### CommentAccessMode
+
+---
+
+`type CommentAccessMode = 'public' | 'private'`
+
+| Value       | Description                                                  |
+| ----------- | ------------------------------------------------------------ |
+| `'public'`  | Matches annotations visible to all users; `visibilityConfig.type === 'public'` wins over the legacy flag, and annotations with no `visibilityConfig` and a `'public'` or unset legacy `iam.accessMode` are treated as Public. |
+| `'private'` | Matches annotations with `restricted` or `organizationPrivate` visibility; also includes legacy annotations with `iam.accessMode === 'private'` when `visibilityConfig` is unset. |
 
 #### CommentSidebarData
 
@@ -3313,6 +3327,30 @@ Type: `'ALL' | 'MINE' | 'NONE' | string`
 | Property | Type                               | Required | Description                                               |
 | -------- | ---------------------------------- | -------- | --------------------------------------------------------- |
 | `type`   | `'all' \| 'forYou' \| 'documents'` | No       | Filter for notification type: all, for you, or documents. |
+
+#### CrossOrganizationConfig
+
+---
+
+Configuration for cross-organization "For You" notifications. Merges For You notifications from other organizations the user belongs to. Used with [`enableCrossOrganization()`](/async-collaboration/notifications/customize-behavior#enablecrossorganization).
+
+| Property                   | Type                          | Required | Description                                                                       |
+| -------------------------- | ----------------------------- | -------- | --------------------------------------------------------------------------------- |
+| `enabled`                  | `boolean`                     | No       | Enable or disable cross-org notifications. Defaults to `true` when opted in.      |
+| `organizationIds`          | `string[]`                    | No       | Allowlist of org IDs to include. When omitted, all indexed orgs are eligible.     |
+| `excludeOrganizationIds`   | `string[]`                    | No       | Org IDs to exclude. The current org is always excluded regardless of this field.  |
+| `maxOrganizations`         | `number`                      | No       | Upper bound on orgs queried. Defaults to `20`.                                    |
+| `feeds`                    | `('forYou' \| 'all')[]`       | No       | Feed targets. Only `'forYou'` is supported; `'all'` is ignored with a warning.    |
+
+#### FirestorePaths
+
+---
+
+Self-hosting configuration that maps Velt collections to custom Firestore paths. Only the field relevant to cross-organization notifications is shown below; additional path fields exist for other self-hosted collections.
+
+| Property                | Type     | Required | Description                                                                                                  |
+| ----------------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------- |
+| `userNotificationIndex` | `string` | No       | Path to the global, per-user notification index collection (org-independent). Required for cross-organization "For You" notifications. See [Cross-Organization Notifications](/self-host-data/notifications#cross-organization-notifications). |
 
 #### NotificationSettingsLayout
 
@@ -6006,7 +6044,7 @@ Request structure for permission queries sent to the Permission Provider.
 | Property   | Type                                                                                                                                                                                  | Required | Description                                                                                                                                                                                                                                                                                                                                                                |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `userId`   | `string`                                                                                                                                                                              | Yes      | ID of the user requesting access to the resource.                                                                                                                                                                                                                                                                                                                          |
-| `resource` | `{ type:` [PermissionResourceType](#permissionresourcetype)`; id: string; source:` [PermissionSource](#permissionsource)`; organizationId: string; context?:` [Context](#context) `}` | Yes      | Resource the user is requesting access to. The `type` uses [`PermissionResourceType`](#permissionresourcetype) enum. The `source` field identifies which SDK method triggered the permission check. The optional `context` field is present only when `isContextEnabled: true` and contains context values set during setDocuments. Includes `organizationId` for context. |
+| `resource` | `{ type:` [PermissionResourceType](#permissionresourcetype)`; id: string; source:` [PermissionSource](#permissionsource)`; organizationId: string; context?:` [Context](#context)`; parentFolderId?: string }` | Yes      | Resource the user is requesting access to. The `type` uses [`PermissionResourceType`](#permissionresourcetype) enum. The `source` field identifies which SDK method triggered the permission check. The optional `context` field is present only when `isContextEnabled: true` and contains context values set during setDocuments. Includes `organizationId` for context. The optional `parentFolderId` field is set when the document was created via `setDocuments()` with a `folderId` option — it forwards the folder context through the permission request so the document is created and attached to its parent folder. |
 
 #### PermissionResult
 
@@ -7047,6 +7085,421 @@ export interface ProxyConfig {
   `proxyConfig.apiHost` for equivalent behavior. All other host overrides
   require the new `proxyConfig` fields.
 </Info>
+
+# Suggestions
+
+### Core Types
+
+#### SuggestionStatus
+
+---
+
+Lifecycle states for a suggestion. Transitions are forward-only.
+
+```typescript
+type SuggestionStatus = 'pending' | 'accepted' | 'rejected' | 'stale' | 'apply_failed';
+```
+
+| Value          | Description                                              |
+| -------------- | -------------------------------------------------------- |
+| `'pending'`    | Suggestion created; awaiting a resolution action         |
+| `'accepted'`   | Suggestion accepted; your `suggestionApproved` handler applies the change |
+| `'rejected'`   | Suggestion explicitly rejected                           |
+| `'stale'`      | Target DOM node could not be resolved at accept time; suggestion invalidated |
+| `'apply_failed'` | The accept handler threw while applying the change. Represented via [`ApprovedSuggestion<T>`](#approvedsuggestiont); surfaced as a status only (no dedicated event in v1). |
+
+#### SuggestionMode
+
+---
+
+v1 exports this type for forward compatibility. It is not currently consumed by any public method parameter or return type.
+
+```typescript
+type SuggestionMode = 'suggesting' | 'editing';
+```
+
+#### SuggestionTargetType
+
+---
+
+v1 always resolves to `'custom'`.
+
+```typescript
+type SuggestionTargetType = 'custom';
+```
+
+#### SuggestionData
+
+---
+
+Stored on `CommentAnnotation.suggestion` when `annotation.type === 'suggestion'`. SDK-managed; read via [`SuggestionElement`](#suggestionelement) API.
+
+| Property        | Type                                        | Required | Description                                               |
+| --------------- | ------------------------------------------- | -------- | --------------------------------------------------------- |
+| `annotationId`  | `string`                                    | Yes      | ID of the parent `CommentAnnotation`                      |
+| `targetId`      | `string`                                    | Yes      | ID of the registered suggestion target                    |
+| `targetType`    | [`SuggestionTargetType`](#suggestiontargettype) | Yes  | v1: always `'custom'`                                     |
+| `status`        | [`SuggestionStatus`](#suggestionstatus)     | Yes      | Current lifecycle state                                   |
+| `oldValue`      | `unknown`                                   | Yes      | Target value captured at suggestion creation              |
+| `newValue`      | `unknown`                                   | Yes      | Proposed replacement value                                |
+| `summary`       | `string`                                    | No       | Human-readable description of the change                  |
+| `metadata`      | `Record<string, unknown>`                   | No       | Arbitrary caller-supplied metadata                        |
+| `driftDetected` | `boolean`                                   | No       | True when target value changed after suggestion was created |
+| `createdBy`     | `User`                                      | Yes      | User who created the suggestion                           |
+| `createdAt`     | `number`                                    | Yes      | Unix timestamp (ms) of creation                           |
+| `resolvedBy`    | `User`                                      | No       | User who approved or rejected the suggestion              |
+| `resolvedAt`    | `number`                                    | No       | Unix timestamp (ms) of resolution                         |
+| `rejectReason`  | `string \| null`                            | No       | Reason provided when rejecting; `null` when no reason given |
+
+#### Suggestion\<T\>
+
+---
+
+Discriminated union resolved by `status`. Use [`SuggestionStatus`](#suggestionstatus) to narrow to a variant.
+
+```typescript
+type Suggestion<T = unknown> =
+  | PendingSuggestion<T>
+  | ApprovedSuggestion<T>
+  | RejectedSuggestion<T>
+  | StaleSuggestion<T>;
+```
+
+### Variant Types
+
+#### PendingSuggestion\<T\>
+
+---
+
+Narrowed `Suggestion<T>` when `status === 'pending'`.
+
+| Property        | Type                                    | Required | Description                                           |
+| --------------- | --------------------------------------- | -------- | ----------------------------------------------------- |
+| `status`        | `'pending'`                             | Yes      | Discriminant                                          |
+| `annotationId`  | `string`                                | Yes      | Parent annotation ID                                  |
+| `targetId`      | `string`                                | Yes      | Registered target ID                                  |
+| `targetType`    | [`SuggestionTargetType`](#suggestiontargettype) | Yes | v1: always `'custom'`                          |
+| `oldValue`      | `T`                                     | Yes      | Captured value at suggestion creation                 |
+| `newValue`      | `T`                                     | Yes      | Proposed value                                        |
+| `summary`       | `string`                                | No       | Human-readable description of the change              |
+| `metadata`      | `Record<string, unknown>`               | No       | Caller-supplied metadata                              |
+| `driftDetected` | `boolean`                               | No       | True if target has changed since snapshot             |
+| `createdBy`     | `User`                                  | Yes      | Author of the suggestion                              |
+| `createdAt`     | `number`                                | Yes      | Unix timestamp (ms) of creation                       |
+
+#### ApprovedSuggestion\<T\>
+
+---
+
+Narrowed `Suggestion<T>` when `status === 'accepted'` (also covers `'apply_failed'`). Adds `resolvedBy` and `resolvedAt`.
+
+| Property       | Type                                    | Required | Description                          |
+| -------------- | --------------------------------------- | -------- | ------------------------------------ |
+| `status`       | `'accepted' \| 'apply_failed'`          | Yes      | Discriminant                         |
+| `annotationId` | `string`                                | Yes      | Parent annotation ID                 |
+| `targetId`     | `string`                                | Yes      | Registered target ID                 |
+| `targetType`   | [`SuggestionTargetType`](#suggestiontargettype) | Yes | v1: always `'custom'`         |
+| `oldValue`     | `T`                                     | Yes      | Captured value at suggestion creation |
+| `newValue`     | `T`                                     | Yes      | Accepted value                       |
+| `summary`      | `string`                                | No       | Description of the change            |
+| `metadata`     | `Record<string, unknown>`               | No       | Caller-supplied metadata             |
+| `driftDetected` | `boolean`                              | No       | True if target value changed since snapshot |
+| `createdBy`    | `User`                                  | Yes      | Author of the suggestion             |
+| `createdAt`    | `number`                                | Yes      | Unix timestamp (ms) of creation      |
+| `resolvedBy`   | `User`                                  | Yes      | User who approved the suggestion      |
+| `resolvedAt`   | `number`                                | Yes      | Unix timestamp (ms) of approval      |
+
+#### RejectedSuggestion\<T\>
+
+---
+
+Narrowed `Suggestion<T>` when `status === 'rejected'`. Adds `resolvedBy`, `resolvedAt`, and `rejectReason`.
+
+| Property       | Type                                    | Required | Description                           |
+| -------------- | --------------------------------------- | -------- | ------------------------------------- |
+| `status`       | `'rejected'`                            | Yes      | Discriminant                          |
+| `annotationId` | `string`                                | Yes      | Parent annotation ID                  |
+| `targetId`     | `string`                                | Yes      | Registered target ID                  |
+| `targetType`   | [`SuggestionTargetType`](#suggestiontargettype) | Yes | v1: always `'custom'`          |
+| `oldValue`     | `T`                                     | Yes      | Captured value at suggestion creation  |
+| `newValue`     | `T`                                     | Yes      | Proposed value (not applied)          |
+| `summary`      | `string`                                | No       | Description of the change             |
+| `metadata`     | `Record<string, unknown>`               | No       | Caller-supplied metadata              |
+| `driftDetected` | `boolean`                              | No       | True if target value changed since snapshot |
+| `createdBy`    | `User`                                  | Yes      | Author of the suggestion              |
+| `createdAt`    | `number`                                | Yes      | Unix timestamp (ms) of creation       |
+| `resolvedBy`   | `User`                                  | Yes      | User who rejected the suggestion      |
+| `resolvedAt`   | `number`                                | Yes      | Unix timestamp (ms) of rejection      |
+| `rejectReason` | `string \| null`                        | Yes      | Reason provided for rejection; `null` when no reason given |
+
+#### StaleSuggestion\<T\>
+
+---
+
+Narrowed `Suggestion<T>` when `status === 'stale'`. A reviewer clicks Accept, but the target DOM node cannot be resolved at approve time, so the SDK routes the outcome to `stale` instead of `approved`. This variant does not carry `resolvedBy` or `resolvedAt` because the final state is determined by the SDK, not by the reviewer's intent.
+
+| Property        | Type                                    | Required | Description                               |
+| --------------- | --------------------------------------- | -------- | ----------------------------------------- |
+| `status`        | `'stale'`                               | Yes      | Discriminant                              |
+| `annotationId`  | `string`                                | Yes      | Parent annotation ID                      |
+| `targetId`      | `string`                                | Yes      | Registered target ID                      |
+| `targetType`    | [`SuggestionTargetType`](#suggestiontargettype) | Yes | v1: always `'custom'`              |
+| `oldValue`      | `T`                                     | Yes      | Captured value at suggestion creation     |
+| `newValue`      | `T`                                     | Yes      | Proposed value                            |
+| `summary`       | `string`                                | No       | Description of the change                 |
+| `metadata`      | `Record<string, unknown>`               | No       | Caller-supplied metadata                  |
+| `driftDetected` | `boolean`                               | No       | Whether the target value had changed since snapshot; may not be evaluated if the target is unresolvable |
+| `createdBy`     | `User`                                  | Yes      | Author of the suggestion                  |
+| `createdAt`     | `number`                                | Yes      | Unix timestamp (ms) of creation           |
+
+### Config Types
+
+#### RegisterTargetConfig\<T\>
+
+---
+
+Passed to [`registerTarget()`](/api-reference/sdk/api/api-methods#registertarget) to associate a getter with a target ID.
+
+| Property   | Type                             | Required | Description                                          |
+| ---------- | -------------------------------- | -------- | ---------------------------------------------------- |
+| `targetId` | `string`                         | Yes      | Unique identifier matching `data-velt-suggestion-target` attribute |
+| `getter`   | [`TargetGetter<T>`](#targetgettert) | Yes   | Function returning the current value of the target   |
+
+#### EnableSuggestionModeConfig
+
+---
+
+Optional config passed to [`enableSuggestionMode()`](/api-reference/sdk/api/api-methods#enablesuggestionmode-1).
+
+| Property            | Type                                                          | Required | Description                                              |
+| ------------------- | ------------------------------------------------------------- | -------- | -------------------------------------------------------- |
+| `onTargetEditStart` | [`TargetEditStartHandler<T>`](#targeteditstarthandlert)       | No       | Called when user begins editing a suggestion target       |
+| `onTargetEditCommit`| [`TargetEditCommitHandler<T>`](#targeteditcommithandlert)     | No       | Called when an edit is committed as a suggestion          |
+
+#### CommitSuggestionConfig\<T\>
+
+---
+
+Passed to [`commitSuggestion()`](/api-reference/sdk/api/api-methods#commitsuggestion).
+
+| Property   | Type                      | Required | Description                                   |
+| ---------- | ------------------------- | -------- | --------------------------------------------- |
+| `targetId` | `string`                  | Yes      | ID of the target being committed              |
+| `newValue` | `T`                       | Yes      | Proposed value to store in the suggestion      |
+| `summary`  | `string`                  | No       | Human-readable description of the change       |
+| `metadata` | `Record<string, unknown>` | No       | Arbitrary caller-supplied metadata             |
+
+### Handler Types
+
+#### TargetGetter\<T\>
+
+---
+
+Synchronous function that returns the current value of a registered target.
+
+```typescript
+type TargetGetter<T> = () => T;
+```
+
+#### TargetEditDetails\<T\>
+
+---
+
+Passed to [`TargetEditStartHandler`](#targeteditstarthandlert) and [`TargetEditCommitHandler`](#targeteditcommithandlert).
+
+| Property   | Type          | Required | Description                                    |
+| ---------- | ------------- | -------- | ---------------------------------------------- |
+| `targetId` | `string`      | Yes      | ID of the target being edited                  |
+| `oldValue` | `T`           | Yes      | Target value at the time editing started       |
+| `newValue` | `T`           | Yes      | Current value when the edit is being committed |
+| `element`  | `HTMLElement` | No       | DOM element tagged with `data-velt-suggestion-target` |
+
+#### TargetEditStartResult
+
+---
+
+Return value from [`TargetEditStartHandler`](#targeteditstarthandlert). Currently informational; reserved for future overrides.
+
+```typescript
+type TargetEditStartResult = void;
+```
+
+#### TargetEditCommitResult
+
+---
+
+Optional return from [`TargetEditCommitHandler`](#targeteditcommithandlert) to override `summary` or `metadata` on commit.
+
+| Property   | Type                      | Required | Description                              |
+| ---------- | ------------------------- | -------- | ---------------------------------------- |
+| `summary`  | `string`                  | No       | Override for the suggestion summary      |
+| `metadata` | `Record<string, unknown>` | No       | Override for the suggestion metadata     |
+
+#### TargetEditStartHandler\<T\>
+
+---
+
+```typescript
+type TargetEditStartHandler<T> = (
+  details: TargetEditDetails<T>,
+) => TargetEditStartResult | Promise<TargetEditStartResult>;
+```
+
+#### TargetEditCommitHandler\<T\>
+
+---
+
+```typescript
+type TargetEditCommitHandler<T> = (
+  details: TargetEditDetails<T>,
+) => TargetEditCommitResult | void | Promise<TargetEditCommitResult | void>;
+```
+
+#### TargetEditCommitBuilder
+
+---
+
+Pre-bound function attached to [`TargetEditCommitEvent`](#targeteditcommitevent) payloads to programmatically finalize the suggestion.
+
+```typescript
+type TargetEditCommitBuilder = (result?: TargetEditCommitResult) => Promise<{ id: string }>;
+```
+
+### Filter Type
+
+#### SuggestionGetSuggestionsFilter
+
+---
+
+Optional filter passed to [`getSuggestions()`](/api-reference/sdk/api/api-methods#getsuggestions) and [`getSuggestions$()`](/api-reference/sdk/api/api-methods#getsuggestions-1).
+
+| Property   | Type                                        | Required | Description                                    |
+| ---------- | ------------------------------------------- | -------- | ---------------------------------------------- |
+| `targetId` | `string`                                    | No       | Limit results to a specific target ID          |
+| `status`   | [`SuggestionStatus`](#suggestionstatus)     | No       | Limit results to a specific lifecycle state    |
+
+### Element
+
+#### SuggestionElement
+
+---
+
+Singleton object returned by `client.getSuggestionElement()`. Provides all Suggestions API methods. See [API Methods](/api-reference/sdk/api/api-methods#suggestions) for the full method list.
+
+### Event Payload Types
+
+#### SuggestionCreatedEvent
+
+---
+
+| Property     | Type                                          | Required | Description                              |
+| ------------ | --------------------------------------------- | -------- | ---------------------------------------- |
+| `suggestion` | [`PendingSuggestion<unknown>`](#pendingsuggestiont) | Yes | The newly created pending suggestion     |
+
+#### SuggestionApprovedEvent
+
+---
+
+| Property     | Type                                              | Required | Description                          |
+| ------------ | ------------------------------------------------- | -------- | ------------------------------------ |
+| `suggestion` | [`ApprovedSuggestion<unknown>`](#approvedsuggestiont) | Yes  | The approved suggestion              |
+
+#### SuggestionRejectedEvent
+
+---
+
+| Property     | Type                                              | Required | Description                          |
+| ------------ | ------------------------------------------------- | -------- | ------------------------------------ |
+| `suggestion` | [`RejectedSuggestion<unknown>`](#rejectedsuggestiont) | Yes  | The rejected suggestion              |
+
+#### SuggestionStaleEvent
+
+---
+
+| Property     | Type                                          | Required | Description                                    |
+| ------------ | --------------------------------------------- | -------- | ---------------------------------------------- |
+| `suggestion` | [`StaleSuggestion<unknown>`](#stalesuggestiont) | Yes    | The suggestion marked stale because target DOM node could not be resolved |
+
+#### TargetEditStartEvent
+
+---
+
+| Property   | Type                                          | Required | Description                               |
+| ---------- | --------------------------------------------- | -------- | ----------------------------------------- |
+| `details`  | [`TargetEditDetails<unknown>`](#targeteditdetailst) | Yes | Edit details including targetId and values |
+
+#### TargetEditCommitEvent
+
+---
+
+| Property           | Type                                                     | Required | Description                              |
+| ------------------ | -------------------------------------------------------- | -------- | ---------------------------------------- |
+| `details`          | [`TargetEditDetails<unknown>`](#targeteditdetailst)      | Yes      | Edit details at commit time              |
+| `commitSuggestion` | [`TargetEditCommitBuilder`](#targeteditcommitbuilder)    | Yes      | Pre-bound commit function                |
+
+### Maps and Constants
+
+#### SuggestionEventTypesMap
+
+---
+
+Maps event type string keys to their payload types.
+
+```typescript
+interface SuggestionEventTypesMap {
+  suggestionCreated: SuggestionCreatedEvent;
+  suggestionApproved: SuggestionApprovedEvent;
+  suggestionRejected: SuggestionRejectedEvent;
+  suggestionStale: SuggestionStaleEvent;
+  targetEditStart: TargetEditStartEvent;
+  targetEditCommit: TargetEditCommitEvent;
+}
+```
+
+#### SuggestionEventTypes
+
+---
+
+Constant object enumerating all valid event type strings.
+
+```typescript
+const SuggestionEventTypes = {
+  SUGGESTION_CREATED: 'suggestionCreated',
+  SUGGESTION_APPROVED: 'suggestionApproved',
+  SUGGESTION_REJECTED: 'suggestionRejected',
+  SUGGESTION_STALE: 'suggestionStale',
+  TARGET_EDIT_START: 'targetEditStart',
+  TARGET_EDIT_COMMIT: 'targetEditCommit',
+} as const;
+```
+
+#### SuggestionEventType
+
+---
+
+String union of all valid event type keys.
+
+```typescript
+type SuggestionEventType = keyof SuggestionEventTypesMap;
+// = 'suggestionCreated' | 'suggestionApproved' | 'suggestionRejected'
+//   | 'suggestionStale' | 'targetEditStart' | 'targetEditCommit'
+```
+
+### Utility
+
+#### Unsubscribe
+
+---
+
+A function that removes a subscription when called. Exported for convenience and forward compatibility.
+
+```typescript
+type Unsubscribe = () => void;
+```
+
+<Note>
+In v1, [`registerTarget()`](/api-reference/sdk/api/api-methods#registertarget) returns `void` — remove a registration with [`unregisterTarget()`](/api-reference/sdk/api/api-methods#unregistertarget). [`on()`](/api-reference/sdk/api/api-methods#on-6) returns an `Observable`; unsubscribe via its subscription.
+</Note>
 
 ## Python SDK Types
 

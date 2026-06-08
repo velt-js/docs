@@ -36,6 +36,23 @@ git cat-file -e "$AFTER_SHA" 2>/dev/null || { echo "AFTER_SHA $AFTER_SHA not fou
 TMP_JSONL="$(mktemp)"
 trap 'rm -f "$TMP_JSONL"' EXIT
 
+# Pre-filter: drop paths that mapping.md marks as explicitly out-of-scope.
+# This keeps the agent's diff.json small so it stays within its turn budget.
+is_out_of_scope() {
+  case "$1" in
+    release-notes/*|key-concepts/*|migration/*|integrations/*) return 0 ;;
+    mcp/*|ai/*|images/*|gifs/*|global-styles/*|snippets/*) return 0 ;;
+    *.css) return 0 ;;
+    live-co-editing/*) return 0 ;;
+    api-reference/open-api/*|api-reference/postman-collection/*) return 0 ;;
+    api-reference/sdk/models/*|api-reference/sdk/api/*) return 0 ;;
+    # get-started pages are meta-docs about the AI toolchain, not SDK features
+    get-started/skills.mdx|get-started/plugins.mdx|get-started/agentic-overview.mdx) return 0 ;;
+    get-started/mcp-installer.mdx|get-started/cli.mdx) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 git diff --name-status --no-renames "$BEFORE_SHA" "$AFTER_SHA" -- \
   'async-collaboration/**' \
   'realtime-collaboration/**' \
@@ -49,6 +66,11 @@ git diff --name-status --no-renames "$BEFORE_SHA" "$AFTER_SHA" -- \
   'permission-management/**' \
   'in-app-user-feedback/**' \
   | while IFS=$'\t' read -r status path; do
+      # Skip out-of-scope paths before they enter diff.json
+      if is_out_of_scope "$path"; then
+        echo "Skipping out-of-scope: $path"
+        continue
+      fi
       # numstat for additions/deletions on this single path
       read -r additions deletions _ < <(git diff --numstat "$BEFORE_SHA" "$AFTER_SHA" -- "$path" || echo "0 0 $path")
       jq -nc \

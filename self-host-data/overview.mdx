@@ -1,34 +1,902 @@
 ---
 title: "Overview"
-description: "Self-host the user generated content on your infrastructure while storing only minimal identifiers on Velt servers."
+description: "Self-host user-generated content and PII on your own infrastructure while Velt stores only minimal structural identifiers. Learn the data-provider model, what gets stored where, and how to register providers."
 ---
 
-# Self-Hosting Data
+By default, Velt stores all collaboration data (comments, reactions, recordings, notifications, activity, attachments) in Velt's managed backend. **Self-hosting** lets you split that storage so sensitive content and PII never leave your infrastructure:
 
-Velt allows you to self-host sensitive content while still using most of the collaboration features and components:
+- **Velt keeps the structural / non-PII data** — IDs, document and organization references, locations and targets, statuses, timestamps, and relationships. This is what Velt needs to position pins, thread comments, drive real-time sync, and render the UI shell.
+- **You keep the content / PII** — comment text, user information, transcripts, attachment files, and any custom fields — inside **your own database and/or file storage**.
 
-- **Comments**: Store comment content on your infrastructure with only identifiers on Velt servers
-- **Attachments**: Store comment file attachments on your infrastructure with only identifiers on Velt servers
-- **In-app notifications**: In-app notification content is automatically handled when you use comments and reactions self-hosted solutions
-- **Reactions**: Store reaction data on your systems with only identifiers on Velt servers
-- **Users**: Store sensitive user PII on your servers, with only identifiers on Velt servers
-- **Recordings**: Store recording annotation PII (user identity, transcription, attachment URLs) on your infrastructure
-- **Notifications**: Manage custom notification PII from your own backend using get and delete handlers
-
-For each data type, you configure a data provider that implements specific methods (get, save, delete) to interact with your database. Velt Components automatically hydrate data in the frontend by fetching from your configured providers.
+You enable this by registering one or more **data providers** (also called *resolvers*). A data provider is an object you supply that Velt calls at the right moments. For each data type, you implement specific methods (`get`, `save`, `delete`) to interact with your storage, and Velt Components automatically hydrate the data in the frontend by fetching from your providers.
 
 This approach gives you complete control and ownership of your data while maintaining all Velt collaboration features and real-time functionality.
 
+## How it works
+
+Velt uses a **strip-on-write, merge-on-read** model:
+
+- **On write** (a comment is added, a recording is saved, …): Velt **strips** the PII out of the record, writes only the structural remainder to Velt's database, and hands the stripped PII to **your** provider to persist.
+- **On read** (loading a document, receiving a real-time update, …): Velt calls **your** provider to fetch the PII back, then **merges** it into the structural record so the UI renders exactly as it would in a fully Velt-hosted setup.
+
+For write requests (`save`, `delete`), the operation is performed on your database **first**. Only on a success response does Velt apply the change on its own servers. If the operation fails on your side, Velt does not change its own data and retries if you have configured retries.
+
+### Supported features at a glance
+
+| Feature | Provider key | `get` | `save` | `delete` | Model |
+|---|---|:---:|:---:|:---:|---|
+| [Users](/self-host-data/users) | `user` | ✅ | — | — | Maps `userId → user object` |
+| [Comments](/self-host-data/comments) | `comment` | ✅ | ✅ | ✅ | Strip on write, merge on read |
+| [Reactions](/self-host-data/reactions) | `reaction` | ✅ | ✅ | ✅ | Strip on write, merge on read |
+| [Attachments](/self-host-data/attachments) | `attachment` | — | ✅ | ✅ | File storage only |
+| [Recordings](/self-host-data/recordings) | `recorder` | ✅ | ✅ | ✅ | Strip on write + file storage modes |
+| [Activity](/self-host-data/activity) | `activity` | ✅ | ✅ | — | Append-only (no delete) |
+| [Notifications](/self-host-data/notifications) | `notification` | ✅ | — | ✅ | Read-only enrichment (custom notifications only) |
+| Anonymous users | `anonymousUser` | resolve-by-email | — | — | Maps `email → userId` |
+
+<Note>
+**Mix and match.** You can self-host some features and let Velt host the rest. If you don't register a provider for a feature, that feature stays fully Velt-hosted.
+</Note>
+
 <Warning>
-Email notifications via Velt's SendGrid integration are not available when you self-host comment content. Since the content lives on your infrastructure, Velt cannot construct and send emails via the sendgrid integration. Instead, use [Webhooks](/webhooks/basic) to receive events (e.g., mentions, replies), fetch the relevant comment/notification content from your database, and send emails from your own email provider.
+Email notifications via Velt's SendGrid integration are not available when you self-host comment content. Since the content lives on your infrastructure, Velt cannot construct and send emails via the SendGrid integration. Instead, use [Webhooks](/webhooks/basic) to receive events (e.g., mentions, replies), fetch the relevant comment/notification content from your database, and send emails from your own email provider.
 </Warning>
 
-# Supported Infrastructure
+## Registering data providers
 
-You can self-host your data on any infrastructure that you want as long as you can receive and return the data in the provided format. Here are some examples:
+All providers are registered through a single method, [`setDataProviders()`](/api-reference/sdk/api/api-methods#setdataproviders), which accepts a [`VeltDataProvider`](/api-reference/sdk/models/data-models#veltdataprovider) object. Every key is optional, so you only pass the providers you actually want to self-host.
+
+<Warning>
+  - Ensure that the data providers are set **prior** to calling the `identify` method.
+  - Self-hosting is currently only compatible with the `setDocuments` method.
+  - Every data provider method must return the correct `statusCode` (e.g., `200` for success, `500` for errors) and `success` boolean in the response object. This ensures proper error handling and retries.
+</Warning>
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const dataProviders = {
+  comment:       commentDataProvider,
+  reaction:      reactionDataProvider,
+  recorder:      recorderDataProvider,
+  notification:  notificationDataProvider,
+  activity:      activityDataProvider,
+  attachment:    attachmentDataProvider,
+  anonymousUser: anonymousUserDataProvider,
+  user:          userDataProvider,
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={dataProviders}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+await Velt.setDataProviders({
+  comment:       commentDataProvider,
+  reaction:      reactionDataProvider,
+  recorder:      recorderDataProvider,
+  notification:  notificationDataProvider,
+  activity:      activityDataProvider,
+  attachment:    attachmentDataProvider,
+  anonymousUser: anonymousUserDataProvider,
+  user:          userDataProvider,
+});
+```
+</Tab>
+</Tabs>
+
+The anonymous-user provider also has a standalone setter, [`setAnonymousUserDataProvider()`](/api-reference/sdk/api/api-methods#setanonymoususerdataprovider), if you prefer to register it separately.
+
+### Two ways to implement: callback or URL
+
+Each provider operation (`get` / `save` / `delete`) can be satisfied in one of two ways:
+
+1. **A callback function** — you implement the method directly in your frontend code.
+2. **A config URL** — you point Velt at an HTTP endpoint (`config.getConfig.url`, `config.saveConfig.url`, `config.deleteConfig.url`) and Velt makes the request for you.
+
+A method is considered "provided" if it has **either** a function **or** a corresponding config URL. If a required operation has neither, the provider is rejected (an error is logged) and the feature falls back to Velt-hosted behavior. Choose whichever style fits your architecture — you can even mix them (e.g., a `get` callback but a `saveConfig.url`).
+
+| | Function based | Endpoint based |
+|---|---|---|
+| **Best for** | Complex setups requiring middleware logic, dynamic headers, or transformation before sending | Standard REST APIs where you just need to pass the request "as-is" to the backend |
+| **Implementation** | You write the `fetch()` or `axios` code | You provide the `url` string and `headers` object |
+| **Flexibility** | High | Medium |
+| **Speed** | Medium | High |
+
+<Tip>
+For endpoint (URL) mode, your endpoints must parse Velt's request payloads and respond in the exact shape Velt expects. Rather than hand-rolling the wire format, build your endpoints with Velt's official server SDKs — available for [Node.js](/backend-sdks/node) and [Python](/backend-sdks/python) — which ship the request parsers, payload types, and response helpers for every resolver operation.
+</Tip>
+
+## The provider contract
+
+All providers share a common `config` object and a common response shape.
+
+### config (ResolverConfig)
+
+Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig).
+
+| Field | Type | Purpose |
+|---|---|---|
+| `resolveTimeout` | `number` (ms) | Max time Velt waits for a read before giving up. Default: **60,000 ms (1 minute)**. |
+| `getRetryConfig` | [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig) | Retry policy for read (`get`) calls. |
+| `saveRetryConfig` | [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig) | Retry policy for `save` calls. |
+| `deleteRetryConfig` | [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig) | Retry policy for `delete` calls. |
+| `getConfig` | [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig) | HTTP endpoint for reads (URL style). |
+| `saveConfig` | [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig) | HTTP endpoint for saves (URL style). |
+| `deleteConfig` | [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig) | HTTP endpoint for deletes (URL style). |
+| `additionalFields` | `string[]` | Custom fields to **copy** into your DB while keeping them in Velt's. See [Excluding & extending fields](#excluding--extending-fields). |
+| `fieldsToRemove` | `string[]` | Custom fields to **move** out of Velt's DB into yours. See [Excluding & extending fields](#excluding--extending-fields). |
+
+[`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig) supports `retryCount` (how many times to retry on failure), `retryDelay` (delay between retries in ms), and `revertOnFailure` (roll back Velt's optimistic local change if your call fails).
+
+<Note>
+The notification provider uses a slightly reduced config, [`NotificationResolverConfig`](/api-reference/sdk/models/data-models#notificationresolverconfig), with only `resolveTimeout`, `getRetryConfig`, `deleteRetryConfig`, `getConfig`, and `deleteConfig`. It does **not** support `fieldsToRemove` / `additionalFields`.
+</Note>
+
+### Response shape (ResolverResponse)
+
+Every callback and every HTTP endpoint must return / respond with the [`ResolverResponse<T>`](/api-reference/sdk/models/data-models#resolverresponse) shape:
+
+```ts
+interface ResolverResponse<T> {
+  data?:       T;        // the resolved payload (for `get`); omit for save/delete
+  success:     boolean;
+  statusCode:  number;   // 200 = success; anything else is treated as a failure
+  message?:    string;
+  timestamp?:  number;
+}
+```
+
+**`statusCode: 200` means success.** Any other status triggers Velt's error handling and, if `revertOnFailure` is set, rolls back the optimistic local update.
+
+### HTTP endpoint contract (URL style)
+
+When you use a config URL, Velt issues:
+
+- A `POST` to your `url`
+- `Content-Type: application/json` plus any `headers` you supplied
+- A request body equal to the JSON request object for that operation (the same object your callback would receive)
+
+Your endpoint should respond with HTTP `2xx` and a JSON body of `{ "data": … }` for reads (the `data` is unwrapped into the resolver response). For saves and deletes, a `2xx` is enough.
+
+<Note>
+Attachment and recording uploads are the exception — they use `multipart/form-data` rather than JSON, because a binary file is involved. See [Attachment & recording storage](#attachment--recording-storage).
+</Note>
+
+### Metadata your provider receives
+
+Every `get` / `save` / `delete` request includes a `metadata` object ([`BaseMetadata`](/api-reference/sdk/models/data-models#basemetadata)) describing the organization/document context, so you can scope the data correctly in your backend. Velt sends you a **client-facing** subset: it maps Velt's internal IDs back to **the IDs you originally passed to Velt** and removes purely internal bookkeeping fields.
+
+| Field | Meaning |
+|---|---|
+| `apiKey` | Your Velt API key. |
+| `documentId` | **Your** document ID (the one you supplied to Velt). |
+| `organizationId` | **Your** organization ID (the one you supplied to Velt). |
+| `folderId` | Folder ID, when present. |
+| `documentMetadata` | Your document metadata, when present. |
+| `sdkVersion` | The SDK version that produced the event. |
+
+<Note>
+`documentId` and `organizationId` are **your** IDs, not Velt's internal hashed IDs. Use them directly as keys in your own database. Internal bookkeeping fields (e.g., `clientDocumentId`, `clientOrganizationId`, `veltFolderId`, `pageInfo`) are not sent to your provider.
+</Note>
+
+**Delete requests are minimized further.** For `delete` operations, Velt sends only the bare minimum needed to locate the record:
+
+```ts
+{ apiKey, documentId, organizationId, folderId? }   // folderId only when present
+```
+
+## Per-feature reference
+
+Each subsection shows the provider interface and the request types. The exact field inventory for *what gets stored where* is consolidated in [Complete field inventory](#complete-field-inventory).
+
+### Comments (`comment`)
+
+```ts
+interface CommentAnnotationDataProvider {
+  get?:    (request: GetCommentResolverRequest)    => Promise<ResolverResponse<Record<string, PartialCommentAnnotation>>>;
+  save?:   (request: SaveCommentResolverRequest)   => Promise<ResolverResponse<undefined>>;
+  delete?: (request: DeleteCommentResolverRequest) => Promise<ResolverResponse<undefined>>;
+  config?: ResolverConfig;
+}
+
+interface GetCommentResolverRequest {
+  organizationId: string;
+  commentAnnotationIds?: string[];
+  documentIds?: string[];
+  folderId?: string;
+  allDocuments?: boolean;
+}
+interface SaveCommentResolverRequest {
+  commentAnnotation: { [annotationId: string]: PartialCommentAnnotation };
+  event?: ResolverActions;     // e.g. COMMENT_ANNOTATION_ADD, COMMENT_ADD, COMMENT_UPDATE, COMMENT_DELETE
+  metadata?: BaseMetadata;
+  commentId?: string;
+}
+interface DeleteCommentResolverRequest {
+  commentAnnotationId: string;
+  metadata?: BaseMetadata;
+  event?: ResolverActions;
+}
+```
+
+The PII payload you store/return is `PartialCommentAnnotation`.
+
+**Example — callback `get` / `save` / `delete`:**
+
+```ts
+const commentDataProvider = {
+  async get({ organizationId, commentAnnotationIds, documentIds }) {
+    const rows = await db.comments.find({ organizationId, documentIds, commentAnnotationIds });
+    const data: Record<string, PartialCommentAnnotation> = {};
+    for (const row of rows) data[row.annotationId] = row.partial;
+    return { data, success: true, statusCode: 200 };
+  },
+  async save({ commentAnnotation, metadata, event }) {
+    await db.comments.upsertMany(commentAnnotation, metadata);
+    return { success: true, statusCode: 200 };
+  },
+  async delete({ commentAnnotationId, metadata }) {
+    await db.comments.remove(commentAnnotationId, metadata);
+    return { success: true, statusCode: 200 };
+  },
+};
+```
+
+See [Comments](/self-host-data/comments) for the full endpoint- and function-based examples.
+
+### Reactions (`reaction`)
+
+```ts
+interface ReactionAnnotationDataProvider {
+  get?:    (request: GetReactionResolverRequest)    => Promise<ResolverResponse<Record<string, PartialReactionAnnotation>>>;
+  save?:   (request: SaveReactionResolverRequest)   => Promise<ResolverResponse<undefined>>;
+  delete?: (request: DeleteReactionResolverRequest) => Promise<ResolverResponse<undefined>>;
+  config?: ResolverConfig;
+}
+```
+
+Requests mirror the comment shapes (`reactionAnnotationIds` instead of `commentAnnotationIds`). The PII payload is `PartialReactionAnnotation`. See [Reactions](/self-host-data/reactions).
+
+### Recordings (`recorder`)
+
+```ts
+interface RecorderAnnotationDataProvider {
+  get?:    (request: GetRecorderResolverRequest)    => Promise<ResolverResponse<Record<string, PartialRecorderAnnotation>>>;
+  save?:   (request: SaveRecorderResolverRequest)   => Promise<ResolverResponse<SaveRecorderResolverData | undefined>>;
+  delete?: (request: DeleteRecorderResolverRequest) => Promise<ResolverResponse<undefined>>;
+  config?: ResolverConfig;
+  storage?: AttachmentDataProvider;       // bring-your-own storage for recording files
+}
+```
+
+The PII payload is `PartialRecorderAnnotation`. Recordings are special because of file storage — see [Attachment & recording storage](#attachment--recording-storage) and [Recordings](/self-host-data/recordings).
+
+### Notifications (`notification`)
+
+```ts
+interface NotificationDataProvider {
+  get?:    (request: GetNotificationResolverRequest)    => Promise<ResolverResponse<Record<string, PartialNotification>>>;
+  delete?: (request: DeleteNotificationResolverRequest) => Promise<ResolverResponse<undefined>>;
+  config?: NotificationResolverConfig;
+}
+
+interface GetNotificationResolverRequest    { organizationId: string; notificationIds: string[]; }
+interface DeleteNotificationResolverRequest { notificationId: string; organizationId: string; }
+```
+
+The notification provider is **read-only enrichment**: there is **no `save`**. It only applies to **custom notifications** (notifications whose source is `custom` — i.e., ones you created via the notifications API). Standard comment/recording notifications are unaffected. The PII payload is `PartialNotification`. See [Notifications](/self-host-data/notifications).
+
+### Activity (`activity`)
+
+```ts
+interface ActivityAnnotationDataProvider {
+  get?:  (request: GetActivityResolverRequest)  => Promise<ResolverResponse<Record<string, PartialActivityRecord>>>;
+  save?: (request: SaveActivityResolverRequest) => Promise<ResolverResponse<undefined>>;
+  config?: ResolverConfig;
+}
+
+interface GetActivityResolverRequest  { activityIds?: string[]; documentIds?: string[]; organizationId?: string; }
+interface SaveActivityResolverRequest { activity: Record<string, PartialActivityRecord>; event?: string; metadata?: BaseMetadata; }
+```
+
+Activity is **append-only** — there is **no `delete`**. A single activity record can contain PII from several features at once (comment text, reaction icons, recording transcripts); Velt resolves those through the respective feature providers and through the activity provider in turn. The PII payload is `PartialActivityRecord`. See [Activity](/self-host-data/activity).
+
+### Attachments (`attachment`)
+
+```ts
+interface AttachmentDataProvider {
+  save?:   (request: SaveAttachmentResolverRequest)   => Promise<ResolverResponse<SaveAttachmentResolverData>>;
+  delete?: (request: DeleteAttachmentResolverRequest) => Promise<ResolverResponse<undefined>>;
+  config?: ResolverConfig;
+}
+
+interface SaveAttachmentResolverData { url: string; }   // you return the URL where the file now lives
+```
+
+The attachment provider handles **binary file storage** for comment attachments. There is no `get` — the stored file's `url` is kept inside the comment/recording payload. See [Attachment & recording storage](#attachment--recording-storage) and [Attachments](/self-host-data/attachments).
+
+### Anonymous users (`anonymousUser`)
+
+```ts
+interface AnonymousUserDataProvider {
+  resolveUserIdsByEmail(request: ResolveUserIdsByEmailRequest): Promise<ResolverResponse<Record<string, string>>>;
+  config?: AnonymousUserDataProviderConfig;   // { resolveTimeout?, getRetryConfig? }
+}
+
+interface ResolveUserIdsByEmailRequest {
+  organizationId: string;
+  documentId?: string;
+  folderId?: string;
+  emails: string[];
+}
+```
+
+When someone @mentions a person by **email** who isn't yet a known user, Velt calls `resolveUserIdsByEmail` to map those emails to your `userId`s **before** the comment is persisted. You return a `{ email: userId }` map (`statusCode: 200`). Velt then backfills the resolved `userId` into the comment (rewriting the mention text to reference the `userId` and dropping the raw email). This stores no separate records — it's a just-in-time identity resolution step. See [Anonymous User Resolution](/self-host-data/users#anonymous-user-resolution).
+
+### Users (`user`, optional)
+
+```ts
+interface UserDataProvider {
+  get(userIds: string[]): Promise<Record<string, User>>;   // userId → user object
+  config?: ResolverConfig;
+  resolveTimeout?: number;
+}
+```
+
+The user provider lets Velt resolve `userId`s into full user objects (name, email, avatar) from your own user directory, so user PII never has to live in Velt. It is the data source that all the other resolvers rely on when they strip user objects down to `{ userId }`. See [Users](/self-host-data/users).
+
+## Complete field inventory
+
+This section answers exactly which fields are stored in Velt's database, and which are stored in your database, when self-hosting is enabled. *Velt's DB vs your DB.*
+
+A few rules apply across **all** features:
+
+- **User objects are reduced to `{ userId }`** in Velt's DB for most features (comments, recordings, activity). The full user object (name, email, avatar, …) lives in your backend, resolved via your [`user`](/self-host-data/users) provider. It is the data source that all the other resolvers rely on when they strip user objects down to `{ userId }`.
+- **The client-facing `metadata`** (see above) accompanies every PII payload you store.
+- Velt sets an internal flag on the structural record (e.g., `isCommentResolverUsed`, `isReactionResolverUsed`, `isRecorderResolverUsed`, `isNotificationResolverUsed`, `isActivityResolverUsed`) so the UI knows to wait for resolver data. You don't need to store these.
+
+### Comments
+
+**Stored in your DB** — `PartialCommentAnnotation`:
+
+| Field | Notes |
+|---|---|
+| `annotationId` | Key. |
+| `metadata` | Client-facing subset (see [Metadata](#metadata-your-provider-receives)). |
+| `comments` | Map of `commentId → PartialComment` (the per-comment PII below). |
+| `from` | `{ userId }` — annotation author. |
+| `assignedTo` | `{ userId }`. |
+| `targetTextRange` | `{ text }` — the highlighted text snippet. |
+| `resolvedByUserId` | `string \| null`. |
+| *custom fields* | Any keys you declared via `fieldsToRemove` / `additionalFields`. |
+
+Each `PartialComment` in `comments` holds:
+
+| Field | Notes |
+|---|---|
+| `commentId` | Key. |
+| `commentHtml` | Rich comment body. |
+| `commentText` | Plain-text comment body. |
+| `attachments` | Map of `attachmentId → { url, name, attachmentId }` (present when the attachment provider is active). |
+| `from` | `{ userId }`. |
+| `to` | `[{ userId }]`. |
+| `taggedUserContacts` | `[{ userId, contact: { userId }, text }]`. |
+
+**Stored in Velt's DB** — the full comment annotation **minus** the PII above. Velt removes each comment's `commentHtml`/`commentText`, attachment `name`/`url` (when an attachment provider is active), and any `fieldsToRemove` fields; reduces user objects to `{ userId }`; and keeps everything else:
+
+| Field | Field | Field |
+|---|---|---|
+| `annotationId` | `annotationNumber` | `annotationIndex` |
+| `comments[]` *(structural; no text/html)* | `commentCategories` | `customList` |
+| `from` → `{ userId }` | `assignedTo` → `{ userId }` | `resolvedByUserId` |
+| `resolvedByUser` → `{ userId }` | `statusUpdatedByUserId` | `subscribedUsers` / `unsubscribedUsers` |
+| `subscribedGroups` | `viewedByUserIds` | `viewedBy` → `{ userId }` |
+| `status` | `priority` | `approved` |
+| `resolved` *(deprecated)* | `inProgress` *(deprecated)* | `unread` |
+| `type` | `commentType` | `sourceType` |
+| `sourceId` | `multiThreadAnnotationId` | `visibilityConfig` |
+| `color` | `iam` *(access mode)* | `context` / `contextId` |
+| `location` / `locationId` | `documentParams` / `documentParamsId` *(deprecated)* | `position` |
+| `positionX` / `positionY` | `screenWidth` / `screenHeight` | `screenScrollHeight` / `screenScrollTop` |
+| `targetElement` | `targetElementId` | `taggedElementPath` / `taggedElementRect` |
+| `targetTextRange` *(without `text`)* | `selectAllContent` | `isPageAnnotation` |
+| `targetInlineCommentElementId` | `inlineCommentSectionConfig` | `areaAnnotationId` |
+| `ghostComment` | `views` | `pageInfo` |
+| `createdAt` | `lastUpdated` | `metadata` |
+| `isDraft` | `suggestion` | `agent` |
+| `isCommentResolverUsed` *(flag)* | `additionalFields` *(if configured)* | |
+
+### Reactions
+
+**Stored in your DB** — `PartialReactionAnnotation`:
+
+| Field | Notes |
+|---|---|
+| `annotationId` | Key. |
+| `metadata` | Client-facing subset. |
+| `icon` | The reaction emoji/icon. |
+| `from` | `{ userId }`. |
+
+**Stored in Velt's DB** — the structural reaction annotation. On save Velt removes only the `icon` (it is restored from your DB on read) and sets the `isReactionResolverUsed` flag; everything else is kept:
+
+| Field | Field | Field |
+|---|---|---|
+| `annotationId` | `annotationIndex` | `commentAnnotationId` |
+| `reactions[]` | `from` | `icon` *(removed; resolved from your DB)* |
+| `iconUrl` | `iconEmoji` | `type` |
+| `context` | `location` / `locationId` | `position` |
+| `targetElement` | `targetElementId` | `pageInfo` |
+| `lastUpdated` | `metadata` | `isReactionResolverUsed` *(flag)* |
+
+### Recordings
+
+**Stored in your DB** — `PartialRecorderAnnotation`:
+
+| Field | Notes |
+|---|---|
+| `annotationId` | Key. |
+| `metadata` | Client-facing subset. |
+| `from` | Full user object. |
+| `transcription` | The recording transcript. |
+| `attachment` | The recording file reference. |
+| `attachments` | Array of file references. |
+| `chunkUrls` | `{ [index]: url }` — internal, managed by Velt; normally empty. |
+| `recordingEditVersions` | `{ [index]: { from, attachment, attachments, transcription } }` — per-edit version PII. |
+| *custom fields* | Any keys you declared via `additionalFields`. |
+
+**Stored in Velt's DB** — the structural recording annotation where: `from` is reduced to `{ userId }`; `transcription` is removed; `attachment` is set to `null`; `attachments` is reduced to stubs `[{ attachmentId, name, bucketPath }]` (the `bucketPath` is preserved so Velt can clean up any Velt-side storage artifacts); `chunkUrls` is emptied to `{}`; and the `isRecorderResolverUsed` flag is set:
+
+| Field | Field | Field |
+|---|---|---|
+| `annotationId` | `annotationIndex` | `commentAnnotationId` |
+| `from` → `{ userId }` | `transcription` *(removed)* | `attachment` *(→ `null`)* |
+| `attachments` *(→ stubs)* | `chunkUrls` *(→ `{}`)* | `recordingEditVersions` *(PII stripped)* |
+| `recordingType` | `mode` | `recordedTime` |
+| `waveformData` | `displayName` | `latestVersion` |
+| `type` | `approved` | `color` |
+| `context` | `location` / `locationId` | `position` |
+| `positionX` / `positionY` | `screenWidth` / `screenHeight` | `screenScrollHeight` / `screenScrollTop` |
+| `targetElement` | `recorderedElementPath` / `recorderedElementRect` | `pageInfo` |
+| `lastUpdated` | `metadata` | `isUrlAvailable` |
+| `isRecorderResolverUsed` *(flag)* | `additionalFields` *(if configured)* | |
+
+### Notifications (custom notifications only)
+
+**Stored in your DB** — `PartialNotification`:
+
+| Field | Notes |
+|---|---|
+| `notificationId` | Key. |
+| `displayHeadlineMessageTemplate` | Headline template string. |
+| `displayHeadlineMessageTemplateData` | `{ actionUser, recipientUser, actionMessage, … }`. |
+| `displayBodyMessage` | Body message. |
+| `displayBodyMessageTemplate` | Body template string. |
+| `displayBodyMessageTemplateData` | Template data for the body. |
+| `notificationSourceData` | Your custom source payload. |
+| *custom fields* | Any additional keys you return are merged back on read. |
+
+**Stored in Velt's DB** — the structural notification envelope. For **custom** notifications, the PII fields above are **not stored by Velt at all** — they are fetched from you on read. (Unlike comments/recordings, there is no write-side strip step; the notification resolver is purely read-time enrichment.)
+
+| Field | Field | Field |
+|---|---|---|
+| `id` | `notificationSource` | `actionType` |
+| `isUnread` | `timestamp` | `forYou` |
+| `targetAnnotationId` | `actionUser` → `{ userId }` | `notifyUsers` |
+| `notifyUsersByUserId` | `metadata` | `notificationSourceData` *(structural ref)* |
+| `isCommentResolverUsed` *(flag)* | `isNotificationResolverUsed` *(flag)* | |
+
+### Activity
+
+**Stored in your DB** — `PartialActivityRecord`:
+
+| Field | Notes |
+|---|---|
+| `id` | Key. |
+| `metadata` | Client-facing subset. |
+| `changes` | Activity changes (e.g. a `commentText` change `from`/`to`). |
+| `entityData` | Feature-specific entity snapshot (e.g. the comment/reaction/recording involved). |
+| `entityTargetData` | Feature-specific sub-entity snapshot. |
+| `displayMessageTemplateData` | Template data for display messages. |
+| *custom fields* | `fieldsToRemove` keys (for `custom` activity types only). |
+
+**Stored in Velt's DB** — the structural activity record where: `actionUser` is reduced to `{ userId }`; user objects inside `changes` and `displayMessageTemplateData` are reduced to `{ userId }`; the human-readable `displayMessage` is removed (it's always recomputed on the client); feature-specific PII is extracted out; custom `fieldsToRemove` fields are removed; and the `isActivityResolverUsed` flag is set:
+
+| Field | Field | Field |
+|---|---|---|
+| `id` | `featureType` | `actionType` |
+| `eventType` | `actionUser` → `{ userId }` | `timestamp` |
+| `targetEntityId` | `targetSubEntityId` | `metadata` |
+| `changes` *(user objects → `{ userId }`; feature PII stripped)* | `entityData` *(stripped)* | `entityTargetData` *(stripped)* |
+| `displayMessageTemplate` | `displayMessageTemplateData` *(user objects → `{ userId }`)* | `actionIcon` |
+| `immutable` | `isActivityResolverUsed` *(flag)* | |
+
+<Note>
+`displayMessage` is never stored — it is recomputed on the client from the template plus resolved data.
+</Note>
+
+### Attachments (files)
+
+Attachments don't have a "record" of their own in your DB — they are **binary files**. What Velt hands your storage provider on upload:
+
+| Field | Notes |
+|---|---|
+| *file* | The raw `File` (binary content). |
+| `attachmentId` | Numeric ID. |
+| `name` | File name. |
+| `mimeType` | MIME type. |
+| `metadata` | Attachment metadata (`organizationId`, `documentId`, `folderId?`, `attachmentId`, `commentAnnotationId`, `apiKey`). |
+| `event` | The resolver action (e.g. `ATTACHMENT_ADD`). |
+
+You return `{ url }`. That `url` is what gets stored inside the comment/recording payload (in your DB).
+
+### Anonymous users
+
+No records are stored. The provider only returns a transient `{ email: userId }` map used to backfill the comment before it is saved.
+
+### Summary — where does field X live?
+
+The table below summarizes where each kind of data lives. Each feature page includes a **Sample Data** section with the exact JSON stored on your database vs. on Velt servers.
+
+| Data | Velt's DB | Your DB / storage |
+|---|:---:|:---:|
+| Comment text / HTML | — | ✅ |
+| Comment attachments (file + name/url) | reference stub only | ✅ |
+| Reaction icon | — | ✅ |
+| Recording transcript / file | file stubs only | ✅ |
+| Custom notification PII | — | ✅ |
+| Activity PII (text changes, entity data, display message data) | — | ✅ |
+| User profile (name, email, avatar) | `{ userId }` only | ✅ |
+| Your own custom fields via `fieldsToRemove` | — | ✅ |
+| Your own custom fields via `additionalFields` | ✅ | ✅ |
+| Structural data (IDs, locations, status, targets, timestamps) | ✅ | — |
+
+## Attachment & recording storage
+
+Attachments and recordings involve **binary files**, not just JSON records. To keep them on your own infrastructure, provide a storage provider: Velt hands you the raw `File`, you upload it to *your* bucket (S3, GCS, Azure Blob, …), and return `{ url }`. Velt never touches the bytes. Implement it as an [`AttachmentDataProvider`](/api-reference/sdk/models/data-models#attachmentdataprovider) — `save` / `delete` callbacks, or `saveConfig` / `deleteConfig` URLs.
+
+### Storage scopes
+
+Comment attachments and recording files are configured **separately**, so you can route them to different destinations:
+
+| Scope | Configured via | Used for |
+|---|---|---|
+| **Comment attachments** | `dataProviders.attachment` | Files attached to comments. |
+| **Recording files** | `dataProviders.recorder.storage` | Video/audio recording files. |
+
+You can point both scopes at the same bucket or at different ones. The example below self-hosts both:
+
+```ts
+await Velt.setDataProviders({
+  // Comment attachments → YOUR storage
+  attachment: {
+    async save({ file, name, metadata }) {
+      const url = await myBucket.put(file, name);
+      return { data: { url }, success: true, statusCode: 200 };
+    },
+    async delete({ attachmentId, metadata }) {
+      await myBucket.remove(attachmentId);
+      return { success: true, statusCode: 200 };
+    },
+  },
+
+  // Recording metadata → YOUR DB, and recording FILES → YOUR storage
+  recorder: {
+    async get(req)    { /* … */ },
+    async save(req)   { /* … */ },
+    async delete(req) { /* … */ },
+    storage: {
+      async save({ file, name }) {
+        const url = await myBucket.put(file, name);
+        return { data: { url }, success: true, statusCode: 200 };
+      },
+      async delete({ attachmentId }) {
+        await myBucket.remove(attachmentId);
+        return { success: true, statusCode: 200 };
+      },
+    },
+  },
+});
+```
+
+### The upload contract (storage providers)
+
+Storage providers are the one place the contract differs from the JSON model, because a binary file is involved.
+
+**Callback style** — your `save` receives a `ResolverAttachment`:
+
+```ts
+interface ResolverAttachment {
+  attachmentId: number;
+  file: File;                          // the raw bytes
+  name?: string;
+  mimeType?: string;
+  metadata?: AttachmentResolverMetadata;
+}
+// You return: { data: { url }, success: true, statusCode: 200 }
+```
+
+**URL style** — Velt POSTs `multipart/form-data` (not JSON) to your `saveConfig.url`:
+
+- a `file` part containing the raw file, and
+- a `request` part containing JSON: `{ attachment: { attachmentId, name, mimeType }, metadata, event }`.
+
+Your endpoint stores the file and responds `{ "data": { "url": "https://…" } }`. (Velt deliberately omits `Content-Type` so the browser sets the correct multipart boundary.)
+
+**Deletes** (both scopes) send the minimized metadata `{ apiKey, documentId, organizationId, folderId? }` plus the `attachmentId`, so you can remove the right file.
+
+### How recording files are uploaded
+
+When a recording storage provider (`recorder.storage`) is set, Velt uploads the **entire recording** to your storage once — after the recording stops and the annotation is saved — and then patches the returned file URL onto the annotation. Velt also skips its own server-side encoding/transcription post-processing in this case; you own those files end to end.
+
+See [Recordings](/self-host-data/recordings) and [Attachments](/self-host-data/attachments) for full examples.
+
+## Excluding & extending fields
+
+Velt already strips its **built-in PII** automatically (comment text, user info, transcripts, …) — you don't configure that. `fieldsToRemove` and `additionalFields` are for **your own custom fields** that you attach to an annotation and want handled a particular way. Both are set on the provider's `config`.
+
+```ts
+const commentDataProvider = {
+  config: {
+    fieldsToRemove:   ['internalTicketId', 'priorityScore'],   // move OUT of Velt's DB
+    additionalFields: ['teamName'],                            // copy to your DB, keep in Velt's
+  },
+  async get(req)    { /* … */ },
+  async save(req)   { /* … */ },
+  async delete(req) { /* … */ },
+};
+```
+
+- **`fieldsToRemove` — data sovereignty (move).** Each listed field is copied into the payload sent to **your** backend **and deleted** from Velt's database. On read, Velt restores the field from your backend and merges it back into the record. Use this when a custom field must **not** be stored by Velt at all.
+- **`additionalFields` — replication (copy).** Each listed field is deep-copied into the payload sent to your backend, but **kept** in Velt's database. On read there is nothing to merge (the field is already present). Use this when you want a copy of a field in your own backend (e.g., for analytics or search) without removing it from Velt.
+
+| Aspect | `fieldsToRemove` | `additionalFields` |
+|---|---|---|
+| Effect on Velt's DB | **Removed** | **Kept** |
+| Sent to your backend | Yes (moved) | Yes (copied) |
+| Merged back on read | Yes (restored from you) | No (already in Velt's DB) |
+| Falsy values (`0`, `""`, `false`) | Copied only if truthy | Preserved |
+| Processing order | First | Second |
+| If a field is in **both** lists | **`fieldsToRemove` wins** (removed first) | — |
+
+### Where these are supported
+
+| Provider | `fieldsToRemove` | `additionalFields` |
+|---|:---:|:---:|
+| `comment` | ✅ | ✅ |
+| `reaction` | — | ✅ |
+| `recorder` | — | ✅ |
+| `activity` | ✅ (for `custom` activity types) | — |
+| `notification` | — | — |
+
+<Warning>
+`fieldsToRemove` is **only** for your own custom fields. Never list a field that Velt relies on to **query, scope, position, sync, or render** an annotation. If you remove a structural field, Velt can no longer find or place the annotation, and comments/reactions/recordings will silently fail to load, appear in the wrong place, or break filtering and visibility.
+
+In particular, do **not** put any of these in `fieldsToRemove`:
+
+- **`metadata`** and its sub-fields — `apiKey`, `documentId`, `organizationId`, `folderId`, `documentMetadata`.
+- **Identifiers / keys** — `annotationId`, `id`, `commentId`, `annotationNumber`, `targetEntityId`, `targetSubEntityId`, `notificationId`, `commentAnnotationId`.
+- **Location & positioning** — `location`, `locationId`, `context`, `contextId`, `position`, `positionX`/`positionY`, `targetElement`, `targetElementId`, `targetTextRange`, `pageInfo`.
+- **Query / filter / state fields** — `status`, `priority`, `type`, `commentType`, `featureType`, `actionType`, `from`, `assignedTo`, `resolvedByUserId`, `timestamp`, `createdAt`, `lastUpdated`, `forYou`, `notificationSource`, `targetAnnotationId`.
+- **Resolver flags** — `isCommentResolverUsed`, `isReactionResolverUsed`, `isRecorderResolverUsed`, `isNotificationResolverUsed`, `isActivityResolverUsed`.
+
+If in doubt, prefer `additionalFields` (which keeps the field in Velt's DB) so you never accidentally break querying.
+</Warning>
+
+### Worked example
+
+Store a custom `priorityScore` only in your own database:
+
+```ts
+await Velt.setDataProviders({
+  comment: {
+    config: { fieldsToRemove: ['priorityScore'] },
+    async get({ commentAnnotationIds, documentIds, organizationId }) {
+      const rows = await db.comments.find({ organizationId, documentIds, commentAnnotationIds });
+      const data = {};
+      for (const r of rows) {
+        // r.partial already includes priorityScore — Velt merges it back in
+        data[r.annotationId] = r.partial;
+      }
+      return { data, success: true, statusCode: 200 };
+    },
+    async save({ commentAnnotation }) {
+      // each PartialCommentAnnotation here includes priorityScore
+      await db.comments.upsertMany(commentAnnotation);
+      return { success: true, statusCode: 200 };
+    },
+    async delete({ commentAnnotationId }) {
+      await db.comments.remove(commentAnnotationId);
+      return { success: true, statusCode: 200 };
+    },
+  },
+});
+```
+
+After this, `priorityScore` is never written to Velt's database — it lives only in your `db.comments` and is merged back into the comment whenever Velt loads it.
+
+## Operational behavior
+
+- **Timeouts.** Reads are wrapped in a timeout (default **1 minute**, configurable via `config.resolveTimeout`). On timeout, Velt proceeds gracefully and renders whatever structural data it already has — it never blocks the UI indefinitely.
+- **Retries.** `retryCount` / `retryDelay` let you retry transient failures. Combine with `revertOnFailure` to roll back Velt's optimistic local change if your save/delete ultimately fails.
+- **Degrade, don't drop.** If resolution fails, Velt keeps the structural record and renders it without the PII rather than dropping it. Your data is never lost because a resolver call failed.
+- **Not every update calls `save`.** Velt only sends a `save` when the PII actually changed and the action maps to a meaningful resolver event (add/update/delete of the comment body, etc.). Pure structural changes (status, priority, assignment) are handled by Velt and won't necessarily call your save.
+- **Custom notifications only.** The notification resolver applies **only** to notifications whose source is `custom`. Standard comment/recording notifications are resolved through their own feature providers. See [Notifications](/self-host-data/notifications).
+- **Cross-organization notifications.** "For You" notifications can come from organizations other than the active one. Velt calls your notification/comment `get` endpoints with **each entry's own `organizationId`** — make sure your endpoints honor the `organizationId` in the request rather than assuming the current org.
+- **Activity is multi-feature.** A single activity record may contain PII owned by several providers. Velt resolves them in sequence (user → comment → reaction → recorder → activity), so register all relevant providers for activity feeds to render fully.
+
+## Backend implementation
+
+For endpoint (URL) mode, Velt provides official server SDKs that handle request parsing, payload types, and response formatting for every resolver operation:
+
+<CardGroup cols={2}>
+<Card title="Node SDK" icon="node-js" href="/backend-sdks/node">
+Self-hosting backend with built-in MongoDB + AWS S3 support, or call Velt's REST APIs directly.
+</Card>
+<Card title="Python SDK" icon="python" href="/backend-sdks/python">
+Server-side SDK for self-hosting backend implementation and REST API access.
+</Card>
+</CardGroup>
+
+## End-to-end example
+
+A consolidated setup self-hosting comments (with a custom field moved out), recordings (own storage), custom notifications, activity, and anonymous-user resolution:
+
+```ts
+await Velt.setDataProviders({
+  // 1) Comments — PII + a custom field in your DB
+  comment: {
+    config: { fieldsToRemove: ['internalTicketId'] },
+    async get({ organizationId, documentIds, commentAnnotationIds }) {
+      const data = await myApi.getComments({ organizationId, documentIds, commentAnnotationIds });
+      return { data, success: true, statusCode: 200 };
+    },
+    async save({ commentAnnotation, metadata, event }) {
+      await myApi.saveComments(commentAnnotation, metadata, event);
+      return { success: true, statusCode: 200 };
+    },
+    async delete({ commentAnnotationId, metadata }) {
+      await myApi.deleteComment(commentAnnotationId, metadata);
+      return { success: true, statusCode: 200 };
+    },
+  },
+
+  // 2) Recordings — metadata in your DB, files in your bucket
+  recorder: {
+    async get(req)    { return { data: await myApi.getRecordings(req), success: true, statusCode: 200 }; },
+    async save(req)   { await myApi.saveRecording(req); return { success: true, statusCode: 200 }; },
+    async delete(req) { await myApi.deleteRecording(req); return { success: true, statusCode: 200 }; },
+    storage: {
+      async save({ file, name }) {
+        const url = await myBucket.put(file, name);
+        return { data: { url }, success: true, statusCode: 200 };
+      },
+      async delete({ attachmentId }) {
+        await myBucket.remove(attachmentId);
+        return { success: true, statusCode: 200 };
+      },
+    },
+  },
+
+  // 3) Custom notifications — read-only enrichment from your DB
+  notification: {
+    async get({ organizationId, notificationIds }) {
+      const data = await myApi.getNotifications({ organizationId, notificationIds });
+      return { data, success: true, statusCode: 200 };
+    },
+    async delete({ notificationId, organizationId }) {
+      await myApi.deleteNotification(notificationId, organizationId);
+      return { success: true, statusCode: 200 };
+    },
+  },
+
+  // 4) Activity — append-only (no delete)
+  activity: {
+    async get({ activityIds, documentIds, organizationId }) {
+      const data = await myApi.getActivity({ activityIds, documentIds, organizationId });
+      return { data, success: true, statusCode: 200 };
+    },
+    async save({ activity, metadata }) {
+      await myApi.saveActivity(activity, metadata);
+      return { success: true, statusCode: 200 };
+    },
+  },
+
+  // 5) Anonymous users — resolve @mentions-by-email to your userIds
+  anonymousUser: {
+    async resolveUserIdsByEmail({ emails, organizationId }) {
+      const map = await myApi.lookupUserIdsByEmail(emails, organizationId); // { email: userId }
+      return { data: map, success: true, statusCode: 200 };
+    },
+  },
+});
+```
+
+The same providers can be expressed with config URLs instead of callbacks — e.g., replace the `comment` callbacks with:
+
+```ts
+comment: {
+  config: {
+    fieldsToRemove: ['internalTicketId'],
+    getConfig:    { url: 'https://api.example.com/velt/comments/get' },
+    saveConfig:   { url: 'https://api.example.com/velt/comments/save' },
+    deleteConfig: { url: 'https://api.example.com/velt/comments/delete' },
+  },
+},
+```
+
+## Quick reference
+
+### Provider cheat-sheet
+
+| Provider key | Methods | Request type(s) | Payload (your DB) | `fieldsToRemove` | `additionalFields` |
+|---|---|---|---|:---:|:---:|
+| `user` | get | `userIds: string[]` | `Record<userId, User>` | — | — |
+| `comment` | get / save / delete | `Get/Save/DeleteCommentResolverRequest` | [`PartialCommentAnnotation`](/api-reference/sdk/models/data-models#partialcommentannotation) | ✅ | ✅ |
+| `reaction` | get / save / delete | `Get/Save/DeleteReactionResolverRequest` | [`PartialReactionAnnotation`](/api-reference/sdk/models/data-models#partialreactionannotation) | — | ✅ |
+| `attachment` | save / delete | `Save/DeleteAttachmentResolverRequest` | binary file → `{ url }` | — | ✅ |
+| `recorder` | get / save / delete (+ `storage`) | `Get/Save/DeleteRecorderResolverRequest` | [`PartialRecorderAnnotation`](/api-reference/sdk/models/data-models#partialrecorderannotation) | — | ✅ |
+| `activity` | get / save | `Get/SaveActivityResolverRequest` | [`PartialActivityRecord`](/api-reference/sdk/models/data-models#partialactivityrecord) | ✅ (custom types) | — |
+| `notification` | get / delete | `Get/DeleteNotificationResolverRequest` | [`PartialNotification`](/api-reference/sdk/models/data-models#partialnotification) | — | — |
+| `anonymousUser` | resolveUserIdsByEmail | `ResolveUserIdsByEmailRequest` | `{ email: userId }` (transient) | — | — |
+
+### Defaults & conventions
+
+- **Success** = `statusCode: 200`. Anything else = failure.
+- **Read timeout** = 60,000 ms (1 minute) unless overridden.
+- **Retries** default to 0; set `retryCount` / `retryDelay` to enable.
+- **Delete metadata** is always `{ apiKey, documentId, organizationId, folderId? }`.
+- **JSON endpoints**: `POST`, `application/json`, respond `{ "data": … }` for reads.
+- **File upload endpoints**: `POST`, `multipart/form-data` (`file` + `request` parts), respond `{ "data": { "url": … } }`.
+- **Storage scopes**: `dataProviders.attachment` (comment files) and `dataProviders.recorder.storage` (recording files) are configured independently.
+
+## Supported infrastructure
+
+You can self-host your data on any infrastructure you want, as long as you can receive and return the data in the provided format. Here are some examples:
+
 - AWS
 - GCP
 - Azure
 - Any Custom Infrastructure
 
+## Debugging
 
+You can subscribe to `dataProvider` events to monitor and debug `get`, `save`, and `delete` operations across all providers. The event includes a `moduleName` field that identifies which module triggered the resolver call, helping you trace data provider requests.
+
+You can also use the [Velt Chrome DevTools extension](https://chromewebstore.google.com/detail/velt-devtools/nfldoicbagllmegffdapcnohakpamlnl) to inspect and debug your Velt implementation.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useVeltClient } from '@veltdev/react';
+
+const { client } = useVeltClient();
+
+useEffect(() => {
+  if (!client) return;
+
+  const subscription = client.on('dataProvider').subscribe((event) => {
+    console.log('Data Provider Event:', event);
+    console.log('Module Name:', event.moduleName);
+  });
+
+  return () => subscription?.unsubscribe();
+}, [client]);
+```
+</Tab>
+<Tab title="Other Frameworks">
+```javascript
+const subscription = Velt.on('dataProvider').subscribe((event) => {
+  console.log('Data Provider Event:', event);
+  console.log('Module Name:', event.moduleName);
+});
+
+// Unsubscribe when done
+subscription?.unsubscribe();
+```
+</Tab>
+</Tabs>

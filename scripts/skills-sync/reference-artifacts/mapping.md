@@ -29,10 +29,27 @@
 | `api-reference/rest-apis/v1/**`, `api-reference/rest-apis/v2/**` | `velt-rest-apis-best-practices` |
 | `api-reference/sdk/api/api-methods.mdx` | route by method family (match `<Feature>Element` or service name to skill) |
 | `api-reference/sdk/api/react-hooks.mdx` | route by hook family (match `use<Feature>` to skill) |
-| `api-reference/sdk/models/data-models.mdx` | route by model family (match type prefix to skill) |
+| `api-reference/sdk/models/data-models.mdx` | route by model family (see §model-family routing below) |
 | `async-collaboration/suggestions/**` | `velt-suggestions-best-practices` (unmapped — new skill needed) |
 | `webhooks/basic.mdx`, `webhooks/advanced.mdx` | route by event family (see §webhook routing) |
 | `ui-customization/features/<feature>/**` | skill matching `<feature>` (e.g., `comments` → `velt-comments-best-practices`) |
+
+## Model-family routing
+
+`data-models.mdx` is cross-cutting. The planner examines diff hunks for type names and routes to the owning skill:
+
+| Type prefix | Target skill |
+|---|---|
+| `CommentAnnotation`, `Comment`, `PartialComment`, `CommentAnnotationAgent`, `AgentResult`, `CommentAnnotationSuggestion` | `velt-comments-best-practices` |
+| `PermissionRequest`, `PermissionProvider`, `PermissionResponse` | `velt-setup-best-practices` |
+| `NotificationData`, `Notification`, `NotificationEvent` | `velt-notifications-best-practices` |
+| `RecorderData`, `Recording`, `RecordingAnnotation` | `velt-recorder-best-practices` |
+| `PresenceUser`, `Presence` | `velt-presence-best-practices` |
+| `CursorUser`, `Cursor` | `velt-cursors-best-practices` |
+| `HuddleData`, `Huddle` | `velt-huddle-best-practices` |
+| `BaseMetadata`, `User`, `UserContact` | (cross-cutting — route to skill matching the changed section's heading context) |
+
+If a type name doesn't match any prefix above, check the `#### <TypeName>` heading's enclosing section in the diff for context clues (e.g., if it appears under "Permission Models", route to `velt-setup-best-practices`). Do **not** send to `unmapped` unless you've exhausted both the prefix table and the heading context.
 
 ## Webhook routing
 

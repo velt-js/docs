@@ -22,6 +22,7 @@
 set -euo pipefail
 
 INCOMING_DIR="${INCOMING_DIR:-$PWD/incoming}"
+DOWNLOAD_ROOT="${DOWNLOAD_ROOT:-$PWD/incoming}"
 AGENT_SKILLS_DIR="${AGENT_SKILLS_DIR:-$PWD/agent-skills}"
 OUT_DIR="${OUT_DIR:-$PWD/outputs}"
 
@@ -29,7 +30,9 @@ mkdir -p "$OUT_DIR"
 
 shopt -s nullglob
 PATCHES=( "$INCOMING_DIR"/*.patch )
-CHANGES=( "$INCOMING_DIR"/changes.json "$INCOMING_DIR"/*/changes.json )
+# changes.json lives under outputs/ in each artifact, which extracts to
+# $DOWNLOAD_ROOT/outputs/ — NOT inside $INCOMING_DIR (agent-skills-patches/).
+CHANGES=( "$DOWNLOAD_ROOT"/changes.json "$DOWNLOAD_ROOT"/*/changes.json )
 shopt -u nullglob
 
 if [ ${#PATCHES[@]} -eq 0 ]; then

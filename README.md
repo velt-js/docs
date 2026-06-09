@@ -59,3 +59,4 @@ npm install @veltdev/react
 [`velt-js/agent-skills`](https://github.com/velt-js/agent-skills) requesting `@yoen-velt` as the reviewer,
 covering any rule that drifted from docs. No manual coordination required. See
 [`scripts/skills-sync/README.md`](scripts/skills-sync/README.md) for pipeline details.</sub>
+

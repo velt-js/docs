@@ -3574,6 +3574,8 @@ Subscribe to Comment Events. Here is the list of events you can subscribe to and
 | Status & Priority | `approveCommentAnnotation` | Approve a comment annotation | [ApproveCommentAnnotationEvent](/api-reference/sdk/models/data-models#approvecommentannotationevent) |
 | Status & Priority | `acceptCommentAnnotation` | Accept a comment annotation | [AcceptCommentAnnotationEvent](/api-reference/sdk/models/data-models#acceptcommentannotationevent) |
 | Status & Priority | `rejectCommentAnnotation` | Reject a comment annotation | [RejectCommentAnnotationEvent](/api-reference/sdk/models/data-models#rejectcommentannotationevent) |
+| Agent Suggestions | `suggestionAccepted` | Triggered when a reviewer accepts an agent suggestion (finding) from the comment dialog | [SuggestionAcceptEvent](/api-reference/sdk/models/data-models#suggestionacceptevent) |
+| Agent Suggestions | `suggestionRejected` | Triggered when a reviewer rejects an agent suggestion (finding) from the comment dialog | [SuggestionRejectEvent](/api-reference/sdk/models/data-models#suggestionrejectevent) |
 | Recordings | `deleteRecording` | Delete a recording from a comment | [DeleteRecordingEvent](/api-reference/sdk/models/data-models#deleterecordingevent) |
 | Deep Links | `copyLink` | Copy a deep link to a comment | [CopyLinkEvent](/api-reference/sdk/models/data-models#copylinkevent) |
 | Comment Sidebar | `commentSidebarDataInit` | Triggered when comment sidebar data is first loaded | [CommentSidebarDataInitEvent](/api-reference/sdk/models/data-models#commentsidebardatainitevent) |
@@ -5591,6 +5593,92 @@ commentElement.setCustomCategory([
 <Warning>
 Make sure to have at least 2 categories set.
 </Warning>
+
+# Agent Comments
+
+Agent comments let your AI agents leave comments and findings directly in Velt by calling the Comment Annotations REST APIs — no SDK changes required. They are built on top of the same Comments feature, but render with a special UI: each agent finding is a suggestion with **Accept** and **Reject** buttons on the comment dialog.
+
+For the full guide — the `agent` block, request/response shapes, and `velt` vs `external` agents — see [Agent Comments](/ai/agent-comments).
+
+### Create an agent comment
+
+Your agent calls the [Add Comment Annotations API](/api-reference/rest-apis/v2/comments-feature/comment-annotations/add-comment-annotations) with an `agent` block attached to the root comment and `type: "suggestion"`. The server stamps `sourceType: "agent"` on both the comment and the annotation.
+
+```bash cURL
+curl -X POST 'https://api.velt.dev/v2/commentannotations/add' \
+  -H 'x-velt-api-key: YOUR_API_KEY' \
+  -H 'x-velt-auth-token: YOUR_AUTH_TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "data": {
+      "organizationId": "acme-corp",
+      "documentId": "design-mockup-v2",
+      "commentAnnotations": [
+        {
+          "type": "suggestion",
+          "commentData": [
+            {
+              "commentText": "This button has insufficient color contrast.",
+              "from": { "userId": "a11y-bot" },
+              "agent": {
+                "agentSource": "external",
+                "agentName": "Accessibility Bot",
+                "agentId": "a11y-bot",
+                "reason": {
+                  "title": "Low color contrast",
+                  "description": "Contrast ratio is 2.1:1, below the 4.5:1 WCAG AA threshold.",
+                  "severity": "high",
+                  "findingType": "pin"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }'
+```
+
+To read agent comments back, use the [Get Comment Annotations API](/api-reference/rest-apis/v2/comments-feature/comment-annotations/get-comment-annotations-v2) with agent-specific filters (`agentId`, `executionId`, `agentSource`, `agentSuggestions`, `agentComments`).
+
+### Handle accept / reject
+
+Because agent findings render with **Accept** and **Reject** buttons on the comment dialog, the outcome is emitted on the comment element as the `suggestionAccepted` and `suggestionRejected` events. Subscribe to them to apply the change to your own data or trigger follow-up logic.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const accepted = useCommentEventCallback('suggestionAccepted');
+const rejected = useCommentEventCallback('suggestionRejected');
+
+useEffect(() => {
+  if (accepted) {
+    // accepted.commentAnnotation contains the agent finding
+  }
+}, [accepted]);
+
+useEffect(() => {
+  if (rejected) {
+    // rejected.rejectReason contains the optional reason
+  }
+}, [rejected]);
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+
+commentElement.on('suggestionAccepted').subscribe(({ commentAnnotation }) => {
+  // commentAnnotation contains the agent finding
+});
+
+commentElement.on('suggestionRejected').subscribe(({ commentAnnotation, rejectReason }) => {
+  // rejectReason contains the optional reason
+});
+```
+</Tab>
+</Tabs>
 
 # UI/UX
 

@@ -7,6 +7,8 @@ tools: Read, Bash
 
 # Skill PR Composer
 
+**EXECUTE NOW.** This is not a spec to review — it is your task. Read the input files listed below, then follow the Process steps to commit, push, and open a PR. Start immediately by reading `inputs/plan.json` and `inputs/source-commit.json`. Do not ask for confirmation or clarification.
+
 You wrap up the run. You commit the working tree, push a branch, open one PR with a clear summary, and file one issue per unmapped feature. You do not edit any source files — your output is a PR and issues.
 
 ## Inputs

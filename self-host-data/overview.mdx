@@ -192,7 +192,7 @@ Every `get` / `save` / `delete` request includes a `metadata` object ([`BaseMeta
 
 ## Per-feature reference
 
-Each subsection shows the provider interface and the request types. The exact field inventory for *what gets stored where* is consolidated in [Complete field inventory](#complete-field-inventory).
+Each subsection shows the provider interface and the request types. The exact field inventory for *what gets stored where* is consolidated in the [Complete field inventory](/self-host-data/field-inventory).
 
 ### Comments (`comment`)
 
@@ -352,208 +352,17 @@ The user provider lets Velt resolve `userId`s into full user objects (name, emai
 
 ## Complete field inventory
 
-This section answers exactly which fields are stored in Velt's database, and which are stored in your database, when self-hosting is enabled. *Velt's DB vs your DB.*
+For an exhaustive, ground-truthed breakdown of **every** persisted field — with **types**, **example values**, **descriptions**, and per-feature **strip rules** — covering both sides of the split (Velt's DB *and* your DB) and expanding every nested structural object into its own sub-table, see the dedicated reference:
+
+<Card title="Complete Field Inventory" icon="table-list" href="/self-host-data/field-inventory">
+Every persisted field for comments, reactions, recordings, notifications, activity, and attachments — Velt's DB vs. your DB, with types, examples, and notes.
+</Card>
 
 A few rules apply across **all** features:
 
 - **User objects are reduced to `{ userId }`** in Velt's DB for most features (comments, recordings, activity). The full user object (name, email, avatar, …) lives in your backend, resolved via your [`user`](/self-host-data/users) provider. It is the data source that all the other resolvers rely on when they strip user objects down to `{ userId }`.
 - **The client-facing `metadata`** (see above) accompanies every PII payload you store.
 - Velt sets an internal flag on the structural record (e.g., `isCommentResolverUsed`, `isReactionResolverUsed`, `isRecorderResolverUsed`, `isNotificationResolverUsed`, `isActivityResolverUsed`) so the UI knows to wait for resolver data. You don't need to store these.
-
-### Comments
-
-**Stored in your DB** — `PartialCommentAnnotation`:
-
-| Field | Notes |
-|---|---|
-| `annotationId` | Key. |
-| `metadata` | Client-facing subset (see [Metadata](#metadata-your-provider-receives)). |
-| `comments` | Map of `commentId → PartialComment` (the per-comment PII below). |
-| `from` | `{ userId }` — annotation author. |
-| `assignedTo` | `{ userId }`. |
-| `targetTextRange` | `{ text }` — the highlighted text snippet. |
-| `resolvedByUserId` | `string \| null`. |
-| *custom fields* | Any keys you declared via `fieldsToRemove` / `additionalFields`. |
-
-Each `PartialComment` in `comments` holds:
-
-| Field | Notes |
-|---|---|
-| `commentId` | Key. |
-| `commentHtml` | Rich comment body. |
-| `commentText` | Plain-text comment body. |
-| `attachments` | Map of `attachmentId → { url, name, attachmentId }` (present when the attachment provider is active). |
-| `from` | `{ userId }`. |
-| `to` | `[{ userId }]`. |
-| `taggedUserContacts` | `[{ userId, contact: { userId }, text }]`. |
-
-**Stored in Velt's DB** — the full comment annotation **minus** the PII above. Velt removes each comment's `commentHtml`/`commentText`, attachment `name`/`url` (when an attachment provider is active), and any `fieldsToRemove` fields; reduces user objects to `{ userId }`; and keeps everything else:
-
-| Field | Field | Field |
-|---|---|---|
-| `annotationId` | `annotationNumber` | `annotationIndex` |
-| `comments[]` *(structural; no text/html)* | `commentCategories` | `customList` |
-| `from` → `{ userId }` | `assignedTo` → `{ userId }` | `resolvedByUserId` |
-| `resolvedByUser` → `{ userId }` | `statusUpdatedByUserId` | `subscribedUsers` / `unsubscribedUsers` |
-| `subscribedGroups` | `viewedByUserIds` | `viewedBy` → `{ userId }` |
-| `status` | `priority` | `approved` |
-| `resolved` *(deprecated)* | `inProgress` *(deprecated)* | `unread` |
-| `type` | `commentType` | `sourceType` |
-| `sourceId` | `multiThreadAnnotationId` | `visibilityConfig` |
-| `color` | `iam` *(access mode)* | `context` / `contextId` |
-| `location` / `locationId` | `documentParams` / `documentParamsId` *(deprecated)* | `position` |
-| `positionX` / `positionY` | `screenWidth` / `screenHeight` | `screenScrollHeight` / `screenScrollTop` |
-| `targetElement` | `targetElementId` | `taggedElementPath` / `taggedElementRect` |
-| `targetTextRange` *(without `text`)* | `selectAllContent` | `isPageAnnotation` |
-| `targetInlineCommentElementId` | `inlineCommentSectionConfig` | `areaAnnotationId` |
-| `ghostComment` | `views` | `pageInfo` |
-| `createdAt` | `lastUpdated` | `metadata` |
-| `isDraft` | `suggestion` | `agent` |
-| `isCommentResolverUsed` *(flag)* | `additionalFields` *(if configured)* | |
-
-### Reactions
-
-**Stored in your DB** — `PartialReactionAnnotation`:
-
-| Field | Notes |
-|---|---|
-| `annotationId` | Key. |
-| `metadata` | Client-facing subset. |
-| `icon` | The reaction emoji/icon. |
-| `from` | `{ userId }`. |
-
-**Stored in Velt's DB** — the structural reaction annotation. On save Velt removes only the `icon` (it is restored from your DB on read) and sets the `isReactionResolverUsed` flag; everything else is kept:
-
-| Field | Field | Field |
-|---|---|---|
-| `annotationId` | `annotationIndex` | `commentAnnotationId` |
-| `reactions[]` | `from` | `icon` *(removed; resolved from your DB)* |
-| `iconUrl` | `iconEmoji` | `type` |
-| `context` | `location` / `locationId` | `position` |
-| `targetElement` | `targetElementId` | `pageInfo` |
-| `lastUpdated` | `metadata` | `isReactionResolverUsed` *(flag)* |
-
-### Recordings
-
-**Stored in your DB** — `PartialRecorderAnnotation`:
-
-| Field | Notes |
-|---|---|
-| `annotationId` | Key. |
-| `metadata` | Client-facing subset. |
-| `from` | Full user object. |
-| `transcription` | The recording transcript. |
-| `attachment` | The recording file reference. |
-| `attachments` | Array of file references. |
-| `chunkUrls` | `{ [index]: url }` — internal, managed by Velt; normally empty. |
-| `recordingEditVersions` | `{ [index]: { from, attachment, attachments, transcription } }` — per-edit version PII. |
-| *custom fields* | Any keys you declared via `additionalFields`. |
-
-**Stored in Velt's DB** — the structural recording annotation where: `from` is reduced to `{ userId }`; `transcription` is removed; `attachment` is set to `null`; `attachments` is reduced to stubs `[{ attachmentId, name, bucketPath }]` (the `bucketPath` is preserved so Velt can clean up any Velt-side storage artifacts); `chunkUrls` is emptied to `{}`; and the `isRecorderResolverUsed` flag is set:
-
-| Field | Field | Field |
-|---|---|---|
-| `annotationId` | `annotationIndex` | `commentAnnotationId` |
-| `from` → `{ userId }` | `transcription` *(removed)* | `attachment` *(→ `null`)* |
-| `attachments` *(→ stubs)* | `chunkUrls` *(→ `{}`)* | `recordingEditVersions` *(PII stripped)* |
-| `recordingType` | `mode` | `recordedTime` |
-| `waveformData` | `displayName` | `latestVersion` |
-| `type` | `approved` | `color` |
-| `context` | `location` / `locationId` | `position` |
-| `positionX` / `positionY` | `screenWidth` / `screenHeight` | `screenScrollHeight` / `screenScrollTop` |
-| `targetElement` | `recorderedElementPath` / `recorderedElementRect` | `pageInfo` |
-| `lastUpdated` | `metadata` | `isUrlAvailable` |
-| `isRecorderResolverUsed` *(flag)* | `additionalFields` *(if configured)* | |
-
-### Notifications (custom notifications only)
-
-**Stored in your DB** — `PartialNotification`:
-
-| Field | Notes |
-|---|---|
-| `notificationId` | Key. |
-| `displayHeadlineMessageTemplate` | Headline template string. |
-| `displayHeadlineMessageTemplateData` | `{ actionUser, recipientUser, actionMessage, … }`. |
-| `displayBodyMessage` | Body message. |
-| `displayBodyMessageTemplate` | Body template string. |
-| `displayBodyMessageTemplateData` | Template data for the body. |
-| `notificationSourceData` | Your custom source payload. |
-| *custom fields* | Any additional keys you return are merged back on read. |
-
-**Stored in Velt's DB** — the structural notification envelope. For **custom** notifications, the PII fields above are **not stored by Velt at all** — they are fetched from you on read. (Unlike comments/recordings, there is no write-side strip step; the notification resolver is purely read-time enrichment.)
-
-| Field | Field | Field |
-|---|---|---|
-| `id` | `notificationSource` | `actionType` |
-| `isUnread` | `timestamp` | `forYou` |
-| `targetAnnotationId` | `actionUser` → `{ userId }` | `notifyUsers` |
-| `notifyUsersByUserId` | `metadata` | `notificationSourceData` *(structural ref)* |
-| `isCommentResolverUsed` *(flag)* | `isNotificationResolverUsed` *(flag)* | |
-
-### Activity
-
-**Stored in your DB** — `PartialActivityRecord`:
-
-| Field | Notes |
-|---|---|
-| `id` | Key. |
-| `metadata` | Client-facing subset. |
-| `changes` | Activity changes (e.g. a `commentText` change `from`/`to`). |
-| `entityData` | Feature-specific entity snapshot (e.g. the comment/reaction/recording involved). |
-| `entityTargetData` | Feature-specific sub-entity snapshot. |
-| `displayMessageTemplateData` | Template data for display messages. |
-| *custom fields* | `fieldsToRemove` keys (for `custom` activity types only). |
-
-**Stored in Velt's DB** — the structural activity record where: `actionUser` is reduced to `{ userId }`; user objects inside `changes` and `displayMessageTemplateData` are reduced to `{ userId }`; the human-readable `displayMessage` is removed (it's always recomputed on the client); feature-specific PII is extracted out; custom `fieldsToRemove` fields are removed; and the `isActivityResolverUsed` flag is set:
-
-| Field | Field | Field |
-|---|---|---|
-| `id` | `featureType` | `actionType` |
-| `eventType` | `actionUser` → `{ userId }` | `timestamp` |
-| `targetEntityId` | `targetSubEntityId` | `metadata` |
-| `changes` *(user objects → `{ userId }`; feature PII stripped)* | `entityData` *(stripped)* | `entityTargetData` *(stripped)* |
-| `displayMessageTemplate` | `displayMessageTemplateData` *(user objects → `{ userId }`)* | `actionIcon` |
-| `immutable` | `isActivityResolverUsed` *(flag)* | |
-
-<Note>
-`displayMessage` is never stored — it is recomputed on the client from the template plus resolved data.
-</Note>
-
-### Attachments (files)
-
-Attachments don't have a "record" of their own in your DB — they are **binary files**. What Velt hands your storage provider on upload:
-
-| Field | Notes |
-|---|---|
-| *file* | The raw `File` (binary content). |
-| `attachmentId` | Numeric ID. |
-| `name` | File name. |
-| `mimeType` | MIME type. |
-| `metadata` | Attachment metadata (`organizationId`, `documentId`, `folderId?`, `attachmentId`, `commentAnnotationId`, `apiKey`). |
-| `event` | The resolver action (e.g. `ATTACHMENT_ADD`). |
-
-You return `{ url }`. That `url` is what gets stored inside the comment/recording payload (in your DB).
-
-### Anonymous users
-
-No records are stored. The provider only returns a transient `{ email: userId }` map used to backfill the comment before it is saved.
-
-### Summary — where does field X live?
-
-The table below summarizes where each kind of data lives. Each feature page includes a **Sample Data** section with the exact JSON stored on your database vs. on Velt servers.
-
-| Data | Velt's DB | Your DB / storage |
-|---|:---:|:---:|
-| Comment text / HTML | — | ✅ |
-| Comment attachments (file + name/url) | reference stub only | ✅ |
-| Reaction icon | — | ✅ |
-| Recording transcript / file | file stubs only | ✅ |
-| Custom notification PII | — | ✅ |
-| Activity PII (text changes, entity data, display message data) | — | ✅ |
-| User profile (name, email, avatar) | `{ userId }` only | ✅ |
-| Your own custom fields via `fieldsToRemove` | — | ✅ |
-| Your own custom fields via `additionalFields` | ✅ | ✅ |
-| Structural data (IDs, locations, status, targets, timestamps) | ✅ | — |
 
 ## Attachment & recording storage
 

@@ -16,7 +16,7 @@ description: "An exhaustive, ground-truthed inventory of every persisted self-ho
 When a customer registers a data provider (`Velt.setDataProviders({ … })`), the split happens
 **on the frontend, before anything is written**:
 
-- **Velt's DB** keeps the **structural remainder** written to Firestore — IDs, positions,
+- **Velt's DB** keeps the **structural remainder** — IDs, positions,
   locations/targets, statuses, timestamps, relationships, and flags.
 - **Your DB** receives the **`Partial<X>` PII payload** the SDK strips on the device and hands to your
   provider's `save` (or `saveConfig.url`) — then merges back on read so the UI renders identically to
@@ -29,17 +29,6 @@ When a customer registers a data provider (`Velt.setDataProviders({ … })`), th
 > is sent only to your DB (or recomputed entirely on the client). Velt never receives it, transmits
 > it, or stores it.
 
-**Important framing:** the tables below describe behavior **when the relevant resolver IS active**.
-If you do **not** register a provider for a feature, nothing is withheld — the full record (including
-everything in the "Your DB" tables) is sent to Velt as normal.
-
-> **Omitted by design.** This inventory lists only what is **persisted** — to Velt's DB or to yours.
-> Fields that are *computed on the client and stored in neither database* are **not listed**: a
-> comment's `unread` / `viewedBy` / `resolvedByUser`, a notification's `isUnread` / `forYou` / rendered
-> `displayHeadlineMessage`, an activity's `displayMessage`, and a comment's hydrated
-> `reactionAnnotations`. They exist on the in-memory model but are recomputed on the client and never
-> sent anywhere.
-
 ### Note vocabulary
 
 | Term | Meaning |
@@ -49,18 +38,6 @@ everything in the "Your DB" tables) is sent to Velt as normal.
 | **never sent to Velt** | The field's data is stripped on the frontend **before** any write, so it never leaves the device for Velt — not in transit, not at rest. It goes only to your DB (when applicable) or is recomputed on the client. (For a few fields the *key* is still written to Velt as `null` / `{}` — only the *value* is withheld.) |
 | **copied-not-moved** | Sent to **both** your DB and Velt's DB (replicated, not relocated). |
 | **@deprecated** | Still stored for back-compat; do not rely on it. |
-
-### Two cross-cutting rules that the guide understates
-
-1. **User reduction is a *separate* toggle.** Fields like `from`, `assignedTo`, `actionUser`,
-   `reactions[].from`, `subscribedUsers[].user`, `suggestion.resolvedBy` are reduced to `{ userId }`
-   **only when the `user` provider is active** — *not* the feature resolver. With only a
-   comment/reaction/recorder/etc. resolver and **no** `user` provider, full `User` objects (name /
-   email / avatar) are still sent to Velt.
-2. **`metadata` is reduced for *your* copy only.** The copy sent to your DB goes through
-   `getClientMetadata()`: `clientDocumentId → documentId`, `clientOrganizationId → organizationId`,
-   and `veltFolderId` / `parentVeltFolderId` / `pageInfo` are dropped. The **full** `metadata` stays
-   in Velt's DB. (See the [BaseMetadata](#basemetadata) sub-table.)
 
 > **Features covered:** `comment`, `reaction`, `recorder`, `notification`, `activity`, `attachment`
 > (+ shared building blocks). Features **without** a self-hosting data-provider split — `cursor`,
@@ -201,7 +178,7 @@ Model: `ReactionAnnotation`. PII payload: `PartialReactionAnnotation`.
 | `lastUpdated` | `any` (server timestamp) | `1717804800000` | Annotation last-updated. | auto-generated |
 | `targetElement` | `TargetElement \| null` | `{ xpath: '#cta-btn' }` | DOM anchor. | kept — see [TargetElement](#targetelement) |
 | `targetElementId` | `string \| null` | `"cta-btn"` | Target element id you supplied. | kept |
-| `position` | `CursorPosition \| null` | `null` | Pin position. | value **never sent to Velt** — written as `null` on every Firestore write (independent of self-hosting) |
+| `position` | `CursorPosition \| null` | `null` | Pin position. | value **never sent to Velt** — written as `null` on every write to Velt's DB (independent of self-hosting) |
 | `locationId` | `number \| null` | `1843762915` | Hash of `location`. | auto-generated |
 | `location` | `Location \| null` | `{ id: 'page-2', version: { id: 'v1', name: 'Draft' } }` | Sub-document location. | kept — see [Location](#location--version) |
 | `type` | `string` | `"reaction"` | Discriminator. | default `'reaction'` |
@@ -228,7 +205,7 @@ Model: `ReactionAnnotation`. PII payload: `PartialReactionAnnotation`.
 - Only `icon` is **never sent to Velt** (stripped on the frontend → your DB); everything else is kept and `isReactionResolverUsed` set `true`.
 - `from` is **copied-not-moved**. Per-element `reactions[].from` is reduced to `{ userId }` (when
   `user` provider active) **only inside Velt's DB** — it is not part of the `Partial` payload.
-- `position`'s value is **never sent to Velt** — written as `null` on every Firestore write regardless of self-hosting.
+- `position`'s value is **never sent to Velt** — written as `null` on every write to Velt's DB regardless of self-hosting.
 - An unchanged save (deep-compare vs. cache) skips stripping entirely (icon not re-processed, flag not set).
 
 ---
@@ -297,7 +274,7 @@ Model: `RecorderAnnotation`. PII payload: `PartialRecorderAnnotation`.
 
 - Never sent to Velt: `transcription` (entire object → your DB), the value of `attachment`
   (written as `null`), the urls inside `attachments` (Velt keeps only `{ attachmentId, name, bucketPath }`
-  stubs; `bucketPath` is deliberately kept for Firebase cleanup), and the value of `chunkUrls`
+  stubs; `bucketPath` is deliberately kept for Velt-side storage cleanup), and the value of `chunkUrls`
   (written as `{}`). `from` is reduced to `{ userId }`; `isRecorderResolverUsed` set `true`.
 - `recordingEditVersions` per-version PII is withheld the same way; non-PII per-version fields
   (`recordedTime`, `waveformData`, `displayName`, `boundedTrimRanges`, `boundedScaleRanges`) are sent to Velt.

@@ -1,0 +1,666 @@
+---
+title: "Complete Field Inventory"
+description: "An exhaustive, ground-truthed inventory of every persisted self-hosting field — Velt's DB vs. your DB — with type, example value, description, and notes for comments, reactions, recordings, notifications, activity, and attachments."
+---
+
+> **Companion to the [Self-Hosting Overview](/self-host-data/overview).** That guide's field-inventory
+> section lists the field *names* split between Velt's DB and your DB. This page adds **Type**,
+> **Example value**, **Description**, and **Notes** for every field, covers **both sides** of the
+> split, and **expands every nested structural object** into its own sub-table. Ground-truthed against
+> the SDK models and the resolver *strip* logic, not just the guide.
+
+---
+
+## How to read this
+
+When a customer registers a data provider (`Velt.setDataProviders({ … })`), the split happens
+**on the frontend, before anything is written**:
+
+- **Velt's DB** keeps the **structural remainder** written to Firestore — IDs, positions,
+  locations/targets, statuses, timestamps, relationships, and flags.
+- **Your DB** receives the **`Partial<X>` PII payload** the SDK strips on the device and hands to your
+  provider's `save` (or `saveConfig.url`) — then merges back on read so the UI renders identically to
+  a fully-Velt-hosted setup.
+
+> ### 🔒 Privacy guarantee
+>
+> **Anything not stored in Velt's DB never leaves the frontend device for Velt's network — not in
+> transit, not at rest.** The PII is stripped on the device **before** any request to Velt is made and
+> is sent only to your DB (or recomputed entirely on the client). Velt never receives it, transmits
+> it, or stores it.
+
+**Important framing:** the tables below describe behavior **when the relevant resolver IS active**.
+If you do **not** register a provider for a feature, nothing is withheld — the full record (including
+everything in the "Your DB" tables) is sent to Velt as normal.
+
+> **Omitted by design.** This inventory lists only what is **persisted** — to Velt's DB or to yours.
+> Fields that are *computed on the client and stored in neither database* are **not listed**: a
+> comment's `unread` / `viewedBy` / `resolvedByUser`, a notification's `isUnread` / `forYou` / rendered
+> `displayHeadlineMessage`, an activity's `displayMessage`, and a comment's hydrated
+> `reactionAnnotations`. They exist on the in-memory model but are recomputed on the client and never
+> sent anywhere.
+
+### Note vocabulary
+
+| Term | Meaning |
+|---|---|
+| **kept** | Sent to Velt and written to its DB verbatim. |
+| **reduced** | User object collapsed to `{ userId }` before any write — only the `userId` is sent to Velt; the rest of the user object (name / email / avatar) is **never sent to Velt**. |
+| **never sent to Velt** | The field's data is stripped on the frontend **before** any write, so it never leaves the device for Velt — not in transit, not at rest. It goes only to your DB (when applicable) or is recomputed on the client. (For a few fields the *key* is still written to Velt as `null` / `{}` — only the *value* is withheld.) |
+| **copied-not-moved** | Sent to **both** your DB and Velt's DB (replicated, not relocated). |
+| **@deprecated** | Still stored for back-compat; do not rely on it. |
+
+### Two cross-cutting rules that the guide understates
+
+1. **User reduction is a *separate* toggle.** Fields like `from`, `assignedTo`, `actionUser`,
+   `reactions[].from`, `subscribedUsers[].user`, `suggestion.resolvedBy` are reduced to `{ userId }`
+   **only when the `user` provider is active** — *not* the feature resolver. With only a
+   comment/reaction/recorder/etc. resolver and **no** `user` provider, full `User` objects (name /
+   email / avatar) are still sent to Velt.
+2. **`metadata` is reduced for *your* copy only.** The copy sent to your DB goes through
+   `getClientMetadata()`: `clientDocumentId → documentId`, `clientOrganizationId → organizationId`,
+   and `veltFolderId` / `parentVeltFolderId` / `pageInfo` are dropped. The **full** `metadata` stays
+   in Velt's DB. (See the [BaseMetadata](#basemetadata) sub-table.)
+
+> **Features covered:** `comment`, `reaction`, `recorder`, `notification`, `activity`, `attachment`
+> (+ shared building blocks). Features **without** a self-hosting data-provider split — `cursor`,
+> `presence`, `huddle`, `selection`, `tag`, `area`, `arrow`, `rewriter`, standalone `transcription` —
+> are **not** included; they have no resolver and stay fully Velt-hosted.
+
+---
+
+## Table of Contents
+
+1. [Comments](#1-comments-comment)
+2. [Reactions](#2-reactions-reaction)
+3. [Recordings](#3-recordings-recorder)
+4. [Notifications](#4-notifications-notification)
+5. [Activity](#5-activity-activity)
+6. [Attachments](#6-attachments-attachment)
+7. [Shared building blocks](#7-shared-building-blocks)
+8. [Summary matrix & field counts](#8-summary-matrix--field-counts)
+
+---
+
+## 1. Comments (`comment`)
+
+Model: `CommentAnnotation`. PII payload: `PartialCommentAnnotation`.
+
+### 1.A — Stored in Velt's DB (`CommentAnnotation`, structural remainder)
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `annotationId` | `string` | `"a8f3c2e1-9b4d-4e7a-8c1f-2d3e4f5a6b7c"` | Unique id for the comment pin annotation. | auto-generated; join key (also in your DB) |
+| `annotationNumber` | `number` | `42` | Sequential pin number. | auto-generated |
+| `visibilityConfig` | `CommentAnnotationVisibilityConfig` `{ type; organizationId?; userIds?[] }` | `{ type: 'private', userIds: ['u_1','u_2'] }` | Who can see the annotation (public/private/org/user-list). | kept |
+| `comments` | `Comment[]` | `[{ commentId: 482910, type: 'text', from: { userId: 'u_1' } }]` | All comments in the thread. | kept; per-comment PII never sent to Velt — see [Comment sub-table](#comment-per-thread-comment) |
+| `commentCategories` | `CustomCategory[]` | `[{ id: 'bug', name: 'Bug', color: '#f00' }]` | Categories the annotation belongs to. | defaults `[]` |
+| `from` | `User` → `{ userId }` | `{ userId: 'u_1' }` | Creator of the annotation. | reduced when `user` provider active; **copied-not-moved** |
+| `color` | `string` | `"#1F64FF"` | Pin color. | kept |
+| `resolved` | `boolean` | `false` | Whether marked resolved. | **@deprecated** |
+| `inProgress` | `boolean` | `false` | Whether marked in-progress. | **@deprecated** |
+| `lastUpdated` | `Timestamp` (`any`) | `{ seconds: 1717804800, nanoseconds: 0 }` | Last-updated time. | auto-generated |
+| `createdAt` | `Timestamp` (`any`) | `{ seconds: 1717800000, nanoseconds: 0 }` | Created time. | auto-generated |
+| `positionX` | `number` | `320.5` | Pin X position. | auto-generated |
+| `positionY` | `number` | `148.2` | Pin Y position. | auto-generated |
+| `screenWidth` | `number` | `1440` | Author screen width. | auto-generated |
+| `screenHeight` | `number` | `900` | Author screen height. | auto-generated |
+| `screenScrollHeight` | `number` | `3200` | Author scroll height. | auto-generated |
+| `screenScrollTop` | `number` | `640` | Author scroll-top offset. | auto-generated |
+| `taggedElementPath` | `string` | `"/html/body/div[1]/main/p[3]"` | XPath of the clicked element. | auto-generated |
+| `taggedElementRect` | `any` (DOMRect-like) | `{ x: 120, y: 300, width: 200, height: 24 }` | Bounding rect of the clicked element. | auto-generated |
+| `targetElement` | `TargetElement \| null` | `{ xpath: '/html/body/div', topPercentage: 42 }` | DOM anchor of the comment. | kept — see [TargetElement](#targetelement) (its own `targetText` IS sent to Velt; only `targetTextRange.text` is withheld) |
+| `targetElementId` | `string \| null` | `"editor-section-2"` | Target element id you supplied. | kept |
+| `position` | `CursorPosition \| null` | `{ top: 148, left: 320 }` | Pin position descriptor. | kept — see [CursorPosition](#cursorposition) |
+| `locationId` | `number \| null` | `987654321` | Hash of `location`. | kept |
+| `location` | `Location \| null` | `{ id: 'page-1', version: { id: 'v1', name: 'V1' } }` | Sub-document location. | kept — see [Location](#location--version) |
+| `type` | `string` | `"comment"` | Discriminator (`comment` \| `suggestion`). | default `'comment'`; load-bearing suggestion discriminator |
+| `commentType` | `string` | `"suggestion"` | Secondary discriminator. | load-bearing suggestion discriminator |
+| `sourceType` | `string` | `"agent"` | Origin; `'agent'` = AI-authored. | kept |
+| `metadata` | `CommentMetadata` (extends `BaseMetadata`; `[key]: any`) | `{ documentId: 'doc_1', organizationId: 'org_1', apiKey: 'velt_xxx' }` | Org/doc/api routing context. | **full** kept in Velt's DB; `getClientMetadata` copy sent to your DB — see [BaseMetadata](#basemetadata) |
+| `targetTextRange` | `TargetTextRange \| null` | `{ commonAncestorContainerFXpath: '/html/body/div/p', occurrence: 1 }` | Text-comment anchor. | kept **minus `.text`** (only `text` is withheld) — see [TargetTextRange](#targettextrange) |
+| `selectAllContent` | `boolean` | `true` | Comment spans all text of the target element. | kept |
+| `approved` | `boolean` | `false` | Approval flag. | kept |
+| `status` | `CustomStatus` | `{ id: 'OPEN', name: 'Open', type: 'DEFAULT', color: '#888' }` | Workflow status. | default `OPEN` |
+| `statusUpdatedByUserId` | `string \| null` | `"u_1"` | Who last changed status. | already a userId |
+| `annotationIndex` | `number` | `1` | 1-based index in the available list. | kept |
+| `pageInfo` | `PageInfo` | `{ title: 'Home', url: 'https://app.com' }` | Page context at creation. | default `new PageInfo()` — see [PageInfo](#pageinfo) |
+| `assignedTo` | `User` → `{ userId }` | `{ userId: 'u_2' }` | Assignee. | reduced when `user` provider active; **copied-not-moved** |
+| `priority` | `CustomPriority` | `{ id: 'P1', name: 'High', color: '#f00' }` | Priority. | kept |
+| `ghostComment` | `GhostComment \| null` `{ targetElement?; message?; type?; isSameGroup? }` | `{ message: 'element not found', type: 'desktop' }` | Placeholder when target element is missing. | kept |
+| `areaAnnotationId` | `string` | `"area_77"` | Connected area annotation id. | kept |
+| `context` | `any` | `{ access: { roles: ['editor'] } }` | Your custom context data. | kept (unless in `fieldsToRemove`) |
+| `contextId` | `string` | `"ctx_abc123"` | Hash of `context`. | kept |
+| `iam` | `CommentIAMConfig` `{ accessMode? }` | `{ accessMode: 'PUBLIC' }` | IAM access config. | default `new CommentIAMConfig()` |
+| `isPageAnnotation` | `boolean` | `false` | Page-level annotation flag. | kept |
+| `targetInlineCommentElementId` | `string` | `"inline-sec-3"` | Inline-comment target element id. | kept |
+| `inlineCommentSectionConfig` | `InlineCommentSectionConfig` `{ id; name? }` | `{ id: 'sec_3', name: 'Section 3' }` | Inline-comment section config. | kept |
+| `customList` | `CustomAnnotationDropdownItem[]` | `[{ id: 'tag1', label: 'Backend' }]` | Custom dropdown items. | defaults `[]` |
+| `subscribedUsers` | `CommentAnnotationSubscribedUsers` `{ [hash]: { user: User; type } }` | `{ 'h_u1': { user: { userId: 'u_1' }, type: 'manual' } }` | Subscribed users. | nested `user` reduced when `user` provider active |
+| `unsubscribedUsers` | `CommentAnnotationUnsubscribedUsers` | `{ 'h_u3': { user: { userId: 'u_3' }, type: 'auto' } }` | Unsubscribed users. | nested `user` reduced when `user` provider active |
+| `subscribedGroups` | `CommentAnnotationSubscribedGroups` `{ [groupId]: { type } }` | `{ 'grp_eng': { type: 'manual' } }` | Subscribed groups. | defaults `{}` |
+| `resolvedByUserId` | `string \| null` | `"u_1"` | Who resolved the annotation. | already a userId; **copied-not-moved** |
+| `multiThreadAnnotationId` | `string` | `"thread_5"` | Links multi-thread annotations. | kept |
+| `isDraft` | `boolean` | `false` | Draft flag. | kept |
+| `sourceId` | `string` | `"src_99"` | Source id. | kept |
+| `views` | `CommentAnnotationViews` | `{ views: { 'u_1': { timestamp: 1717800000 } } }` | View tracking. | kept — see [CommentAnnotationViews](#commentannotationviews) |
+| `viewedByUserIds` | `string[]` | `["u_1","u_2"]` | Viewer userIds. | already userIds |
+| `suggestion` | `SuggestionData` | `{ status: 'pending', resolvedBy: { userId: 'u_1' } }` | SDK-managed suggestion data (iff `type === 'suggestion'`). | kept; nested `resolvedBy` reduced when `user` provider active |
+| `agent` | `AgentData` `{ agentName?; name?; avatar?; result?: { title? }; agentFields?[] }` | `{ agentName: 'Reviewer Bot', result: { title: 'Fix typo' } }` | AI-agent identity + output. | read-only from SDK; kept |
+
+### 1.B — Stored in your DB (`PartialCommentAnnotation`)
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `annotationId` | `string` | `"a8f3c2e1-…"` | Join key. | required; also in Velt's DB |
+| `metadata` | `BaseMetadata` | `{ documentId: 'doc_1', organizationId: 'org_1', apiKey: 'velt_xxx' }` | Client-facing metadata. | `getClientMetadata(data.metadata ?? {})` |
+| `comments` | `{ [commentId]: PartialComment }` | `{ '482910': { commentId: 482910, commentText: 'Looks good', from: { userId: 'u_1' } } }` | Per-comment PII map. | required (`{}`); re-keyed array → map |
+| `comments[].commentId` | `string \| number` | `482910` | Per-comment id. | always sent |
+| `comments[].commentHtml` | `string` | `"<p>Looks good 👍</p>"` | Rich-text body (PII). | only if truthy; **never sent to Velt** (stripped on the frontend → your DB) |
+| `comments[].commentText` | `string` | `"Looks good 👍"` | Plain-text body (PII). | only if truthy; **never sent to Velt** (stripped on the frontend → your DB) |
+| `comments[].attachments` | `{ [attachmentId]: PartialAttachment }` | `{ 1: { attachmentId: 1, name: 'spec.pdf', url: 'https://cdn/…/spec.pdf' } }` | Per-comment attachment name/url. | only when the **`attachment`** resolver is also active |
+| `comments[].from` | `PartialUser` `{ userId }` | `{ userId: 'u_1' }` | Comment author. | only if truthy |
+| `comments[].to` | `PartialUser[]` | `[{ userId: 'u_2' }]` | @mentioned users. | only if truthy |
+| `comments[].taggedUserContacts` | `{ userId; contact?: { userId }; text? }[]` | `[{ userId: 'u_2', text: '@Jane' }]` | Tagged contacts (PII text labels). | only if truthy |
+| `from` | `PartialUser` `{ userId }` | `{ userId: 'u_1' }` | Annotation creator. | only if truthy; **copied-not-moved** |
+| `assignedTo` | `PartialUser` `{ userId }` | `{ userId: 'u_2' }` | Assignee. | only if truthy; **copied-not-moved** |
+| `targetTextRange` | `{ text: string }` | `{ text: 'the selected sentence' }` | Selected text content (PII). | the `.text` is **never sent to Velt** (stripped → your DB); rest of `targetTextRange` is sent |
+| `resolvedByUserId` | `string \| null` | `"u_1"` | Who resolved it. | only if truthy; **copied-not-moved** |
+| `[fieldsToRemove]` | `any` | `{ internalTicketId: 'JIRA-42' }` | Your custom fields kept off Velt entirely. | per `config.fieldsToRemove`; truthy-gated; **never sent to Velt** (→ your DB) |
+| `[additionalFields]` | `any` | `{ teamName: 'Growth' }` | Your custom fields replicated. | per `config.additionalFields`; deep-copied; sent to **both** (falsy preserved) |
+
+### 1.C — Comment strip rules
+
+- The only PII stripped on the frontend (and therefore **never sent to Velt**) is: per-comment
+  `commentText`/`commentHtml`, attachment `name`/`url` (when the `attachment` resolver is active),
+  `targetTextRange.text`, and any `fieldsToRemove`. Each comment whose PII is withheld gets
+  `isCommentResolverUsed = true`; attachments get `isAttachmentResolverUsed = true`.
+- `from` / `assignedTo` / `resolvedByUserId` are **copied-not-moved** (sent to both).
+- A `save` to your provider only fires when the comment PII actually changed **and** the action maps
+  to a `ResolverActions` value (`COMMENT_ANNOTATION_ADD` / `COMMENT_ADD` / `COMMENT_UPDATE` /
+  `COMMENT_DELETE`, or a draft). Pure status / priority / assignment changes do **not** call `save`.
+- Truthy-gating: empty-string `commentText` etc. are **not** sent to your provider (and are not
+  withheld from Velt either). `additionalFields` is the exception — it uses `!== undefined`, so
+  `0` / `""` / `false` are copied.
+- **Delete** sends only `{ apiKey, documentId, organizationId, folderId? }`.
+
+---
+
+## 2. Reactions (`reaction`)
+
+Model: `ReactionAnnotation`. PII payload: `PartialReactionAnnotation`.
+
+### 2.A — Stored in Velt's DB (`ReactionAnnotation`)
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `annotationId` | `string` | `"rXa92Kf0bQ3nLpT7v"` | Unique reaction-pin id. | auto-generated; join key (also in your DB) |
+| `context` | `Context` | `{ category: 'design' }` | Context object at creation. | kept |
+| `commentAnnotationId` | `string` | `"cmtAnn_5fK28dQ"` | Connected comment annotation. | kept |
+| `reactions` | `Reaction[]` | `[{ variant: '1f44d', from: { userId: 'u_1' }, lastUpdated: <Date> }]` | Individual reactions. | defaults `[]`; each `from` reduced when `user` provider active — see [Reaction sub-table](#reaction-per-element) |
+| `lastUpdated` | `any` (server timestamp) | `1717804800000` | Annotation last-updated. | auto-generated |
+| `targetElement` | `TargetElement \| null` | `{ xpath: '#cta-btn' }` | DOM anchor. | kept — see [TargetElement](#targetelement) |
+| `targetElementId` | `string \| null` | `"cta-btn"` | Target element id you supplied. | kept |
+| `position` | `CursorPosition \| null` | `null` | Pin position. | value **never sent to Velt** — written as `null` on every Firestore write (independent of self-hosting) |
+| `locationId` | `number \| null` | `1843762915` | Hash of `location`. | auto-generated |
+| `location` | `Location \| null` | `{ id: 'page-2', version: { id: 'v1', name: 'Draft' } }` | Sub-document location. | kept — see [Location](#location--version) |
+| `type` | `string` | `"reaction"` | Discriminator. | default `'reaction'` |
+| `annotationIndex` | `number` | `3` | 1-based index in available list. | kept |
+| `pageInfo` | `PageInfo` | `{ title: 'Dashboard', url: 'https://app.example.com/dashboard' }` | Page context. | default `new PageInfo()` — see [PageInfo](#pageinfo) |
+| `from` | `User` → `{ userId }` | `{ userId: 'u_1' }` | Creator of the reaction annotation. | reduced when `user` provider active; **copied-not-moved** |
+| `icon` | `string` | `"1f44d"` | Emoji/icon code. | **never sent to Velt** when resolver active (stripped on the frontend → your DB; re-merged on read) |
+| `isReactionResolverUsed` | `boolean` | `true` | Resolver-used flag. | flag; set `true` on strip |
+| `iconUrl` | `string` | `"https://cdn.example.com/custom/party.svg"` | Custom reaction icon URL. | kept; sent to Velt (only `icon` is withheld) |
+| `iconEmoji` | `string` | `"🎉"` | Custom reaction emoji char. | kept; sent to Velt |
+| `metadata` | `ReactionMetadata` (extends `BaseMetadata`; `[key]: any`) | `{ documentId: 'doc_42', organizationId: 'org_7' }` | Routing metadata. | **full** kept; `getClientMetadata` copy sent to your DB |
+
+### 2.B — Stored in your DB (`PartialReactionAnnotation`)
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `annotationId` | `string` | `"rXa92Kf0bQ3nLpT7v"` | Join key. | required; also in Velt's DB |
+| `metadata` | `BaseMetadata` | `{ documentId: 'doc_42', organizationId: 'org_7' }` | Client-facing metadata. | `getClientMetadata(annotation.metadata ?? {})` |
+| `icon` | `string` | `"1f44d"` | Emoji/icon code — the only relocated field. | **never sent to Velt** |
+| `from` | `PartialUser` `{ userId }` | `{ userId: 'u_1' }` | Reaction creator. | only if present; **copied-not-moved** |
+
+### 2.C — Reaction strip rules
+
+- Only `icon` is **never sent to Velt** (stripped on the frontend → your DB); everything else is kept and `isReactionResolverUsed` set `true`.
+- `from` is **copied-not-moved**. Per-element `reactions[].from` is reduced to `{ userId }` (when
+  `user` provider active) **only inside Velt's DB** — it is not part of the `Partial` payload.
+- `position`'s value is **never sent to Velt** — written as `null` on every Firestore write regardless of self-hosting.
+- An unchanged save (deep-compare vs. cache) skips stripping entirely (icon not re-processed, flag not set).
+
+---
+
+## 3. Recordings (`recorder`)
+
+Model: `RecorderAnnotation`. PII payload: `PartialRecorderAnnotation`.
+
+### 3.A — Stored in Velt's DB (`RecorderAnnotation`)
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `annotationId` | `string` | `"rec_a1b2c3d4"` | Unique recorder-pin id. | auto-generated; join key |
+| `context` | `Context` | `{ scopeId: 'scope-1' }` | Context object. | kept |
+| `commentAnnotationId` | `string` | `"cmt_99x8"` | Connected comment annotation. | kept |
+| `from` | `User` → `{ userId }` | `{ userId: 'user-123' }` | Creator. | **reduced** to `{ userId }`; the full `User` (name/email/avatar) is **never sent to Velt** (→ your DB) |
+| `color` | `string` | `"#FF5733"` | Pin color. | kept |
+| `lastUpdated` | `any` | `1717804800000` | Last-updated time. | auto-generated |
+| `positionX` | `number` | `342` | Pin X position. | auto-generated |
+| `positionY` | `number` | `128` | Pin Y position. | auto-generated |
+| `screenWidth` | `number` | `1920` | Author screen width. | auto-generated |
+| `screenHeight` | `number` | `1080` | Author screen height. | auto-generated |
+| `screenScrollHeight` | `number` | `4200` | Author scroll height. | auto-generated |
+| `screenScrollTop` | `number` | `320` | Author scroll-top. | auto-generated |
+| `recorderedElementPath` | `string` | `"/html/body/div[2]/button[1]"` | XPath of clicked element. | auto-generated |
+| `recorderedElementRect` | `any` | `{ top: 100, left: 50, width: 200, height: 40 }` | Bounding rect of clicked element. | auto-generated |
+| `targetElement` | `TargetElement \| null` | `{ xpath: '/html/body/div[2]' }` | DOM anchor. | kept — see [TargetElement](#targetelement) |
+| `position` | `CursorPosition \| null` | `{ top: 128, left: 342 }` | Pin position. | kept — see [CursorPosition](#cursorposition) |
+| `locationId` | `number \| null` | `1837465921` | Hash of `location`. | kept |
+| `location` | `Location \| null` | `{ id: 'doc-1', locationName: 'Page 1' }` | Sub-document location. | kept — see [Location](#location--version) |
+| `type` | `string` | `"recorder"` | Discriminator. | default `'recorder'` |
+| `recordingType` | `RecorderType` (`'audio' \| 'video' \| 'screen'`) | `"video"` | Recording kind. | default `'audio'` |
+| `mode` | `RecorderLayoutMode` | `"floating"` | Recorder layout mode. | default `'floating'` |
+| `approved` | `boolean` | `true` | Approval flag. | kept |
+| `attachment` | `Attachment \| null` | `null` | Single recorded-media attachment. | **@deprecated**; value **never sent to Velt** — written as `null`; full object → your DB |
+| `attachments` | `Attachment[]` | `[{ attachmentId: 'att_1', name: 'recording.webm', bucketPath: 'orgs/o1/rec/att_1.webm' }]` | Recording attachments. | **reduced to stubs** `{ attachmentId, name, bucketPath }` (url etc. never sent to Velt; bucketPath kept for cleanup) |
+| `annotationIndex` | `number` | `3` | 1-based index. | kept |
+| `pageInfo` | `PageInfo` | `{ title: 'Home', url: 'https://app.example.com' }` | Page context. | default `new PageInfo()` — see [PageInfo](#pageinfo) |
+| `recordedTime` | `{ duration?: number; display?: string } \| null` | `{ duration: 12500, display: '00:00:12' }` | Recorded duration. | kept; sent to Velt |
+| `transcription` | `Transcription` | *(absent when resolver active)* | Transcript of the media. | **never sent to Velt** when resolver active → see [Your DB](#3b--stored-in-your-db-partialrecorderannotation). Present in Velt's DB **only** when no recorder resolver is set |
+| `waveformData` | `number[]` | `[0.1, 0.4, 0.2, 0.9]` | Audio waveform. | kept; sent to Velt |
+| `displayName` | `string` | `"Sprint demo recording"` | Display name. | kept; sent to Velt (top level) |
+| `metadata` | `RecorderMetadata` (extends `BaseMetadata`; `[key]: any`) | `{ apiKey: 'AbC', documentId: 'doc-1', organizationId: 'org-1' }` | Routing metadata. | **full** kept; `getClientMetadata` copy sent to your DB |
+| `latestVersion` | `number` | `2` | Current edit version number. | kept |
+| `recordingEditVersions` | `{ [version: number]: RecorderAnnotationEditVersion }` | `{ 1: { recordedTime: {...}, waveformData: [...], displayName: 'v1' } }` | Per-edit version history. | per-version PII withheld (`from`→`{userId}`, `attachment`→`null`, `attachments`→stubs, `transcription` never sent); non-PII per-version fields kept |
+| `chunkUrls` | `{ [index: number]: string }` | `{}` | Per-chunk upload URLs. | value **never sent to Velt** — written as `{}` when resolver active (full map → your DB) |
+| `isRecorderResolverUsed` | `boolean` | `true` | Resolver-used flag. | flag; set `true` on strip |
+| `isUrlAvailable` | `boolean` | `false` | Real URL (vs. local blob) ready yet. | kept **and** copied to your DB |
+
+### 3.B — Stored in your DB (`PartialRecorderAnnotation`)
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `annotationId` | `string` | `"rec_a1b2c3d4"` | Join key. | always present |
+| `metadata` | `BaseMetadata` | `{ apiKey: 'AbC', documentId: 'doc-1', organizationId: 'org-1', folderId: 'f-1' }` | Client-facing metadata. | `getClientMetadata(data.metadata)` |
+| `from` | `User` (full) | `{ userId: 'user-123', name: 'Jane Doe', email: 'jane@acme.com', photoUrl: 'https://…' }` | Full creator user object (PII). | deep-cloned full object |
+| `transcription` | `Transcription` | `{ from: { userId: 'user-123' }, transcriptedText: 'Hello team…', vttUrl: 'https://…/cap.vtt' }` | Full transcript (PII). | **never sent to Velt** — see [Transcription](#transcription-your-db-recorder-payload) |
+| `attachment` | `Attachment \| null` | `{ attachmentId: 'att_1', name: 'recording.webm', url: 'https://storage/…' }` | Deprecated single attachment (with URL). | **@deprecated**; sent when defined; value never sent to Velt (written as `null` there) |
+| `attachments` | `Attachment[]` | `[{ attachmentId: 'att_1', name: 'recording.webm', url: 'https://storage/…' }]` | Full attachment list incl. media URLs (PII). | sent only when length > 0; reduced to stubs in Velt's DB |
+| `chunkUrls` | `Record<number, string>` | `{ 0: 'https://storage/chunk0', 1: 'https://storage/chunk1' }` | Full chunk-URL map. | sent only when non-empty; value never sent to Velt (written as `{}` there) |
+| `recordingEditVersions` | `Record<number, PartialRecorderAnnotationEditVersion>` | `{ 1: { from: { userId: 'user-123' }, attachments: [{ attachmentId: 'att_1', url: 'https://…' }], transcription: { transcriptedText: '…' } } }` | Per-version PII (`from`, `attachment`, `attachments`, `transcription`). | only versions with ≥1 PII field |
+| `isUrlAvailable` | `boolean` | `false` | Real URL ready yet. | copied (also kept in Velt's DB) |
+| `[additionalFields]` | `any` | `{ customTag: 'launch-demo' }` | Your replicated custom fields. | per `config.additionalFields`; kept in Velt's DB too |
+
+### 3.C — Recorder strip rules
+
+- Never sent to Velt: `transcription` (entire object → your DB), the value of `attachment`
+  (written as `null`), the urls inside `attachments` (Velt keeps only `{ attachmentId, name, bucketPath }`
+  stubs; `bucketPath` is deliberately kept for Firebase cleanup), and the value of `chunkUrls`
+  (written as `{}`). `from` is reduced to `{ userId }`; `isRecorderResolverUsed` set `true`.
+- `recordingEditVersions` per-version PII is withheld the same way; non-PII per-version fields
+  (`recordedTime`, `waveformData`, `displayName`, `boundedTrimRanges`, `boundedScaleRanges`) are sent to Velt.
+- Top-level `displayName` / `waveformData` / `recordedTime` are sent to Velt (not part of the your-DB payload).
+- **Recording files stay on Velt** unless you also set `recorder.storage` (the bring-your-own storage
+  scope). The recorder *metadata* resolver and the recording *file* storage are independent toggles.
+
+---
+
+## 4. Notifications (`notification`)
+
+Model: `Notification` / `NotificationRawData`. PII payload: `PartialNotification`. **Custom
+notifications only** (`notificationSource === 'custom'`); standard comment/recording notifications
+resolve through their own feature providers. This is **read-only enrichment** — there is **no
+write-side strip** and **no `save`**.
+
+### 4.A — Stored in Velt's DB (structural notification envelope)
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `id` | `string` | `"notif_a1b2c3d4"` | Notification id / join key. | required; the resolver `get()` lookup key |
+| `notificationSource` | `string` | `"custom"` | Source discriminator. | resolver applies only when `'custom'` |
+| `actionType` | `string` | `"created"` | Action kind. | structural |
+| `actionUser` | `User` → `{ userId }` | `{ userId: 'user_42' }` | Who triggered it. | reduced when `user` provider active; full user object never sent to Velt |
+| `timestamp` | `number` | `1717689600000` | Created time (epoch ms). | ordering key |
+| `targetAnnotationId` | `string` | `"annotation_99"` | Comment annotation it points at. | structural; underlying comment PII resolves via the comment resolver |
+| `metadata` | `NotificationMetadata` `{ apiKey?; organizationId?; clientOrganizationId?; documentId?; clientDocumentId?: string\|number; locationId?: number; location?: Location }` | `{ apiKey: 'key_xyz', organizationId: 'org_1', documentId: 'doc_5', locationId: 1234567890 }` | Routing identifiers. | identifiers only (no display PII) |
+| `notifyUsers` | `{ [emailHash]: boolean }` | `{ "a1b2c3": true }` | Recipients by **hashed** email. | keys are hashes, not raw emails |
+| `notifyUsersByUserId` | `{ [userIdHash]: boolean }` | `{ "f9e8d7": true }` | Recipients by **hashed** userId. | keys are hashes |
+| `isCommentResolverUsed` | `boolean` | `true` | Comment resolver supplied the comment text. | flag |
+| `isNotificationResolverUsed` | `boolean` | `true` | Notification resolver enriched this record on read. | flag; auto-set by merge |
+
+### 4.B — Stored in your DB (`PartialNotification`)
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `notificationId` | `string` | `"notif_a1b2c3d4"` | Join key. | required; the only non-PII field |
+| `displayHeadlineMessageTemplate` | `string` | `"{{actionUser}} mentioned {{recipientUser}}"` | Headline template (PII copy). | never sent to Velt (custom) |
+| `displayHeadlineMessageTemplateData` | `{ actionUser?: User; recipientUser?: User; actionMessage?: string; [key]: any }` | `{ actionUser: { userId: 'user_42', name: 'Ada' }, actionMessage: 'mentioned you' }` | Headline template data (full user objects). | PII; your DB only |
+| `displayBodyMessage` | `string` | `"Take a look when you get a chance."` | Rendered body text. | PII; your DB only |
+| `displayBodyMessageTemplate` | `string` | `"{{users}} replied to your comment"` | Body template. | PII; your DB only |
+| `displayBodyMessageTemplateData` | `{ [key]: any }` | `{ users: [{ userId: 'user_7', name: 'Linus' }] }` | Body template data. | PII; your DB only |
+| `notificationSourceData` | `any` | `{ comment: { text: 'Looks great!' } }` | Your custom source payload. | PII; your DB only |
+| `[key: string]` | `any` | `{ customBadge: 'urgent' }` | Any extra custom fields you return. | merged verbatim on read (except `notificationId`) |
+
+### 4.C — Notification strip rules
+
+- **No write-side strip / no `save`.** For custom notifications the `PartialNotification` PII is never
+  sent to Velt at all; it lives in your backend and is fetched on read, then merged into both the
+  `notification` and its raw form, setting `isNotificationResolverUsed = true`.
+- The only write-side reduction is `actionUser → { userId }` (when `user` provider active).
+- `isUnread`, `forYou`, and the rendered `displayHeadlineMessage` are **computed on the client** (from
+  `notificationViews` / `notifyUsers*` / the templates) and stored in neither DB — omitted from the
+  tables above.
+- Resolution order is **notification → user → comment** (notification PII fills userIds that the user
+  resolver then enriches).
+- **Delete** calls your provider with `{ notificationId, organizationId }`.
+
+---
+
+## 5. Activity (`activity`)
+
+Model: `ActivityRecord`. PII payload: `PartialActivityRecord`. **Append-only** — there is **no
+`delete`**. Activity records can carry PII from several features at once.
+
+### 5.A — Stored in Velt's DB (`ActivityRecord`)
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `id` | `string` | `"act_8f3kd92mz"` | Unique activity id / join key. | auto-generated |
+| `featureType` | `ActivityFeatureType` (`'comment'\|'reaction'\|'recorder'\|'crdt'\|'custom'`) | `"comment"` | Feature that generated the activity. | structural |
+| `actionType` | `string` | `"comment_annotation.status_change"` | Action (`entity_type.action`). | structural |
+| `eventType` | `string` | `"STATUS_CHANGED"` | Underlying status/event. | optional |
+| `actionUser` | `User` → `{ userId }` | `{ userId: 'user_123' }` | Who performed the action. | reduced when `user` provider active; full user object never sent to Velt |
+| `timestamp` | `number` | `1717804800000` | Server timestamp (epoch ms). | auto-generated |
+| `metadata` | `ActivityMetadata` (extends `BaseMetadata`; `[key]: any`) | `{ organizationId: 'org_1', documentId: 'doc_42', folderId: 'folder_9' }` | Denormalized routing IDs. | **full** kept; `getClientMetadata` copy sent to your DB |
+| `targetEntityId` | `string` | `"annotation_55"` | Parent entity id (annotation/recording/…). | resolver lookup key |
+| `targetSubEntityId` | `string \| null` | `"comment_88"` | Sub-entity id (commentId); null for entity-level. | optional |
+| `changes` | `ActivityChanges` `{ [key]: { from?; to? } }` | `{ status: { from: { id: 'open' }, to: { id: 'closed' } } }` | Linear-style from/to pairs. | user objects → `{ userId }`; `commentText` entry **never sent to Velt** (→ your DB) when **activity** resolver active |
+| `entityData` | `TEntity` (e.g. `CommentAnnotation`/`ReactionAnnotation`/`RecorderAnnotation`) | `{ annotationId: 'annotation_55', status: { id: 'open' } }` | Full parent-entity snapshot. | feature PII **never sent to Velt** (comment text/html/attachments, reaction icon, recorder transcription/attachments/chunkUrls); users → `{ userId }` |
+| `entityTargetData` | `TTarget` (e.g. `Comment`) | `{ commentId: 'comment_88', from: { userId: 'user_123' } }` | Sub-entity snapshot (or custom-activity data). | comment PII **never sent to Velt** (text/html/from/to/taggedUserContacts) |
+| `displayMessageTemplate` | `string` | `"{{actionUser.name}} shipped {{releaseName}}"` | Template — **custom activities only**. | kept (unless in `fieldsToRemove`) |
+| `displayMessageTemplateData` | `Record<string, unknown>` | `{ actionUser: { userId: 'user_123' }, releaseName: 'v2.1' }` | Template values — **custom only**. | user objects → `{ userId }`; non-user values kept |
+| `actionIcon` | `string` | `"https://cdn.example.com/icons/status.svg"` | Display icon (typically custom). | optional |
+| `immutable` | `boolean` | `true` | If true, cannot be updated/deleted via REST. | optional flag |
+| `isActivityResolverUsed` | `boolean` | `true` | Resolver withheld PII from this record (PII never sent to Velt). | flag; set `true` only when PII was extracted |
+
+### 5.B — Stored in your DB (`PartialActivityRecord`)
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `id` | `string` | `"act_8f3kd92mz"` | Correlation key. | required; same as `ActivityRecord.id` |
+| `metadata` | `BaseMetadata` | `{ organizationId: 'org_1', documentId: 'doc_42' }` | Client-facing metadata copy. | `getClientMetadata` subset |
+| `changes` | `ActivityChanges` | `{ commentText: { from: 'old text', to: 'new text' } }` | PII change pairs. | for comment activities, only `{ commentText }`; sent when **activity** resolver active |
+| `entityData` | `unknown` (`PartialReaction…`/`PartialRecorder…`) | `{ annotationId: 'rec_77', transcription: {…}, attachment: {…} }` | Feature-specific entity PII. | reaction/recorder only, **and** only when the matching feature resolver is also active |
+| `entityTargetData` | `unknown` | `{ commentId: 'comment_88', commentText: 'Looks good' }` | Sub-entity PII snapshot. | merged back on read |
+| `displayMessageTemplateData` | `Record<string, unknown>` | `{ releaseName: 'v2.1', secretNote: 'internal only' }` | Custom-activity template values. | via `fieldsToRemove` for custom; users → `{ userId }` Velt-side |
+| `[key: string]` | `any` | `{ customField: { ssn: '***' } }` | `fieldsToRemove` custom fields. | **`featureType === 'custom'` only**; **never sent to Velt** (→ your DB) |
+
+### 5.C — Activity strip rules
+
+- `displayMessage` is **always recomputed on the client** (from the template + values) and stored in
+  neither DB — omitted from the tables above.
+- All user reduction (`actionUser`, users in `changes`, users in `displayMessageTemplateData`) happens
+  only when the **`user`** provider is active.
+- `changes['commentText']` is **never sent to Velt** (→ your DB) **only** when the **activity**
+  resolver is active; if only the *comment* resolver is active it is preserved (to avoid unrestorable
+  loss). Comment `entityData`/`entityTargetData` PII is handled by the comment resolver's own store.
+- Reaction/recorder `entityData` PII reaches your DB **only when both** the activity resolver **and**
+  the matching feature resolver are active.
+- `fieldsToRemove` applies to `featureType === 'custom'` only; built-in feature types ignore it.
+- Append-only: no delete.
+
+---
+
+## 6. Attachments (`attachment`)
+
+Stored model: `Attachment` — embedded on comments (`comments[].attachments`) and recordings
+(`attachments`). Upload payload: `ResolverAttachment` / `AttachmentResolverMetadata`. **There is no
+`Partial<X>` strip and no `get`** — attachments are *binary files*. When you register an `attachment`
+(or `recorder.storage`) provider, Velt hands you the raw `File`; you return `{ url }`.
+
+### 6.A — Stored in Velt's DB (`Attachment` record — kept, minus the binary bytes)
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `attachmentId` | `number` | `742193` | Unique attachment id (random 6-digit). | auto-generated; primary key |
+| `isAttachmentResolverUsed` | `boolean` | `true` | Self-hosted storage used for this attachment. | flag |
+| `name` | `string` | `"design-spec.pdf"` | Original file name. | kept; also sent (reduced) to your storage |
+| `bucketPath` | `string` | `"attachments/abc123/design-spec.pdf"` | Path of the file in storage. | kept |
+| `size` | `number` | `204800` | File size (bytes). | kept |
+| `type` | `RecorderFileFormat` (`'mp3'\|'mp4'\|'webm'`) | `"mp4"` | File format. | kept (string union, not enum) |
+| `url` | `string` | `"https://customer-cdn.example.com/files/design-spec.pdf"` | Download URL. | with self-hosting = the URL **your** storage returned |
+| `thumbnail` | `string` | `"data:image/png;base64,iVBORw0KGgo…"` | Base64 thumbnail. | kept |
+| `thumbnailWithPlayIconUrl` | `string` | `"https://cdn/…/thumb-play.png"` | Thumbnail with play overlay (video). | kept |
+| `metadata` | `any` | `{ width: 1920, height: 1080, duration: 12.4 }` | Arbitrary attachment metadata. | kept (distinct from `AttachmentResolverMetadata`) |
+| `mimeType` | `any` | `"application/pdf"` | MIME type. | kept; also sent (reduced) to your storage |
+| `previewImages` | `string[]` | `["data:image/png;base64,…","data:image/png;base64,…"]` | Preview images. | kept |
+
+> The **binary bytes are never sent to Velt** when you self-host storage; they go straight to your
+> bucket and only the returned `url` (plus the structural fields above) is stored on the `Attachment`
+> record.
+
+### 6.B — Handed to your storage provider (upload payload) / returned
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `file` | `File` | `File { name: 'mockup.png', size: 23456, type: 'image/png' }` | Raw binary content. | multipart `file` part (URL mode) or `provider.save` arg; never sent to Velt |
+| `attachment.attachmentId` | `number` | `742199` | Attachment id (inside `request.attachment`). | required |
+| `attachment.name` | `string` | `"mockup.png"` | File name. | optional |
+| `attachment.mimeType` | `string` | `"image/png"` | MIME type. | optional |
+| `metadata` | `AttachmentResolverMetadata` | `{ organizationId: 'org_xyz789', documentId: 'doc_a1b2c3', folderId: null, attachmentId: 742199, commentAnnotationId: 'ann_55', apiKey: 'AbCd…' }` | Routing context. | see sub-fields below |
+| `metadata.organizationId` | `string \| null` | `"org_xyz789"` | Org scope. | nullable |
+| `metadata.documentId` | `string \| null` | `"doc_a1b2c3"` | Document scope. | nullable |
+| `metadata.folderId` | `string \| null` | `"folder_q1reports"` | Folder scope. | optional + nullable; on delete only when truthy |
+| `metadata.attachmentId` | `number \| null` | `742199` | Mirror of top-level id. | nullable |
+| `metadata.commentAnnotationId` | `string \| null` | `"ann_55"` | Owning comment annotation. | nullable; dropped on delete |
+| `metadata.apiKey` | `string \| null` | `"AbCdEf123456PublicApiKey"` | Velt public API key. | nullable |
+| `event` | `ResolverActions` | `"ATTACHMENT_SAVE"` | Why the call fired. | optional; delete uses `ATTACHMENT_DELETE` |
+| **(return)** `url` | `string` | `"https://cdn.customer.com/velt/742199/mockup.png"` | URL of the stored file you return. | `SaveAttachmentResolverData.url`; persisted back onto `Attachment.url` |
+
+### 6.C — Attachment strip rules
+
+- No annotation-style `Partial<X>`. The JSON `request` is exactly
+  `{ attachment: { attachmentId, name, mimeType }, metadata, event }`; the `File` is destructured out
+  and sent as binary — straight to your storage, never to Velt.
+- **Delete** sends `{ attachmentId, metadata: { apiKey, documentId, organizationId, folderId? }, event }`.
+- Comment attachments (`DataProviders.attachment`) and recording files
+  (`DataProviders.recorder.storage`) are **independent** storage scopes — omit either to keep that
+  scope on Velt-managed storage.
+
+---
+
+## 7. Shared building blocks
+
+These nested objects are embedded inside the feature records above and are kept verbatim in Velt's DB
+(unless a sub-field is noted as never sent to Velt). The `metadata` envelope is the one whose
+*your-DB* copy is reduced via `getClientMetadata()`.
+
+### BaseMetadata
+
+The `metadata` field present on every feature payload. Full version kept in Velt's DB; client-facing
+subset sent to your DB.
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `apiKey` | `string` | `"AbCdEf123456PublicApiKey"` | Velt public API key. | optional |
+| `documentId` | `string` | `"doc_a1b2c3"` | Velt-internal hashed document id. | auto-derived from `clientDocumentId` |
+| `clientDocumentId` | `string` | `"my-page-123"` | The raw documentId you passed. | dropped from the client-facing copy (after mapping → `documentId`) |
+| `organizationId` | `string` | `"org_xyz789"` | Velt-internal hashed org id. | auto-derived from `clientOrganizationId` |
+| `clientOrganizationId` | `string` | `"acme-corp"` | The raw organizationId you passed. | dropped from the client-facing copy (after mapping → `organizationId`) |
+| `folderId` | `string` | `"folder_q1reports"` | Velt-internal hashed folder id. | auto-derived from `veltFolderId` |
+| `veltFolderId` | `string` | `"vfolder_001"` | Velt-assigned folder id. | Velt-internal; not included in the client-facing copy sent to your DB |
+| `documentMetadata` | `DocumentMetadata` | `{ documentName: 'Q1 Report' }` | Your descriptive document metadata. | optional |
+| `sdkVersion` | `string \| null` | `"5.0.2-beta.34"` | SDK version that produced the payload. | auto-generated |
+
+> **Client-facing transform (`getClientMetadata`):** `clientDocumentId → documentId`,
+> `clientOrganizationId → organizationId`; `veltFolderId` / `parentVeltFolderId` / `pageInfo`
+> dropped. `folderId` included only when truthy.
+
+### Location & Version
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `id` | `string` | `"page-2"` | Unique location id. | optional |
+| `locationName` | `string` | `"Page 2 - Section A"` | Human-readable location name. | optional |
+| `version` | `Version` `{ id: string; name: string }` | `{ id: 'v1', name: 'Draft 1' }` | Version object. | optional |
+| `[key: string]` | `any` | `{ page: 3, tab: 'design' }` | Arbitrary custom location keys. | open index signature — kept |
+
+### PageInfo
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `url` | `string` | `"https://app.example.com/editor?doc=123"` | Full page URL. | optional |
+| `path` | `string` | `"/editor"` | Path (excl. base URL). | optional |
+| `queryParams` | `string` | `"doc=123&tab=design"` | Query string. | optional |
+| `baseUrl` | `string` | `"https://app.example.com"` | Domain. | optional |
+| `title` | `string` | `"Editor - Acme App"` | Page title. | optional |
+| `arrowUrl` | `string` | `"https://app.example.com/editor#arrow-1"` | Arrow-annotation reference URL. | optional |
+| `areaUrl` | `string` | `"https://app.example.com/editor#area-1"` | Area-annotation reference URL. | optional |
+| `commentUrl` | `string` | `"https://app.example.com/editor#comment-1"` | Comment-annotation reference URL. | optional |
+| `tagUrl` | `string` | `"https://app.example.com/editor#tag-1"` | Tag-annotation reference URL. | optional |
+| `recorderUrl` | `string` | `"https://app.example.com/editor#rec-1"` | Recorder-annotation reference URL. | optional |
+| `screenWidth` | `number` | `1440` | Author screen width. | auto-generated |
+| `deviceInfo` | `IDeviceInfo` | `{ os: 'macOS', browser: 'Chrome' }` | Device/browser info. | auto-generated default |
+
+### TargetElement
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `xpath` | `string` | `"/html/body/div[1]/button"` | XPath of the target element. | optional |
+| `fXpath` | `string` | `"/html[1]/body[1]/div[1]/button[1]"` | Full XPath. | optional |
+| `cfXpath` | `string` | `"/html[1]/body[1]/div[1]@class=toolbar/button[1]"` | Full XPath with class names. | optional |
+| `topPercentage` | `number` | `42.5` | Relative top position on the element (%). | default `0` |
+| `leftPercentage` | `number` | `63.1` | Relative left position on the element (%). | default `0` |
+| `anchor` | `AnchorRecord \| null` | `{ … robust anchor descriptor … }` | Robust anchor descriptor. | optional |
+
+### TargetTextRange
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `commonAncestorContainer` | `string` | `"/html/body/div[2]/p[1]"` | XPath of the common ancestor container. | optional |
+| `commonAncestorContainerFXpath` | `string` | `"/html[1]/body[1]/div[2]/p[1]"` | Full XPath of the container. | optional |
+| `commonAncestorContainerCFXpath` | `string` | `"/html[1]/body[1]/div[2]@class=content/p[1]"` | Full XPath with class names. | optional |
+| `commonAncestorContainerAnchor` | `AnchorRecord` | `{ … robust anchor descriptor … }` | Robust anchor descriptor. | optional |
+| `text` | `string` | `"the quick brown fox"` | The selected text snippet. | **never sent to Velt** for comments (→ your DB) — the only sub-field withheld |
+| `occurrence` | `number` | `1` | Which occurrence of the text. | default `1` |
+
+### CursorPosition
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `top` | `number` | `148` | Top position of the pin/cursor. | default `0` |
+| `left` | `number` | `320` | Left position of the pin/cursor. | default `0` |
+| `parentScaleX` | `number` | `1` | X-scale of the parent element. | optional (transform handling) |
+| `parentScaleY` | `number` | `1` | Y-scale of the parent element. | optional (transform handling) |
+| `transformContext` | `any` | `{ … }` | Transform context info. | optional |
+
+### CommentAnnotationViews
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `views` | `{ [userId]: { timestamp } }` | `{ 'u_1': { timestamp: 1717800000 } }` | Per-user annotation view timestamps. | kept |
+| `comments` | `{ [commentId]: { views: { [userId]: { timestamp } } } }` | `{ '482910': { views: { 'u_1': { timestamp: 1717800100 } } } }` | Per-comment view timestamps. | kept |
+| `metadata` | `BaseMetadata` | `{ documentId: 'doc_1' }` | Routing metadata. | optional |
+
+### Reaction (per element)
+
+The element shape of `ReactionAnnotation.reactions[]`, kept in Velt's DB.
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `variant` | `string` | `"1f44d"` | Emoji variant/identifier for this reaction. | optional; kept; sent to Velt |
+| `from` | `User` → `{ userId }` | `{ userId: 'u_1' }` | Who added this individual reaction. | required on element; reduced when `user` provider active (Velt-side only) |
+| `lastUpdated` | `Date` | `2026-06-08T10:32:00.000Z` | When this reaction was added. | auto-generated |
+
+### Comment (per-thread comment)
+
+The element shape of `CommentAnnotation.comments[]`, kept in Velt's DB with per-comment PII never sent to Velt.
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `commentId` | `number` | `482910` | Per-comment id. | auto-generated |
+| `context` | `any` | `{ … }` | Per-comment context. | kept |
+| `type` | `'text' \| 'voice'` | `"text"` | Comment content type. | default `'text'` |
+| `commentText` | `string` | `"Looks good 👍"` | Plain-text body. | **never sent to Velt** (→ your DB) |
+| `isCommentTextAvailable` | `boolean` | `true` | Whether comment text exists. | kept |
+| `isCommentResolverUsed` | `boolean` | `true` | Comment resolver used (per comment). | flag |
+| `commentHtml` | `string` | `"<p>Looks good 👍</p>"` | Rich-text body. | **never sent to Velt** (→ your DB) |
+| `replaceContentHtml` | `string` | `"<p>fixed</p>"` | HTML to replace on accept. | kept |
+| `replaceContentText` | `string` | `"fixed"` | Text to replace on accept. | kept |
+| `commentVoiceUrl` | `string` | `"https://…/voice.webm"` | Voice-comment URL. | kept |
+| `from` | `User` → `{ userId }` | `{ userId: 'u_1' }` | Comment author. | reduced when `user` provider active |
+| `to` | `User[]` → `{ userId }[]` | `[{ userId: 'u_2' }]` | @mentioned users. | reduced when `user` provider active |
+| `lastUpdated` | `Date` | `2026-06-08T10:32:00Z` | Last-updated time. | auto-generated |
+| `createdAt` | `any` | `{ seconds: 1717800000 }` | Created time. | auto-generated |
+| `status` | `'added' \| 'updated'` | `"added"` | Comment status. | default `'added'` |
+| `attachments` | `Attachment[]` | `[{ attachmentId: 1, name: 'spec.pdf' }]` | Attachments. | `name`/`url` never sent to Velt when `attachment` resolver active — see [Attachment](#6a--stored-in-velts-db-attachment-record--kept-minus-the-binary-bytes) |
+| `recorders` | `RecordedData[]` | `[…]` | Embedded recorded data. | kept |
+| `reactionAnnotationIds` | `string[]` | `["rXa92…"]` | Linked reaction-annotation ids. | kept |
+| `taggedUserContacts` | `AutocompleteUserContactReplaceData[]` | `[{ userId: 'u_2', text: '@Jane' }]` | Tagged contacts. | `contact` reduced to `{ userId }`; PII text → your DB |
+| `customList` | `AutocompleteReplaceData[]` | `[…]` | Custom autocomplete replacements. | kept |
+| `toOrganizationUserGroup` | `AutocompleteGroupReplaceData[]` | `[…]` | Tagged org groups. | kept |
+| `isDraft` | `boolean` | `false` | Draft flag. | kept |
+| `editedAt` | `any` | `{ seconds: 1717800500 }` | Edited time. | auto-generated |
+| `isEdited` | `boolean` | `true` | Edited flag. | kept |
+
+### Transcription (your-DB recorder payload)
+
+Full object sent to your DB (never sent to Velt) when the recorder resolver is active.
+
+| Field | Type | Example | Description | Notes |
+|---|---|---|---|---|
+| `from` | `User` | `{ userId: 'user-123' }` | Who created the transcription. | required |
+| `lastUpdated` | `number` | `1717804800000` | Created/updated time. | optional |
+| `srtBucketPath` | `string` | `"orgs/o1/rec/cap.srt"` | Storage path of the SRT file. | optional |
+| `srtUrl` | `string` | `"https://…/cap.srt"` | SRT file URL. | optional |
+| `transcriptedText` | `string` | `"Hello team, in this demo…"` | Transcribed text. | optional (PII) |
+| `transcriptionLatency` | `number` | `840` | Time to transcribe (ms). | optional |
+| `vttBucketPath` | `string` | `"orgs/o1/rec/cap.vtt"` | Storage path of the VTT file. | optional |
+| `vttUrl` | `string` | `"https://…/cap.vtt"` | VTT file URL. | optional |
+
+---
+
+## 8. Summary matrix & field counts
+
+### Where does each field-class live?
+
+| Data | Velt's DB | Your DB / storage |
+|---|---|---|
+| Comment text / HTML | — | ✅ |
+| Comment attachment file + name/url | bucketPath stub (recordings) | ✅ |
+| Reaction `icon` | — | ✅ |
+| Recording transcript / file | file stubs only | ✅ |
+| Custom-notification display/template PII | — | ✅ |
+| Activity PII (commentText changes, entity data, template data) | — | ✅ |
+| User profile (name, email, avatar) | `{ userId }` only (when `user` provider set) | ✅ |
+| Your custom fields via `fieldsToRemove` | — | ✅ |
+| Your custom fields via `additionalFields` | ✅ | ✅ |
+| Structural data (IDs, locations, status, targets, timestamps, flags) | ✅ | — |
+| Client-computed fields (`unread`, `isUnread`, `forYou`, `displayMessage`, …) | — | — |
+
+*Anything in the right-hand column with `—` under "Velt's DB" is **never sent to Velt** — it is
+stripped on the frontend and goes only to your DB (or is recomputed on the client).*
+
+### Field counts (persisted fields only)
+
+| Feature | Velt's DB | Your DB (`Partial<X>`) | Strip model |
+|---|---|---|---|
+| Comments | 53 top-level (+ ~24-field `Comment` element) | `PartialCommentAnnotation` + nested `PartialComment` | strip on the frontend, merge on read |
+| Reactions | 19 top-level (+ 3-field `Reaction` element) | `{ annotationId, metadata, icon, from? }` | strip `icon` only |
+| Recordings | 36 (incl. reduced `from`/`attachments`/`chunkUrls`; `transcription` → your DB only) | `PartialRecorderAnnotation` (+ per-version partials, `additionalFields`) | strip + reduce on the frontend; optional file storage |
+| Notifications | 11 (structural + flags) | `PartialNotification` (6 PII + open index) | **read-only enrichment** (custom only) |
+| Activity | 17 | `PartialActivityRecord` (`{ id, metadata?, changes?, entityData?, entityTargetData?, displayMessageTemplateData?, [key]: any }`) | strip on the frontend; append-only |
+| Attachments | `Attachment` (12 fields, minus bytes) | `file` + `{ attachmentId, name, mimeType }` + `AttachmentResolverMetadata` + `event` → returns `{ url }` | binary file storage only |
+
+### Resolver flags (set in Velt's DB; never sent from your side)
+
+`isCommentResolverUsed` · `isReactionResolverUsed` · `isRecorderResolverUsed` ·
+`isNotificationResolverUsed` · `isActivityResolverUsed` · `isAttachmentResolverUsed`
+
+---
+
+*This inventory documents only persisted fields. Fields computed on the client and stored in neither
+database (e.g. `unread`, `viewedBy`, `isUnread`, `forYou`, rendered `displayMessage` /
+`displayHeadlineMessage`) are intentionally omitted — they are never sent to Velt either.*

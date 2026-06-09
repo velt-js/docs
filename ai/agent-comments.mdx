@@ -10,7 +10,7 @@ Agent comments let your AI agents participate in collaboration the same way huma
 
 Agent comments are built on top of the same [Comments](/async-collaboration/comments/overview) feature, but they render with a special UI: each agent finding is a [suggestion](/async-collaboration/suggestions/overview) with **Accept** and **Reject** buttons on the comment dialog. When a reviewer accepts or rejects a finding, the outcome is emitted on the comment element as the `suggestionAccepted` / `suggestionRejected` events, so you can apply the change to your own data or trigger follow-up logic.
 
-Any agent that can make an HTTP request can do this — a built-in Velt agent (like `spell-check`), a custom agent you register in the Velt Console, or an external agent running in your own framework (LangChain, CrewAI, a cron job, etc.).
+Any agent that can make an HTTP request can do this — a custom agent you register in the Velt Console, or an external agent running in your own framework (LangChain, CrewAI, a cron job, etc.).
 
 ## How it works
 
@@ -27,13 +27,57 @@ Attach an `agent` object to the root comment (`commentData[0]`). It is discrimin
 | Field          | Required                                  | Description                                                                                                       |
 | -------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `agentSource`  | Yes                                       | Origin of the agent. One of `velt` or `external`.                                                                |
-| `agentId`      | Required for `velt`, optional for `external` | A built-in agent (e.g. `spell-check`) or a custom agent ID verified server-side. Opaque (never validated) for `external` agents. |
+| `agentId`      | Required for `velt`, optional for `external` | A custom agent ID verified server-side. Opaque (never validated) for `external` agents. |
 | `agentName`    | Required for `external`                    | Display name for the agent. The only source of truth for an external agent's name. (For `velt` agents the name is resolved server-side.) |
 | `executionId`  | No                                        | Execution / run ID for this agent invocation.                                                                    |
 | `url`          | No                                        | Page URL associated with the finding.                                                                            |
 | `reason`       | Yes                                       | Finding details (`title`, `description`, `severity`, `findingType`, `confidence`, `suggestedFix`, etc.). Custom fields are preserved. |
 
 Set the annotation `type` to `"suggestion"` so the finding is classified as an agent suggestion rather than a regular comment.
+
+### The `reason` object
+
+The `reason` object carries the finding's details. Here's each field with a description and an example value.
+
+| Field | Required | Type | Description | Example |
+|-------|----------|------|-------------|---------|
+| `title` | ✅ | string | Short finding title — a quick label for the issue. | `"Low color contrast"` |
+| `description` | ✅ | string | Fuller explanation of what the agent found. | `"Contrast ratio is 2.1:1, below the 4.5:1 WCAG AA threshold."` |
+| `severity` | ✅ | string | How serious the finding is. One of `critical`, `high`, `medium`, `low`, `info`. | `"high"` |
+| `findingId` | — | string | Your own unique ID for the finding, useful for dedup/tracking. | `"finding_a11y_0427"` |
+| `findingType` | — | string | What kind of target the finding is on. One of `text`, `pin`, `page`. | `"pin"` |
+| `issueType` | — | string | Custom classification you define for your own taxonomy. | `"accessibility"` |
+| `confidence` | — | number | How confident the agent is. Integer 0–100. | `92` |
+| `suggestion` | — | string | Suggested change in plain text (human-readable advice). | `"Darken the button background to at least #1A1A1A."` |
+| `suggestedFix` | — | string | The concrete fix value to apply. | `"Welcome"` |
+| `htmlSnippet` | — | string | The relevant chunk of HTML where the issue lives. | `"<button class='cta'>Buy now</button>"` |
+| `htmlSelector` | — | string | CSS/HTML selector pointing to the finding's location. | `".cta-primary > button"` |
+| `source` | — | string | Where the triggering rule came from. One of `instructions`, `knowledge`. | `"knowledge"` |
+| `knowledgeSection` | — | string | Which knowledge section fired (pairs with `source: "knowledge"`). | `"brand-guidelines/accessibility"` |
+
+A note on the difference between the two "fix" fields, since it's easy to conflate them: `suggestion` is prose meant for a human to read in the comment, while `suggestedFix` is the actual replacement value. For a spelling correction, for instance, `suggestedFix` would be just `"Welcome"` — the corrected word itself, not a sentence about it.
+
+Putting it together, a fully-populated `reason` looks like:
+
+```json
+"reason": {
+  "title": "Low color contrast",
+  "description": "Contrast ratio is 2.1:1, below the 4.5:1 WCAG AA threshold.",
+  "severity": "high",
+  "findingId": "finding_a11y_0427",
+  "findingType": "pin",
+  "issueType": "accessibility",
+  "confidence": 92,
+  "suggestion": "Darken the button background to at least #1A1A1A.",
+  "suggestedFix": "#1A1A1A",
+  "htmlSnippet": "<button class='cta'>Buy now</button>",
+  "htmlSelector": ".cta-primary > button",
+  "source": "knowledge",
+  "knowledgeSection": "brand-guidelines/accessibility"
+}
+```
+
+Only the first three (`title`, `description`, `severity`) are required — everything else is optional, and any extra custom fields you add beyond this list are preserved by the server.
 
 ## Example: leave a comment from an external agent
 
@@ -177,7 +221,6 @@ Use the [Get Comment Annotations API](/api-reference/rest-apis/v2/comments-featu
 | ------------------ | ---------------------------------------------------------------------- |
 | `agentId`          | Annotations created by a specific agent.                                |
 | `executionId`      | Annotations from a specific agent run.                                  |
-| `agentType`        | `built-in`, `custom`, or `external`.                                    |
 | `agentSource`      | `velt` or `external`.                                                   |
 | `agentSuggestions` | When `true`, returns only fresh (unaccepted) agent suggestions.        |
 | `agentComments`    | When `true`, returns all agent annotations regardless of status.       |
@@ -191,7 +234,7 @@ curl -X POST 'https://api.velt.dev/v2/commentannotations/get' \
     "data": {
       "organizationId": "acme-corp",
       "documentId": "design-mockup-v2",
-      "agentId": "spell-check"
+      "agentId": "a11y-bot"
     }
   }'
 ```

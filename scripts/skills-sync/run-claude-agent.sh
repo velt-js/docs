@@ -58,7 +58,13 @@ MODEL="${MODEL:-claude-opus-4-7}"
 
 # Strip the YAML frontmatter so we pass just the agent body as the user prompt.
 # Convention: frontmatter is fenced by two `---` lines at the top.
-BODY="$(awk 'BEGIN{f=0} /^---$/{f++; next} f>=2{print}' "$AGENT_FILE")"
+RAW_BODY="$(awk 'BEGIN{f=0} /^---$/{f++; next} f>=2{print}' "$AGENT_FILE")"
+
+# Prepend an explicit execution instruction so the model treats the body as
+# imperative instructions rather than informational context.
+BODY="Execute the following skill instructions NOW against the files in your working directory. Do not ask clarifying questions — read the input files and carry out every step.
+
+${RAW_BODY}"
 
 if [ -z "${BODY//[[:space:]]/}" ]; then
   echo "run-claude-agent.sh: agent body is empty after stripping frontmatter — refusing to run" >&2

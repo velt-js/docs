@@ -3,39 +3,11 @@ title: "Developer Guide"
 description: "A hands-on guide to building on Velt Memory, the review-intelligence layer: add a knowledge source, ask a question, search past decisions, and pull a grounded suggestion."
 ---
 
-A hands-on guide to building on Velt's **Memory** — the review-intelligence layer. By the end you'll have added a knowledge source, asked a natural-language question, searched past review decisions, and pulled a grounded decision suggestion.
+A hands-on guide to building on Velt **Memory**, the review-intelligence layer. By the end you'll have added a knowledge source, asked a natural-language question, searched past review decisions, and pulled a grounded decision suggestion.
 
 <Note>
-  **Two docs, two jobs.** This guide teaches you the **journey** (concepts + a working integration). The **REST API Reference** is the field-level law — every endpoint, field, and error. When the two disagree, the reference wins.
+  New to Memory? Start with the [Overview](/ai/memory/overview) for what Memory is, how judgments and knowledge sources work, and the core concepts this guide builds on.
 </Note>
-
-## What is Memory?
-
-Memory turns your team's review and approval activity into a searchable, queryable knowledge base. As people (and AI agents) make review decisions in Velt, Memory records each one as a **judgment** — the decision, the reasoning, who decided, and what they decided on. On top of that, you can feed Memory your reference material (guidelines, standards, policy docs).
-
-With that foundation you can:
-
-- Search past decisions semantically ("how have we judged copy with medical claims?").
-- Ask natural-language questions and get grounded answers with citations.
-- Suggest a decision for a new item, based on precedent.
-- Surface reviewer profiles, detected patterns, aggregate stats, and proactive alerts.
-
-Two important things to understand up front:
-
-- **Judgments are created automatically** from your review activity — you don't write them through this API. A brand-new workspace starts empty and fills in as reviews happen.
-- **Knowledge is what you add** — reference documents you ingest yourself (covered in the tutorial below).
-
-## Core concepts
-
-| Concept | What it is |
-| --- | --- |
-| **Judgment** | An enriched record of one review decision (decision + reasoning + reviewer + content type + scope, plus an agent block when an AI agent decided). The thing search / ask / suggest read over. Created automatically from review activity. |
-| **Knowledge source** | Reference material you ingest (PDF / CSV / XLSX / text). Memory converts it to canonical markdown, extracts rules, and embeds it. |
-| **Scope** | `apiKey` (workspace), `organization`, or `document` — narrow reads to the right level. |
-| **Embedding type** | `review` (decision + reasoning, the default) vs `content` (the reviewed item). |
-| **Filters** | Narrow results by `decision`, `judgeType` (human/agent), `contentType`, `reviewerId`, `annotationId`, or `dateRange`. |
-| **Retrieval modes** | `search`/`ask` use vector search by default; set `recencyDays` for "what happened recently", or `filters.annotationId` to read one comment thread. |
-| **Pattern / Reviewer profile / Alert** | Derived insights Memory computes from your judgments. |
 
 ## Prerequisites & authentication
 
@@ -73,7 +45,7 @@ export VELT_AUTH_TOKEN="at_..."
 
 ## Build your first integration
 
-We'll do the full loop: add knowledge → ask a question → search decisions → get a suggestion.
+You'll do the full loop: add knowledge → ask a question → search decisions → get a suggestion.
 
 <Steps>
 <Step title="Add a knowledge source">
@@ -81,10 +53,10 @@ Knowledge ingestion is asynchronous and multimodal. Supported file types: PDF, C
 
 There are two ways to submit a file:
 
-- **Inline** (≤ 5 MB) — base64-encode it and send it directly.
-- **By reference** (≤ 30 MB) — request an upload URL, PUT the bytes there, then ingest by reference.
+- **Inline** (up to 5 MB): base64-encode it and send it directly.
+- **By reference** (up to 30 MB): request an upload URL, PUT the bytes there, then ingest by reference.
 
-Inline example — ingest a small PDF of brand guidelines:
+Inline example: ingest a small PDF of brand guidelines:
 
 ```bash
 curl -X POST https://api.velt.dev/v2/memory/knowledge/ingest \
@@ -104,7 +76,7 @@ curl -X POST https://api.velt.dev/v2/memory/knowledge/ingest \
   }'
 ```
 
-Response — ingestion has started in the background:
+Response: ingestion has started in the background:
 
 ```json
 { "result": { "status": "processing", "sourceId": "src_9a8...", "message": "Ingestion started." } }
@@ -134,7 +106,7 @@ curl -X POST https://api.velt.dev/v2/memory/knowledge/list \
   -H "content-type: application/json" -d '{ "data": {} }'
 ```
 
-**Search inside your knowledge base.** This is distinct from Step 3 (which searches decisions/judgments): `/knowledge/search` does a semantic search over the *content of the files you've ingested*. Omit `sourceId` to search the whole workspace KB, or narrow to one or more sources:
+**Search inside your knowledge base.** This is distinct from Step 3 (which searches decisions/judgments): `/knowledge/search` does a semantic search over the *content of the files you've ingested*. Omit `sourceId` to search the whole workspace knowledge base, or narrow to one or more sources:
 
 ```bash
 curl -X POST https://api.velt.dev/v2/memory/knowledge/search \
@@ -144,7 +116,7 @@ curl -X POST https://api.velt.dev/v2/memory/knowledge/search \
 # -> { "result": { "results": [ { "sourceId": "src_9a8...", "text": "Always cite a peer-reviewed source...", "score": 0.18 } ], "recordsSearched": 1 } }
 ```
 
-`sourceId` is optional and may be a single id or a 2–30 id array (fanned out then merged); `score` is the cosine distance (lower = more relevant). This endpoint is workspace-scoped (no `organizationId`/`documentId`). See [Search Knowledge Base](/api-reference/rest-apis/v2/memory/knowledge/search) for the full request/response contract.
+`sourceId` is optional and may be a single id or an array of 2 to 30 ids (fanned out then merged); `score` is the cosine distance (lower = more relevant). This endpoint is workspace-scoped (no `organizationId`/`documentId`). See [Search Knowledge Base](/api-reference/rest-apis/v2/memory/knowledge/search) for the full request/response contract.
 
 <Note>
   **Large or binary files (up to 30 MB):** call `POST /v2/memory/knowledge/upload-url` with `{ mimeType, fileSize, fileName }`, PUT the raw bytes to the returned `uploadUrl`, then call `ingest` with `{ "source": "fileRef", "fileRef": "<the gs:// URI>", "mimeType": "..." }`.
@@ -172,7 +144,9 @@ curl -X POST https://api.velt.dev/v2/memory/ask \
 }
 ```
 
-**Honesty by design:** if Memory has no relevant context, `ask` returns an empty answer (`""`) with `confidence: 0` rather than inventing one. Treat that as "nothing learned about this yet" — expected for brand-new workspaces.
+<Note>
+  If Memory has no relevant context, `ask` returns an empty answer (`""`) with `confidence: 0` rather than inventing one. Treat that as "nothing learned about this yet"; it's expected for brand-new workspaces.
+</Note>
 </Step>
 
 <Step title="Search past decisions">
@@ -216,21 +190,15 @@ curl -X POST https://api.velt.dev/v2/memory/suggest \
 
 ## Going further
 
-Short pointers to the rest of the surface. Field-level detail lives in the REST API Reference.
+Short pointers to the rest of the surface.
 
-- **Filters & date ranges** — Narrow `search`/`ask`/`judgments/query` by `decision`, `judgeType` (human/agent), `contentType`, `reviewerId`, or `dateRange` (`{ start, end }`, ISO-8601 or epoch ms).
-- **Recency-true mode** — Set `recencyDays` (1–365) on `search`/`ask` to get the most-recent activity instead of a semantic match — ideal for digests.
-- **Scopes** — Pass `organizationId` (and `documentId`) to narrow reads; `documentId` requires `organizationId`.
-- **Structured listing vs. semantic search** — Use `judgments/query` when you want to list decisions by metadata (no embedding) instead of ranking by similarity.
-- **Insights** — Pull a reviewer's behavioral profile (`profiles/get`), detected patterns (`patterns/get`), and workspace stats (`stats/get`).
-- **Alerts** — List proactive alerts, dismiss or mark them actioned, and tune generation via `alerts/config/update` (`enabled`, `maxAlertsPerWeek`, `enabledAlertTypes`, `severityThreshold`).
-- **Knowledge lifecycle** — `update` re-runs the pipeline and bumps a source's version; `download` returns the canonical markdown; `delete` hard-removes a source and its derived chunks/rules (blocked while a source is still processing or has dedup dependents); [`knowledge/search`](/api-reference/rest-apis/v2/memory/knowledge/search) semantic-searches the ingested file content (optionally narrowed by `sourceId`).
-
-## Where the data comes from
-
-- **Judgments** are produced automatically as your team reviews/approves work in Velt — there's no "create judgment" endpoint. Expect Memory to be sparse on a new workspace and to get richer as review activity accumulates.
-- **Knowledge sources** are the part you control directly: ingest the guidelines and standards you want Memory (and your agents) to reason against.
-- **Profiles, patterns, and alerts** are derived from judgments over time, so they also need some review history before they're meaningful.
+- **Filters & date ranges:** narrow `search`/`ask`/`judgments/query` by `decision`, `judgeType` (human/agent), `contentType`, `reviewerId`, or `dateRange` (`{ start, end }`, ISO-8601 or epoch ms).
+- **Recency-true mode:** set `recencyDays` (1 to 365) on `search`/`ask` to get the most-recent activity instead of a semantic match, which is ideal for digests.
+- **Scopes:** pass `organizationId` (and `documentId`) to narrow reads; `documentId` requires `organizationId`.
+- **Structured listing vs. semantic search:** use `judgments/query` when you want to list decisions by metadata (no embedding) instead of ranking by similarity.
+- **Insights:** pull a reviewer's behavioral profile (`profiles/get`), detected patterns (`patterns/get`), and workspace stats (`stats/get`).
+- **Alerts:** list proactive alerts, dismiss or mark them actioned, and tune generation via `alerts/config/update` (`enabled`, `maxAlertsPerWeek`, `enabledAlertTypes`, `severityThreshold`).
+- **Knowledge lifecycle:** `update` re-runs the pipeline and bumps a source's version; `download` returns the canonical markdown; `delete` hard-removes a source and its derived chunks/rules (blocked while a source is still processing or has dedup dependents); [`knowledge/search`](/api-reference/rest-apis/v2/memory/knowledge/search) semantic-searches the ingested file content (optionally narrowed by `sourceId`).
 
 ## Errors & troubleshooting
 
@@ -242,18 +210,18 @@ Errors use the standard envelope with a gRPC-style status:
 | `UNAUTHENTICATED` | Missing/invalid `x-velt-auth-token`. |
 | `NOT_FOUND` | Unknown `sourceId`. |
 | `FAILED_PRECONDITION` | e.g. deleting a source that's still processing or has dedup dependents. |
-| `RESOURCE_EXHAUSTED` | Rate limit, or the outstanding-upload quota on `upload-url` — back off and retry. |
+| `RESOURCE_EXHAUSTED` | Rate limit, or the outstanding-upload quota on `upload-url`; back off and retry. |
 
 Common gotchas (all `INVALID_ARGUMENT`):
 
-- Using `filters.annotationId` without `organizationId` — the annotation lookup needs an org.
+- Using `filters.annotationId` without `organizationId`; the annotation lookup needs an org.
 - Passing `documentId` without `organizationId`.
 - A `dateRange` whose `start` is after `end`.
 - An unsupported file type, or an inline file that decodes to more than 5 MB (use `upload-url` for larger files).
 
 ## Limitations
 
-- **Ingestion is asynchronous** — `ingest` returns `status: "processing"`; poll `ingest-status` for the terminal state. A duplicate upload (`dedupOf` set in the status) reports the winning source's status, so it can stay `processing` until the original finishes — `completed` always means "safe to download".
-- **File limits** — inline ≤ 5 MB, by-reference ≤ 30 MB; PDF / CSV / XLSX / plain text only.
-- **Judgments are read-only** via this API — they're created from review activity, not written directly.
-- **New workspaces start empty** — `ask` returns an empty answer and `suggest`/insights stay sparse until enough review history exists.
+- **Ingestion is asynchronous:** `ingest` returns `status: "processing"`; poll `ingest-status` for the terminal state. A duplicate upload (`dedupOf` set in the status) reports the winning source's status, so it can stay `processing` until the original finishes; `completed` always means "safe to download".
+- **File limits:** inline up to 5 MB, by-reference up to 30 MB; PDF / CSV / XLSX / plain text only.
+- **Judgments are read-only via this API:** they're created from review activity, not written directly.
+- **New workspaces start empty:** `ask` returns an empty answer and `suggest`/insights stay sparse until enough review history exists.

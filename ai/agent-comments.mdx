@@ -1,0 +1,299 @@
+---
+title: "Agent Comments"
+sidebarTitle: "Agent Comments"
+description: "Let your AI agents leave comments and findings directly in Velt by calling the Comments REST APIs."
+---
+
+## What are agent comments?
+
+Agent comments let your AI agents participate in collaboration the same way humans do — by leaving comments and findings anchored to a document. Instead of building a separate UI for agent output, your agent calls the Velt [Comment Annotations REST APIs](/api-reference/rest-apis/v2/comments-feature/comment-annotations/add-comment-annotations) to create annotations that render in the standard Velt comments experience.
+
+Agent comments are built on top of the same [Comments](/async-collaboration/comments/overview) feature, but they render with a special UI: each agent finding is a [suggestion](/async-collaboration/suggestions/overview) with **Accept** and **Reject** buttons on the comment dialog. When a reviewer accepts or rejects a finding, the outcome is emitted on the comment element as the `suggestionAccepted` / `suggestionRejected` events, so you can apply the change to your own data or trigger follow-up logic.
+
+Any agent that can make an HTTP request can do this — a custom agent you register in the Velt Console, or an external agent running in your own framework (LangChain, CrewAI, a cron job, etc.).
+
+## How it works
+
+1. **Your agent runs** and produces a finding (a spelling error, an accessibility issue, a code-review note, etc.).
+2. **Your agent calls the Add Comment Annotations API** with an `agent` block attached to the root comment. The server stamps `sourceType: "agent"` on both the comment and the annotation, and generates the annotation-level agent block.
+3. **The finding renders in Velt** as a suggestion that humans can review, accept, or reject.
+4. **You read agent annotations back** with the Get Comment Annotations API using agent-specific filters (`agentId`, `executionId`, `agentSource`, and more).
+
+
+## The `agent` block
+
+Attach an `agent` object to the root comment (`commentData[0]`). It is discriminated on `agentSource`:
+
+| Field          | Required                                  | Description                                                                                                       |
+| -------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `agentSource`  | Yes                                       | Origin of the agent. One of `velt` or `external`.                                                                |
+| `agentId`      | Required for `velt`, optional for `external` | A custom agent ID verified server-side. Opaque (never validated) for `external` agents. |
+| `agentName`    | Required for `external`                    | Display name for the agent. The only source of truth for an external agent's name. (For `velt` agents the name is resolved server-side.) |
+| `executionId`  | No                                        | Execution / run ID for this agent invocation.                                                                    |
+| `url`          | No                                        | Page URL associated with the finding.                                                                            |
+| `reason`       | Yes                                       | Finding details (`title`, `description`, `severity`, `findingType`, `confidence`, `suggestedFix`, etc.). Custom fields are preserved. |
+
+Set the annotation `type` to `"suggestion"` so the finding is classified as an agent suggestion rather than a regular comment.
+
+### The `reason` object
+
+The `reason` object carries the finding's details. Here's each field with a description and an example value.
+
+| Field | Required | Type | Description | Example |
+|-------|----------|------|-------------|---------|
+| `title` | ✅ | string | Short finding title — a quick label for the issue. | `"Low color contrast"` |
+| `description` | ✅ | string | Fuller explanation of what the agent found. | `"Contrast ratio is 2.1:1, below the 4.5:1 WCAG AA threshold."` |
+| `severity` | ✅ | string | How serious the finding is. One of `critical`, `high`, `medium`, `low`, `info`. | `"high"` |
+| `findingId` | — | string | Your own unique ID for the finding, useful for dedup/tracking. | `"finding_a11y_0427"` |
+| `findingType` | — | string | What kind of target the finding is on. One of `text`, `pin`, `page`. | `"pin"` |
+| `issueType` | — | string | Custom classification you define for your own taxonomy. | `"accessibility"` |
+| `confidence` | — | number | How confident the agent is. Integer 0–100. | `92` |
+| `suggestion` | — | string | Suggested change in plain text (human-readable advice). | `"Darken the button background to at least #1A1A1A."` |
+| `suggestedFix` | — | string | The concrete fix value to apply. | `"Welcome"` |
+| `htmlSnippet` | — | string | The relevant chunk of HTML where the issue lives. | `"<button class='cta'>Buy now</button>"` |
+| `htmlSelector` | — | string | CSS/HTML selector pointing to the finding's location. | `".cta-primary > button"` |
+| `source` | — | string | Where the triggering rule came from. One of `instructions`, `knowledge`. | `"knowledge"` |
+| `knowledgeSection` | — | string | Which knowledge section fired (pairs with `source: "knowledge"`). | `"brand-guidelines/accessibility"` |
+
+A note on the difference between the two "fix" fields, since it's easy to conflate them: `suggestion` is prose meant for a human to read in the comment, while `suggestedFix` is the actual replacement value. For a spelling correction, for instance, `suggestedFix` would be just `"Welcome"` — the corrected word itself, not a sentence about it.
+
+Putting it together, a fully-populated `reason` looks like:
+
+```json
+"reason": {
+  "title": "Low color contrast",
+  "description": "Contrast ratio is 2.1:1, below the 4.5:1 WCAG AA threshold.",
+  "severity": "high",
+  "findingId": "finding_a11y_0427",
+  "findingType": "pin",
+  "issueType": "accessibility",
+  "confidence": 92,
+  "suggestion": "Darken the button background to at least #1A1A1A.",
+  "suggestedFix": "#1A1A1A",
+  "htmlSnippet": "<button class='cta'>Buy now</button>",
+  "htmlSelector": ".cta-primary > button",
+  "source": "knowledge",
+  "knowledgeSection": "brand-guidelines/accessibility"
+}
+```
+
+Only the first three (`title`, `description`, `severity`) are required — everything else is optional, and any extra custom fields you add beyond this list are preserved by the server.
+
+## Example: leave a comment from an external agent
+
+This is the most common path — an agent running in your own framework leaves a finding. Use `agentSource: "external"` and supply your own `agentName`.
+
+<CodeGroup>
+```bash cURL
+curl -X POST 'https://api.velt.dev/v2/commentannotations/add' \
+  -H 'x-velt-api-key: YOUR_API_KEY' \
+  -H 'x-velt-auth-token: YOUR_AUTH_TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "data": {
+      "organizationId": "acme-corp",
+      "documentId": "design-mockup-v2",
+      "commentAnnotations": [
+        {
+          "type": "suggestion",
+          "commentData": [
+            {
+              "commentText": "This button has insufficient color contrast.",
+              "from": { "userId": "a11y-bot" },
+              "agent": {
+                "agentSource": "external",
+                "agentName": "Accessibility Bot",
+                "agentId": "a11y-bot",
+                "executionId": "run_8f21",
+                "url": "https://example.com/design-mockup-v2",
+                "reason": {
+                  "title": "Low color contrast",
+                  "description": "Contrast ratio is 2.1:1, below the 4.5:1 WCAG AA threshold.",
+                  "severity": "high",
+                  "findingType": "pin"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }'
+```
+
+```javascript Node.js
+const response = await fetch('https://api.velt.dev/v2/commentannotations/add', {
+  method: 'POST',
+  headers: {
+    'x-velt-api-key': process.env.VELT_API_KEY,
+    'x-velt-auth-token': process.env.VELT_AUTH_TOKEN,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    data: {
+      organizationId: 'acme-corp',
+      documentId: 'design-mockup-v2',
+      commentAnnotations: [
+        {
+          type: 'suggestion',
+          commentData: [
+            {
+              commentText: 'This button has insufficient color contrast.',
+              from: { userId: 'a11y-bot' },
+              agent: {
+                agentSource: 'external',
+                agentName: 'Accessibility Bot',
+                agentId: 'a11y-bot',
+                executionId: 'run_8f21',
+                url: 'https://example.com/design-mockup-v2',
+                reason: {
+                  title: 'Low color contrast',
+                  description:
+                    'Contrast ratio is 2.1:1, below the 4.5:1 WCAG AA threshold.',
+                  severity: 'high',
+                  findingType: 'pin',
+                },
+              },
+            },
+          ],
+        },
+      ],
+    },
+  }),
+});
+
+const result = await response.json();
+```
+
+```python Python
+import os
+import requests
+
+response = requests.post(
+    "https://api.velt.dev/v2/commentannotations/add",
+    headers={
+        "x-velt-api-key": os.environ["VELT_API_KEY"],
+        "x-velt-auth-token": os.environ["VELT_AUTH_TOKEN"],
+        "Content-Type": "application/json",
+    },
+    json={
+        "data": {
+            "organizationId": "acme-corp",
+            "documentId": "design-mockup-v2",
+            "commentAnnotations": [
+                {
+                    "type": "suggestion",
+                    "commentData": [
+                        {
+                            "commentText": "This button has insufficient color contrast.",
+                            "from": {"userId": "a11y-bot"},
+                            "agent": {
+                                "agentSource": "external",
+                                "agentName": "Accessibility Bot",
+                                "agentId": "a11y-bot",
+                                "executionId": "run_8f21",
+                                "url": "https://example.com/design-mockup-v2",
+                                "reason": {
+                                    "title": "Low color contrast",
+                                    "description": "Contrast ratio is 2.1:1, below the 4.5:1 WCAG AA threshold.",
+                                    "severity": "high",
+                                    "findingType": "pin",
+                                },
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+    },
+)
+
+result = response.json()
+```
+</CodeGroup>
+
+
+## Reading agent comments back
+
+Use the [Get Comment Annotations API](/api-reference/rest-apis/v2/comments-feature/comment-annotations/get-comment-annotations-v2) with agent-specific filters to fetch what your agents have left. Only one agent filter may be supplied per request.
+
+| Filter             | Description                                                              |
+| ------------------ | ---------------------------------------------------------------------- |
+| `agentId`          | Annotations created by a specific agent.                                |
+| `executionId`      | Annotations from a specific agent run.                                  |
+| `agentSource`      | `velt` or `external`.                                                   |
+| `agentSuggestions` | When `true`, returns only fresh (unaccepted) agent suggestions.        |
+| `agentComments`    | When `true`, returns all agent annotations regardless of status.       |
+
+```bash cURL
+curl -X POST 'https://api.velt.dev/v2/commentannotations/get' \
+  -H 'x-velt-api-key: YOUR_API_KEY' \
+  -H 'x-velt-auth-token: YOUR_AUTH_TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "data": {
+      "organizationId": "acme-corp",
+      "documentId": "design-mockup-v2",
+      "agentId": "a11y-bot"
+    }
+  }'
+```
+
+Agent annotations in the response carry `type: "suggestion"` and `sourceType: "agent"` at the annotation root, an annotation-root `agent` block, and an `agent` block on each agent-authored comment (`comments[].agent`).
+
+<Note>
+The Get Comment Annotations API requires the **advanced queries** option to be enabled in the [Velt Console](https://console.velt.dev/dashboard/config/appconfig) and the v4 series of the Velt SDK. See the [API reference](/api-reference/rest-apis/v2/comments-feature/comment-annotations/get-comment-annotations-v2) for details.
+</Note>
+
+## Handle accept / reject in your app
+
+Because agent findings render with **Accept** and **Reject** buttons on the comment dialog, the outcome is emitted on the **comment element**. Subscribe to the [`suggestionAccepted` and `suggestionRejected` events](/async-collaboration/comments/customize-behavior#event-subscription) to apply the change to your own data or trigger follow-up logic. The SDK records the outcome and persists the suggestion — applying the change is your code's job.
+
+<CodeGroup>
+```tsx React
+import { useCommentEventCallback } from '@veltdev/react';
+
+export function AgentSuggestionListener() {
+  const accepted = useCommentEventCallback('suggestionAccepted');
+  const rejected = useCommentEventCallback('suggestionRejected');
+
+  useEffect(() => {
+    if (accepted) {
+      // accepted.commentAnnotation contains the agent finding
+      console.log('Suggestion accepted', accepted.commentAnnotation);
+    }
+  }, [accepted]);
+
+  useEffect(() => {
+    if (rejected) {
+      console.log('Suggestion rejected', rejected.rejectReason);
+    }
+  }, [rejected]);
+
+  return null;
+}
+```
+
+```javascript Other Frameworks
+const commentElement = Velt.getCommentElement();
+
+commentElement.on('suggestionAccepted').subscribe(({ commentAnnotation }) => {
+  // commentAnnotation contains the agent finding
+  console.log('Suggestion accepted', commentAnnotation);
+});
+
+commentElement.on('suggestionRejected').subscribe(({ commentAnnotation, rejectReason }) => {
+  console.log('Suggestion rejected', rejectReason);
+});
+```
+</CodeGroup>
+
+<Tip>
+For the full suggestion lifecycle — statuses, applying `newValue`, and the other suggestion-stream events — see the [Suggestions](/async-collaboration/suggestions/overview) guide.
+</Tip>
+
+## API reference
+
+- [Add Comment Annotations](/api-reference/rest-apis/v2/comments-feature/comment-annotations/add-comment-annotations) — full reference for the Add API, including the `agent` block and agent suggestion examples.
+- [Get Comment Annotations](/api-reference/rest-apis/v2/comments-feature/comment-annotations/get-comment-annotations-v2) — full reference for the Get API, including all agent filters and response field notes.
+- [Comment Events](/async-collaboration/comments/customize-behavior#event-subscription) — subscribe to the `suggestionAccepted` and `suggestionRejected` comment events to react to accept/reject outcomes.

@@ -1,0 +1,227 @@
+---
+title: "Developer Guide"
+description: "A hands-on guide to building on Velt Memory, the review-intelligence layer: add a knowledge source, ask a question, search past decisions, and pull a grounded suggestion."
+---
+
+A hands-on guide to building on Velt **Memory**, the review-intelligence layer. By the end you'll have added a knowledge source, asked a natural-language question, searched past review decisions, and pulled a grounded decision suggestion.
+
+<Note>
+  New to Memory? Start with the [Overview](/ai/memory/overview) for what Memory is, how judgments and knowledge sources work, and the core concepts this guide builds on.
+</Note>
+
+## Prerequisites & authentication
+
+**Base URLs**
+
+| Environment | Base URL |
+| --- | --- |
+| Production | `https://api.velt.dev` |
+| Staging | `https://staging.velt.dev` |
+
+Endpoints are versioned; `/v1/...` and `/v2/...` accept the same shapes. New integrations should use `/v2/`.
+
+**Required headers**
+
+| Header | Description |
+| --- | --- |
+| `x-velt-api-key` | Your workspace API key. |
+| `x-velt-auth-token` | A short-lived auth token. See [Auth Tokens](/security/auth-tokens). |
+| `content-type` | `application/json` |
+
+**Envelope.** Wrap your payload in `data`; success comes back under `result`, errors under `error`:
+
+```json
+{ "data": { /* endpoint fields */ } }          // request
+{ "result": { /* payload */ } }                 // success
+{ "error": { "message": "...", "status": "INVALID_ARGUMENT", "details": {} } }  // error
+```
+
+Export your credentials once for the examples below:
+
+```bash
+export VELT_API_KEY="ak_live_..."
+export VELT_AUTH_TOKEN="at_..."
+```
+
+## Build your first integration
+
+You'll do the full loop: add knowledge → ask a question → search decisions → get a suggestion.
+
+<Steps>
+<Step title="Add a knowledge source">
+Knowledge ingestion is asynchronous and multimodal. Supported file types: PDF, CSV, Excel (`.xlsx`), and plain text.
+
+There are two ways to submit a file:
+
+- **Inline** (up to 5 MB): base64-encode it and send it directly.
+- **By reference** (up to 30 MB): request an upload URL, PUT the bytes there, then ingest by reference.
+
+Inline example: ingest a small PDF of brand guidelines:
+
+```bash
+curl -X POST https://api.velt.dev/v2/memory/knowledge/ingest \
+  -H "x-velt-api-key: $VELT_API_KEY" \
+  -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{
+    "data": {
+      "source": "inline",
+      "file": {
+        "base64": "'"$(base64 -w0 brand-guidelines.pdf)"'",
+        "mimeType": "application/pdf",
+        "fileName": "brand-guidelines.pdf",
+        "fileSize": 184320
+      }
+    }
+  }'
+```
+
+Response: ingestion has started in the background:
+
+```json
+{ "result": { "status": "processing", "sourceId": "src_9a8...", "message": "Ingestion started." } }
+```
+
+Poll until it's done with the `sourceId`:
+
+```bash
+curl -X POST https://api.velt.dev/v2/memory/knowledge/ingest-status \
+  -H "x-velt-api-key: $VELT_API_KEY" -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{ "data": { "sourceId": "src_9a8..." } }'
+# -> { "result": { "status": "completed", "extractedRulesCount": 7, ... } }
+```
+
+Once `completed`, inspect what was extracted:
+
+```bash
+# List the rules pulled out of the doc
+curl -X POST https://api.velt.dev/v2/memory/knowledge/rules \
+  -H "x-velt-api-key: $VELT_API_KEY" -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+  -H "content-type: application/json" -d '{ "data": { "sourceId": "src_9a8..." } }'
+
+# List all your sources
+curl -X POST https://api.velt.dev/v2/memory/knowledge/list \
+  -H "x-velt-api-key: $VELT_API_KEY" -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+  -H "content-type: application/json" -d '{ "data": {} }'
+```
+
+**Search inside your knowledge base.** This is distinct from Step 3 (which searches decisions/judgments): `/knowledge/search` does a semantic search over the *content of the files you've ingested*. Omit `sourceId` to search the whole workspace knowledge base, or narrow to one or more sources:
+
+```bash
+curl -X POST https://api.velt.dev/v2/memory/knowledge/search \
+  -H "x-velt-api-key: $VELT_API_KEY" -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{ "data": { "query": "how should we handle medical claims?", "sourceId": "src_9a8...", "limit": 5 } }'
+# -> { "result": { "results": [ { "sourceId": "src_9a8...", "text": "Always cite a peer-reviewed source...", "score": 0.18 } ], "recordsSearched": 1 } }
+```
+
+`sourceId` is optional and may be a single id or an array of 2 to 30 ids (fanned out then merged); `score` is the cosine distance (lower = more relevant). This endpoint is workspace-scoped (no `organizationId`/`documentId`). See [Search Knowledge Base](/api-reference/rest-apis/v2/memory/knowledge/search) for the full request/response contract.
+
+<Note>
+  **Large or binary files (up to 30 MB):** call `POST /v2/memory/knowledge/upload-url` with `{ mimeType, fileSize, fileName }`, PUT the raw bytes to the returned `uploadUrl`, then call `ingest` with `{ "source": "fileRef", "fileRef": "<the gs:// URI>", "mimeType": "..." }`.
+</Note>
+</Step>
+
+<Step title="Ask a question">
+Ask Memory a natural-language question. The answer is grounded in your judgments + knowledge, and comes with citations and a confidence score:
+
+```bash
+curl -X POST https://api.velt.dev/v2/memory/ask \
+  -H "x-velt-api-key: $VELT_API_KEY" -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{ "data": { "question": "How do we handle marketing copy that makes medical claims?" } }'
+```
+
+```json
+{
+  "result": {
+    "answer": "Reviewers reject copy that makes medical claims without a citation...",
+    "citations": [ { "recordId": "act_8f3...", "snippet": "Claim 'clinically proven' lacks a citation." } ],
+    "confidence": 0.74,
+    "recordsSearched": 18
+  }
+}
+```
+
+<Note>
+  If Memory has no relevant context, `ask` returns an empty answer (`""`) with `confidence: 0` rather than inventing one. Treat that as "nothing learned about this yet"; it's expected for brand-new workspaces.
+</Note>
+</Step>
+
+<Step title="Search past decisions">
+When you want the underlying records rather than a synthesized answer, use `search`:
+
+```bash
+curl -X POST https://api.velt.dev/v2/memory/search \
+  -H "x-velt-api-key: $VELT_API_KEY" -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{ "data": { "query": "unsupported medical claim", "limit": 5, "filters": { "decision": "reject" } } }'
+```
+
+Each result includes the reasoning, decision, confidence, who decided (`actionUser`), and a similarity score. Two handy overrides:
+
+- **Recent activity:** add `"recencyDays": 7` to get the last week's decisions instead of a semantic match.
+- **One thread:** add `"filters": { "annotationId": "<id>" }` with an `organizationId` to read a single comment thread chronologically.
+</Step>
+
+<Step title="Get a suggestion">
+Ask Memory what it would recommend for a new item, grounded in precedent:
+
+```bash
+curl -X POST https://api.velt.dev/v2/memory/suggest \
+  -H "x-velt-api-key: $VELT_API_KEY" -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{ "data": { "query": "Ad copy: \"clinically proven to reduce wrinkles\"" } }'
+```
+
+```json
+{
+  "result": {
+    "primary": { "recommendation": "reject", "confidence": 0.78, "basedOn": 12, "topReasons": ["Unsupported medical claim"], "caveats": [] },
+    "conflict": null
+  }
+}
+```
+
+`primary` is the best-grounded recommendation; `conflict` is populated when the evidence is split, so you can surface "reviewers disagree here."
+</Step>
+</Steps>
+
+## Going further
+
+Short pointers to the rest of the surface.
+
+- **Filters & date ranges:** narrow `search`/`ask`/`judgments/query` by `decision`, `judgeType` (human/agent), `contentType`, `reviewerId`, or `dateRange` (`{ start, end }`, ISO-8601 or epoch ms).
+- **Recency-true mode:** set `recencyDays` (1 to 365) on `search`/`ask` to get the most-recent activity instead of a semantic match, which is ideal for digests.
+- **Scopes:** pass `organizationId` (and `documentId`) to narrow reads; `documentId` requires `organizationId`.
+- **Structured listing vs. semantic search:** use `judgments/query` when you want to list decisions by metadata (no embedding) instead of ranking by similarity.
+- **Insights:** pull a reviewer's behavioral profile (`profiles/get`), detected patterns (`patterns/get`), and workspace stats (`stats/get`).
+- **Alerts:** list proactive alerts, dismiss or mark them actioned, and tune generation via `alerts/config/update` (`enabled`, `maxAlertsPerWeek`, `enabledAlertTypes`, `severityThreshold`).
+- **Knowledge lifecycle:** `update` re-runs the pipeline and bumps a source's version; `download` returns the canonical markdown; `delete` hard-removes a source and its derived chunks/rules (blocked while a source is still processing or has dedup dependents); [`knowledge/search`](/api-reference/rest-apis/v2/memory/knowledge/search) semantic-searches the ingested file content (optionally narrowed by `sourceId`).
+
+## Errors & troubleshooting
+
+Errors use the standard envelope with a gRPC-style status:
+
+| Code | Meaning |
+| --- | --- |
+| `INVALID_ARGUMENT` | Request failed validation. |
+| `UNAUTHENTICATED` | Missing/invalid `x-velt-auth-token`. |
+| `NOT_FOUND` | Unknown `sourceId`. |
+| `FAILED_PRECONDITION` | e.g. deleting a source that's still processing or has dedup dependents. |
+| `RESOURCE_EXHAUSTED` | Rate limit, or the outstanding-upload quota on `upload-url`; back off and retry. |
+
+Common gotchas (all `INVALID_ARGUMENT`):
+
+- Using `filters.annotationId` without `organizationId`; the annotation lookup needs an org.
+- Passing `documentId` without `organizationId`.
+- A `dateRange` whose `start` is after `end`.
+- An unsupported file type, or an inline file that decodes to more than 5 MB (use `upload-url` for larger files).
+
+## Limitations
+
+- **Ingestion is asynchronous:** `ingest` returns `status: "processing"`; poll `ingest-status` for the terminal state. A duplicate upload (`dedupOf` set in the status) reports the winning source's status, so it can stay `processing` until the original finishes; `completed` always means "safe to download".
+- **File limits:** inline up to 5 MB, by-reference up to 30 MB; PDF / CSV / XLSX / plain text only.
+- **Judgments are read-only via this API:** they're created from review activity, not written directly.
+- **New workspaces start empty:** `ask` returns an empty answer and `suggest`/insights stay sparse until enough review history exists.

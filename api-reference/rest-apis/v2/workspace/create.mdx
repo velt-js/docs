@@ -23,13 +23,13 @@ This is a **public endpoint** — no authentication headers are required.
       Email address of the workspace owner. Disposable email domains are blocked.
     </ParamField>
     <ParamField body="name" type="string">
-      Owner's display name. Max 200 characters.
+      Owner's display name. Max 200 characters. Must not be empty when provided. Defaults to the owner's email address when not provided.
     </ParamField>
     <ParamField body="workspaceName" type="string">
-      Workspace name. Max 200 characters. Defaults to `"{name} workspace"` when not provided.
+      Workspace name. Max 200 characters. Must not be empty when provided. Defaults to `"{name} workspace"` when not provided (or `"{ownerEmail} workspace"` if `name` is also omitted).
     </ParamField>
     <ParamField body="avatar" type="string">
-      URL for the workspace avatar image. Max 2000 characters.
+      URL for the workspace owner's avatar image. Max 2000 characters. Returned in the response as `owner.avatar`.
     </ParamField>
   </Expandable>
 </ParamField>
@@ -55,7 +55,7 @@ This is a **public endpoint** — no authentication headers are required.
 {
   "result": {
     "status": "success",
-    "message": "Workspace created successfully.",
+    "message": "Workspace created successfully",
     "data": {
       "id": "workspace_abc123",
       "name": "My Workspace",
@@ -63,12 +63,12 @@ This is a **public endpoint** — no authentication headers are required.
         "email": "owner@example.com",
         "id": "owner_id_123",
         "name": "John Doe",
-        "avatar": ""
+        "avatar": "https://example.com/avatar.png"
       },
-      "authToken": "eyJhbGciOiJSUzI1NiIs...",
+      "authToken": "9a1b2c3d4e5f60718293a4b5c6d7e8f9",
       "apiKeyList": {
         "velt_api_key_1": {
-          "apiKeyName": "John Doe Test API Key",
+          "apiKeyName": "Owner Test API Key",
           "id": "velt_api_key_1",
           "type": "testing"
         }
@@ -82,6 +82,10 @@ This is a **public endpoint** — no authentication headers are required.
 `apiKeyList` is a **keyed object** (not an array). Each key is the API key ID. To extract the first API key, use `Object.keys(result.data.apiKeyList)[0]` in JavaScript or iterate over the object keys.
 </Note>
 
+<Note>
+The default `apiKeyName` is derived from the part of `ownerEmail` before the `@` (capitalized), not from `name`. For example, `owner@example.com` produces `"Owner Test API Key"`.
+</Note>
+
 #### Failure Response
 
 ##### If email domain is disposable
@@ -90,7 +94,7 @@ This is a **public endpoint** — no authentication headers are required.
 {
   "error": {
     "status": "INVALID_ARGUMENT",
-    "message": "Disposable email domains are not allowed."
+    "message": "This email domain is not supported."
   }
 }
 ```
@@ -101,7 +105,55 @@ This is a **public endpoint** — no authentication headers are required.
 {
   "error": {
     "status": "RESOURCE_EXHAUSTED",
-    "message": "Too many requests. Please try again later."
+    "message": "Rate limit exceeded for this endpoint. Try again later."
+  }
+}
+```
+
+##### If the email already owns the maximum number of workspaces
+
+An email address may own up to 5 workspaces.
+
+```JSON
+{
+  "error": {
+    "status": "RESOURCE_EXHAUSTED",
+    "message": "You have reached the maximum number of workspaces allowed for this email address."
+  }
+}
+```
+
+##### If creating an additional workspace without a paid plan
+
+The first workspace for an email is always allowed. Creating an additional workspace requires the email's root workspace to be on a paid plan.
+
+```JSON
+{
+  "error": {
+    "status": "PERMISSION_DENIED",
+    "message": "Creating an additional workspace requires your root workspace to be on a paid plan (a production API key)."
+  }
+}
+```
+
+##### If a workspace already exists for the email
+
+```JSON
+{
+  "error": {
+    "status": "ALREADY_EXISTS",
+    "message": "A workspace already exists for this email address"
+  }
+}
+```
+
+##### If workspace creation fails
+
+```JSON
+{
+  "error": {
+    "status": "INTERNAL",
+    "message": "Failed to create workspace"
   }
 }
 ```
@@ -110,7 +162,7 @@ This is a **public endpoint** — no authentication headers are required.
 
 After creating a workspace, use the response values for subsequent API calls:
 
-- **Workspace-level endpoints** (e.g., [Get Workspace](/api-reference/rest-apis/v2/workspace/get), [Create API Key](/api-reference/rest-apis/v2/workspace/apikey-create)): pass `result.data.id` as the `x-velt-workspace-id` header and `result.data.authToken` as the `x-velt-auth-token` header.
+- **Workspace-level endpoints** (e.g., [Get Workspace](/api-reference/rest-apis/v2/workspace/get), [Create API Key](/api-reference/rest-apis/v2/workspace/apikey-create)): pass `result.data.id` as the `x-velt-workspace-id` header and `result.data.authToken` as the `x-velt-workspace-auth-token` header.
 - **API-key-level endpoints** (e.g., [Add Domains](/api-reference/rest-apis/v2/workspace/add-domain), [Update Email Config](/api-reference/rest-apis/v2/workspace/emailconfig-update)): extract the API key ID from `Object.keys(result.data.apiKeyList)[0]`, then retrieve its auth token via [Get Auth Tokens](/api-reference/rest-apis/v2/workspace/authtokens-get). Pass these as `x-velt-api-key` and `x-velt-auth-token`.
 
 <ResponseExample>
@@ -118,7 +170,7 @@ After creating a workspace, use the response values for subsequent API calls:
 {
   "result": {
     "status": "success",
-    "message": "Workspace created successfully.",
+    "message": "Workspace created successfully",
     "data": {
       "id": "workspace_abc123",
       "name": "My Workspace",
@@ -126,12 +178,12 @@ After creating a workspace, use the response values for subsequent API calls:
         "email": "owner@example.com",
         "id": "owner_id_123",
         "name": "John Doe",
-        "avatar": ""
+        "avatar": "https://example.com/avatar.png"
       },
-      "authToken": "eyJhbGciOiJSUzI1NiIs...",
+      "authToken": "9a1b2c3d4e5f60718293a4b5c6d7e8f9",
       "apiKeyList": {
         "velt_api_key_1": {
-          "apiKeyName": "John Doe Test API Key",
+          "apiKeyName": "Owner Test API Key",
           "id": "velt_api_key_1",
           "type": "testing"
         }

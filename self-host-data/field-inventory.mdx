@@ -248,7 +248,6 @@ Model: `RecorderAnnotation`. PII payload: `PartialRecorderAnnotation`.
 | `metadata` | `RecorderMetadata` (extends `BaseMetadata`; `[key]: any`) | `{ apiKey: 'AbC', documentId: 'doc-1', organizationId: 'org-1' }` | Routing metadata. | **full** kept; `getClientMetadata` copy sent to your DB |
 | `latestVersion` | `number` | `2` | Current edit version number. | kept |
 | `recordingEditVersions` | `{ [version: number]: RecorderAnnotationEditVersion }` | `{ 1: { recordedTime: {...}, waveformData: [...], displayName: 'v1' } }` | Per-edit version history. | per-version PII withheld (`from`→`{userId}`, `attachment`→`null`, `attachments`→stubs, `transcription` never sent); non-PII per-version fields kept |
-| `chunkUrls` | `{ [index: number]: string }` | `{}` | Per-chunk upload URLs (Velt-managed chunked upload only). | written as `{}` when recorder resolver active; **not used in recorder self-hosting** — not sent to your DB either |
 | `isRecorderResolverUsed` | `boolean` | `true` | Resolver-used flag. | flag; set `true` on strip |
 | `isUrlAvailable` | `boolean` | `false` | Real URL (vs. local blob) ready yet. | kept **and** copied to your DB |
 
@@ -262,7 +261,6 @@ Model: `RecorderAnnotation`. PII payload: `PartialRecorderAnnotation`.
 | `transcription` | `Transcription` | `{ from: { userId: 'user-123' }, transcriptedText: 'Hello team…', vttUrl: 'https://…/cap.vtt' }` | Full transcript (PII). | **never sent to Velt** — see [Transcription](#transcription-your-db-recorder-payload) |
 | `attachment` | `Attachment \| null` | `{ attachmentId: 'att_1', name: 'recording.webm', url: 'https://storage/…' }` | Deprecated single attachment (with URL). | **@deprecated**; sent when defined; value never sent to Velt (written as `null` there) |
 | `attachments` | `Attachment[]` | `[{ attachmentId: 'att_1', name: 'recording.webm', url: 'https://storage/…' }]` | Full attachment list incl. media URLs (PII). | sent only when length > 0; reduced to stubs in Velt's DB |
-| ~~`chunkUrls`~~ | — | — | Not applicable to recorder self-hosting. | recorder self-hosting does **not** use chunked uploads — `chunkUrls` is never sent to your DB |
 | `recordingEditVersions` | `Record<number, PartialRecorderAnnotationEditVersion>` | `{ 1: { from: { userId: 'user-123' }, attachments: [{ attachmentId: 'att_1', url: 'https://…' }], transcription: { transcriptedText: '…' } } }` | Per-version PII (`from`, `attachment`, `attachments`, `transcription`). | only versions with ≥1 PII field |
 | `isUrlAvailable` | `boolean` | `false` | Real URL ready yet. | copied (also kept in Velt's DB) |
 | `[additionalFields]` | `any` | `{ customTag: 'launch-demo' }` | Your replicated custom fields. | per `config.additionalFields`; kept in Velt's DB too |
@@ -273,8 +271,6 @@ Model: `RecorderAnnotation`. PII payload: `PartialRecorderAnnotation`.
   (written as `null`), and the urls inside `attachments` (Velt keeps only `{ attachmentId, name, bucketPath }`
   stubs; `bucketPath` is deliberately kept for Velt-side storage cleanup). `from` is reduced to `{ userId }`;
   `isRecorderResolverUsed` set `true`.
-- **`chunkUrls` is not used in recorder self-hosting.** Chunked uploads are a Velt-managed
-  upload path; the field is written as `{}` on the Velt side and is never sent to your DB.
 - `recordingEditVersions` per-version PII is withheld the same way; non-PII per-version fields
   (`recordedTime`, `waveformData`, `displayName`, `boundedTrimRanges`, `boundedScaleRanges`) are sent to Velt.
 - Top-level `displayName` / `waveformData` / `recordedTime` are sent to Velt (not part of the your-DB payload).
@@ -392,7 +388,7 @@ removed depends on `featureType`.
     rest of the structure survives.
   - **recorder** — removes `from`, `transcription`, `attachment`, `attachments` *only when both the
     activity resolver and the recorder resolver are active*; otherwise only user objects are reduced
-    to `{ userId }`. (`chunkUrls` is not part of recorder self-hosting.)
+    to `{ userId }`.
 - `changes['commentText']` is removed from the Velt record (→ your DB) **only** when the activity
   resolver is active; if only the comment resolver is registered it is preserved on the Velt side to
   avoid unrestorable loss.
@@ -655,7 +651,7 @@ stripped on the frontend and goes only to your DB (or is recomputed on the clien
 |---|---|---|---|
 | Comments | 53 top-level (+ ~24-field `Comment` element) | `PartialCommentAnnotation` + nested `PartialComment` | strip on the frontend, merge on read |
 | Reactions | 16 top-level (+ 3-field `Reaction` element) | `{ annotationId, metadata, icon, from? }` | strip `icon` only |
-| Recordings | 36 (incl. reduced `from`/`attachments`/`chunkUrls`; `transcription` → your DB only) | `PartialRecorderAnnotation` (+ per-version partials, `additionalFields`) | strip + reduce on the frontend; optional file storage |
+| Recordings | 35 (incl. reduced `from`/`attachments`; `transcription` → your DB only) | `PartialRecorderAnnotation` (+ per-version partials, `additionalFields`) | strip + reduce on the frontend; optional file storage |
 | Notifications | 11 (structural + flags) | `PartialNotification` (6 PII + open index) | **read-only enrichment** (custom only) |
 | Activity | 17 | `PartialActivityRecord` (`{ id, metadata?, changes?, entityData?, entityTargetData?, displayMessageTemplateData?, [key]: any }`) | strip on the frontend; append-only |
 | Attachments | `Attachment` (12 fields, minus bytes) | `file` + `{ attachmentId, name, mimeType }` + `AttachmentResolverMetadata` + `event` → returns `{ url }` | binary file storage only |

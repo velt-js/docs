@@ -28,16 +28,48 @@ When activity records are created or read:
 
 **The process works as follows:**
 
-On write:
-1. The SDK strips configured PII fields from the activity record.
-2. Your `save` handler receives the stripped data and stores it in your backend.
-3. Velt's backend stores only the minimal identifiers.
+On write (`stripActivityPII`):
+1. The SDK strips PII from the activity record. *How much* is stripped depends on `featureType` — see [What gets stripped](#what-gets-stripped) below.
+2. Your `save` handler receives the stripped PII (`PartialActivityRecord`) and stores it in your backend.
+3. Velt's backend stores the skeleton record (structural identifiers, timestamps, flags) plus any non-PII fields.
 
-On read:
+On read (`rehydrateActivities`):
 1. The SDK fetches the activity records from Velt's backend (with PII absent).
-2. Your `get` handler is called with the activity IDs.
-3. The SDK merges the returned PII back into the activity records before delivering them to your UI.
+2. The SDK runs 5 resolver passes in order: `user` → `comment` → `reaction` → `recorder` → `activity`. Your `get` handler is called during the activity pass with the activity IDs.
+3. The returned PII is merged back into the activity records before they are delivered to your UI.
 4. [`ActivityRecord.isActivityResolverUsed`](/api-reference/sdk/models/data-models#activityrecord) is set to `true` when PII was stripped by the resolver. Use this to show a loading state while re-hydration is pending.
+
+## What gets stripped
+
+How much PII is removed from `entityData` and `entityTargetData` depends on `featureType`.
+
+### Built-in `featureType` (`comment` / `reaction` / `recorder`) — partial strip
+
+`entityData` and `entityTargetData` objects are **kept** on the Velt record; only specific PII *fields inside them* are removed. Structural identifiers (annotation IDs, comment IDs, target IDs) are preserved so the read path can re-match resolved data.
+
+| Feature | Fields removed from `entityData` / `entityTargetData` | Gating |
+|---|---|---|
+| **comment** | `commentText`, `commentHtml`, `attachments` (name/url), `from`, `to`, `taggedUserContacts` | Always (when the activity resolver is active) |
+| **reaction** | `icon`, `from`, `metadata` | Only when **both** the activity resolver **and** the reaction resolver are active. Otherwise only user objects are reduced to `{ userId }` and the rest survives. |
+| **recorder** | `from`, `transcription`, `attachment`, `attachments` | Only when **both** the activity resolver **and** the recorder resolver are active. Otherwise only user objects are reduced to `{ userId }` and the rest survives. |
+
+`changes['commentText']` is moved to your DB **only** when the activity resolver is active. If only a comment resolver is registered (no activity resolver), it is preserved on the Velt side to avoid unrestorable loss.
+
+Comment `entityData` / `entityTargetData` PII is handled by the comment resolver's own store, not duplicated through the activity resolver.
+
+### `featureType === 'custom'` — wholesale removal by config
+
+There is **no automatic field-level stripping** for custom activities. The only fields removed are the top-level keys you list in `config.fieldsToRemove` — each listed key is moved wholesale to your DB and `delete`d from the Velt record. On read it's restored by wholesale replacement.
+
+- If you list `entityData` or `entityTargetData` in `fieldsToRemove`, the *entire field* disappears from the Velt record (not field-by-field).
+- If you don't list them, they're left untouched on the Velt record.
+- `fieldsToRemove` is **ignored** for built-in feature types.
+
+### Universal
+
+- `displayMessage` is always recomputed on the client and stored in neither DB.
+- `actionUser` and any user objects in `changes` and `displayMessageTemplateData` are reduced to `{ userId }` whenever a `user` resolver is active.
+- Activity is **append-only** — there is no delete.
 
 # Implementation
 
@@ -135,7 +167,7 @@ Configuration for the activity data provider.
 
 - Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig). Relevant properties:
   - `resolveTimeout`: Timeout duration (in milliseconds) for resolver operations.
-  - `fieldsToRemove`: `string[]`. Additional fields to strip from activity records before writing to Velt's backend (e.g., `['customSensitiveField']`).
+  - `fieldsToRemove`: `string[]`. Top-level keys to move wholesale from the activity record to your DB. **Applies only to `featureType === 'custom'`** — built-in feature types (`comment` / `reaction` / `recorder`) ignore this and use the feature-aware partial strip described in [What gets stripped](#what-gets-stripped). Listing `entityData` or `entityTargetData` moves the *entire field* (not field-by-field).
 
 ```tsx
 const activityDataProvider = {
@@ -272,6 +304,8 @@ activities?.map((activity) => (
   "immutable": false
 }
 ```
-Note: Entity snapshots, display message templates, and custom fields are NOT stored on Velt servers when using the activity resolver. Only minimal identifiers, action metadata, and resolver flags (`isActivityResolverUsed`, `targetEntityId`) are stored.
+Note: The example above is a `custom` activity with `entityData`, `entityTargetData`, `displayMessageTemplate`, and `displayMessageTemplateData` listed in `config.fieldsToRemove` — that's why those whole fields move to your DB.
+
+For built-in feature types (`comment` / `reaction` / `recorder`), `entityData` and `entityTargetData` are **kept** on the Velt record; only specific PII fields inside them are moved to your DB (see [What gets stripped](#what-gets-stripped)).
 </Tab>
 </Tabs>

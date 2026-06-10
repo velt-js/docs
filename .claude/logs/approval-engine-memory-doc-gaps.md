@@ -22,16 +22,32 @@ or the internal developer guides supplied by the team. No fabrication.
    names), and backend-only changelog bullets removed per changelog rules (Stripe billing
    fan-out, FieldValue sentinel handling, log-level changes, Firestore path normalization).
 
+## Fixed in the consolidation + REST build-out pass
+8. **Pages consolidated to sitewide convention.** Developer guides merged into Setup:
+   approval-engine is now overview/setup/customize-behavior; memory is overview/setup.
+   All links, cards, changelog bullets, and docs.json updated; no redirects needed
+   (the developer-guide URLs never shipped).
+9. **Memory REST reference built out** from the internal memory-api-reference: 20 new
+   pages (search, judgments/query, ask, suggest; knowledge upload-url/ingest/
+   ingest-status/list/rules/download/update/delete; profiles/patterns/stats;
+   alerts list/dismiss/action/config get+update). docs.json Memory group now has
+   Search & Q&A / Knowledge / Insights / Alerts subgroups. Memory setup links to them.
+10. **Approval Engine REST coverage audited**: all 14 public endpoints in the internal
+   api-reference have existing pages (definitions 5, executions 5, steps 4).
+11. **Beta labels** added: "Memory (Beta)" page title, and "(Beta)" on the
+   Approval Engine and Memory sidebar groups (AE overview title already had it).
+12. **embeddingType** is now documented on the Search Judgments REST page.
+
 ## Open issues (missing source material)
 Approval Engine:
-- Inbound webhook has no URL, request/response schema, bearer-token source, callback
-  verification recipe, concrete rate-limit/body-size numbers, or api-reference page.
+- Inbound webhook surfaces (`/v1/workflow/webhook-inbound/trigger` and `/callback`,
+  `triggers[].inboundWebhook`, definition-level `webhookConfig`) are described in the
+  internal api-reference without response schemas; no public REST pages yet.
 - `webhook` node (deferred): runtime behavior if shipped is unspecified.
+- Field-level drift audit of the 14 existing AE REST pages against the internal
+  api-reference has not been done (endpoint coverage confirmed only).
 
 Memory:
-- No api-reference pages for ~15 of 16 endpoints (`ingest`, `ingest-status`, `rules`,
-  `list`, `upload-url`, `update`, `download`, `delete`, `ask`, `search`, `suggest`,
-  `judgments/query`, `profiles/get`, `patterns/get`, `stats/get`, `alerts/*`).
-- Old-SDK enrichment + migration (`migrateOldSdk`/`backfillJudgments`): no endpoint doc.
-- Judgment object: exact field list unspecified in public docs.
-- Embedding type (`review` vs `content`) never shown on an endpoint example.
+- Old-SDK enrichment + migration (`migrateOldSdk`/`backfillJudgments`): internal-only,
+  intentionally undocumented.
+- Judgment object: exact field list documented only via REST response examples.

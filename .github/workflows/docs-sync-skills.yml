@@ -13,6 +13,7 @@ on:
       - 'async-collaboration/**'
       - 'realtime-collaboration/**'
       - 'api-reference/rest-apis/**'
+      - 'api-reference/sdk/**'
       - 'self-host-data/**'
       - 'security/**'
       - 'webhooks/**'
@@ -21,6 +22,7 @@ on:
       - 'ui-customization/**'
       - 'permission-management/**'
       - 'in-app-user-feedback/**'
+      - 'ai/**'
 
   workflow_dispatch:
     inputs:
@@ -112,6 +114,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DOCS_DIR: ${{ github.workspace }}/docs
+          AGENT_MAX_TURNS: "80"
         run: bash docs/scripts/skills-sync/run-claude-agent.sh docs-diff-planner
 
       - name: Gate — does the plan have any work?
@@ -203,6 +206,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DOCS_DIR: ${{ github.workspace }}/docs
+          AGENT_MAX_TURNS: "80"
         run: bash docs/scripts/skills-sync/run-claude-agent.sh "${{ steps.variant.outputs.name }}"
 
       - name: Build patch artifact
@@ -339,6 +343,7 @@ jobs:
       - name: Apply matrix patches
         env:
           INCOMING_DIR:      ${{ github.workspace }}/incoming/agent-skills-patches
+          DOWNLOAD_ROOT:     ${{ github.workspace }}/incoming
           AGENT_SKILLS_DIR:  ${{ github.workspace }}/agent-skills
         run: bash docs/scripts/skills-sync/apply-patches.sh
 
@@ -391,6 +396,36 @@ jobs:
           GH_TOKEN:          ${{ secrets.CROSS_REPO_PAT }}
           DOCS_DIR: ${{ github.workspace }}/docs
         run: bash docs/scripts/skills-sync/run-claude-agent.sh skill-pr-composer
+
+      - name: Annotate unmapped changes
+        if: always()
+        run: |
+          if [ ! -f outputs/plan.json ]; then exit 0; fi
+          UNMAPPED=$(jq '.unmapped | length' outputs/plan.json)
+          if [ "$UNMAPPED" -gt 0 ]; then
+            echo "::warning::$UNMAPPED docs change(s) could not be mapped to any skill. Review plan.json → unmapped[]"
+            jq -r '.unmapped[] | "  - \(.feature) → suggested: \(.suggested_slug // "unknown")"' outputs/plan.json
+          fi
+
+      - name: Assert PR was created or updated
+        run: |
+          TICKETS=$(jq -r '[.tickets[].skill] | length' outputs/plan.json 2>/dev/null || echo "0")
+          if [ "$TICKETS" -eq 0 ]; then
+            echo "No tickets — skipping PR assertion"
+            exit 0
+          fi
+          if [ ! -f outputs/pr-composer-result.json ]; then
+            echo "::error::Pipeline had $TICKETS ticket(s) but Agent 4 produced no pr-composer-result.json"
+            echo "::error::changes-merged.json contents: $(cat outputs/changes-merged.json 2>/dev/null || echo 'missing')"
+            exit 1
+          fi
+          PR_URL=$(jq -r '.pr_url // empty' outputs/pr-composer-result.json)
+          if [ -z "$PR_URL" ]; then
+            echo "::error::Pipeline had $TICKETS ticket(s) but no PR was created or updated"
+            echo "::error::changes-merged.json contents: $(cat outputs/changes-merged.json 2>/dev/null || echo 'missing')"
+            exit 1
+          fi
+          echo "PR: $PR_URL"
 
       - name: Upload pipeline run summary
         if: always()

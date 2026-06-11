@@ -11,14 +11,9 @@ A hands-on guide to building your first workflow on the Approval Engine. By the 
 
 ## Prerequisites & authentication
 
-**Base URLs**
+**Base URL**
 
-| Environment | Base URL |
-| --- | --- |
-| Production | `https://api.velt.dev` |
-| Staging | `https://staging.velt.dev` |
-
-Endpoints are versioned. `/v1/...` and `/v2/...` accept the same shapes; new integrations should use `/v2/`.
+All endpoints are under `https://api.velt.dev/v2/`.
 
 **Required headers on every request**
 
@@ -62,8 +57,8 @@ flowchart LR
     RW --> Done
 ```
 
-<Steps>
-<Step title="Create the definition">
+### Step 1: Create the definition
+
 A `human` node must declare what happens on rejection: either an `onReject` shorthand or membership in a `loops[]` body. Here we use the `onReject.routeToNodeId` shorthand to send rejections to a follow-up node, and we gate the success edge with `when: decision == 'approve'` so it only fires on approval.
 
 The `when` value is a **JSON-AST string**: the engine parses it as JSON and evaluates it with a safe walker, never as JavaScript. The follow-up node uses the reserved `__mock__` agent id so you can run this end-to-end without registering a real agent (use a real `agentId` in production).
@@ -108,9 +103,9 @@ curl -X POST https://api.velt.dev/v2/workflow/definitions/create \
 A successful create returns a `DefinitionView` with `version: 1` and `status: "active"`. Definitions are linted at write time: cycles, dangling edges, unreachable nodes, and quorum misconfiguration all fail before you ever dispatch. If the engine rejects the definition you'll get `INVALID_ARGUMENT` with a [linter code](/ai/approval-engine/customize-behavior#linter-rules) in the message.
 
 The `onReject.routeToNodeId` shorthand synthesizes the reject-gated edge for you, so you only need to author the explicit approve-side routing. See [Per-human-node `onReject` shorthand](/ai/approval-engine/customize-behavior#per-human-node-onreject-shorthand) for choosing a rejection strategy. Full request shape: [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition).
-</Step>
 
-<Step title="Dispatch an execution">
+### Step 2: Dispatch an execution
+
 Dispatch starts a run against a work item. You write one definition per workflow type and reuse it across many dispatches. `triggerContext` is free-form data your nodes and edge expressions can read as `execution.input.*`. Pass an `idempotencyKey` so retries never spawn duplicates.
 
 ```bash
@@ -140,9 +135,9 @@ Response:
 ```
 
 Keep the `executionId`; it's the handle for everything that follows. (`deduplicated: true` means this was a replay of an earlier dispatch with the same `idempotencyKey`, and you got the original execution back.) Full request shape: [Dispatch Execution](/api-reference/rest-apis/v2/approval-engine/executions/dispatch-execution).
-</Step>
 
-<Step title="Find the pending step and record a decision">
+### Step 3: Find the pending step and record a decision
+
 Fetch the execution to see which step is waiting on a human:
 
 ```bash
@@ -180,9 +175,9 @@ Response:
 `reviewerId` must match a `userId` declared on the node. When all mandatory reviewers approve (or any reviewer rejects), the step resolves and the workflow advances. Recording the same reviewer's decision twice is idempotent (`recorded: false` on replay). Full request shape: [Record Reviewer Decision](/api-reference/rest-apis/v2/approval-engine/steps/record-reviewer-decision).
 
 For blocking agent steps, record the outcome with [Record Agent Resolution](/api-reference/rest-apis/v2/approval-engine/steps/record-agent-resolution) instead.
-</Step>
 
-<Step title="Get the outcome">
+### Step 4: Get the outcome
+
 You have two complementary ways to learn how the run ends.
 
 **A. Webhook push (real-time).** Pass `webhookUrl` + `webhookSecret` on dispatch and the engine POSTs every externally-visible event to you, signed with HMAC-SHA256:
@@ -237,8 +232,6 @@ curl -X POST https://api.velt.dev/v2/workflow/executions/getEvents \
 <Note>
   **Recommended production setup:** webhooks for liveness, polling as the recovery path.
 </Note>
-</Step>
-</Steps>
 
 ## Putting it together: a realistic workflow
 

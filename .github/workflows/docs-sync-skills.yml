@@ -59,6 +59,10 @@ jobs:
       tickets:     ${{ steps.gate.outputs.tickets }}
       target_sha:  ${{ steps.resolve-shas.outputs.target_sha }}
       before_sha:  ${{ steps.resolve-shas.outputs.before_sha }}
+      # The agent-skills ref that patches must be GENERATED against so they
+      # apply cleanly onto the same ref in validate-and-pr. If an open
+      # skills-sync PR exists, that's its (accumulator) branch; otherwise main.
+      base_ref:    ${{ steps.resolve-base-ref.outputs.base_ref }}
 
     steps:
       - name: Checkout docs (full history)
@@ -74,6 +78,30 @@ jobs:
           token: ${{ secrets.CROSS_REPO_PAT }}
           path: agent-skills
           fetch-depth: 1
+
+      - name: Resolve agent-skills base ref (reuse open skills-sync PR branch)
+        id: resolve-base-ref
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+        run: |
+          # Patches are generated (update-skill) and applied (validate-and-pr)
+          # against agent-skills. They MUST share a base, or hunks like the
+          # metadata.json version line fail to apply. If an open skills-sync PR
+          # exists, its branch is the accumulator that validate-and-pr commits
+          # onto — so generate against that branch. Otherwise generate against main.
+          EXISTING=$(gh pr list \
+            --repo ${{ env.AGENT_SKILLS_REPO }} \
+            --state open \
+            --label skills-sync \
+            --json headRefName,updatedAt \
+            --jq 'sort_by(.updatedAt) | reverse | .[0].headRefName // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "base_ref=$EXISTING" >> "$GITHUB_OUTPUT"
+            echo "Open skills-sync PR found — patch base is its branch: $EXISTING"
+          else
+            echo "base_ref=main" >> "$GITHUB_OUTPUT"
+            echo "No open skills-sync PR — patch base is main"
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -173,6 +201,11 @@ jobs:
           repository: ${{ env.AGENT_SKILLS_REPO }}
           token: ${{ secrets.CROSS_REPO_PAT }}
           path: agent-skills
+          # Generate the patch against the SAME ref validate-and-pr applies onto
+          # (the open skills-sync PR's accumulator branch, else main). Without
+          # this the patch is built against main and fails to apply onto a
+          # drifted accumulator branch (e.g. an already-bumped metadata.json).
+          ref: ${{ needs.plan.outputs.base_ref }}
           fetch-depth: 1
 
       - name: Set up Node.js
@@ -426,6 +459,27 @@ jobs:
             exit 1
           fi
           echo "PR: $PR_URL"
+
+      - name: Notify on failure (never fail silently)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+        run: |
+          DOCS_SHA="${{ needs.plan.outputs.target_sha }}"
+          SHORT="$(echo "$DOCS_SHA" | cut -c1-7)"
+          DOCS_URL="${{ github.server_url }}/${{ github.repository }}/commit/$DOCS_SHA"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="⚠️ skills-sync failed for docs@${SHORT} (${DOCS_URL}). Those docs changes were **not** synced to agent-skills. Pipeline run: ${RUN_URL}"
+          # Prefer a comment on the open skills-sync PR; otherwise open an issue so
+          # a failed run is always surfaced and never silently dropped.
+          if [ -n "${EXISTING_PR_NUMBER:-}" ]; then
+            gh pr comment "$EXISTING_PR_NUMBER" --repo ${{ env.AGENT_SKILLS_REPO }} --body "$MSG" || true
+          else
+            gh issue create --repo ${{ env.AGENT_SKILLS_REPO }} \
+              --title "skills-sync: failed to sync docs@${SHORT}" \
+              --body "$MSG" \
+              --label skills-sync || true
+          fi
 
       - name: Upload pipeline run summary
         if: always()

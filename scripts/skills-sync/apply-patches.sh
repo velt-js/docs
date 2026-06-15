@@ -46,12 +46,16 @@ echo "[apply-patches] Applying ${#PATCHES[@]} patch(es) to $AGENT_SKILLS_DIR"
 cd "$AGENT_SKILLS_DIR"
 for patch in "${PATCHES[@]}"; do
   echo "  - $(basename "$patch")"
-  # --3way leaves conflict markers if there's a conflict; we want a clean apply.
-  git apply --index --check "$patch" 2>&1 || {
-    echo "apply-patches.sh: patch failed precheck: $patch" >&2
+  # --3way lets a patch generated against a slightly different base (e.g. an
+  # accumulator branch that already bumped metadata.json) still apply via a
+  # 3-way merge instead of failing on stale context. With the patch generated
+  # against the same ref it's applied onto (see docs-sync-skills.yml base_ref),
+  # the normal path applies cleanly; --3way is the safety net. A genuine
+  # conflict still fails loudly rather than being silently skipped.
+  git apply --index --3way "$patch" 2>&1 || {
+    echo "apply-patches.sh: patch failed to apply (3-way): $patch" >&2
     exit 2
   }
-  git apply --index "$patch"
 done
 
 # Merge all changes.json files into a single array

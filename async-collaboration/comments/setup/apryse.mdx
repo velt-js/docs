@@ -1,0 +1,363 @@
+---
+title: "Apryse Setup"
+---
+
+![](/gifs/Add-Text-Comments.gif)
+
+<Note>
+The Velt Apryse WebViewer integration is documented for React. This guide covers the React integration only.
+</Note>
+
+## Setup
+
+#### Step 1: Add Comment components
+
+- Add the `Velt Comments` component to the root of your app.
+- This component is required to render comments in your app.
+- Set the `text mode` prop to `false` to hide the default text comment tool.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```js
+    <VeltProvider apiKey="API_KEY">
+      <VeltComments textMode={false} />
+    </VeltProvider>
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 2: Install the Velt Apryse package
+
+```bash
+npm i @veltdev/apryse-velt-comments
+```
+
+`@veltdev/apryse-velt-comments` lists `@pdftron/webviewer` as a **peer dependency** — install it yourself (the package won't bring its own copy, to avoid running two WebViewer runtimes in the same browser):
+
+```bash
+npm i @pdftron/webviewer
+```
+
+**Serve Apryse's runtime assets**
+
+Apryse's WebViewer isn't just JavaScript — it ships with a **WebAssembly core**, the **Office Editor engine**, and a **UI shell** (HTML/CSS/JS), all under `node_modules/@pdftron/webviewer/public/`. These are loaded at runtime over **HTTP** from a URL on your site (the `path` option you pass to `WebViewer(...)`), *not* via a JS import — so your bundler won't pick them up on its own. You need to copy them into your app's static folder so the browser can fetch them.
+
+Most teams automate this with a `postinstall` script:
+
+```js
+// scripts/copy-webviewer-assets.mjs
+import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const root = resolve(__dirname, '..');
+const src = resolve(root, 'node_modules/@pdftron/webviewer/public');
+const destDir = resolve(root, 'public/lib/webviewer');
+
+if (!existsSync(src)) {
+  console.warn('[copy-webviewer-assets] @pdftron/webviewer not installed yet — skipping.');
+  process.exit(0);
+}
+
+rmSync(destDir, { recursive: true, force: true });
+mkdirSync(destDir, { recursive: true });
+for (const folder of ['core', 'ui']) {
+  cpSync(resolve(src, folder), resolve(destDir, folder), { recursive: true });
+}
+```
+
+Wire it up in `package.json`:
+
+```json
+{
+  "scripts": {
+    "postinstall": "node scripts/copy-webviewer-assets.mjs"
+  }
+}
+```
+
+After install, the assets are at `public/lib/webviewer/core/` (WASM + PDF/Office engines) and `public/lib/webviewer/ui/` (WebViewer UI shell) — which is exactly what the `path: 'lib/webviewer'` option in `WebViewer(...)` (see Step 3) points to.
+
+#### Step 3: Create an Apryse WebViewer component with Velt Comments
+
+- Attach the extension to the WebViewer instance once it's created. The instance is then the handle that every `addComment` / `renderComments` call uses.
+- `@pdftron/webviewer` touches the DOM, so import it dynamically (only in the browser) to stay SSR-safe in Next.js, Remix, etc.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```jsx
+    import { useEffect, useRef, useState } from 'react';
+    import { useCommentAnnotations } from '@veltdev/react';
+    import {
+      ApryseVeltComments,
+      addComment,
+      renderComments,
+    } from '@veltdev/apryse-velt-comments';
+
+    function ApryseEditor() {
+      const viewerRef = useRef(null);
+      const instanceRef = useRef(null);
+      const extensionRef = useRef(null);
+      const [instance, setInstance] = useState(null);
+
+      const annotations = useCommentAnnotations();
+
+      useEffect(() => {
+        if (!viewerRef.current || instanceRef.current) return;
+        let cancelled = false;
+
+        import('@pdftron/webviewer').then(({ default: WebViewer }) => {
+          if (cancelled) return;
+          WebViewer(
+            {
+              path: 'lib/webviewer',
+              licenseKey: 'YOUR_APRYSE_LICENSE_KEY',
+              initialDoc: '/your-document.docx',
+              initialMode: 'docxEditor',
+            },
+            viewerRef.current,
+          ).then((webViewerInstance) => {
+            if (cancelled) return;
+            instanceRef.current = webViewerInstance;
+
+            // Attach the Velt comments extension to the WebViewer instance.
+            extensionRef.current = ApryseVeltComments.configure({}).attach(
+              webViewerInstance,
+            );
+            setInstance(webViewerInstance);
+          });
+        });
+
+        return () => {
+          cancelled = true;
+          extensionRef.current?.detach();
+          extensionRef.current = null;
+          instanceRef.current = null;
+          setInstance(null);
+        };
+      }, []);
+
+      useEffect(() => {
+        if (instance && annotations) {
+          renderComments({ instance, commentAnnotations: annotations });
+        }
+      }, [instance, annotations]);
+
+      return <div ref={viewerRef} style={{ width: '100%', height: '100vh' }} />;
+    }
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 4: Add a comment button to your WebViewer
+
+- Add a button that users can click to add comments after selecting text in the document.
+- Unlike DOM-based editors, Apryse selections live in the WebViewer's canvas — clicking a button in the host page does **not** clear the selection, so no `onMouseDown` / `preventDefault` dance is needed. Just call `addComment({ instance })`.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```jsx
+    import { addComment } from '@veltdev/apryse-velt-comments';
+
+    function AddCommentButton({ instance }) {
+      const handleAddComment = async () => {
+        if (!instance) return;
+        await addComment({ instance });
+      };
+
+      return <button onClick={handleAddComment}>Add Comment</button>;
+    }
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 5: Call `addComment` to add a comment
+
+- Call this method to add a comment to the currently selected text in the WebViewer. You can use this when the user clicks on the comment button or presses a keyboard shortcut.
+- Params: [`AddCommentArgs`](/api-reference/sdk/models/data-models#addcommentargs). It has the following properties:
+  - `instance`: The Apryse `WebViewerInstance` returned by `WebViewer(...)`.
+- Returns: [`AddCommentResult`](/api-reference/sdk/models/data-models#addcommentresult) or `null`. Resolves to `null` if no text is selected or the Velt SDK is not yet loaded. On success it returns:
+  - `veltAnnotationId`: The Velt annotation id assigned by the SDK.
+  - `textEditorConfig`: The durable logical anchor stored on the annotation (`{ editorId, text, pageNumber, occurrence }`).
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```js
+    import { addComment } from '@veltdev/apryse-velt-comments';
+
+    const handleAddComment = async () => {
+      const result = await addComment({ instance });
+      if (!result) {
+        console.warn('Add comment failed — make sure text is selected.');
+        return;
+      }
+      console.log('Created annotation:', result.veltAnnotationId);
+    };
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+To scope comments to a specific WebViewer (multi-viewer pages), set the editor id when you attach the extension: `ApryseVeltComments.configure({ editorId: 'EDITOR_ID' }).attach(webViewerInstance)`. `renderComments` will then only paint annotations whose stored `editorId` matches.
+</Tip>
+
+#### Step 6: Render comments in the WebViewer
+
+- Use the `useCommentAnnotations` hook from `@veltdev/react` to get comment data from Velt and render it in the WebViewer.
+- Params: [`RenderCommentsArgs`](/api-reference/sdk/models/data-models#rendercommentsargs). It has the following properties:
+  - `instance`: The Apryse `WebViewerInstance`.
+  - `commentAnnotations`: Array of Comment Annotation objects from Velt.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```jsx
+    import { useEffect } from 'react';
+    import { renderComments } from '@veltdev/apryse-velt-comments';
+    import { useCommentAnnotations } from '@veltdev/react';
+
+    const annotations = useCommentAnnotations();
+
+    useEffect(() => {
+      if (instance && annotations) {
+        renderComments({
+          instance,
+          commentAnnotations: annotations,
+        });
+      }
+    }, [instance, annotations]);
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+The library uses a durable logical anchor (`text` + `occurrence`) per comment — anchors survive document edits, page reflow, and viewer ↔ docxEditor mode switches. Physical positions are re-derived at render time.
+</Tip>
+
+#### Step 7: Clean up when the component unmounts
+
+- `ApryseVeltComments.configure(...).attach(instance)` returns an [`AttachedExtension`](/api-reference/sdk/models/data-models#attachedextension) handle. Call `detach()` from your effect cleanup so every Apryse listener and per-instance cache is released.
+- If you switch documents inside the same WebViewer (e.g. via `instance.UI.loadDocument(...)`), you do **not** need to detach/re-attach — the extension listens for Apryse's `beforeDocumentLoaded` / `documentLoaded` events and re-syncs the comment highlights automatically.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```jsx
+    useEffect(() => {
+      // ...attach as in Step 3...
+      extensionRef.current = ApryseVeltComments.configure({}).attach(webViewerInstance);
+
+      return () => {
+        // Removes textSelected / pagesUpdated / documentLoaded / docx-edit
+        // listeners and clears the per-instance annotation + page-text caches.
+        extensionRef.current?.detach();
+        extensionRef.current = null;
+      };
+    }, []);
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 8: Style the commented text
+
+- Comment highlights are rendered as positioned `<div>` elements inside `<velt-comment-text>` annotation overlays that Apryse manages on each page.
+- The default styles are set via inline `!important` rules, so to override them target the inner highlight class with a higher-specificity selector or `!important`.
+
+```css
+/* Override the default yellow highlight */
+velt-comment-text .velt-apryse-highlight {
+  background-color: rgba(60, 130, 246, 0.30) !important;
+  border-bottom: 2px solid rgba(60, 130, 246, 0.95) !important;
+}
+
+/* Hover state — apply to the host element */
+velt-comment-text:hover .velt-apryse-highlight {
+  background-color: rgba(60, 130, 246, 0.50) !important;
+}
+```
+
+<Note>
+`<velt-comment-text>` lives inside the `<apryse-webviewer>` shadow root, so global CSS automatically reaches it (the browser applies host-page styles into open shadow roots for unknown custom elements).
+</Note>
+
+## APIs
+
+#### [ApryseVeltComments.configure()](/api-reference/sdk/api/api-methods#apryseveltcomments-configure)
+Creates the Velt Comments extension for the Apryse WebViewer. It exposes a `configure(...).attach(instance)` pattern — each `.attach()` returns a handle whose `.detach()` undoes everything for that instance.
+
+- Params: `config?:` [ApryseVeltCommentsConfig](/api-reference/sdk/models/data-models#apryseveltcommentsconfig)
+  - `editorId?: string` - Unique identifier for this WebViewer instance (for multi-viewer scenarios). Default: `'apryse'`.
+- Returns: `ApryseVeltComments` (call `.attach(instance)` to wire it to a WebViewer, which returns an [`AttachedExtension`](/api-reference/sdk/models/data-models#attachedextension))
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { ApryseVeltComments } from '@veltdev/apryse-velt-comments';
+
+    const extension = ApryseVeltComments.configure({
+      editorId: 'my-editor',
+    }).attach(webViewerInstance);
+
+    // later, on unmount:
+    extension.detach();
+    ```
+  </Tab>
+</Tabs>
+
+#### [addComment()](/api-reference/sdk/api/api-methods#addcomment-7)
+
+Creates a comment annotation for the currently selected text in the WebViewer.
+
+- Params:
+  - `request:` [AddCommentArgs](/api-reference/sdk/models/data-models#addcommentargs)
+    - `instance: WebViewerInstance`
+- Returns: `Promise<`[AddCommentResult](/api-reference/sdk/models/data-models#addcommentresult)` | null>`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from '@veltdev/apryse-velt-comments';
+
+    <button
+      onClick={async () => {
+        const result = await addComment({ instance });
+        if (result) {
+          console.log('Created annotation:', result.veltAnnotationId);
+        }
+      }}
+    >
+      Comment
+    </button>
+    ```
+  </Tab>
+</Tabs>
+
+#### [renderComments()](/api-reference/sdk/api/api-methods#rendercomments-7)
+
+Renders and highlights comment annotations in the WebViewer.
+
+- Params:
+  - `request:` [RenderCommentsArgs](/api-reference/sdk/models/data-models#rendercommentsargs)
+    - `instance: WebViewerInstance`
+    - `commentAnnotations:` [CommentAnnotation[]](/api-reference/sdk/models/data-models#commentannotation)
+- Returns: `void`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect } from 'react';
+    import { renderComments } from '@veltdev/apryse-velt-comments';
+    import { useCommentAnnotations } from '@veltdev/react';
+
+    const annotations = useCommentAnnotations();
+
+    useEffect(() => {
+      if (instance && annotations) {
+        renderComments({
+          instance,
+          commentAnnotations: annotations,
+        });
+      }
+    }, [instance, annotations]);
+    ```
+  </Tab>
+</Tabs>

@@ -22,9 +22,10 @@ Velt supports self-hosting your activity log PII data:
 When activity records are created or read:
 
 1. The SDK uses your configured [`ActivityAnnotationDataProvider`](/api-reference/sdk/models/data-models#activityannotationdataprovider) to handle storage and retrieval.
-2. Your data provider implements two optional methods:
-   - `get`: Fetches activity PII from your database and returns it for re-hydration
-   - `save`: Stores PII fields stripped from the activity record before Velt writes to its backend
+2. Your data provider implements two optional methods, each of which can be supplied as either a callback function **or** a config endpoint URL:
+   - `get` / `getConfig`: Fetches activity PII from your database and returns it for re-hydration
+   - `save` / `saveConfig`: Stores PII fields stripped from the activity record before Velt writes to its backend
+3. Each method is considered valid as long as it has either a callback function (`get` / `save`) **or** a corresponding config endpoint URL (`getConfig` / `saveConfig`).
 
 **The process works as follows:**
 
@@ -72,6 +73,177 @@ There is **no automatic field-level stripping** for custom activities. The only 
 - Activity is **append-only** — there is no delete.
 
 # Implementation
+
+## Implementation Approaches
+
+You can implement activity self-hosting using either of these approaches:
+
+1. **Endpoint based**: Provide endpoint URLs and let the SDK handle HTTP requests
+2. **Function based**: Implement `get` and `save` methods yourself
+
+Both approaches are fully backward compatible and can be used together.
+
+| Feature | Function based | Endpoint based |
+|---------|----------------|----------------|
+| **Best For** | Complex setups requiring middleware logic, dynamic headers, or transformation before sending | Standard REST APIs where you just need to pass the request "as-is" to the backend |
+| **Implementation** | You write the `fetch()` or `axios` code | You provide the `url` string and `headers` object |
+| **Flexibility** | High | Medium |
+| **Speed** | Medium | High |
+
+## Endpoint based DataProvider
+
+Instead of implementing custom methods, you can configure endpoints directly and let the SDK handle HTTP requests.
+
+<Note>
+Activity is **append-only** — there is no `delete` operation, so there is no `deleteConfig` for activity.
+</Note>
+
+### getConfig
+Config-based endpoint for fetching activity PII. The SDK automatically makes HTTP POST requests with the request body.
+- Type: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig)
+- Request body format: [`GetActivityResolverRequest`](/api-reference/sdk/models/data-models#getactivityresolverrequest)
+- Response format: [`ResolverResponse<Record<string, PartialActivityRecord>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const activityResolverConfig = {
+  getConfig: {
+    url: 'https://your-backend.com/api/velt/activity/get',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  }
+};
+
+const activityDataProvider = {
+  config: activityResolverConfig
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ activity: activityDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const activityResolverConfig = {
+  getConfig: {
+    url: 'https://your-backend.com/api/velt/activity/get',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  }
+};
+
+const activityDataProvider = {
+  config: activityResolverConfig
+};
+
+Velt.setDataProviders({ activity: activityDataProvider });
+```
+</Tab>
+</Tabs>
+
+### saveConfig
+Config-based endpoint for saving stripped activity PII. The SDK automatically makes HTTP POST requests with the request body.
+- Type: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig)
+- Request body format: [`SaveActivityResolverRequest`](/api-reference/sdk/models/data-models#saveactivityresolverrequest) (the SDK sends `{ activity, event, metadata }`)
+- Response format: [`ResolverResponse`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const activityResolverConfig = {
+  saveConfig: {
+    url: 'https://your-backend.com/api/velt/activity/save',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  }
+};
+
+const activityDataProvider = {
+  config: activityResolverConfig
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ activity: activityDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const activityResolverConfig = {
+  saveConfig: {
+    url: 'https://your-backend.com/api/velt/activity/save',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  }
+};
+
+const activityDataProvider = {
+  config: activityResolverConfig
+};
+
+Velt.setDataProviders({ activity: activityDataProvider });
+```
+</Tab>
+</Tabs>
+
+### Endpoint based Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const activityResolverConfig = {
+  getConfig: {
+    url: 'https://your-backend.com/api/velt/activity/get',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  },
+  saveConfig: {
+    url: 'https://your-backend.com/api/velt/activity/save',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  },
+  resolveTimeout: 60000,
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000, revertOnFailure: true },
+  fieldsToRemove: ['customSensitiveField']
+};
+
+const activityDataProvider = {
+  config: activityResolverConfig
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ activity: activityDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const activityResolverConfig = {
+  getConfig: {
+    url: 'https://your-backend.com/api/velt/activity/get',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  },
+  saveConfig: {
+    url: 'https://your-backend.com/api/velt/activity/save',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  },
+  resolveTimeout: 60000,
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000, revertOnFailure: true },
+  fieldsToRemove: ['customSensitiveField']
+};
+
+const activityDataProvider = {
+  config: activityResolverConfig
+};
+
+Velt.setDataProviders({ activity: activityDataProvider });
+```
+</Tab>
+</Tabs>
 
 ## Function based DataProvider
 
@@ -167,18 +339,22 @@ Configuration for the activity data provider.
 
 - Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig). Relevant properties:
   - `resolveTimeout`: Timeout duration (in milliseconds) for resolver operations.
+  - `getRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for `get` operations.
+  - `saveRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for `save` operations. `RetryConfig` is `{ retryCount?: number; retryDelay?: number; revertOnFailure?: boolean }`. Note: `revertOnFailure` reverts the optimistic cache update if the save ultimately fails.
+  - `getConfig`: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig). Endpoint URL + headers for fetching activity PII. See [Endpoint based DataProvider](#endpoint-based-dataprovider).
+  - `saveConfig`: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig). Endpoint URL + headers for saving stripped activity PII. See [Endpoint based DataProvider](#endpoint-based-dataprovider).
   - `fieldsToRemove`: `string[]`. Top-level keys to move wholesale from the activity record to your DB. **Applies only to `featureType === 'custom'`** — built-in feature types (`comment` / `reaction` / `recorder`) ignore this and use the feature-aware partial strip described in [What gets stripped](#what-gets-stripped). Listing `entityData` or `entityTargetData` moves the *entire field* (not field-by-field).
 
 ```tsx
-const activityDataProvider = {
-  config: {
-    resolveTimeout: 60000,
-    fieldsToRemove: ['customSensitiveField'],
-  },
+const activityResolverConfig = {
+  resolveTimeout: 60000,
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000, revertOnFailure: true },
+  fieldsToRemove: ['customSensitiveField']
 };
 ```
 
-## Complete Example
+## Function based Complete Example
 
 <Tabs>
 <Tab title="React / Next.js">

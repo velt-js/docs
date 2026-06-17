@@ -1266,1866 +1266,645 @@ commentElement.disableVisibilityOptions();
 </Tab>
 </Tabs>
 
-The banner surface is fully wireframe-customizable via the new [`VeltCommentDialogWireframe.VisibilityBanner.*` / `velt-comment-dialog-visibility-banner-*`](/ui-customization/features/async/comments/comment-dialog-components#visibility-banner) family.
+The banner surface is fully wireframe-customizable via the new [`VeltCommentDialogVisibilityBanner`](/ui-customization/features/async/comments/comment-dialog/primitives#veltcommentdialogvisibilitybanner) primitive.
 
-- [**Comments**]: Added `AddCommentRequest.visibility` field of type `CommentVisibilityConfig` to set comment visibility at creation time. Previously visibility could only be set after creation via `updateVisibility()`.
+- [**Comments**]: Added `visibilityConfig` to `CommentAnnotation` model for per-annotation access control via a structured `VisibilityConfig` object (`type`, `allowedUsers`, optional `displayName`). Supported types: `public`, `organizationPrivate`, `restricted`. [Learn More →](/async-collaboration/comments/customize-behavior#setvisibilityconfigforannotation)
+
+- [**Comments**]: Added `CommentElement.setVisibilityConfigForAnnotation()`. Updates the `visibilityConfig` of an existing annotation and refreshes Firestore document-level access rules (IAM) in real time. Overrides the top-level `defaultCommentVisibility` setting when called on a specific annotation.
 
 <Tabs>
 <Tab title="React / Next.js">
-```jsx
+```tsx
 const commentElement = client.getCommentElement();
-commentElement.addComment({
-  annotationId: 'annotation-id',
-  comment: { text: 'Visible only to selected users' },
-  visibility: {
+commentElement.setVisibilityConfigForAnnotation({
+  annotationId: 'annotation-123',
+  visibilityConfig: {
     type: 'restricted',
-    userIds: ['user1', 'user2'],
+    allowedUsers: [{ userId: 'user-456', email: 'user@example.com' }],
+    displayName: 'Team Only',
   },
 });
 ```
 </Tab>
 <Tab title="Other Frameworks">
-```html
-<script>
+```js
 const commentElement = Velt.getCommentElement();
-commentElement.addComment({
-  annotationId: 'annotation-id',
-  comment: { text: 'Visible only to selected users' },
-  visibility: {
+commentElement.setVisibilityConfigForAnnotation({
+  annotationId: 'annotation-123',
+  visibilityConfig: {
     type: 'restricted',
-    userIds: ['user1', 'user2'],
+    allowedUsers: [{ userId: 'user-456', email: 'user@example.com' }],
+    displayName: 'Team Only',
   },
 });
-</script>
 ```
 </Tab>
 </Tabs>
 
-### Improvements
 
-- [**Comments**]: `VisibilityOptionClickedEvent` now includes an optional `users` field containing the list of selected users when `visibility === 'restricted'`. Previously, the event only reported the visibility type string.
+- [**Comments**]: Added `enableVisibilityOptionDropdown()` and `disableVisibilityOptionDropdown()` (plus `visibilityOptionDropdown` prop on `VeltComments`) to show or hide a small visibility caret next to the visibility banner in the comment composer — giving users a quick dropdown to change the access level without opening the full options menu.
 
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-const eventData = useCommentEventCallback('visibilityOptionClicked');
-useEffect(() => {
-  if (eventData) {
-    console.log(eventData.visibility); // 'public' | 'organization-private' | 'restricted-self' | 'restricted'
-    console.log(eventData.users);      // populated when visibility === 'restricted'
-  }
-}, [eventData]);
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-const commentElement = Velt.getCommentElement();
-commentElement.on('visibilityOptionClicked').subscribe((event) => {
-  console.log(event.visibility);
-  console.log(event.users);
-});
-</script>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: `CommentSaveTriggeredEvent` now includes a `commentAnnotation` field with the full annotation object at save time. Handlers for `onCommentSaveTriggered` can now access comment content, assignment, and visibility state without a separate lookup.
-
-</Update>
-
-<Update label="5.0.2-beta.3" description="February 24, 2026">
-
-### New Features
-
-- [**Comments**]: Added [`AnonymousUserDataProvider`](/self-host-data/users#anonymous-user-resolution) to resolve email → `userId` mappings for users who are tagged by email in comments but are not part of the contact list. When a comment is saved and a tagged contact or `to` recipient has an email but no `userId`, the SDK calls the registered provider to look up the `userId` and backfills it into the comment data before persisting.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Option 1: standalone method
-client.setAnonymousUserDataProvider({
-  resolveUserIdsByEmail: async (request) => {
-    // request.emails: string[]
-    const map = await yourBackend.lookupUserIds(request.emails);
-    return { statusCode: 200, success: true, data: map };
-  },
-  config: {
-    resolveTimeout: 5000,
-    getRetryConfig: { retryCount: 2, retryDelay: 300 },
-  },
-});
-
-// Option 2: via setDataProviders
-client.setDataProviders({
-  anonymousUser: {
-    resolveUserIdsByEmail: async (request) => { /* ... */ },
-  },
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-// Option 1: standalone method
-Velt.setAnonymousUserDataProvider({
-  resolveUserIdsByEmail: async (request) => {
-    // request.emails: string[]
-    const map = await yourBackend.lookupUserIds(request.emails);
-    return { statusCode: 200, success: true, data: map };
-  },
-  config: {
-    resolveTimeout: 5000,
-    getRetryConfig: { retryCount: 2, retryDelay: 300 },
-  },
-});
-
-// Option 2: via setDataProviders
-Velt.setDataProviders({
-  anonymousUser: {
-    resolveUserIdsByEmail: async (request) => { /* ... */ },
-  },
-});
-</script>
-```
-</Tab>
-</Tabs>
-
-Results are cached in memory for the session; emails already resolved are not re-fetched. On timeout or error, the provider returns whatever was cached and proceeds without the unresolved user IDs. If no [`UserDataProvider`](/api-reference/sdk/models/data-models#userdataprovider) is configured, resolved user IDs are automatically backfilled to the organization database as stub user records (`{ userId, name: email, email }`). If a `UserDataProvider` is already configured, the org DB backfill is skipped.
-
-### Improvements
-
-- [**Comments**]: Comment annotations now store a top-level [`visibilityConfig`](/api-reference/sdk/models/data-models#commentannotationvisibilityconfig) field (`{ type, organizationId, userIds }`) alongside the existing `context.accessFields` tokens. This makes the original visibility setting inspectable without reversing hashed tokens. Annotations without an explicit visibility setting default to `{ type: 'public' }`. The `context.accessFields` tokens continue to govern actual access control.
-
-- [**Comments**]: When setting restricted visibility, the current user's `userId` is now automatically appended to `userIds` (deduplicated) if not already present. Existing explicit `userIds` lists are preserved. This applies across [`enablePrivateMode`](/async-collaboration/comments/customize-behavior#enableprivatemode), [`addCommentAnnotation`](/async-collaboration/comments/customize-behavior#addcommentannotation), and [`updateVisibility`](/async-collaboration/comments/customize-behavior#updatevisibility).
-
-</Update>
-
-
-<Update label="5.0.2-beta.2" description="February 24, 2026">
-
-### New Features
-
-- [**Comments**]: Added a `commentSaveTriggered` event that fires immediately when a user clicks the save button, before the async save completes. Use it for immediate pre-save feedback alongside the existing `commentSaved` event, which continues to fire after the save finishes.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using hook
-const event = useCommentEventCallback('commentSaveTriggered');
-
-useEffect(() => {
-  if (event) {
-    console.log('Save triggered for annotation:', event.annotationId);
-  }
-}, [event]);
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-const commentElement = Velt.getCommentElement();
-commentElement.on('commentSaveTriggered').subscribe((event) => {
-  console.log('Save triggered for annotation:', event.annotationId);
-});
-</script>
-```
-</Tab>
-</Tabs>
-
-The exported [`CommentSaveTriggeredEvent`](/api-reference/sdk/models/data-models#commentsavetriggeredevent) interface has the following shape:
-
-```ts
-interface CommentSaveTriggeredEvent {
-  annotationId: string;
-  metadata: VeltEventMetadata;
-}
-```
-
-### Improvements
-- [**Comments**]: The sidebar now automatically returns to the full comment list when all annotations are deselected while in focused thread mode.
-
-- [**Comments**]: Page scroll position is now preserved when navigating to a highlighted annotation from the sidebar.
-
-</Update>
-
-<Update label="5.0.2-beta.1" description="February 20, 2026">
-
-### New Features
-
-- [**Comments**]: Added a visibility dropdown to the comment composer, letting users set a comment's visibility to `public` or `private` before submitting. Disabled by default; enable it via the `visibilityOptionDropdown` prop or API methods. A `visibilityOptionClicked` event fires on each selection, emitting the annotation ID, full [`CommentAnnotation`](/api-reference/sdk/models/data-models#commentannotation), and chosen visibility.
+- [**Comments**]: New `CommentElement.getCommentAnnotationCount()` method returns total and unread comment counts for a given request query, without subscribing to a stream. Accepts an optional `CommentRequestQuery` with `organizationId`, `documentId`, `locationId`, and filter options. [Learn more →](/async-collaboration/comments/customize-behavior#getcommentannotationcount)
 
 <Tabs>
 <Tab title="React / Next.js">
 ```tsx
-// Declarative prop
-<VeltComments visibilityOptionDropdown={true} />
-
-// Using API methods
 const commentElement = client.getCommentElement();
-commentElement.enableVisibilityOptionDropdown();
-commentElement.disableVisibilityOptionDropdown();
-
-// Listening to the event
-import { useCommentEventCallback } from '@veltdev/react';
-const visibilityEvent = useCommentEventCallback('visibilityOptionClicked');
-
-useEffect(() => {
-  if (visibilityEvent) {
-    console.log('Visibility selected:', visibilityEvent.visibility);
-    console.log('Annotation ID:', visibilityEvent.annotationId);
-  }
-}, [visibilityEvent]);
+const count = await commentElement.getCommentAnnotationCount({
+  organizationId: 'org-123',
+  documentId: 'doc-456',
+});
+console.log(count.totalCount, count.unreadCount);
 ```
 </Tab>
 <Tab title="Other Frameworks">
-```html
-<velt-comments visibility-option-dropdown="true"></velt-comments>
-
-<script>
+```js
 const commentElement = Velt.getCommentElement();
-commentElement.enableVisibilityOptionDropdown();
-commentElement.disableVisibilityOptionDropdown();
-
-commentElement.on('visibilityOptionClicked').subscribe((event) => {
-  console.log('Visibility selected:', event.visibility);
-  console.log('Annotation ID:', event.annotationId);
+const count = await commentElement.getCommentAnnotationCount({
+  organizationId: 'org-123',
+  documentId: 'doc-456',
 });
-</script>
+console.log(count.totalCount, count.unreadCount);
 ```
 </Tab>
 </Tabs>
 
-To customize the dropdown via wireframes, you can refer to the [wireframe documentation](/ui-customization/features/async/comments/comment-dialog-components#visibility-dropdown-composer).
-
 ### Bug Fixes
 
-- [**Comments Sidebar**]: Fixed the "(This page)" indicator not appearing for locations identified by `locationName` instead of `id`. The sidebar now matches the current location by `id`, `locationName`, or legacy `locationId`, in that order.
+- [**Comments**]: Reply count on thread cards now updates in real time without requiring a page refresh.
 
 </Update>
 
-<Update label="5.0.1" description="February 18, 2026">
-
-### Bug Fixes
-
-- [**Comments**]: Fixed temporary composer annotations (prefixed `TEMP_COMPOSER_`) being inadvertently persisted to the database. Guards were added so temp annotations remain client-only and are never written to the database.
-
-- [**Comments**]: Fixed the comment dialog calling `markAsRead()` for `TEMP_COMPOSER_` annotations that do not yet exist in the database. The call is now guarded so only persisted annotations are marked read when a pin is selected.
-
-- [**Comments Sidebar**]: Fixed the sidebar failing to identify the current page's annotation group when a location is configured with `locationName` but no `id`. The sidebar now resolves the current location using `location.id` first, then `location.locationName`, then alphabetical order.
-
-- [**Notifications**]: Fixed a race condition where a stale async call completing after a newer one could overwrite the user's saved notification config with defaults.
-
-- [**Comments**]: Fixed comment pins being placed at incorrect positions on video timelines whose total duration is not a whole number of seconds. Fractional-second durations are now preserved correctly.
-
-</Update>
-
-<Update label="5.0.1-beta.4" description="February 18, 2026">
+<Update label="5.0.2-beta.3" description="February 19, 2026">
 
 ### New Features
 
-- [**Comments**]: Added `enablePrivateMode(config)` and `disablePrivateMode()` methods to set a global visibility policy for all newly created comments. Supports `restricted` (user-list), `organizationPrivate`, and `public` visibility types via the new [`PrivateModeConfig`](/api-reference/sdk/models/data-models#privatemodeconfig) type.
+- [**Comments**]: Added `CommentElement.updateCommentAnnotationContext()` — updates the `context` object on an existing comment annotation in real time without changing other annotation fields. Accepts a `merge` flag (default `false`) to deep-merge new fields with the existing context instead of replacing it.
 
 <Tabs>
 <Tab title="React / Next.js">
 ```tsx
-// Using API methods
 const commentElement = client.getCommentElement();
-
-// Restrict all new comments to specific users
-commentElement.enablePrivateMode({ type: 'restricted', userIds: ['user-1', 'user-2'] });
-
-// Restrict all new comments to the current organization
-commentElement.enablePrivateMode({ type: 'organizationPrivate' });
-
-// Revert to default public visibility
-commentElement.disablePrivateMode();
+commentElement.updateCommentAnnotationContext({
+  annotationId: 'annotation-123',
+  context: { projectId: 'proj-456', phase: 'review' },
+  merge: true,
+});
 ```
 </Tab>
 <Tab title="Other Frameworks">
-```ts
+```js
 const commentElement = Velt.getCommentElement();
-
-// Restrict all new comments to specific users
-commentElement.enablePrivateMode({ type: 'restricted', userIds: ['user-1', 'user-2'] });
-
-// Restrict all new comments to the current organization
-commentElement.enablePrivateMode({ type: 'organizationPrivate' });
-
-// Revert to default public visibility
-commentElement.disablePrivateMode();
+commentElement.updateCommentAnnotationContext({
+  annotationId: 'annotation-123',
+  context: { projectId: 'proj-456', phase: 'review' },
+  merge: true,
+});
 ```
 </Tab>
 </Tabs>
 
-- [**Comments**]: Added a `commentSaved` event that fires after a comment is persisted to the database, providing a reliable signal for triggering downstream actions. The payload includes the annotation ID, full [`CommentAnnotation`](/api-reference/sdk/models/data-models#commentannotation), and [`VeltEventMetadata`](/api-reference/sdk/models/data-models#velteventmetadata).
+- [**REST API**]: New webhook trigger for `comment.reaction.added` and `comment.reaction.deleted` events, fired when a reaction is added or removed from a comment. Subscribe via `WebhooksV2Service` and set `triggers.comment.reaction.added` / `triggers.comment.reaction.deleted` to `true`. [Learn More →](/api-reference/rest-apis/v2/webhooks)
+
+- [**Presence**]: `PresenceElement.getPresenceUsers()` now returns both current-document and cross-document presences in a single call. Cross-document user entries include a `documentId` field.
+
+- [**REST API**]: `POST /v2/commentannotations/add` accepts an optional `triggerWebhooks` boolean. When `true`, a `comment.added` webhook is dispatched for the created annotation. [Learn More →](/api-reference/rest-apis/v2/comment-annotations/add-comment-annotations)
+
+### Improvements
+
+- [**Comments**]: The Comment Dialog composer toolbar now correctly renders in dark mode.
+
+- [**Comments**]: `CommentAnnotation.externalId` is now supported in sidebar filters via `CommentSidebarFilters.externalId`. When set, the sidebar only shows annotations whose `externalId` matches.
+
+- [**Analytics**]: Added `COMMENT_NAVIGATION_BUTTON_CLICKED` to the analytics events emitted by `CommentElement`. Fires when the user clicks the comment navigation button in the comment dialog. [Learn More →](/async-collaboration/comments/customize-behavior#analytics)
+
+### Bug Fixes
+
+- [**Comments**]: Fixed composer mode not detecting clicks on annotation elements as "inside clicks", causing the composer to dismiss unexpectedly.
+
+- [**Comments**]: Fixed `CommentElement.getAllCommentAnnotations()` returning only the first emission from each observable merge and not updating on subsequent annotation changes.
+
+- [**Comments**]: Scrolling inside the comment dialog no longer triggers the click-outside close behavior.
+
+- [**Notifications**]: Fixed the notification panel bell icon badge count showing incorrect numbers when the panel was opened or notifications were read.
+
+</Update>
+
+<Update label="5.0.2-beta.2" description="February 13, 2026">
+
+### New Features
+
+- [**Comments**]: Added `CommentAnnotation.externalId` — an optional user-defined string field on comment annotations for correlating Velt annotations with records in external systems (tickets, tasks, CRM entries). Set it at creation time or update it at any time via `CommentElement.setExternalId()`. The field is indexed for efficient lookups with `CommentElement.getCommentAnnotationsByExternalId()`. [Learn More →](/async-collaboration/comments/customize-behavior#setexternalid)
+
+- [**Access Control**]: Added access-control support for folders — document-type IAM rules can now be scoped to a folder via `folderId`. `getUserPermissions()` now supports querying folder-level permissions. Documents inside a folder inherit the folder's access rules unless the document has its own explicit rule. [Learn More →](/access-control/overview)
+
+### Bug Fixes
+
+- [**Collaboration**]: Fixed a bug in `client.setDocuments()` where setting a document with a `folderId` to `null` was not properly handled, causing the document to remain in the folder.
+
+- [**Comments**]: Fixed `VeltCommentPlayerTimeline` not rendering timestamp labels on the timeline.
+
+- [**Comments**]: Fixed the comment dialog not opening when clicking on a `VeltCommentPlayerTimeline` pin.
+
+</Update>
+
+<Update label="5.0.2-beta.1" description="February 6, 2026">
+
+### New Features
+
+- [**CRDT**]: Added `CrdtElement.getUsers()` to retrieve a list of users for a given CRDT provider. Returns an observable of `CrdtUser[]`. [Learn More →](/realtime-collaboration/crdt/setup/core)
+
+- [**CRDT**]: Added `CrdtElement.getPendingChanges()` — returns `true` if there are unsaved local changes, `false` otherwise. [Learn More →](/realtime-collaboration/crdt/setup/core)
+
+- [**Core**]: Added `VeltUser.isAnonymous` — a boolean flag indicating whether the user is signed in anonymously. Populated automatically when a user object with no `email` and no `name` is passed to `identify()`. [Learn More →](/users/identify)
+
+- [**Core**]: `identify()` now accepts an optional `UserOptions` second argument with an `isAnonymous?: boolean` property. When set to `true`, the user is marked as anonymous regardless of whether the `User` object has an email or name. [Learn More →](/users/identify)
+
+- [**Comments**]: New `VeltCommentPlayerTimeline` / `<velt-comment-player-timeline>` component renders comment and reaction pins as a scrubable timeline at the bottom of a video or audio player. Pins are positioned by `targetElement` timestamp, displayed as SVG icons with color coding by status, and are fully customizable via CSS variables and slot overrides. [Learn More →](/async-collaboration/comments/setup/video-player)
+
+### Improvements
+
+- [**Core**]: `client.getAuthToken()` now resolves immediately if a cached token is still valid, instead of always issuing a new network request. Token expiry is checked against `authToken.expiresAt` before making a refresh call.
+
+- [**Core**]: Added `TokenRefreshOptions.forceRefresh?: boolean` — when `true`, `getAuthToken()` bypasses the cache and always fetches a fresh token from the server. [Learn More →](/api-reference/sdk/api/api-methods#getauthtoken)
+
+### Bug Fixes
+
+- [**Core**]: Fixed multi-organization support for `setDocuments()` — calling it with a different `organizationId` now properly re-initializes the Velt client services instead of ignoring the new organization context.
+
+</Update>
+
+<Update label="5.0.1" description="January 29, 2026">
+
+### New Features
+
+- [**Core**]: Added `VeltProvider.onAuthError` prop / `client.on('authError')` event — fires whenever the Velt authentication flow fails (network error, invalid API key, server-side rejection). The callback receives an `AuthErrorEvent` with `error`, `errorCode`, and optional `message`. [Learn More →](/api-reference/sdk/api/api-methods#onautherror)
 
 <Tabs>
 <Tab title="React / Next.js">
 ```tsx
-// Using Hooks
-import { useCommentEventCallback } from '@veltdev/react';
-import { useEffect } from 'react';
-
-const commentSavedData = useCommentEventCallback('commentSaved');
-
-useEffect(() => {
-  if (commentSavedData) {
-    console.log('Comment saved:', commentSavedData.annotationId);
-    console.log('Annotation:', commentSavedData.commentAnnotation);
-  }
-}, [commentSavedData]);
-
-// Using API methods
-const commentElement = client.getCommentElement();
-commentElement.on('commentSaved').subscribe((event) => {
-  console.log('Comment saved:', event.annotationId);
-  console.log('Annotation:', event.commentAnnotation);
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```ts
-const commentElement = Velt.getCommentElement();
-commentElement.on('commentSaved').subscribe((event) => {
-  console.log('Comment saved:', event.annotationId);
-  console.log('Annotation:', event.commentAnnotation);
-});
-```
-</Tab>
-</Tabs>
-
-- [**Notifications**]: Added opt-in notification delay and batching pipeline for comment notifications. Configure `delayConfig` to hold notifications and suppress delivery if a user views the comment during the delay window. Configure `batchConfig` to accumulate notifications per document or per user before delivery, reducing noise on high-activity content. Webhooks and workflow triggers always fire immediately and are never subject to delay or batching.
-
-```json
-{
-  "delayConfig": {
-    "isEnabled": true,
-    "delaySeconds": 30
-  },
-  "batchConfig": {
-    "document": {
-      "isEnabled": true,
-      "batchWindowSeconds": 300,
-      "maxActivities": 10
-    },
-    "user": {
-      "isEnabled": true,
-      "batchWindowSeconds": 300,
-      "maxActivities": 10
-    }
-  }
-}
-```
-
-Set `notificationServiceConfig` in your workspace notification settings in the [Velt Console](https://console.velt.dev/dashboard/config/notification). [Learn more](/async-collaboration/notifications/customize-behavior#notificationserviceconfig)
-
-- [**Notifications**]: Webhook payloads now include per-user notification preferences for all involved users. Depending on the config level, payloads carry either `usersOrganizationNotificationsConfig` or `usersDocumentNotificationsConfig`, enabling downstream consumers to route notifications based on each user's settings. See [`UserNotificationsConfig`](/api-reference/sdk/models/data-models#usernotificationsconfig) for the type definition. [Learn more](/webhooks/basic)
-
-<Tabs>
-<Tab title="Webhook Payload — Org-Level Config">
-```json
-{
-  "webhookId": "notif-123",
-  "usersOrganizationNotificationsConfig": {
-    "user-1": { "inbox": "ALL", "email": "MINE" },
-    "user-2": { "inbox": "ALL", "email": "MINE" }
-  }
-}
-```
-</Tab>
-<Tab title="Webhook Payload — Document-Level Config">
-```json
-{
-  "webhookId": "notif-456",
-  "usersDocumentNotificationsConfig": {
-    "user-1": { "inbox": "ALL", "email": "MINE" },
-    "user-2": { "inbox": "ALL", "email": "MINE" }
-  }
-}
-```
-</Tab>
-</Tabs>
-
-- [**Notifications**]: The `getConfig` notification API now supports a `getOrganizationConfig: true` option to retrieve org-level notification config for a user. `documentIds` is now optional in `setConfig` — omitting it applies the config at the organization level as the user's default for all documents. [setConfig](/api-reference/rest-apis/v2/notifications/set-config) | [getConfig](/api-reference/rest-apis/v2/notifications/get-config)
-
-<Tabs>
-<Tab title="setConfig — Org-Level">
-```json
-{
-  "data": {
-    "organizationId": "org-123",
-    "userIds": ["user-1", "user-2"],
-    "config": {
-      "inbox": "ALL",
-      "email": "NONE"
-    }
-  }
-}
-```
-</Tab>
-<Tab title="getConfig — Org-Level">
-```json
-{
-  "data": {
-    "organizationId": "org-123",
-    "userId": "user-1",
-    "getOrganizationConfig": true
-  }
-}
-```
-</Tab>
-</Tabs>
-
-### Improvements
-
-- [**Comments**]: Added auto-resolution of the organization ID from the current org configuration when `updateVisibility()` or `enablePrivateMode()` is called with `type: 'organizationPrivate'` and no `organizationId` is provided.
-
-### Bug Fixes
-
-- [**Comments**]: Fixed global dark mode toggling not affecting open comment dialogs. Dialog initialization no longer sets a component-level dark mode override that would block `ThemeService` propagation.
-
-- [**Comments**]: Fixed composer placeholder text not reappearing after a user typed and deleted all text. The contenteditable element is now cleared with `innerHTML = ''` to ensure the CSS `:empty::before` placeholder renders correctly.
-
-- [**Comments**]: Fixed SVG gradient, clip-path, and filter rendering for duplicate emoji reactions. Each emoji SVG instance now receives unique internal IDs via `EmojiService.uniquifySvgIds()`.
-
-- [**Comments**]: Fixed priority dropdown showing an incorrect background color in dark mode when no priority was set.
-
-- [**Comments**]: Fixed user migration not updating `{{userId}}` placeholders in `commentText`/`commentHtml` and not remapping `views`/`viewedByUserIds` by internal user key. All userId references in comment content and view tracking are now correctly updated during migration.
-
-</Update>
-
-
-<Update label="5.0.1-beta.3" description="February 16, 2026">
-
-### Improvements
-
-- [**Comments**]: Added backward compatibility so V4 custom wireframes using property names `allowAssignment`, `allowEdit`, `allowToggleNotification`, and `allowChangeCommentAccessMode` automatically resolve to their v5 equivalents. No changes to your wireframe code are required when upgrading from v4 to v5.
-
-- [**Comments**]: Added edit composer wireframe reuse in comment thread cards so it now applies the same `velt-comment-dialog-composer-wireframe` customization as the reply composer. Previously the edit composer always rendered the default template.
-
-### Bug Fixes
-
-- [**Comments**]: Fixed custom wireframes for nested comment dialog components — including thread cards, priority/status dropdowns, attachment layouts, reply avatars, and seen dropdowns — silently falling back to the default template instead of rendering correctly. This restores the v4 behavior where parent components extracted nested wireframes via `querySelector` and passed them to children.
-
-- [**Comments**]: Fixed `veltDynamicTemplate` placement in multiple components so it wraps only the replaceable inner content (e.g., an icon) instead of the entire component structure. Previously the default template always rendered and the wireframe content was never injected.
-
-- [**Comments**]: Fixed `velt-class` conditional styling in custom wireframes not resolving correctly for per-item data such as `{commentObj.*}`, `{attachment.*}`, and `{file.*}`. Added `applyConditionalClasses()` calls with per-item data contexts across 40+ comment dialog primitive components.
-
-- [**Comments**]: Fixed click event handlers being lost when custom wireframes replace default content by moving handlers from inside `veltDynamicTemplate` blocks to wrapper elements outside the template directive. This restores click functionality for custom wireframes on mark-as-read, dropdown items, options, and priority/status items.
-
-- [**Comments**]: Fixed per-dialog state (`localUIStateSignal`) not being propagated to child primitives and `veltDynamicTemplate` contexts throughout the entire comment dialog component tree, including through wireframe-replaced sections.
-
-- [**Comments**]: Fixed custom wireframes using data bindings like `<VeltData field="attachment.name" />` displaying empty content by adding per-item data fields (`attachment`, `commentObj`, `file`, `item`, etc.) to `veltDynamicTemplate` context objects.
-
-- [**Comments**]: Fixed layout issues caused by styled wrapper elements persisting outside the template when wireframes replaced inner content. Visual styling classes (width, height, padding) are now inside the `veltDynamicTemplate` default content.
-
-- [**Comments**]: Restored CSS class names on the priority dropdown content item components to their v4 names (`velt-priority-dropdown-content-item`, `velt-priority-dropdown-content-item-tick`, `s-priority-*`) so existing CSS overrides continue to work without changes.
-
-- [**Comments**]: Fixed mark-as-read not firing when clicking a comment in sidebar focused-thread mode or inline comment section mode. Previously the comment dialog is always in a selected state in these modes, preventing the mark-as-read path from triggering.
-
-- [**Comments**]: Fixed the attachment image download button not hiding for anonymous users, disabled states, and expired plans. The button now correctly matches v4 behavior.
-
-- [**Comments**]: Fixed attachment loading spinners crashing when `config.uiState` is not yet initialized (e.g., in standalone usage or during initialization race conditions).
-
-- [**Comments**]: Fixed sidebar deselection accidentally re-selecting an annotation that was already removed from the selected annotations map by another code path.
-
-</Update>
-
-
-<Update label="5.0.1-beta.2" description="February 16, 2026">
-
-### New Features
-
-- [**Comments**]: Added `enableAttachmentDownload()` / `disableAttachmentDownload()` API methods and an `attachmentDownload` prop on `<VeltComments>` to control whether clicking an attachment triggers a file download. A new `attachmentDownloadClicked` event fires on every attachment click regardless of the download setting, letting you intercept clicks for custom viewers, analytics, or access control. Download is enabled by default so there is no breaking change.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Declarative prop
-<VeltComments attachmentDownload={false} />
-
-// Using API methods
-const commentElement = client.getCommentElement();
-commentElement.enableAttachmentDownload();
-commentElement.disableAttachmentDownload();
-
-// Listening to the event
-const handleAttachmentDownloadClicked = useCommentEventCallback('attachmentDownloadClicked');
-
-useEffect(() => {
-  if (handleAttachmentDownloadClicked) {
-    console.log('Attachment clicked:', handleAttachmentDownloadClicked.attachment.attachmentId);
-    console.log('Annotation ID:', handleAttachmentDownloadClicked.annotationId);
-  }
-}, [handleAttachmentDownloadClicked]);
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<velt-comments attachment-download="false"></velt-comments>
-
-<script>
-const commentElement = Velt.getCommentElement();
-commentElement.enableAttachmentDownload();
-commentElement.disableAttachmentDownload();
-
-commentElement.on('attachmentDownloadClicked').subscribe((event) => {
-  console.log('Attachment clicked:', event.attachment.attachmentId);
-  console.log('Annotation ID:', event.annotationId);
-});
-</script>
-```
-</Tab>
-</Tabs>
-
-The exported `AttachmentDownloadClickedEvent` interface has the following shape:
-
-```ts
-interface AttachmentDownloadClickedEvent {
-  annotationId: string;
-  commentAnnotation: CommentAnnotation;
-  attachment: Attachment;
-  metadata?: VeltEventMetadata;
-}
-```
-
-### Improvements
-
-- [**Comments**]: The wireframe template for the resolve and unresolve buttons in the assignee banner is now nested inside the button component rather than wrapping it, giving custom wireframes direct access to button state, styling, and event handlers. The affected wireframes are `velt-comment-dialog-assignee-banner-resolve-button-wireframe` and `velt-comment-dialog-assignee-banner-unresolve-button-wireframe`.
-
-- [**Comments**]: Added CSS classes to comment composer attachment components to reflect loading and edit-mode states: `.velt-composer-attachment-container`, `.velt-composer-attachment--loading`, and `.velt-composer-attachment--edit-mode`.
-
-- [**Comments**]: Added `.s-comment-dialog-assign-to-menu` and `.velt-thread-card--assign-to-menu` CSS classes to the assign-to menu component for more granular styling control.
-
-### Bug Fixes
-
-- [**Comments**]: Added `'iframe'` to the list of non-nestable elements so that `getHostElement()` returns the iframe's parent element instead of attempting to place a comment pin inside the iframe document context.
-
-- [**Comments**]: Fixed a regression where navigating back from a focused thread triggered an unintended draft auto-save. A guard now skips auto-save when the focused thread dialog is destroyed via back navigation.
-
-- [**Comments**]: Fixed stale selection state in the sidebar after back-navigating from a focused annotation. The annotation is now properly deselected from the internal selection map on exit.
-
-- [**Comments**]: Thread card attachment components now use `isTemplateEmpty()` to detect empty wireframe templates instead of a truthy check, so attachments correctly fall back to default rendering when an empty wireframe is provided.
-
-- [**Comments**]: Custom thread card wireframes that do not include an edit composer wireframe now automatically render the default edit composer, so inline comment editing remains functional without requiring wireframe changes.
-
-</Update>
-
-<Update label="5.0.1-beta.1" description="February 13, 2026">
-
-### New Features
-
-- [**Comments**]: Added `clearContext` option to `PageModeComposerConfig` to control whether comment context is cleared after page mode composer submission. Set `clearContext: false` to preserve context data across submissions (defaults to `true`).
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using Hooks
-const commentElement = useCommentUtils();
-commentElement.setContextInPageModeComposer({
-  context: { documentId: '123', section: 'intro' },
-  targetElementId: 'my-element',
-  clearContext: false
-});
-
-// Using API methods
-const commentElement = client.getCommentElement();
-commentElement.setContextInPageModeComposer({
-  context: { documentId: '123', section: 'intro' },
-  targetElementId: 'my-element',
-  clearContext: false
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-const commentElement = Velt.getCommentElement();
-commentElement.setContextInPageModeComposer({
-  context: { documentId: '123', section: 'intro' },
-  targetElementId: 'my-element',
-  clearContext: false
-});
-</script>
-```
-</Tab>
-</Tabs>
-
-### Bug Fixes
-
-- [**Comments**]: Removed host CSS classes `velt-composer-open` and `velt-composer-input-focused` from the Comment Dialog Composer component. If your custom styles targeted these classes, update your selectors accordingly.
-
-- [**Comments**]: Fixed wireframe template forwarding in Comment Dialog so custom templates set via `dialogTemplate` are now correctly applied to all child components.
-
-- [**Comments**]: Fixed nested wireframe template extraction in Comment Dialog Threads so custom `velt-comment-dialog-thread-card-wireframe` and `velt-comment-dialog-more-reply-wireframe` templates are correctly applied.
-
-- [**Comments**]: Fixed Mark as Read/Unread wireframe template structure so custom wireframe templates now provide proper control over the button's internal elements.
-
-- [**Comments**]: Added proper wireframe template wrapper to the parent Mark as Read component with a clickable container that includes accessibility attributes for the toggle action.
-
-- [**Comments**]: Fixed comment annotation data resolution in button click handlers so `commentAnnotation` context data now correctly resolves from the updated component config structure.
-
-</Update>
-
-
-<Update label="5.0.0" description="February 12, 2026">
-
-### New Features
-
-- [**CRDT**]: Added [Add CRDT Data](/api-reference/rest-apis/v2/crdt/add-crdt-data) REST API to create new CRDT editor data on the backend. Supports `text`, `map`, `array`, and `xml` types for use with Multiplayer Editing (Yjs).
-
-- [**CRDT**]: Added [Update CRDT Data](/api-reference/rest-apis/v2/crdt/update-crdt-data) REST API to replace existing CRDT editor data. Generates proper CRDT operations so connected clients pick up the change automatically.
-
-### Bug Fixes
-
-- [**Comments**]: Fixed edit mode not working in thread card messages. Edit mode now properly propagates to comment messages within thread cards.
-
-</Update>
-
-
-<Update label="5.0.0-beta.17" description="February 12, 2026">
-
-### Improvements
-
-- [**Comments**]: Updated `updateVisibility()` with `type: 'restricted'` to auto-default to the current authenticated user when no `userIds` are provided. Developers no longer need to manually pass the current user's ID.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using hook
-const commentElement = useCommentUtils();
-
-// Before: Had to pass userIds manually
-commentElement.updateVisibility({
-  annotationId: 'annotation-1',
-  visibility: { type: 'restricted', userIds: ['current-user-id'] }
-});
-
-// After: userIds auto-defaults to current authenticated user
-commentElement.updateVisibility({
-  annotationId: 'annotation-1',
-  visibility: { type: 'restricted' }
-});
-
-// Using API method
-const commentElement = client.getCommentElement();
-commentElement.updateVisibility({
-  annotationId: 'annotation-1',
-  visibility: { type: 'restricted' }
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-const commentElement = Velt.getCommentElement();
-
-// Before: Had to pass userIds manually
-commentElement.updateVisibility({
-  annotationId: 'annotation-1',
-  visibility: { type: 'restricted', userIds: ['current-user-id'] }
-});
-
-// After: userIds auto-defaults to current authenticated user
-commentElement.updateVisibility({
-  annotationId: 'annotation-1',
-  visibility: { type: 'restricted' }
-});
-</script>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Improved performance of `getCommentAnnotationsCount()` by automatically batching queries when 2+ `documentIds` are provided. You can customize the debounce delay with `debounceMs` parameter (default 5000ms).
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using hook
-const commentElement = useCommentUtils();
-
-// Automatically batches when 2+ documentIds are provided
-const counts = commentElement.getCommentAnnotationsCount({
-  documentIds: ['doc-1', 'doc-2', 'doc-3']
-});
-
-// Optional: customize debounce (default 5000ms)
-const countsWithDebounce = commentElement.getCommentAnnotationsCount({
-  documentIds: ['doc-1', 'doc-2', 'doc-3'],
-  debounceMs: 2000
-});
-
-// Using API method
-const commentElement = client.getCommentElement();
-const counts = commentElement.getCommentAnnotationsCount({
-  documentIds: ['doc-1', 'doc-2', 'doc-3']
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-const commentElement = Velt.getCommentElement();
-
-// Automatically batches when 2+ documentIds are provided
-const counts = commentElement.getCommentAnnotationsCount({
-  documentIds: ['doc-1', 'doc-2', 'doc-3']
-});
-
-// Optional: customize debounce (default 5000ms)
-const countsWithDebounce = commentElement.getCommentAnnotationsCount({
-  documentIds: ['doc-1', 'doc-2', 'doc-3'],
-  debounceMs: 2000
-});
-</script>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Deprecated legacy `enablePrivateCommentMode()`, `disablePrivateCommentMode()`, and `updateAccess()` methods. These are replaced by the visibility API. Existing usage continues to work but IDEs will show deprecation warnings.
-
-</Update>
-
-
-<Update label="5.0.0-beta.16" description="February 11, 2026">
-
-### Improvements
-
-- [**Core**]: Added ability to control Firestore SDK logs via `sessionStorage` or environment config. By default, logs are silenced to reduce console noise in production.
-
-- [**Performance**]: Added GSAP animation detection to reduce MutationObserver overhead. Pages using GSAP now experience ~20x performance improvement (from ~375ms to ~18ms per callback).
-
-### Bug Fixes
-
-- [**Comments**]: Fixed cursor position loss on mobile when selecting autocomplete options. The cursor now stays at the correct position after selecting @-mentions.
-
-- [**Comments**]: Fixed hotkey insertion in autocomplete tool. Clicking the autocomplete trigger button (e.g. "@") now inserts at cursor position on all browsers, preserving mention spans.
-
-- [**Comments**]: Fixed autocomplete panel click events bubbling through dropdown. Selecting options no longer accidentally triggers underlying elements on mobile browsers.
-
-- [**Comments**]: Disabled format options (bold, italic, etc.) by default. To enable, set `enableFormatOptions: true` in your comment configuration.
-
-- [**Comments**]: Fixed cursor position in bottomsheet mode after selecting mentions. The cursor now appears after the mention span instead of jumping to the beginning.
-
-- [**Comments**]: Fixed attachment components not receiving parent UI state. Selected and invalid attachment components now correctly react to parent composer state changes.
-
-</Update>
-
-
-<Update label="5.0.0-beta.15" description="February 11, 2026">
-
-### New Features
-
-- [**Comments**]: Added rich text formatting toolbar for comment composers. Users can apply bold, italic, underline, and strikethrough formatting to emphasize text.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using Hooks
-import { VeltComments } from '@veltdev/react';
-
-<VeltComments formatOptions={true} />
-
-// Using API methods
-const commentElement = client.getCommentElement();
-commentElement.enableFormatOptions();
-commentElement.disableFormatOptions();
-
-// Configure individual format types
-commentElement.setFormatConfig({
-  bold: { enable: true },
-  italic: { enable: true },
-  underline: { enable: false },
-  strikethrough: { enable: false }
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<velt-comments format-options="true"></velt-comments>
-
-<script>
-const commentElement = Velt.getCommentElement();
-commentElement.enableFormatOptions();
-commentElement.disableFormatOptions();
-
-// Configure individual format types
-commentElement.setFormatConfig({
-  bold: { enable: true },
-  italic: { enable: true },
-  underline: { enable: false },
-  strikethrough: { enable: false }
-});
-</script>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added `clearComposer()` method to programmatically reset composer state (text, attachments, recordings, tagged users).
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using Hooks
-const commentElement = useCommentUtils();
-commentElement.clearComposer({ targetComposerElementId: 'my-composer-1' });
-
-// Using API methods
-const commentElement = client.getCommentElement();
-commentElement.clearComposer({ targetComposerElementId: 'my-composer-1' });
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-const commentElement = Velt.getCommentElement();
-commentElement.clearComposer({ targetComposerElementId: 'my-composer-1' });
-</script>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added `getComposerData()` method to retrieve current composer state synchronously without subscribing to events.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using Hooks
-const commentElement = useCommentUtils();
-const data = commentElement.getComposerData({ targetComposerElementId: 'my-composer-1' });
-
-if (data) {
-  console.log(data.text);
-  console.log(data.annotation);
-  console.log(data.targetComposerElementId);
-}
-
-// Using API methods
-const commentElement = client.getCommentElement();
-const data = commentElement.getComposerData({ targetComposerElementId: 'my-composer-1' });
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-const commentElement = Velt.getCommentElement();
-const data = commentElement.getComposerData({ targetComposerElementId: 'my-composer-1' });
-
-if (data) {
-  console.log(data.text);
-  console.log(data.annotation);
-  console.log(data.targetComposerElementId);
-}
-</script>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added `context` prop to `VeltCommentDialogComposer` to attach custom context data to comments created from standalone composers.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-<VeltCommentDialogComposer
-  targetComposerElementId="my-composer"
-  context={{ projectId: 'abc123', section: 'header' }}
-/>
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<velt-comment-dialog-composer
-  target-composer-element-id="my-composer"
-  context='{"projectId": "abc123", "section": "header"}'>
-</velt-comment-dialog-composer>
-```
-</Tab>
-</Tabs>
-
-### Improvements
-
-- [**Comments**]: Updated `composerTextChange` event to include the full draft annotation object and `targetComposerElementId`. Access tagged users, attachments, recordings, context, and assign-to data without additional API calls.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using Hooks
-const composerTextChangeEvent = useCommentEventCallback('composerTextChange');
-
-useEffect(() => {
-  if (composerTextChangeEvent) {
-    console.log(composerTextChangeEvent.text);
-    console.log(composerTextChangeEvent.annotation);
-    console.log(composerTextChangeEvent.targetComposerElementId);
-  }
-}, [composerTextChangeEvent]);
-
-// Using API methods
-const commentElement = client.getCommentElement();
-commentElement.on('composerTextChange').subscribe((event) => {
-  console.log(event.text);
-  console.log(event.annotation);
-  console.log(event.targetComposerElementId);
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-const commentElement = Velt.getCommentElement();
-commentElement.on('composerTextChange').subscribe((event) => {
-  console.log(event.text);
-  console.log(event.annotation);
-  console.log(event.targetComposerElementId);
-});
-</script>
-```
-</Tab>
-</Tabs>
-
-- [**Notifications**]: Fixed notification panel settings accordion wireframes to properly forward custom trigger and content templates to child components.
-
-### Bug Fixes
-
-- [**Comments**]: Fixed `assignToType` to correctly respect values set via attribute or API without being overridden by hardcoded defaults.
-
-- [**Comments**]: Fixed formatted text (bold, italic, underline, strikethrough) to preserve formatting on submit and edit.
-
-</Update>
-
-
-<Update label="5.0.0-beta.14" description="February 10, 2026">
-
-### New Features
-
-- [**Comments**]: Added page mode composer context APIs to pass context when opening the sidebar via the comment tool. When enabled, clicking the comment tool opens the sidebar with the page mode composer and passes configured context automatically.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using API methods
-import { useCommentUtils, VeltCommentTool } from '@veltdev/react';
-
-const commentElement = useCommentUtils();
-
-// Enable context passing mode
-commentElement.enableContextInPageModeComposer();
-
-// Set context with target element
-commentElement.setContextInPageModeComposer({
-  context: { projectId: 'abc123', section: 'header' },
-  targetElementId: 'my-target-element'
-});
-
-// Focus the composer programmatically
-commentElement.focusPageModeComposer();
-
-// Clear context
-commentElement.clearPageModeComposerContext();
-
-// Disable context passing mode
-commentElement.disableContextInPageModeComposer();
-
-
-// Using props
-<VeltCommentTool
-  contextInPageModeComposer={true}
-  context={{ section: 'header', elementId: 'nav-menu' }}
-/>
-```
-</Tab>
-<Tab title="Other Frameworks">
-Using props:
-```html
-<velt-comment-tool
-  context-in-page-mode-composer="true"
-  context='{"section": "header", "elementId": "nav-menu"}'>
-</velt-comment-tool>
-
-Using API methods:
-<script>
-const commentElement = Velt.getCommentElement();
-
-// Enable context passing mode
-commentElement.enableContextInPageModeComposer();
-
-// Set context with target element
-commentElement.setContextInPageModeComposer({
-  context: { projectId: 'abc123' },
-  targetElementId: 'my-target-element'
-});
-
-// Focus the composer
-commentElement.focusPageModeComposer();
-
-// Clear context
-commentElement.clearPageModeComposerContext();
-
-// Disable
-commentElement.disableContextInPageModeComposer();
-</script>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added `setAssignToType()` method to switch the assignment UI between dropdown and checkbox modes. Checkbox mode allows quick self-assignment with a toggle.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using Hooks
-import { useCommentUtils, VeltComments } from '@veltdev/react';
-
-const commentElement = useCommentUtils();
-
-// Use dropdown mode (default)
-commentElement.setAssignToType({ type: 'dropdown' });
-
-// Use checkbox mode for quick self-assignment
-commentElement.setAssignToType({ type: 'checkbox' });
-
-
-// Using props
-<VeltComments assignToType="checkbox" />
-```
-</Tab>
-<Tab title="Other Frameworks">
-Using props:
-```html
-<velt-comments assign-to-type="checkbox"></velt-comments>
-
-Using API methods:
-<script>
-const commentElement = Velt.getCommentElement();
-
-// Use dropdown mode (default)
-commentElement.setAssignToType({ type: 'dropdown' });
-
-// Use checkbox mode
-commentElement.setAssignToType({ type: 'checkbox' });
-</script>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added "Assigned to me" filter option in the sidebar to filter comments by assignment.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-import { VeltCommentsSidebarWireframe } from '@veltdev/react';
-
-<VeltCommentsSidebarWireframe.MinimalFilterDropdown.Content>
-  <VeltCommentsSidebarWireframe.MinimalFilterDropdown.Content.FilterAssignedToMe />
-</VeltCommentsSidebarWireframe.MinimalFilterDropdown.Content>
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<velt-comments-sidebar-minimal-filter-dropdown-content-filter-assigned-to-me-wireframe>
-</velt-comments-sidebar-minimal-filter-dropdown-content-filter-assigned-to-me-wireframe>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added new event types to track comment tool and sidebar button clicks. Subscribe to these events to access context data for analytics and custom workflows.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using Hooks
-import { useCommentEventCallback } from '@veltdev/react';
-import { useEffect } from 'react';
-
-const commentToolClickEvent = useCommentEventCallback('commentToolClicked');
-
-useEffect(() => {
-  if (commentToolClickedEvent) {
-    console.log('Context:', commentToolClickedEvent.context);
-    console.log('Target Element ID:', commentToolClickedEvent.targetElementId);
-  }
-}, [commentToolClickedEvent]);
-
-const sidebarButtonClickedEvent = useCommentEventCallback('sidebarButtonClicked');
-
-useEffect(() => {
-  if (sidebarButtonClickedEvent) {
-    console.log('Sidebar button clicked');
-  }
-}, [sidebarButtonClickedEvent]);
-
-// Using API methods
-import { useVeltClient } from '@veltdev/react';
-
-const { client } = useVeltClient();
-const commentElement = client.getCommentElement();
-
-commentElement.on('commentToolClicked').subscribe((event) => {
-  console.log('Context:', event.context);
-  console.log('Target Element ID:', event.targetElementId);
-});
-
-commentElement.on('sidebarButtonClicked').subscribe((event) => {
-  console.log('Sidebar button clicked');
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-const commentElement = Velt.getCommentElement();
-
-// Comment Tool Click
-commentElement.on('commentToolClicked').subscribe((event) => {
-  console.log('Context:', event.context);
-  console.log('Target Element ID:', event.targetElementId);
-  console.log('Metadata:', event.metadata);
-});
-
-// Sidebar Button Click
-commentElement.on('sidebarButtonClicked').subscribe((event) => {
-  console.log('Sidebar button clicked');
-  console.log('Metadata:', event.metadata);
-});
-</script>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added `readOnly` prop to control read-only mode at the component level. The local prop takes precedence over global settings when explicitly set.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-import { VeltCommentComposer, VeltInlineCommentsSection } from '@veltdev/react';
-
-<VeltCommentComposer readOnly={true} />
-
-<VeltInlineCommentsSection
-  targetElementId="my-element"
-  readOnly={true}
-/>
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<velt-comment-composer read-only="true"></velt-comment-composer>
-
-<velt-inline-comments-section
-  target-element-id="my-element"
-  read-only="true">
-</velt-inline-comments-section>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added wireframe component to customize the assign button on thread cards.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-import { VeltCommentDialogWireframe } from '@veltdev/react';
-
-<VeltCommentDialogWireframe.ThreadCard.AssignButton />
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<velt-comment-dialog-thread-card-assign-button-wireframe></velt-comment-dialog-thread-card-assign-button-wireframe>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added wireframe component to customize the edit composer within comment thread cards.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-import { VeltCommentDialogWireframe } from '@veltdev/react';
-
-<VeltCommentDialogWireframe.ThreadCard.EditComposer />
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<velt-comment-dialog-thread-card-edit-composer-wireframe>
-</velt-comment-dialog-thread-card-edit-composer-wireframe>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added reaction pin component to pin specific reactions and exclude them from the general list. 
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-import { VeltCommentDialogWireframe } from '@veltdev/react';
-
-<VeltCommentDialogWireframe.ThreadCard>
-  <VeltCommentDialogWireframe.ThreadCard.ReactionPin reactionId="thumbs-up" />
-  <VeltCommentDialogWireframe.ThreadCard.ReactionPin reactionId="heart" />
-  <VeltCommentDialogWireframe.ThreadCard.Reactions
-    excludeReactionIds={['thumbs-up', 'heart']}
-  />
-
-  <VeltCommentDialogWireframe.ThreadCard.ReactionTool
-    excludeReactionIds={['thumbs-up', 'heart']}
-  />
-</VeltCommentDialogWireframe.ThreadCard>
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<velt-comment-dialog-thread-card-reaction-pin-wireframe
-  reaction-id="thumbs-up">
-</velt-comment-dialog-thread-card-reaction-pin-wireframe>
-
-<velt-comment-dialog-thread-card-reactions-wireframe
-  exclude-reaction-ids='["thumbs-up", "heart"]'>
-</velt-comment-dialog-thread-card-reactions-wireframe>
-
-<velt-comment-dialog-thread-card-reaction-tool-wireframe
-  exclude-reaction-ids='["thumbs-up", "heart"]'>
-</velt-comment-dialog-thread-card-reaction-tool-wireframe>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added `resolvedByUser` property on [`CommentAnnotation`](/api-reference/sdk/models/data-models#commentannotation) to access the full user object of who resolved a comment.
-
-### Improvements
-
-- [**Comments**]: Renamed `targetElementId` to `targetComposerElementId` on `VeltCommentComposer` for clarity.
-
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-import { VeltCommentComposer } from '@veltdev/react';
-
-// Before (deprecated)
-<VeltCommentComposer targetElementId="my-composer" />
-
-// After (required)
-<VeltCommentComposer targetComposerElementId="my-composer" />
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<!-- Before (deprecated) -->
-<velt-comment-composer target-element-id="my-composer"></velt-comment-composer>
-
-<!-- After (required) -->
-<velt-comment-composer target-composer-element-id="my-composer"></velt-comment-composer>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added CSS class `.velt-assign-dropdown--checkbox-icon-selected` to style the checkbox selected state.
-
-### Bug Fixes
-
-- [**Comments**]: Fixed cursor jumping when clicking autocomplete tool buttons. Text now inserts at the correct cursor position.
-- [**Comments**]: Fixed actions menu visibility so it remains visible when the assignment dropdown is opened.
-- [**Comments**]: Added "Assign" tooltip to the assignment button in thread cards.
-- [**Comments**]: Fixed "Assign To" label capitalization to "Assign to".
-- [**Reactions**]: Added `.velt-reaction-pin--no-reactions` CSS class for styling empty reaction pins.
-- [**Comments**]: Fixed autocomplete panel viewport height to respect custom `itemSize` from `autoCompleteScrollConfig`.
-- [**Comments**]: Fixed attachment metadata handling to use fallback values when metadata is unavailable.
-- [**Comments**]: Fixed read-only state management so local `readOnly` props are not overridden by global state changes.
-- [**Reactions**]: Fixed reactions panel to return an empty array on error instead of default emojis.
-- [**Comments**]: Fixed `reactionId` prop on `VeltCommentDialogWireframe.ThreadCard.ReactionPin` to properly convert to dashed-case in React.
-
-</Update>
-
-<Update label="5.0.0-beta.13" description="February 10, 2026">
-
-### New Features
-
-- [**Notifications**]: Added ability to enable organization-level notification settings. This allows you to configure notifications once for all documents in an organization instead of per document.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-  <VeltNotificationsPanel
-    enableSettingsAtOrganizationLevel={true}
-    settings={true}
-  />
-  {/* or */}
-  <VeltNotificationsTool
-    enableSettingsAtOrganizationLevel="true"
-    settings={true}
-  />
-
-// Using API methods
-const notificationElement = client.getNotificationElement();
-// Enable organization-level settings
-notificationElement.enableSettingsAtOrganizationLevel();
-
-// Disable organization-level settings
-notificationElement.disableSettingsAtOrganizationLevel();
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<!-- Using panel or tool components -->
-<velt-notifications-panel
-  enable-settings-at-organization-level="true"
-  settings="true">
-</velt-notifications-panel>
-<!-- or -->
-<velt-notifications-tool
-  enable-settings-at-organization-level="true"
-  settings="true">
-</velt-notifications-tool>
-
-<script>
-// Using API methods
-const notificationElement = Velt.getNotificationElement();
-
-// Enable organization-level settings
-notificationElement.enableSettingsAtOrganizationLevel();
-
-// Disable organization-level settings
-notificationElement.disableSettingsAtOrganizationLevel();
-</script>
-```
-</Tab>
-</Tabs>
-
-</Update>
-
-
-<Update label="5.0.0-beta.12" description="February 6, 2026">
-
-### Improvements
-
-- [**Comments**]: Comments sidebar group-by views now display "Unassigned" for annotations without assignees and "Untagged" for annotations without tagged users.
-
-### Bug Fixes
-
-- [**Comments**]: Fixed an issue where image attachments in comment dialog were not opening in a lightbox view.
-
-- [**Comments**]: Fixed an issue where sometimes user mentions did not include the leading `@` symbol in display text.
-
-- [**Comments**]: Fixed an issue where the recorder control panel in comment dialog composer did not appear when a valid comment dialog ID was not present in component configuration.
-
-- [**Comments**]: Fixed an issue where assignment and private comment options did not respect explicit configuration in sidebar mode.
-
-- [**Comments**]: Fixed an issue where the comment dialog internal tag was changed from `snippyly-comment-dialog` to `velt-comment-dialog-internal` for correct sidebar focus and keyboard behavior.
-
-</Update>
-
-
-<Update label="5.0.0-beta.11" description="February 4, 2026">
-
-### Improvements
-
-- [**Comments**]: Added ability to enable/disable Private Comments feature in [Velt Console](https://console.velt.dev/dashboard/config/appconfig)
-
-</Update>
-
-
-<Update label="5.0.0-beta.10" description="February 3, 2026">
-
-### Improvements
-
-- [**Comments**]: Added `batchedPerDocument` mode for `getCommentAnnotationsCount()` that makes the query more efficient by up to 80% while maintaining per-document granularity. Very useful for UIs that need to display comment counts for 100 documents or less on the same page.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using hook
-const commentElement = useCommentUtils();
-const counts = commentElement.getCommentAnnotationsCount({
-  documentIds: ['doc-1', 'doc-2', ..., 'doc-100'],
-  batchedPerDocument: true
-});
-
-// Using API method
-const client = useVeltClient();
-const commentElement = client.getCommentElement();
-const counts = commentElement.getCommentAnnotationsCount({
-  documentIds: ['doc-1', 'doc-2', ..., 'doc-100'],
-  batchedPerDocument: true,
-  debounceMs: 5000
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-const commentElement = Velt.getCommentElement();
-const counts = commentElement.getCommentAnnotationsCount({
-  documentIds: ['doc-1', 'doc-2', ..., 'doc-100'],
-  batchedPerDocument: true
-});
-
-const countsWithDebounce = commentElement.getCommentAnnotationsCount({
-  documentIds: ['doc-1', 'doc-2', ..., 'doc-100'],
-  batchedPerDocument: true,
-  debounceMs: 5000
-});
-</script>
-```
-</Tab>
-</Tabs>
-
-**Return Format:**
-```typescript
-{
-  data: {
-    "doc-1": { total: 10, unread: 2 },
-    "doc-2": { total: 15, unread: 5 }
-  }
-}
-```
-
-</Update>
-
-
-<Update label="5.0.0-beta.9" description="January 31, 2026">
-### Bug Fixes
-- [**Comments**]: Fixed draft mode not working properly. Draft content is now preserved when the dialog is closed and the shake animation now works as expected.
-
-- [**Comments**]: Fixed context property access in `velt-data` elements. Templates can now access context properties using `{context.propertyName}` patterns.
-
-- [**Comments**]: Fixed edit mode state persisting after dialog close. Reopening the dialog now shows the normal view instead of the edit composer.
-
-- [**Comments**]: Fixed text reappearing when using select-all-and-delete in edit mode composer. Users can now properly delete all text in edit mode.
-
-- [**Comments**]: Fixed links in comment body not clickable. Clicking links in comment text now opens them in a new tab.
-
-- [**Comments**]: Fixed paste handling. Pasting a URL over selected text creates a hyperlink, multiline text preserves line breaks, and images paste as attachments.
-
-- [**Comments**]: Fixed ghost comment banners not displaying. "Comment is syncing..." messages now properly show while annotation data is loading.
-
-- [**Comments**]: Fixed priority selection not working on new annotations. Users can now set priority before submitting the first comment.
-
-- [**Comments**]: Fixed email detection after @ symbol. Typing `@user@example.com` and pressing space now creates an email mention.
-
-- [**Comments**]: Fixed recording in progress flag not clearing. Dialog now properly closes on click outside after recording finishes.
-
-- [**Comments**]: Fixed links and @here mentions not highlighted in comment text. URLs are now styled as clickable links and @here mentions are properly highlighted.
-
-</Update>
-
-
-<Update label="5.0.0-beta.8" description="January 30, 2026">
-
-### New Features
-
-- [**Comments**]: Introducing Private Comments feature: Added `updateVisibility()` method to programmatically set comment access (public, organizationPrivate, or restricted). [Learn more](/async-collaboration/comments/customize-behavior#updatevisibility)
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using hook
-const commentElement = useCommentUtils();
-
-// Set comment to organization-only
-commentElement.updateVisibility({
-  annotationId: "annotationId",
-  type: 'organizationPrivate',
-  organizationId: 'org-123'
-});
-
-// Set comment to private (specific users)
-commentElement.updateVisibility({
-  annotationId: "annotationId",
-  type: 'restricted',
-  userIds: ['user-1', 'user-2']
-});
-
-// Set comment to public
-commentElement.updateVisibility({
-  annotationId: "annotationId",
-  type: 'public'
-});
-
-// Using API method
-const client = useVeltClient();
-const commentElement = client.getCommentElement();
-commentElement.updateVisibility({
-  annotationId: "annotationId",
-  type: 'organizationPrivate',
-  organizationId: 'org-123'
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-const commentElement = Velt.getCommentElement();
-
-// Set comment to organization-only
-commentElement.updateVisibility({
-  annotationId: "annotationId",
-  type: 'organizationPrivate',
-  organizationId: 'org-123'
-});
-
-// Set comment to private (specific users)
-commentElement.updateVisibility({
-  annotationId: "annotationId",
-  type: 'restricted',
-  userIds: ['user-1', 'user-2']
-});
-
-// Set comment to public
-commentElement.updateVisibility({
-  annotationId: "annotationId",
-  type: 'public'
-});
-</script>
-```
-</Tab>
-</Tabs>
-
-### Bug Fixes
-
-- [**Comments**]: Fixed mentioned users not receiving notifications. Users @mentioned in comments now correctly receive notifications.
-
-- [**Comments**]: Fixed notification action type validation. Clients only receive data for valid event types.
-
-- [**Comments**]: Fixed status reset when deleting comments. Status now only resets when current status is terminal.
-
-</Update>
-
-
-<Update label="5.0.0-beta.7" description="January 28, 2026">
-
-### New Features
-
-- [**Comments**]: Added `addCommentAnnotationDraft` event to dynamically set context when creating comment annotations. Triggered before `addCommentAnnotation` event clicks on the comment tool and the composer is rendered.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using hook
-const addCommentAnnotationDraftEvent = useCommentEventCallback('addCommentAnnotationDraft');
-
-useEffect(() => {
-    if (addCommentAnnotationDraftEvent?.addContext) {
-        addCommentAnnotationDraftEvent.addContext({
-            questionId: '123',
-            questionText: 'What is the capital of France?',
-        });
-    }
-}, [addCommentAnnotationDraftEvent]);
-
-// Using API method
-const client = useVeltClient();
-const commentElement = client.getCommentElement();
-commentElement.on('addCommentAnnotationDraft').subscribe((event) => {
-    if (event?.addContext) {
-        event.addContext({
-            questionId: '123',
-            questionText: 'What is the capital of France?',
-        });
-    }
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-const commentElement = Velt.getCommentElement();
-commentElement.on('addCommentAnnotationDraft').subscribe((event) => {
-    if (event?.addContext) {
-        event.addContext({
-            questionId: '123',
-            questionText: 'What is the capital of France?',
-        });
-    }
-});
-</script>
-```
-</Tab>
-</Tabs>
-
-### Improvements
-
-- [**Comments**]: Added `setContextProvider` method to set a global context provider for all comment annotations. Also added `useSetContextProvider` hook for React applications.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using hook
-import { useCallback, useEffect } from 'react';
-import { useSetContextProvider } from '@veltdev/react';
-
-const contextProvider = useCallback((documentId, location) => {
-    return {
-        questionId: '123',
-        questionText: 'What is the capital of France?',
-    }
-}, []);
-
-const { setContextProvider } = useSetContextProvider();
-
-useEffect(() => {
-    if (setContextProvider && contextProvider) {
-        setContextProvider(contextProvider);
-    }
-}, []);
-
-// Using API method
-const client = useVeltClient();
-const commentElement = client.getCommentElement();
-commentElement.setContextProvider((documentId, location) => {
-    return {
-        questionId: '123',
-        questionText: 'What is the capital of France?',
-    }
-});
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<script>
-const commentElement = Velt.getCommentElement();
-commentElement.setContextProvider((documentId, location) => {
-    return {
-        questionId: '123',
-        questionText: 'What is the capital of France?',
-    }
-});
-</script>
-```
-</Tab>
-</Tabs>
-
-</Update>
-
-
-<Update label="5.0.0-beta.6" description="January 28, 2026">
-
-### Bug Fixes
-
-- [**Core**]: Fixed package integrity issue in v5.0.0-beta.5.
-
-</Update>
-
-
-<Update label="5.0.0-beta.5" description="January 28, 2026">
-
-### Bug Fixes
-
-- [**Comments**]: Fixed page mode and multi-thread annotation ID not found error. Page mode and multi-thread comments now work as expected.
-
-- [**Comments**]: Fixed `updateOverlayPosition` function not triggering. Comment dialog now opens in the correct position.
-
-- [**Comments**]: Fixed unread status issues in inline and focused thread modes. Annotations are now marked as read when opened or clicked.
-
-- [**Comments**]: Fixed three-dot menu not visible in sidebar.
-
-- [**Comments**]: Fixed composer not being focused when opened.
-
-- [**Comments**]: Fixed comments navigating on click. Comments now only navigate when the navigation button is clicked.
-
-</Update>
-
-
-<Update label="5.0.0-beta.4" description="January 23, 2026">
-
-### Bug Fixes
-
-- [**Comments**]: Fixed `lastUpdated` timestamp not being updated when changing context in comment annotation via SDK. Ensures context updates are properly synced to other users.
-
-</Update>
-
-
-<Update label="5.0.0-beta.3" description="January 22, 2026">
-
-### Improvements
-
-- [**Core**]: Added robustness to initialization when `VeltProvider` was re-rendered multiple times over a slow network.
-
-
-### Bug Fixes
-
-- [**Comments**]: Refactored `submitComment` method to fix resolver issue for `velt-comment-composer`. Now follows the standard comment submission flow.
-
-- [**Comments**]: Fixed unread status not updating correctly in bottom sheet. This was a regression in v5.
-
-- [**Comments**]: Fixed navigation button not working properly. This was a regression in v5.
-
-- [**Comments**]: Fixed disable recording option not working in `velt-comment-composer`. This was a regression in v5.
-
-</Update>
-
-
-<Update label="5.0.0-beta.2" description="January 22, 2026">
-
-### New Features
-
-- [**Core**]: Added `globalStyles` option to control whether Velt's global CSS is loaded. Set to `false` to disable default styles when implementing custom theming.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using VeltProvider
-<VeltProvider apiKey='API_KEY' config={{
-    globalStyles: false
-}}>
-    {/* Your app content */}
+import { VeltProvider } from '@veltdev/react';
+
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  onAuthError={(event) => {
+    console.error('Velt auth failed:', event.error, event.errorCode);
+  }}
+>
+  <App />
 </VeltProvider>
-
-// Using API method
-const client = useVeltClient();
-client.initConfig('API_KEY', {
-  globalStyles: false
-});
 ```
 </Tab>
 <Tab title="Other Frameworks">
-```html
-<script>
-Velt.initConfig('API_KEY', {
-  globalStyles: false
+```js
+const client = await initVelt('YOUR_API_KEY');
+
+client.on('authError').subscribe((event) => {
+  console.error('Velt auth failed:', event.error, event.errorCode);
 });
-</script>
 ```
 </Tab>
 </Tabs>
 
-- [**Comments**]: Added `submitComment(targetElementId)` method to programmatically trigger comment submission. Enables custom buttons or keyboard shortcuts for submitting comments. 
+- [**Access Control**]: Added `getUserPermissions()` on `PermissionElement` to query access-control state for a batch of resources in a single call. Each entry returns one of `GRANTED`, `PERMISSION_DENIED`, `NOT_FOUND`, or `ERROR`. [Learn More →](/access-control/overview)
 
 <Tabs>
 <Tab title="React / Next.js">
-```jsx
-
-<VeltCommentComposer targetElementId="composer-1" />
-<VeltCommentDialogComposer targetElementId="composer-2" />
-
-// Using hook
-const commentElement = useCommentUtils();
-commentElement.submitComment('composer-1');
-
-// Using API method
-const client = useVeltClient();
-const commentElement = client.getCommentElement();
-commentElement.submitComment('composer-1');
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<velt-comment-composer target-element-id="composer-1"></velt-comment-composer>
-<velt-comment-dialog-composer target-element-id="composer-2"></velt-comment-dialog-composer>
-
-<button onclick="submitComment('composer-1')">Send 1</button>
-<button onclick="submitComment('composer-2')">Send 2</button>
-
-<script>
-  function submitComment(targetElementId) {
-    const commentElement = Velt.getCommentElement();
-    commentElement.submitComment(targetElementId);
-  }
-</script>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added `placeholder` prop to customize input placeholder text in comment composer. Overrides default placeholders. [Learn more](/ui-customization/features/async/comments/standalone-components/comment-composer#placeholder)
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-<VeltCommentComposer placeholder="Share your thoughts..." />
-<VeltCommentDialogComposer placeholder="Add a comment..." />
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<velt-comment-composer placeholder="Share your thoughts..."></velt-comment-composer>
-<velt-comment-dialog-composer placeholder="Add a comment..."></velt-comment-dialog-composer>
-```
-</Tab>
-</Tabs>
-
-- [**Comments**]: Added `composerTextChange` event that fires when text changes in any comment composer. Enables features like auto-save drafts, character counters, or real-time validation. [Learn more](/async-collaboration/comments/customize-behavior#event-subscription)
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Using hook
-const composerTextChangeEvent = useCommentEventCallback('composerTextChange');
-useEffect(() => {
-    if (composerTextChangeEvent) {
-        console.log('Text changed:', composerTextChangeEvent.text);
-    }
-}, [composerTextChangeEvent]);
-
-// Using API method
-const client = useVeltClient();
-const commentElement = client.getCommentElement();
-commentElement.on('composerTextChange').subscribe((event) => {
-    console.log('Text changed:', event.text);
+```tsx
+const permissionElement = client.getPermissionElement();
+permissionElement.getUserPermissions({
+  resources: [
+    { type: 'organization', organizationId: 'org-abc' },
+    { type: 'document', organizationId: 'org-abc', documentId: 'doc-123' },
+    { type: 'folder', organizationId: 'org-abc', folderId: 'folder-xyz' },
+  ],
+}).subscribe((results) => {
+  console.log(results);
 });
 ```
 </Tab>
 <Tab title="Other Frameworks">
-```html
-<script>
-const commentElement = Velt.getCommentElement();
-commentElement.on('composerTextChange').subscribe((event) => {
-    console.log('Text changed:', event.text);
+```js
+const permissionElement = Velt.getPermissionElement();
+permissionElement.getUserPermissions({
+  resources: [
+    { type: 'organization', organizationId: 'org-abc' },
+    { type: 'document', organizationId: 'org-abc', documentId: 'doc-123' },
+    { type: 'folder', organizationId: 'org-abc', folderId: 'folder-xyz' },
+  ],
+}).subscribe((results) => {
+  console.log(results);
 });
-</script>
 ```
 </Tab>
 </Tabs>
 
-</Update>
+- [**Comments**]: `CommentElement.setCommentSidebarFilters()` now accepts `externalId` as a filter field. When set, the sidebar only shows annotations whose `externalId` matches the provided value. [Learn More →](/async-collaboration/comments-sidebar/customize-behavior#setcommentsidebarfilters)
+
+- [**Core**]: Added `VeltProvider.onInit` / `client.on('init')` event that fires once when the Velt client is fully initialized and authenticated (equivalent to the existing `useVeltClient()` hook resolving). Useful in non-React contexts or for one-time post-init setup. [Learn More →](/api-reference/sdk/api/api-methods#oninit)
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  onInit={(client) => {
+    console.log('Velt initialized', client);
+  }}
+>
+  <App />
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const client = await initVelt('YOUR_API_KEY');
+
+client.on('init').subscribe((initializedClient) => {
+  console.log('Velt initialized', initializedClient);
+});
+```
+</Tab>
+</Tabs>
 
 
-<Update label="5.0.0-beta.1" description="January 21, 2026">
+### Improvements
+
+- [**Comments**]: The comments sidebar now updates in real time when `setCommentSidebarFilters()` is called, without requiring a page reload.
 
 ### Bug Fixes
 
-#### Comment Dialog Primitives
+- [**Core**]: Fixed a `NG0100 ExpressionChangedAfterItHasBeenCheckedError` that occurred in Angular when the Velt client initialized synchronously during view construction.
 
-Released 115+ primitive components for building custom comment dialogs. Each subcomponent can now be used independently without requiring the full dialog structure.
+- [**Comments**]: Fixed comment pins briefly blinking/disappearing after a comment is submitted.
 
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-// Pattern 1: ID-Based (Standalone)
-<VeltCommentDialogHeader annotationId="abc123" />
-<VeltCommentDialogComposer annotationId="abc123" />
+- [**Comments**]: Fixed comment dialog appearing to move slightly when the first comment is submitted while the dialog is open.
 
-// Pattern 2: Context Wrapper
-<VeltCommentDialogContextWrapper annotationId="abc123">
-  <VeltCommentDialogHeader />
-  <VeltCommentDialogComposer />
-  <VeltCommentDialogBody />
-</VeltCommentDialogContextWrapper>
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<!-- Pattern 1: ID-Based (Standalone) -->
-<velt-comment-dialog-header annotation-id="abc123"></velt-comment-dialog-header>
-<velt-comment-dialog-composer annotation-id="abc123"></velt-comment-dialog-composer>
+- [**Comments**]: Fixed text comment mode incorrectly appearing in the toolbar when `textComments` is disabled on `VeltComments`.
 
-<!-- Pattern 2: Context Wrapper -->
-<velt-comment-dialog-context-wrapper annotation-id="abc123">
-  <velt-comment-dialog-header></velt-comment-dialog-header>
-  <velt-comment-dialog-composer></velt-comment-dialog-composer>
-  <velt-comment-dialog-body></velt-comment-dialog-body>
-</velt-comment-dialog-context-wrapper>
-```
-</Tab>
-</Tabs>
+</Update>
 
-**Available Components:**
-- **Header/Body**: Header, Body, CloseButton
-- **Thread**: ThreadCard with Avatar, Name, Time, Message, Reactions, Recordings, Reply, Options, and more
-- **Composer**: Composer, ComposerInput, ComposerActionButton, ComposerAttachmentButton, ComposerRecorderButton, ComposerRecorderPlayer, ComposerFiles
-- **Dropdowns**: StatusDropdown, PriorityDropdown, OptionsDropdown, CustomAnnotationDropdown (each with full sub-component breakdown)
-- **Additional**: ReplyAvatars, AssigneeBanner, ResolveButton, UnresolveButton, CopyLink, DeleteButton, PrivateBanner, NavigationButton, and 90+ more
+<Update label="5.0.0" description="January 14, 2026">
+
+### Improvements
+
+- [**Core**]: Reduce bundle size by ~15%.
+
+- [**Core**]: Resolve `zone.js` incompatibilities with Angular 19.
+
+- [**Core**]: Resolve `rxjs` incompatibilities with `rxjs` v7+.
+
+- [**Core**]: First load time improvements and speed optimizations.
+
+</Update>
+
+<Update label="4.0.5" description="January 9, 2026">
+
+### Bug Fixes
+
+- [**Comments**]: Fixed comment pins briefly blinking/disappearing after a comment is submitted.
+
+</Update>
+
+<Update label="4.0.4" description="December 16, 2025">
+
+### Bug Fixes
+
+- [**Comments**]: Fixed an issue where when "Popover" mode was enabled and there are multiple annotations at the same location, clicking through the annotation pages wasn't showing the next annotation correctly.
+
+- [**Presence**]: Fixed an issue where disabling presence with `client.getPresenceElement().disableFeature()` would still show presence avatars in the app.
+
+</Update>
+
+<Update label="4.0.3" description="December 5, 2025">
+
+### Bug Fixes
+
+- [**Comments**]: Fixed an issue where "ghost" annotations remain visible in the UI when the actual annotation has been deleted from the database.
+
+</Update>
+
+<Update label="4.0.2" description="November 28, 2025">
+
+### New Features
+
+- [**REST API**]: Added new REST APIs for Velt Huddle. [Learn More →](/api-reference/rest-apis/v2/huddle/get-all-huddle-rooms)
+
+</Update>
+
+<Update label="4.0.1" description="November 21, 2025">
+
+### New Features
+
+- [**Comments**]: Added `CommentElement.setCommentSidebarFilters()` now also accepts a `location` filter. When set, the sidebar only shows annotations whose location ID matches the provided value or values. [Learn More →](/async-collaboration/comments-sidebar/customize-behavior#setcommentsidebarfilters)
+
+</Update>
+
+<Update label="4.0.0" description="November 13, 2025">
+
+### New Features
+
+- [**Core**]: New `@veltdev/sdk` package for using Velt with non-NPM environments. [Learn More →](/get-started/setup/install)
+
+### Improvements
+
+- [**Comments**]: `getCommentModeState()` on CommentElement now returns a BehaviorSubject, not just an Observable. Calling `.getValue()` on the returned BehaviorSubject gives the current synchronous value.
+
+- [**Comments**]: `CommentAnnotation.locationId` is now included by default in the response payload of `getAllCommentAnnotations()`. Previously, you needed to use `setCommentRequestQuery` with `locationId` to get this field.
+
+### Bug Fixes
+
+- [**Comments**]: Fixed the issue where the comment mode was reset to false after navigating to a new document.
+
+- [**Comments**]: Fixed the issue where a black block appeared in the area of the document where a comment had been previously placed but since deleted.
+
+</Update>
+
+<Update label="3.0.16" description="October 23, 2025">
+
+### New Features
+
+- [**REST API**]: Added REST APIs for reactions. [Learn More →](/api-reference/rest-apis/v2/reactions/get-reactions)
+
+- [**REST API**]: Added `triggerWebhooks` field to `POST /v2/commentannotations/update` endpoint. When set to true, adding a comment to an existing annotation via this endpoint will trigger the `comment.added` webhook. [Learn More →](/api-reference/rest-apis/v2/comment-annotations/update-comment-annotations)
+
+### Bug Fixes
+
+- [**Comments**]: Fixed the issue where the comment count was displaying the wrong count in certain conditions.
+
+</Update>
+
+<Update label="3.0.15" description="October 15, 2025">
+
+### Improvements
+
+- [**Core**]: All API calls are now routed through our new proxy infrastructure, separating them from the CDN host for better performance and reliability.
+
+</Update>
+
+<Update label="3.0.14" description="October 9, 2025">
+
+### New Features
+
+- [**Comments**]: Added multi-document support for `getAllCommentAnnotations()`. Use the new `CommentRequestQuery.documentIds` field (array of document IDs) to subscribe to annotations across multiple documents in a single call. [Learn More →](/async-collaboration/comments/customize-behavior#getallcommentannotations)
+
+</Update>
+
+<Update label="3.0.13" description="September 30, 2025">
+
+### New Features
+
+- [**Comments**]: Added `CommentAnnotationDataProvider` to `VeltDataProvider`. When configured via `setDataProviders()`, Velt uses your callback functions to fetch and save comment annotation data, allowing PII to be hosted on your infrastructure instead of Velt's. [Learn More →](/self-host-data/comments)
+
+- [**REST API**]: Added `GET /v2/tags` endpoint to retrieve all available tags. [Learn More →](/api-reference/rest-apis/v2/tags)
+
+### Bug Fixes
+
+- [**Comments**]: Fixed the issue where comment sidebar filters and the comment `requestQuery` were sometimes overriding each other.
+
+</Update>
+
+<Update label="3.0.12" description="September 24, 2025">
+
+### New Features
+
+- [**Comments**]: Added `ReactionAnnotationDataProvider` to `VeltDataProvider`. When configured via `setDataProviders()`, Velt uses your callback functions to fetch and save reaction annotation data, allowing PII to be hosted on your infrastructure instead of Velt's. [Learn More →](/self-host-data/reactions)
+
+</Update>
+
+<Update label="3.0.11" description="September 19, 2025">
+
+### Bug Fixes
+
+- [**Comments**]: Fixed issue with `VeltCommentDialog` not rendering and subscribing to comment annotations when a `targetAnnotationId` prop was provided.
+
+- [**Access Control**]: Fixed `AttachmentDataProvider.delete()` callback now receives `organizationId` and other metadata fields instead of just the `attachmentId`. 
+
+</Update>
+
+<Update label="3.0.10" description="September 17, 2025">
+
+### New Features
+
+- [**Core**]: Added `AttachmentDataProvider` to `VeltDataProvider`. When configured via `setDataProviders()`, Velt uses your callback functions to fetch, save, and delete file attachments, enabling custom storage providers. The `get`, `save`, and `delete` callbacks receive structured request objects. [Learn More →](/self-host-data/attachments)
+
+</Update>
+
+<Update label="3.0.9" description="September 9, 2025">
+
+### Bug Fixes
+
+- [**Core**]: Fixed issue with subscriptions not working correctly when React strict mode is enabled.
+
+</Update>
+
+<Update label="3.0.8" description="September 3, 2025">
+
+### New Features
+
+- [**Comments**]: Added `commentHtml` field to Comment model. When `getCommentTextAsHtml` is enabled, the HTML version of the comment text is stored in the new `commentHtml` field alongside the existing plain-text `commentText` field.
+
+</Update>
+
+<Update label="3.0.7" description="August 28, 2025">
+
+### New Features
+
+- [**Comments**]: Added `hideResolvedCommentsOnPage` prop on `VeltComments` to hide resolved comment pins from the page. [Learn More →](/async-collaboration/comments/customize-behavior#hide-resolved-comments-on-page)
+
+### Bug Fixes
+
+- [**Comments**]: Fixed issue where reaction annotation was not being set when user first reacts on a comment
+
+</Update>
+
+<Update label="3.0.6" description="August 20, 2025">
+
+### Bug Fixes
+
+- [**Comments**]: Fixed comment dialog opening on the incorrect location when the Velt component is scoped via `targetElement`.
+
+</Update>
+
+<Update label="3.0.5" description="August 12, 2025">
+
+### Bug Fixes
+
+- [**Comments**]: Fixed issue with comments not loading after user token expires and gets refreshed.
+
+</Update>
+
+<Update label="3.0.4" description="August 7, 2025">
+
+### New Features
+
+- [**REST API**]: Added `GET /v2/commentannotations/user/activity` endpoint to retrieve activity data for a given user. [Learn More →](/api-reference/rest-apis/v2/comment-annotations/get-comment-annotations-user-activity)
+
+</Update>
+
+<Update label="3.0.3" description="July 31, 2025">
+
+### New Features
+
+- [**Presence**]: Presence component now supports `targetElement` prop to scope presence to a specific element on the page. [Learn More →](/realtime-collaboration/presence/customize-behavior)
+
+</Update>
+
+<Update label="3.0.2" description="July 22, 2025">
+
+### Bug Fixes
+
+- [**Comments**]: Fixed an issue where using the Comments Dialog component with `targetAnnotationId` would not show any comments.
+
+</Update>
+
+<Update label="3.0.1" description="July 16, 2025">
+
+### New Features
+
+- [**Comments**]: `VeltCommentDialog` now supports `targetAnnotationId` prop to render a comment dialog for a specific annotation. [Learn More →](/async-collaboration/comments/customize-behavior#targetannotationid)
+
+</Update>
+
+<Update label="3.0.0" description="July 3, 2025">
+
+### New Features
+
+- [**Core**]: Velt is now available as an npm package `@veltdev/client` for use in non-React environments.
+
+- [**Comments**]: New [`VeltCommentDialog`](/async-collaboration/comments/setup/overview) component that renders a standalone comment dialog — decoupled from a canvas annotation pin. Useful for building comment-first UIs like document editors, code review tools, or task trackers.
+
+- [**Comments**]: Added `CommentElement.setCommentSidebarFilters()` to set sidebar filter state programmatically (status, people, priority, and more). Triggers a real-time reactive update. [Learn More →](/async-collaboration/comments-sidebar/customize-behavior#setcommentsidebarfilters)
+
+- [**Access Control**]: New access-control module for restricting who can read and write comments, documents, or folders. Supports `public`, `organizationPrivate`, and `restricted` access types. Governed via `client.getPermissionElement()` and managed with `setDocumentIAMConfig()` / `setFolderIAMConfig()`. [Learn More →](/access-control/overview)
+
+### Improvements
+
+- [**Core**]: Revamped the token refresh lifecycle — tokens are now proactively refreshed before they expire, reducing authentication errors.
+
+### Bug Fixes
+
+- [**Comments**]: Fixed an issue where deleting the last comment in a thread was not deleting the annotation from the Sidebar.
+
+- [**Comments**]: Fixed issue where auto-categorize tags feature was causing crashes in some scenarios.
+
+</Update>
+
+<Update label="2.0.11" description="June 19, 2025">
+
+### Bug Fixes
+
+- [**Core**]: Fixed issue with user token refresh causing incorrect permission errors.
+
+</Update>
+
+<Update label="2.0.10" description="June 5, 2025">
+
+### Bug Fixes
+
+- [**Comments**]: Fixed an issue where the comment sidebar was not loading comments when using `setCommentRequestQuery` with `documentId`.
+
+</Update>
+
+<Update label="2.0.9" description="May 28, 2025">
+
+### Bug Fixes
+
+- [**Comments**]: Fixed issue where comment location was not being used to filter sidebar.
+
+</Update>
+
+<Update label="2.0.8" description="May 21, 2025">
+
+### New Features
+
+- [**Comments**]: `commentElement.getAllCommentAnnotations()` now accepts an optional filter to return comment annotations only for a specific location via `locationId`.
+
+</Update>
+
+<Update label="2.0.7" description="May 14, 2025">
+
+### New Features
+
+- [**Comments**]: Added `CommentElement.disableCommentSidebarPanel()` API method to hide the sidebar panel while keeping it functional.
+
+</Update>
+
+<Update label="2.0.6" description="May 1, 2025">
+
+### Bug Fixes
+
+- [**Comments**]: Fixed issue where the scrollbar was incorrectly hidden inside the Velt comment dialog on Windows.
+
+</Update>
+
+<Update label="2.0.5" description="April 24, 2025">
+
+### New Features
+
+- [**Comments**]: Added `VeltCommentTool` component to trigger comment mode. [Learn More →](/async-collaboration/comments/setup/overview)
+
+</Update>
+
+<Update label="2.0.4" description="April 17, 2025">
+
+### Bug Fixes
+
+- [**Comments**]: Fixed comment sidebar not closing when clicking outside of it.
+
+</Update>
+
+<Update label="2.0.3" description="April 10, 2025">
+
+### Bug Fixes
+
+- [**Comments**]: Fixed issue where the comment sidebar filter was not working correctly.
+
+</Update>
+
+<Update label="2.0.2" description="April 3, 2025">
+
+### New Features
+
+- [**Comments**]: Added `pageMode` option to `VeltCommentsSidebar` component. When enabled, comments are grouped by page. [Learn More →](/async-collaboration/comments-sidebar/overview)
+
+</Update>
+
+<Update label="2.0.1" description="March 26, 2025">
+
+### Bug Fixes
+
+- [**Comments**]: Fixed issue where comment annotations would occasionally fail to load.
+
+</Update>
+
+<Update label="2.0.0" description="March 19, 2025">
+
+### New Features
+
+- [**Core**]: Velt 2.0 released. Full rewrite of the core SDK with improved performance and reliability.
+
+</Update>
+
+<Update label="1.0.0" description="January 1, 2025">
+
+### New Features
+
+- [**Core**]: Initial release of the Velt SDK.
+
+- [**Comments**]: Comment annotations, sidebar, and dialog components.
+
+- [**Presence**]: Real-time user presence.
+
+- [**Cursors**]: Live cursor tracking.
+
+- [**Huddle**]: Voice/video huddle rooms.
+
+- [**Recorder**]: Audio and video recording.
+
+- [**Notifications**]: In-app notification system.
+
+- [**UI Customization**]: Wireframe and primitive-based UI customization system. 90+ more
 
 [View full documentation →](/ui-customization/features/async/comments/comment-dialog/primitives) | [Data Models](/api-reference/sdk/models/data-models#comment-dialog-primitives)
 

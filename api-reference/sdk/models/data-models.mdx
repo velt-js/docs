@@ -47,6 +47,8 @@
 | `sourceType`              | `string`                                                                  | No       | Origin of the annotation. Selects the agent-identity vs human-author header variant rendered for suggestion comments. |
 | `suggestion`              | [`CommentAnnotationSuggestion`](#commentannotationsuggestion)             | No       | Suggestion state for typed-suggestion annotations. Mutated by [`acceptSuggestion()`](/api-reference/sdk/api/api-methods#acceptsuggestion) / [`rejectSuggestion()`](/api-reference/sdk/api/api-methods#rejectsuggestion). |
 | `basicAnchorData`         | `{ xpath: string; topPercentage: number; leftPercentage: number }`        | No       | Client-safe anchor data derived from the target element's xpath. `xpath` is sourced from `targetElement.anchor.fXPath`, falling back to the legacy `targetElement.fXpath`. `topPercentage` and `leftPercentage` default to `0` when not set. Omitted entirely when no xpath source is present. |
+| `involvedUserIds`         | `string[]`                                                                | No       | Read-only, server-derived. All user IDs involved in the annotation (subscribed and unsubscribed participants). Used by the `involved` sidebar filter. |
+| `mentionedUserIds`        | `string[]`                                                                | No       | Read-only, server-derived. User IDs @mentioned across the annotation's comments. Used by the `tagged` sidebar filter. |
 
 #### Enum
 
@@ -976,6 +978,9 @@ Logical anchor stored in `annotation.context.textEditorConfig`. Designed to surv
 | `taggedUserContacts`    | `AutocompleteUserContactReplaceData[]` | Yes      | List of users that were @mentioned in this comment with UI metadata.    |
 | `customList`            | `AutocompleteReplaceData[]`            | Yes      | List of custom list items added to the comment.                         |
 | `isDraft`               | `boolean`                              | Yes      | Whether the comment is in draft state.                                  |
+| `sourceType`            | `string`                               | No       | Read-only. Origin of the comment. `'agent'` indicates an AI-agent-authored comment. |
+| `agent`                 | [`CommentAnnotationAgent`](#commentannotationagent) | No | Read-only. AI agent identity and structured output for an agent-authored comment. |
+| `metadata`              | `any`                                  | No       | Customer-supplied metadata bag, persisted as-is when provided.          |
 
 #### AddCommentEvent
 
@@ -1653,6 +1658,7 @@ A reaction annotation represents a placed emoji reaction on a document, comment,
 | `lastUpdated`         | `any`                   | No       | Timestamp when the annotation was last updated (auto-generated).   |
 | `metadata`            | `ReactionMetadata`      | No       | Custom metadata attached to the annotation.                        |
 | `context`             | `Context`               | No       | Context object for the annotation.                                 |
+| `involvedUserIds`     | `string[]`              | No       | Read-only, server-derived. All user IDs involved in the reaction annotation. |
 
 #### Reaction
 
@@ -2539,6 +2545,169 @@ type SidebarSortingCriteria = 'date' | 'unread' | null;
 | `'public'`  | Matches annotations visible to all users; `visibilityConfig.type === 'public'` wins over the legacy flag, and annotations with no `visibilityConfig` and a `'public'` or unset legacy `iam.accessMode` are treated as Public. |
 | `'private'` | Matches annotations with `restricted` or `organizationPrivate` visibility; also includes legacy annotations with `iam.accessMode === 'private'` when `visibilityConfig` is unset. |
 
+#### SidebarFilterValue
+
+---
+
+A single selectable option (with its facet count) inside a Comment Sidebar V2 filter field.
+
+| Property  | Type      | Required | Description                                  |
+| --------- | --------- | -------- | -------------------------------------------- |
+| `id`      | `string`  | Yes      | Option id used in the active selection set.  |
+| `label`   | `string`  | No       | Display label for the option.                |
+| `count`   | `number`  | No       | Facet count of matching annotations.         |
+| `icon`    | `string`  | No       | Icon shown next to the option.               |
+| `selected`| `boolean` | No       | Whether the option is currently selected.    |
+
+#### FilterField
+
+---
+
+A single filterable field shown inside a Comment Sidebar V2 filter panel or header dropdown. Used by the `filters`, `mini-filters`, and `minimal-filters` inputs on [`VeltCommentsSidebarV2`](#veltcommentssidebarv2props).
+
+| Property      | Type                         | Required | Description                                                          |
+| ------------- | ---------------------------- | -------- | ------------------------------------------------------------------- |
+| `field`       | `string`                     | Yes      | Field id. A built-in id ([`BuiltInFilterFieldId`](#builtinfilterfieldid)) or a custom id. |
+| `label`       | `string`                     | No       | Display label for the field section.                                |
+| `select`      | `'single' \| 'multi'`        | No       | Whether one or many options can be selected.                        |
+| `searchable`  | `boolean`                    | No       | Show a per-section search box for the options.                      |
+| `showCounts`  | `boolean`                    | No       | Show per-option facet counts.                                       |
+| `icon`        | `string`                     | No       | Icon shown next to the field.                                       |
+| `valuePath`   | `string`                     | No       | Dot-path into the annotation for a custom field.                    |
+| `includeUnset`| `boolean`                    | No       | Include an option for annotations with no value for this field.     |
+| `placeholder` | `string`                     | No       | Placeholder text for the field's option control.                    |
+| `groupable`   | `boolean`                    | No       | Whether the list can be grouped by this field.                      |
+| `order`       | `string[]`                   | No       | Explicit ordering of option ids.                                    |
+| `options`     | [`SidebarFilterValue[]`](#sidebarfiltervalue) | No | Pre-supplied option set instead of auto-faceted options.            |
+
+#### BuiltInFilterFieldId
+
+---
+
+`type BuiltInFilterFieldId = 'status' | 'priority' | 'category' | 'people' | 'assigned' | 'tagged' | 'involved' | 'location' | 'version' | 'document'`
+
+Built-in [`FilterField`](#filterfield) ids recognized by the Comment Sidebar V2 filter engine. Exported alongside the `BUILT_IN_FILTER_FIELD_IDS` constant.
+
+#### SidebarMinimalFilterConfig
+
+---
+
+A single header dropdown declared via the `minimal-filters` input on [`VeltCommentsSidebarV2`](#veltcommentssidebarv2props).
+
+| Property  | Type                                        | Required | Description                                                |
+| --------- | ------------------------------------------- | -------- | ---------------------------------------------------------- |
+| `type`    | [`SidebarFilterDropdownType`](#sidebarfilterdropdowntype) | No | Dropdown kind. Defaults to a quick + category menu when unset. |
+| `label`   | `string`                                    | No       | Dropdown trigger label.                                    |
+| `field`   | `string`                                    | No       | Single field id for a `filter` dropdown.                   |
+| `fields`  | [`FilterField[]`](#filterfield)             | No       | Field set for a `filter` dropdown.                         |
+| `sorts`   | `(string \| `[`SidebarSortConfig`](#sidebarsortconfig)`)[]` | No | Sort options for `sort` / `actions` dropdowns.            |
+| `actions` | `(string \| `[`SidebarQuickFilterConfig`](#sidebarquickfilterconfig)`)[]` | No | Quick options for `quick` / `actions` dropdowns.  |
+
+#### SidebarFilterDropdownType
+
+---
+
+`type SidebarFilterDropdownType = 'filter' | 'sort' | 'quick' | 'actions'`
+
+Kind of header dropdown rendered for a [`SidebarMinimalFilterConfig`](#sidebarminimalfilterconfig). `'actions'` renders a combined sort + quick menu.
+
+#### SidebarSortConfig
+
+---
+
+A sort option declared in a `sort` or `actions` dropdown.
+
+| Property | Type             | Required | Description                                  |
+| -------- | ---------------- | -------- | -------------------------------------------- |
+| `label`  | `string`         | No       | Display label for the sort option.           |
+| `preset` | `string`         | No       | Built-in sort preset (`'date'`, `'unread'`). |
+| `path`   | `string`         | No       | Dot-path for a custom-field sort.            |
+| `field`  | `string`         | No       | Field id for a custom-field sort.            |
+| `order`  | `'asc' \| 'desc'`| No       | Sort direction.                              |
+
+#### SidebarQuickFilterConfig
+
+---
+
+A quick filter option declared in a `quick` or `actions` dropdown.
+
+| Property     | Type                                          | Required | Description                                              |
+| ------------ | --------------------------------------------- | -------- | ------------------------------------------------------- |
+| `label`      | `string`                                      | No       | Display label for the quick option.                     |
+| `preset`     | `string`                                      | No       | Built-in quick preset (`'open'`, `'resolved'`, `'unread'`). |
+| `path`       | `string`                                      | No       | Dot-path for a single-predicate match.                  |
+| `field`      | `string`                                      | No       | Field id for a single-predicate match.                  |
+| `value`      | `any`                                         | No       | Literal value to match (e.g. a userId `'1.1'`).         |
+| `conditions` | [`SidebarQuickCondition[]`](#sidebarquickcondition) | No | Multiple predicates combined via `operator`.            |
+| `operator`   | `'and' \| 'or'`                               | No       | How `conditions` combine.                               |
+
+#### SidebarQuickCondition
+
+---
+
+A single predicate within a [`SidebarQuickFilterConfig`](#sidebarquickfilterconfig).
+
+| Property | Type     | Required | Description                       |
+| -------- | -------- | -------- | --------------------------------- |
+| `path`   | `string` | No       | Dot-path into the annotation.     |
+| `field`  | `string` | No       | Field id.                         |
+| `value`  | `any`    | Yes      | Literal value to match.           |
+
+#### SidebarAnnotationGroup
+
+---
+
+A group of annotations produced by the Comment Sidebar V2 grouping engine.
+
+| Property        | Type                  | Required | Description                                  |
+| --------------- | --------------------- | -------- | -------------------------------------------- |
+| `id`            | `string`              | Yes      | Group id.                                    |
+| `label`         | `string`              | Yes      | Group display label.                         |
+| `count`         | `number`              | Yes      | Number of annotations in the group.          |
+| `isExpanded`    | `boolean`             | Yes      | Whether the group is expanded.               |
+| `isCurrentPage` | `boolean`             | No       | Whether the group is the current page/location. |
+| `annotations`   | [`CommentAnnotation[]`](#commentannotation) | Yes | Annotations in the group.             |
+
+#### SidebarListRow
+
+---
+
+`type SidebarListRow = { type: 'group'; group: SidebarAnnotationGroup } | { type: 'annotation'; annotation: CommentAnnotation; groupId: string }`
+
+A flattened virtual-scroll row in the Comment Sidebar V2 list: either a [`SidebarAnnotationGroup`](#sidebarannotationgroup) header or a single [`CommentAnnotation`](#commentannotation).
+
+#### FilterFieldOperator
+
+---
+
+`type FilterFieldOperator = 'and' | 'or'`
+
+How selections across different filter fields combine. Set via the `filter-operator` input. Within a single field, selections always combine with `OR`.
+
+#### FacetContext
+
+---
+
+Context passed to a [`FilterFieldResolver`](#filterfieldresolver) when building option facets for a custom field.
+
+| Property      | Type                            | Required | Description                          |
+| ------------- | ------------------------------- | -------- | ------------------------------------ |
+| `annotations` | [`CommentAnnotation[]`](#commentannotation) | Yes | Annotations to build options from.   |
+| `field`       | [`FilterField`](#filterfield)   | Yes      | The field being resolved.            |
+
+#### FilterFieldResolver
+
+---
+
+Extensibility seam for registering a custom filterable field in the Comment Sidebar V2.
+
+| Property       | Type                                  | Required | Description                                            |
+| -------------- | ------------------------------------- | -------- | ----------------------------------------------------- |
+| `id`           | `string`                              | Yes      | Field id this resolver handles.                       |
+| `optionSource` | `'catalog' \| 'scan'`                 | Yes      | Whether options come from a catalog or a scan of annotations. |
+| `buildOptions` | `(ctx: FacetContext) => SidebarFilterValue[]` | Yes | Builds the selectable option set.                     |
+| `matches`      | `(annotation: CommentAnnotation, selectedValueIds: string[]) => boolean` | Yes | Decides whether an annotation matches the selection. |
+
 #### CommentSidebarData
 
 ---
@@ -2730,14 +2899,28 @@ export class ConfirmDialogComponentConfig {
 | `readOnly`                          | `boolean`                 | No       | Enable read-only mode                                         |
 | `embedMode`                         | `string \| null`          | No       | Embeds the sidebar inline within a container                  |
 | `floatingMode`                      | `boolean`                 | No       | Renders the sidebar as a floating overlay                     |
-| `position`                          | `string`                  | No       | Sidebar position, e.g., `'right'`, `'left'`                   |
+| `position`                          | `'right' \| 'left'`       | No       | Sidebar position. Narrowed from `string` in beta.38.          |
 | `variant`                           | `string`                  | No       | Sidebar variant, e.g., `'sidebar'`, `'inline'`                |
 | `forceClose`                        | `boolean`                 | No       | Force-close the sidebar                                       |
 | `version`                           | `string`                  | No       | When `"2"`, routes `VeltCommentsSidebar` to the V2 implementation |
+| `fullScreen`                        | `boolean`                 | No       | Show a fullscreen toggle button in the header. Default `false`. |
+| `filters`                           | `string \| `[`FilterField[]`](#filterfield)` \| object` | No | Main Filter panel fields, or an active-selections object. |
+| `miniFilters`                       | `string \| `[`FilterField[]`](#filterfield) | No | Fields for a single header funnel dropdown.                   |
+| `minimalFilters`                    | `string \| `[`SidebarMinimalFilterConfig[]`](#sidebarminimalfilterconfig) | No | Multiple configurable header dropdowns.            |
+| `filterOperator`                    | [`FilterFieldOperator`](#filterfieldoperator) | No | How selections across different fields combine. Default `'and'`. |
+| `filterPanelLayout`                 | `'bottomSheet' \| 'menu'` | No       | Filter panel layout. Default `'bottomSheet'`.                 |
+| `filterOptionLayout`                | `'dropdown' \| 'checkbox'`| No       | Filter option layout. Default `'dropdown'`.                   |
+| `filterCount`                       | `boolean`                 | No       | Show per-option facet counts. Default `true`.                 |
+| `sortBy`                            | `SortBy`                  | No       | Default sort field.                                           |
+| `sortOrder`                         | `SortOrder`               | No       | Default sort order.                                           |
+| `defaultMinimalFilter`              | `'all' \| 'read' \| 'unread' \| 'resolved' \| 'open' \| 'assignedToMe' \| 'reset'` | No | Default quick filter applied on load. |
+| `groupConfig`                       | `{ enable?: boolean; name?: string; groupBy?: string }` | No | Grouping config. `{ enable: true }` groups by location.       |
+| `searchPlaceholder`                 | `string`                  | No       | Placeholder for the search box. Default `'Search comments'`.  |
 | `onSidebarOpen`                     | `(data: any) => void`     | No       | Callback when sidebar opens                                   |
 | `onSidebarClose`                    | `(data: any) => void`     | No       | Callback when sidebar closes                                  |
 | `onCommentClick`                    | `(data: any) => void`     | No       | Callback when a comment is clicked                            |
 | `onCommentNavigationButtonClick`    | `(data: any) => void`     | No       | Callback when navigation button is clicked                    |
+| `onFullscreenClick`                 | `(data: any) => void`     | No       | Callback when the fullscreen toggle is clicked                |
 
 #### VeltInlineCommentsSectionProps
 

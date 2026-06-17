@@ -12,4 +12,630 @@ The [Velt Python SDK](https://pypi.org/project/velt-py) exposes two independent 
 | Self-hosting | `sdk.selfHosting.*` | Store Velt data in your own MongoDB + AWS S3 |
 | REST API | `sdk.api.*` | Call Velt's REST APIs directly — no database required |
 
-DUE_TO_SIZE_SEE_NEXT
+**Self-hosting backend** (`sdk.selfHosting.*`) simplifies backend implementation by **90%**. Instead of writing custom database queries and storage logic, you:
+
+1. Pass your DB and storage configs to the SDK
+2. Pass the raw request object directly to SDK methods
+3. Return the resulting response object straight to the client
+
+**REST API backend** (`sdk.api.*`) — new in v0.1.9 — provides feature parity with the Velt Node SDK. 17 services, typed `@dataclass` request objects, and raw Velt API responses. No database or AWS configuration needed.
+
+## Installation
+
+```bash
+pip install velt-py
+```
+
+### Requirements
+
+- Python 3.8+
+- Django 4.2.26+ (only if using the self-hosting backend)
+- MongoDB (Percona Server or MongoDB Atlas) for self-hosting
+- `requests` for REST API calls (installed automatically)
+
+## Quick Start
+
+### Initialize the SDK
+
+**Self-hosting initialization** (MongoDB + optional AWS):
+
+```python
+from velt_py import VeltSDK
+
+# Initialize with database and AWS config
+config = {
+    'database': {
+        # Option 1: Connection string (recommended for MongoDB Atlas)
+        'connection_string': 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
+        
+        # Option 2: Individual components
+        # 'host': 'localhost:27017',
+        # 'username': 'your_username',
+        # 'password': 'your_password',
+        # 'auth_database': 'admin',
+        # 'database_name': 'velt-db'
+    },
+    # Optional: AWS S3 config for attachments
+    'aws': {
+        'bucket_name': 'your-bucket',
+        'region': 'us-east-1',
+        'access_key_id': 'YOUR_ACCESS_KEY',
+        'secret_access_key': 'YOUR_SECRET_KEY'
+    },
+    # Optional: Custom collection names
+    'collections': {
+        'comments': 'comment_annotations',
+        'reactions': 'reaction_annotations',
+        'attachments': 'attachments',
+        'users': 'users'
+    },
+    # Required for token generation; also enables sdk.api.*
+    'apiKey': 'YOUR_VELT_API_KEY',
+    'authToken': 'YOUR_VELT_AUTH_TOKEN'
+}
+
+sdk = VeltSDK.initialize(config)
+```
+
+**REST API-only initialization** (no database needed — new in v0.1.9):
+
+```python
+from velt_py import VeltSDK
+
+# Minimal config for REST API backend only
+config = {
+    'apiKey': 'YOUR_VELT_API_KEY',
+    'authToken': 'YOUR_VELT_AUTH_TOKEN'
+}
+
+sdk = VeltSDK.initialize(config)
+
+# All sdk.api.* services are now available
+result = sdk.api.organizations.getOrganizations(...)
+```
+
+The `database` section is optional when using only `sdk.api.*`. Set `VELT_API_KEY` and `VELT_AUTH_TOKEN` environment variables as an alternative to passing credentials in the config dict.
+
+## Configuration
+
+### Environment Variables
+
+The SDK reads the following environment variables automatically. These can be used instead of (or in addition to) config dict keys.
+
+| Variable | Config key equivalent | Purpose |
+|----------|-----------------------|---------|
+| `VELT_API_KEY` | `apiKey` | Velt API key for authenticating REST API calls |
+| `VELT_AUTH_TOKEN` | `authToken` | Velt auth token for authenticating REST API calls |
+| `VELT_WORKSPACE_ID` | — | Default workspace ID for workspace-scoped operations |
+| `VELT_WORKSPACE_AUTH_TOKEN` | — | Auth token scoped to a specific workspace |
+
+### Self-Hosting Configuration
+
+<Tabs>
+<Tab title="Database">
+
+Configure MongoDB connection for storing comments, reactions, and user data.
+
+```python
+config = {
+    'database': {
+        # Option 1: Connection string (recommended for MongoDB Atlas)
+        'connection_string': 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
+        
+        # Option 2: Individual components (for local MongoDB or custom setup)
+        # 'host': 'localhost:27017',
+        # 'username': 'your_username',
+        # 'password': 'your_password',
+        # 'auth_database': 'admin',
+        # 'database_name': 'velt-db'
+    }
+}
+```
+
+</Tab>
+<Tab title="AWS (Attachments)">
+
+Configure AWS S3 for storing file attachments.
+
+```python
+config = {
+    'aws': {
+        'bucket_name': 'your-bucket-name',
+        'region': 'us-east-1',
+        'access_key_id': 'YOUR_AWS_ACCESS_KEY',
+        'secret_access_key': 'YOUR_AWS_SECRET_KEY'
+    }
+}
+```
+
+</Tab>
+<Tab title="Collections">
+
+Customize collection names for storing Velt data.
+
+```python
+config = {
+    'collections': {
+        'comments': 'comment_annotations',    # Default: 'comment_annotations'
+        'reactions': 'reaction_annotations',  # Default: 'reaction_annotations'
+        'attachments': 'attachments',         # Default: 'attachments'
+        'users': 'users'                      # Default: 'users'
+    }
+}
+```
+
+</Tab>
+<Tab title="User Schema">
+
+Map your user schema fields to Velt's expected fields if your database uses different field names.
+
+```python
+config = {
+    'user_schema': {
+        'userId': 'userId',       # Your field name for user ID
+        'name': 'name',           # Your field name for display name
+        'photoUrl': 'photoUrl',   # Your field name for avatar URL
+        'email': 'email',         # Your field name for email
+        'color': 'color',         # Your field name for user color
+        'textColor': 'textColor', # Your field name for text color
+        'isAdmin': 'isAdmin',     # Your field name for admin flag
+        'initial': 'initial'      # Your field name for user initial
+    }
+}
+```
+
+</Tab>
+<Tab title="Complete Example">
+
+Full configuration with database, AWS, collections, and user schema.
+
+```python
+from velt_py import VeltSDK
+
+config = {
+    'database': {
+        'connection_string': 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
+    },
+    'aws': {
+        'bucket_name': 'your-bucket-name',
+        'region': 'us-east-1',
+        'access_key_id': 'YOUR_AWS_ACCESS_KEY',
+        'secret_access_key': 'YOUR_AWS_SECRET_KEY'
+    },
+    'collections': {
+        'comments': 'comment_annotations',
+        'reactions': 'reaction_annotations',
+        'attachments': 'attachments',
+        'users': 'users'
+    },
+    'user_schema': {
+        'userId': 'userId',
+        'name': 'name',
+        'photoUrl': 'photoUrl',
+        'email': 'email',
+        'color': 'color',
+        'textColor': 'textColor',
+        'isAdmin': 'isAdmin',
+        'initial': 'initial'
+    },
+    'apiKey': 'YOUR_VELT_API_KEY',
+    'authToken': 'YOUR_VELT_AUTH_TOKEN'
+}
+
+sdk = VeltSDK.initialize(config)
+```
+
+</Tab>
+</Tabs>
+
+## Self-Hosting Backend
+
+The SDK provides methods that accept the raw request from the frontend and return the properly formatted response.
+
+### Comments
+
+#### `getComments`
+
+- Fetches comments from your database for a document.
+- Params: [GetCommentResolverRequest](/api-reference/sdk/models/data-models#getcommentresolverrequest)
+- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
+
+```python
+from velt_py import GetCommentResolverRequest
+
+def get_comments(request):
+    data = request.json
+    comment_request = GetCommentResolverRequest.from_dict(data)
+    result = sdk.selfHosting.comments.getComments(comment_request)
+    return result
+```
+
+**Response**
+
+```python
+{
+    'success': True,
+    'statusCode': 200,
+    'data': { 'comments': [ ... ] }
+}
+```
+
+#### `saveComments`
+
+- Saves new or updated comments to your database.
+- Params: [SaveCommentResolverRequest](/api-reference/sdk/models/data-models#savecommentresolverrequest)
+- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
+
+```python
+from velt_py import SaveCommentResolverRequest
+
+def save_comments(request):
+    data = request.json
+    save_request = SaveCommentResolverRequest.from_dict(data)
+    result = sdk.selfHosting.comments.saveComments(save_request)
+    return result
+```
+
+**Response**
+
+```python
+{ 'success': True, 'statusCode': 200, 'data': { ... } }
+```
+
+#### `deleteComment`
+
+- Deletes a comment from your database.
+- Params: [DeleteCommentResolverRequest](/api-reference/sdk/models/data-models#deletecommentresolverrequest)
+- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
+
+```python
+from velt_py import DeleteCommentResolverRequest
+
+def delete_comment(request):
+    data = request.json
+    delete_request = DeleteCommentResolverRequest.from_dict(data)
+    result = sdk.selfHosting.comments.deleteComment(delete_request)
+    return result
+```
+
+**Response**
+
+```python
+{ 'success': True, 'statusCode': 200, 'data': { ... } }
+```
+
+### Reactions
+
+#### `getReactions`
+
+- Fetches reactions from your database for a document.
+- Params: [GetReactionResolverRequest](/api-reference/sdk/models/data-models#getreactionresolverrequest)
+- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
+
+```python
+from velt_py import GetReactionResolverRequest
+
+def get_reactions(request):
+    data = request.json
+    reaction_request = GetReactionResolverRequest.from_dict(data)
+    result = sdk.selfHosting.reactions.getReactions(reaction_request)
+    return result
+```
+
+**Response**
+
+```python
+{
+    'success': True,
+    'statusCode': 200,
+    'data': { 'reactions': [ ... ] }
+}
+```
+
+#### `saveReactions`
+
+- Saves new or updated reactions to your database.
+- Params: [SaveReactionResolverRequest](/api-reference/sdk/models/data-models#savereactionresolverrequest)
+- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
+
+```python
+from velt_py import SaveReactionResolverRequest
+
+def save_reactions(request):
+    data = request.json
+    save_request = SaveReactionResolverRequest.from_dict(data)
+    result = sdk.selfHosting.reactions.saveReactions(save_request)
+    return result
+```
+
+**Response**
+
+```python
+{ 'success': True, 'statusCode': 200, 'data': { ... } }
+```
+
+#### `deleteReaction`
+
+- Deletes a reaction from your database.
+- Params: [DeleteReactionResolverRequest](/api-reference/sdk/models/data-models#deletereactionresolverrequest)
+- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
+
+```python
+from velt_py import DeleteReactionResolverRequest
+
+def delete_reaction(request):
+    data = request.json
+    delete_request = DeleteReactionResolverRequest.from_dict(data)
+    result = sdk.selfHosting.reactions.deleteReaction(delete_request)
+    return result
+```
+
+**Response**
+
+```python
+{ 'success': True, 'statusCode': 200, 'data': { ... } }
+```
+
+### Users
+
+#### `getUsers`
+
+- Fetches users from your database.
+- Params: [GetUserResolverRequest](/api-reference/sdk/models/data-models#getuserresolverrequest)
+- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
+
+```python
+from velt_py import GetUserResolverRequest
+
+def get_users(request):
+    data = request.json
+    user_request = GetUserResolverRequest.from_dict(data)
+    result = sdk.selfHosting.users.getUsers(user_request)
+    return result
+```
+
+**Response**
+
+```python
+{
+    'success': True,
+    'statusCode': 200,
+    'data': { 'users': [ { 'userId': 'user-1', 'name': 'John Doe', ... } ] }
+}
+```
+
+### Attachments
+
+#### `saveAttachment`
+
+- Uploads an attachment file to S3 and saves the metadata.
+- Params: [SaveAttachmentResolverRequest](/api-reference/sdk/models/data-models#saveattachmentresolverrequest)
+- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
+
+<Tabs>
+<Tab title="Django">
+
+```python
+import json
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from velt_py import SaveAttachmentResolverRequest, DeleteAttachmentResolverRequest
+from .velt_sdk import get_velt_sdk
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def save_attachment(request):
+    try:
+        file = request.FILES.get('file')
+        request_json_str = request.POST.get('request')
+        
+        if not file or not request_json_str:
+            return JsonResponse({
+                'success': False,
+                'error': 'File and request JSON are required',
+                'errorCode': 'INVALID_INPUT',
+                'statusCode': 400
+            }, status=400)
+        
+        request_data = json.loads(request_json_str)
+        save_request = SaveAttachmentResolverRequest.from_dict(request_data)
+        
+        sdk = get_velt_sdk()
+        result = sdk.selfHosting.attachments.saveAttachment(
+            save_request,
+            file_data=file.read(),
+            file_name=file.name,
+            mime_type=file.content_type
+        )
+        return JsonResponse(result, status=result.get('statusCode', 200))
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e),
+            'errorCode': 'INTERNAL_ERROR',
+            'statusCode': 500
+        }, status=500)
+```
+
+</Tab>
+<Tab title="Flask">
+
+```python
+import json
+from flask import request, jsonify
+from velt_py import SaveAttachmentResolverRequest
+
+@app.route('/api/velt/attachments/save', methods=['POST'])
+def save_attachment():
+    try:
+        file = request.files.get('file')
+        request_json = request.form.get('request')
+        
+        if not file or not request_json:
+            return jsonify({
+                'success': False,
+                'error': 'File and request JSON are required',
+                'errorCode': 'INVALID_INPUT',
+                'statusCode': 400
+            }), 400
+        
+        request_data = json.loads(request_json)
+        save_request = SaveAttachmentResolverRequest.from_dict(request_data)
+        
+        result = sdk.selfHosting.attachments.saveAttachment(
+            save_request,
+            file_data=file.read(),
+            file_name=file.filename,
+            mime_type=file.content_type
+        )
+        return jsonify(result), result.get('statusCode', 200)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e), 'errorCode': 'INTERNAL_ERROR', 'statusCode': 500}), 500
+```
+
+</Tab>
+<Tab title="FastAPI">
+
+```python
+import json
+from fastapi import Request, UploadFile, File, Form
+from fastapi.responses import JSONResponse
+from velt_py import SaveAttachmentResolverRequest
+
+@app.post('/api/velt/attachments/save')
+async def save_attachment(file: UploadFile = File(...), request: str = Form(...)):
+    try:
+        request_data = json.loads(request)
+        save_request = SaveAttachmentResolverRequest.from_dict(request_data)
+        
+        file_bytes = await file.read()
+        result = sdk.selfHosting.attachments.saveAttachment(
+            save_request,
+            file_data=file_bytes,
+            file_name=file.filename,
+            mime_type=file.content_type
+        )
+        return JSONResponse(content=result, status_code=result.get('statusCode', 200))
+    except Exception as e:
+        return JSONResponse(content={'success': False, 'error': str(e), 'errorCode': 'INTERNAL_ERROR', 'statusCode': 500}, status_code=500)
+```
+
+</Tab>
+</Tabs>
+
+**Response**
+
+```python
+{ 'success': True, 'statusCode': 200, 'data': { ... } }
+```
+
+#### `deleteAttachment`
+
+- Deletes an attachment file from S3 and removes its metadata.
+- Params: [DeleteAttachmentResolverRequest](/api-reference/sdk/models/data-models#deleteattachmentresolverrequest)
+- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
+
+<Tabs>
+<Tab title="Django">
+
+```python
+import json
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from velt_py import DeleteAttachmentResolverRequest
+from .velt_sdk import get_velt_sdk
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def delete_attachment(request):
+    try:
+        data = json.loads(request.body)
+        delete_request = DeleteAttachmentResolverRequest.from_dict(data)
+        sdk = get_velt_sdk()
+        result = sdk.selfHosting.attachments.deleteAttachment(delete_request)
+        return JsonResponse(result, status=result.get('statusCode', 200))
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e),
+            'errorCode': 'INTERNAL_ERROR',
+            'statusCode': 500
+        }, status=500)
+```
+
+</Tab>
+<Tab title="Flask">
+
+```python
+from flask import request, jsonify
+from velt_py import DeleteAttachmentResolverRequest
+
+@app.route('/api/velt/attachments/delete', methods=['POST'])
+def delete_attachment():
+    try:
+        data = request.json
+        delete_request = DeleteAttachmentResolverRequest.from_dict(data)
+        result = sdk.selfHosting.attachments.deleteAttachment(delete_request)
+        return jsonify(result), result.get('statusCode', 200)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e), 'errorCode': 'INTERNAL_ERROR', 'statusCode': 500}), 500
+```
+
+</Tab>
+<Tab title="FastAPI">
+
+```python
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from velt_py import DeleteAttachmentResolverRequest
+
+@app.post('/api/velt/attachments/delete')
+async def delete_attachment(request: Request):
+    try:
+        data = await request.json()
+        delete_request = DeleteAttachmentResolverRequest.from_dict(data)
+        result = sdk.selfHosting.attachments.deleteAttachment(delete_request)
+        return JSONResponse(content=result, status_code=result.get('statusCode', 200))
+    except Exception as e:
+        return JSONResponse(content={'success': False, 'error': str(e), 'errorCode': 'INTERNAL_ERROR', 'statusCode': 500}, status_code=500)
+```
+
+</Tab>
+</Tabs>
+
+**Response**
+
+```python
+{ 'success': True, 'statusCode': 200, 'data': { ... } }
+```
+
+### Token
+
+#### `getToken`
+
+- Generates a Velt auth token for a user. Self-hosting variant.
+- Params: positional — `organizationId`, `userId`, `email` (optional), `isAdmin` (optional)
+- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
+
+```python
+result = sdk.selfHosting.token.getToken(
+    organizationId='org-123',
+    userId='user-1',
+    email='user@example.com',
+    isAdmin=False
+)
+```
+
+**Response**
+
+```python
+{
+    'success': True,
+    'statusCode': 200,
+    'data': { 'token': 'eyJhbGciOi...' }
+}
+```
+
+> Note: `getToken` takes positional / keyword arguments — it does NOT accept a dataclass request object. Signature: `getToken(organizationId, userId, email=None, isAdmin=False)`.

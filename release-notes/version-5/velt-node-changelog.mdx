@@ -7,6 +7,137 @@ description: Release Notes of changes added to the Velt Node.js/TypeScript SDK (
 ### Libraries
 - `@veltdev/node`
 
+<Update label="1.0.5" description="June 16, 2026">
+
+### Breaking Changes
+
+- **`PartialReactionAnnotation.user` renamed to `from`**: The reacting user on `PartialReactionAnnotation` is now exposed under `from` instead of `user`, matching `PartialReactionAnnotation.from` in the frontend SDK and the comment annotation model. This affects self-hosting reaction resolvers (`sdk.selfHosting.getReactions()`): saved reactions persist the `from` field, and resolved reactions expose `from`. Code that reads or writes the reacting user on `PartialReactionAnnotation` must use `from` instead of `user`. [Learn more →](/backend-sdks/node)
+
+```typescript
+// Before
+await reactions.saveReactions({
+  metadata: { organizationId: 'org-123' },
+  reactionAnnotation: {
+    'reaction-1': { annotationId: 'reaction-1', icon: 'thumbsup', user: { userId: 'u-1' } },
+  },
+});
+
+// After
+await reactions.saveReactions({
+  metadata: { organizationId: 'org-123' },
+  reactionAnnotation: {
+    'reaction-1': { annotationId: 'reaction-1', icon: 'thumbsup', from: { userId: 'u-1' } },
+  },
+});
+```
+
+</Update>
+
+<Update label="1.0.4" description="June 16, 2026">
+
+### New Features
+
+- **Opt-in field allowlist for REST add/update methods**: The `add`/`update` methods on **Activities**, **Comment Annotations** (including comment-level add/update), and **Notifications** now accept an optional second argument — `FieldFilterOptions`. When `{ filterUnknownFields: true }` is passed, the SDK narrows the request to the exact fields the backend endpoint accepts before sending, dropping unknown keys. The behavior is opt-in and off by default, and is fail-open: if the filter encounters any unexpected error, it returns the original request unchanged. [Learn more →](/backend-sdks/node)
+
+```typescript
+// Extra fields (internalId) are dropped before the request is sent.
+await sdk.api.commentAnnotations.addCommentAnnotations(
+  {
+    organizationId: 'org-123',
+    documentId: 'doc-1',
+    commentAnnotations: [
+      {
+        location: { id: 'section-1' },
+        commentData: [{ commentText: 'Review this', from: { userId: 'user-1' } }],
+        internalId: 'app-specific-field', // dropped when filtering is enabled
+      },
+    ],
+  },
+  { filterUnknownFields: true },
+);
+```
+
+  Methods that accept `FieldFilterOptions`: `sdk.api.activities.addActivities` / `updateActivities`, `sdk.api.commentAnnotations.addCommentAnnotations` / `updateCommentAnnotations` / `addComments` / `updateComments`, and `sdk.api.notifications.addNotifications` / `updateNotifications`.
+
+- **New `field-allowlist` module exports**: A new `field-allowlist` module is exported from `@veltdev/node`, providing the filter primitives `pickKnownFields` and `filterRequest`, the `FilterSpec` / `FieldFilterOptions` types, and the per-method specs (`ADD_ACTIVITIES_SPEC`, `UPDATE_ACTIVITIES_SPEC`, `ADD_COMMENT_ANNOTATIONS_SPEC`, `UPDATE_COMMENT_ANNOTATIONS_SPEC`, `ADD_COMMENTS_SPEC`, `UPDATE_COMMENTS_SPEC`, `ADD_NOTIFICATIONS_SPEC`, `UPDATE_NOTIFICATIONS_SPEC`). Filtering is top-level / fail-closed within a level: only listed keys survive at each described level, while nested open-typed objects (e.g. `actionUser`, `context`, `metadata`) are passed through whole. [Learn more →](/backend-sdks/node)
+
+</Update>
+
+<Update label="1.0.3" description="June 12, 2026">
+
+### New Features
+
+- **AI Agents API (`sdk.api.agents`)**: New `AgentsService` for managing AI agents, their versioned configuration, agent groups, executions, analytics, and prompt tooling. 24 new methods are available under `sdk.api.agents` (create/get/update/delete agents and versions, run/list/count executions, enhance/validate/refine prompts, resolve config, parse agents, and full agent-group management). `AgentsService` is also exported directly from `@veltdev/node`. [Learn more →](/backend-sdks/node)
+
+```typescript
+const created = await sdk.api.agents.createAgent({
+  name: 'Accessibility Reviewer',
+  description: 'Flags a11y issues on a page',
+  instructions: 'Review the page for WCAG 2.1 AA violations and report findings.',
+  enabled: true,
+  execution: { executionStrategy: 'default', knowledge: { useMemory: true, maxChunks: 10 } },
+});
+
+await sdk.api.agents.runExecution({
+  agentId: 'agent-123',
+  url: 'https://example.com/checkout',
+  ranBy: { userId: 'user-1', name: 'John Doe', email: 'john@example.com' },
+});
+```
+
+- **Memory API (`sdk.api.memory`)**: New `MemoryService` for semantic search over review judgments, knowledge-base ingestion/management, reviewer profiles, pattern/stat retrieval, alerting, and maintenance jobs. 24 new methods are available under `sdk.api.memory`. Every exported type is `Memory`-prefixed for collision-proof naming. `MemoryService` is also exported directly from `@veltdev/node`. [Learn more →](/backend-sdks/node)
+
+```typescript
+await sdk.api.memory.search({
+  query: 'comments about color contrast',
+  scope: 'organization',
+  organizationId: 'org-123',
+  limit: 10,
+  filters: { decision: 'rejected', dateRange: { start: '2026-01-01', end: '2026-06-01' } },
+});
+```
+
+- **Approval Workflows API (`sdk.api.approval`)**: New `ApprovalService` for defining approval/review workflows (graphs of agent, human, and webhook nodes) and dispatching/resolving their executions and steps. 14 new methods are available under `sdk.api.approval` (routes live under `/v2/workflow/*`). Every exported type is `Approval`-prefixed. `ApprovalService` is also exported directly from `@veltdev/node`. [Learn more →](/backend-sdks/node)
+
+```typescript
+await sdk.api.approval.createDefinition({
+  definitionId: 'doc-publish-review',
+  name: 'Document Publish Review',
+  scope: { level: 'organization', organizationId: 'org-123' },
+  nodes: [{
+    nodeId: 'review',
+    type: 'human',
+    config: { reviewers: [{ userId: 'user-1', mandatory: true }], commentBody: 'Please review before publishing.' },
+  }],
+  edges: [],
+});
+```
+
+### API Changes
+
+- **CRDT — `deleteCrdtData`**: `sdk.api.crdt` gained a `deleteCrdtData` method to delete CRDT editor data for a document. Omit `editorIds` to delete CRDT data for all editors of the document. [Learn more →](/backend-sdks/node)
+
+- **Documents — `getDocumentsCount`**: `sdk.api.documents` gained `getDocumentsCount` to return a document count for an organization (optionally scoped to a folder, with `excludeFolderDocs`). [Learn more →](/backend-sdks/node)
+
+- **Users — counts, document users, and invites**: `sdk.api.users` gained 7 new methods: `getUsersCount`, `getDocUsers`, `addUserInvite`, `respondToUserInvite`, `getUserInvites`, `getUserInvitations`, and `getInvitedPendingUsersCount`, covering user counts, document-level user lookup, and the full user-invite lifecycle. [Learn more →](/backend-sdks/node)
+
+- **Workspace — domain requests, key config, service configs, advanced webhooks**: `sdk.api.workspace` gained 20 new methods spanning additional-URL/domain requests, API key copy + config, notification/permission-provider/activity service configs, and the advanced (Svix/WebhookV2) webhook endpoint suite. [Learn more →](/backend-sdks/node)
+
+```typescript
+await sdk.api.workspace.updateApiKeyConfig({ requireJwtToken: true, defaultDocumentAccessType: 'organizationPrivate' });
+
+await sdk.api.workspace.createAdvancedWebhookEndpoint({
+  url: 'https://example.com/webhooks/velt',
+  filterTypes: ['comment.added', 'comment.resolved'],
+});
+```
+
+### Improvements
+
+- **`getApiKeyMetadata` now targets the `apikeyconfig` endpoint**: `sdk.api.workspace.getApiKeyMetadata()` now posts to `/v2/workspace/apikeyconfig/get` instead of `/v2/workspace/apikeymetadata/get`. The method name and signature are unchanged — callers do not need to update their code; only the underlying endpoint URL changed. [Learn more →](/backend-sdks/node)
+
+</Update>
+
 <Update label="1.0.2" description="May 19, 2026">
 
 ### New Features
@@ -18,5 +149,21 @@ description: Release Notes of changes added to the Velt Node.js/TypeScript SDK (
 - **`PartialComment` round-trip helpers**: `PartialComment` gains `partialCommentFromDict` / `partialCommentToDict` helpers that pass through unknown keys, preserving forward compatibility. [Learn more →](/backend-sdks/node#partialcomment)
 
 - **`sdkVersion` on `BaseMetadata`**: `BaseMetadata` now includes an `sdkVersion` field. `baseMetadataFromDict` / `baseMetadataToDict` serializers are exposed on the public package surface. [Learn more →](/backend-sdks/node#basemetadata)
+
+</Update>
+
+<Update label="1.0.1" description="April 20, 2026">
+
+### New Features
+
+- **First public release of the Velt Node SDK**: The first public release of [`@veltdev/node`](https://www.npmjs.com/package/@veltdev/node), feature-complete with the Python SDK (`velt-py`). Ships a fully-typed TypeScript surface (with `.d.ts` definitions) and both CJS and ESM bundles so Node and TypeScript customers can integrate Velt without writing custom HTTP clients or MongoDB resolvers. Requires Node.js 18+. [Learn more →](/backend-sdks/node)
+
+- **REST API services (`sdk.api.*`)**: 17 REST API services are available: `organizations`, `folders`, `documents`, `users`, `userGroups`, `notifications`, `commentAnnotations`, `activities`, `accessControl`, `crdt`, `presence`, `livestate`, `recordings`, `rewriter`, `gdpr`, `workspace`, and `token`. Each method takes a typed request object and returns the raw Velt API response. [Learn more →](/backend-sdks/node)
+
+- **Self-hosting services (`sdk.selfHosting.*`)**: 7 self-hosting services — `comments`, `reactions`, `attachments`, `users`, `recorder`, `notifications`, and `activities` (plus `token`) — let you self-host data in your own MongoDB cluster (with optional S3 for attachment binaries) while still using Velt's collaborative frontend. Each service is loaded asynchronously on first access via `await sdk.selfHosting.getXxx()`. `mongodb` and `@aws-sdk/client-s3` are declared as optional peer dependencies and lazy-loaded. [Learn more →](/backend-sdks/node)
+
+- **Custom error classes**: The SDK ships custom error classes — `VeltSDKError` (base), `VeltDatabaseError`, `VeltValidationError`, `VeltTokenError`, and `VeltApiError` — for granular error handling. [Learn more →](/backend-sdks/node)
+
+- **Environment variable support**: The SDK reads `VELT_API_KEY`, `VELT_AUTH_TOKEN`, `VELT_WORKSPACE_ID`, and `VELT_WORKSPACE_AUTH_TOKEN` from the environment for credential configuration, plus standard AWS env vars for S3 attachment uploads. [Learn more →](/backend-sdks/node)
 
 </Update>

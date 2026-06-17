@@ -1,1 +1,113 @@
-@@FILE2@@
+---
+title: "Python SDK (velt-py) Changelog"
+description: Release notes for the velt-py Python SDK for self-hosting
+---
+
+### Libraries
+- `velt-py`
+
+<Update label="Python SDK (velt-py) v0.1.12" description="June 16, 2026">
+
+### Breaking Changes
+
+- [**Self Hosting**]: `PartialReactionAnnotation.user` renamed to `from_` (wire key `from`). The reaction author field on `PartialReactionAnnotation` is renamed from `user` to `from_` (Python attribute) and now serializes under the wire key `from` instead of `user`, matching the velt-sdk contract (`from?: PartialUser`) and the comment models (`PartialComment`, `PartialCommentAnnotation`). Code that constructs reactions with the `user=` keyword must switch to `from_=`. [Learn more →](/backend-sdks/python)
+
+```python
+# Before
+reaction = PartialReactionAnnotation(
+    annotationId='r-1', icon='+1', user=PartialUser(userId='u-1'),  # serialized as {'user': {...}}
+)
+
+# After
+reaction = PartialReactionAnnotation(
+    annotationId='r-1', icon='+1', from_=PartialUser(userId='u-1'),  # serialized as {'from': {...}}
+)
+```
+
+### Bug Fixes
+
+- [**Self Hosting**]: Legacy `user` reaction documents are read transparently. Reaction documents already stored in Mongo under the legacy `user` key are now mapped onto `from_` on read and re-serialized as `from`. `from_dict()` accepts either `from` or `user` (with `from` taking precedence when both are present), and `to_dict()` always emits `from`. Existing data round-trips onto the canonical key with no migration step. [Learn more →](/backend-sdks/python)
+
+- [**Self Hosting**]: The self-hosting package now exports all wired services. `RecorderService`, `NotificationService`, and `ActivityService` are now importable from the `velt_py.services.self_hosting` package and listed in its `__all__`. All seven resolver services (`BaseService`, `CommentService`, `ReactionService`, `AttachmentService`, `RecorderService`, `NotificationService`, `ActivityService`, `UserService`) are now reachable from the package. [Learn more →](/backend-sdks/python)
+
+</Update>
+
+<Update label="Python SDK (velt-py) v0.1.11" description="June 16, 2026">
+
+### New Features
+
+- [**Agents Service**]: New `sdk.api.agents` service (`/v2/agents/*`) for managing AI agents, agent versions, executions, prompt tooling, and agent groups. 23 methods, including `createAgent`, `getAgent`, `updateAgent`, `updateAgentVersion`, `runAgentExecution`, `getAgentExecution`, `listAgentExecutions`, `countAgentExecutions`, `enhancePrompt`, and full agent-group management. Request models live in `velt_py.models.agents`. [Learn more →](/backend-sdks/python)
+
+- [**Memory Service**]: New `sdk.api.memory` service (`/v2/memory/*`) for semantic search, judgments, knowledge ingestion, reviewer profiles/patterns/stats, and alerts. 25 methods, including `search`, `ask`, `queryJudgments`, `ingestKnowledge`, `getUploadUrl`, `getIngestStatus`, `searchKnowledge`, `listKnowledgeSources`, and `deleteKnowledge`. Request models live in `velt_py.models.memory`. [Learn more →](/backend-sdks/python)
+
+- [**Workflow Service**]: New `sdk.api.workflow` service (`/v2/workflow/*`) for the Approval Engine / workflow orchestration: definitions, executions, lifecycle events, and step resolution. 14 methods, including `createDefinition`, `getDefinition`, `listDefinitions`, `dispatchExecution`, `getExecution`, `listExecutions`, `recordReviewerDecision`, and `resolveStep`. Request models live in `velt_py.models.workflow`. [Learn more →](/backend-sdks/python)
+
+- [**User Invitations & Counts**]: The `users` service gains invitation management plus count and document-user queries: `getUsersCount`, `getDocUsers`, `addUserInvite`, `respondToInvite`, `getInvitedUsers`, `getUserInvitations`, and `getInvitedPendingUsersCount`. `getUsers` also gains two optional filters — `includeInvolvedDocuments` and `searchKey` (free-text search). [Learn more →](/backend-sdks/python)
+
+- [**Document & CRDT Additions**]: `sdk.api.documents` gains `getDocumentsCount` (optionally scoped to a folder) and `sdk.api.crdt` gains `deleteCrdtData` (omit `editorIds` to delete all editors for the document). [Learn more →](/backend-sdks/python)
+
+- [**Workspace Configuration Endpoints**]: The `workspace` service gains 19 new methods covering domain requests, API key configuration/copy, notification/permission-provider/activity configs, and advanced (Svix) webhook endpoint management. [Learn more →](/backend-sdks/python)
+
+- [**Field Allowlist (`filter_unknown_fields`)**]: The add/update methods on `sdk.api.commentAnnotations`, `sdk.api.activities`, and `sdk.api.notifications` accept an optional `filter_unknown_fields` keyword (default `False`). When set to `True`, the SDK filters the request's entity collections to only the fields the Velt API accepts before sending, silently dropping any unknown/custom top-level keys. The filter is top-level only (open-typed fields such as `context`, `metadata`, `entityData`, and user objects pass through whole) and fail-open (a write is never blocked). Backed by the new `velt_py.models.field_allowlists` module. [Learn more →](/backend-sdks/python)
+
+```python
+result = sdk.api.activities.addActivities(
+    AddActivitiesRequest(
+        organizationId='org-123',
+        documentId='doc-456',
+        activities=[{
+            'featureType': 'comment',
+            'actionType': 'comment.add',
+            'actionUser': {'userId': 'user-1'},
+            'internalTrackingId': 'abc-123',   # custom key -> dropped
+        }],
+    ),
+    filter_unknown_fields=True,
+)
+```
+
+### Bug Fixes
+
+- [**REST API Backend**]: `getApiKeyMetadata` now targets the canonical endpoint. `sdk.api.workspace.getApiKeyMetadata` was repointed from `/v2/workspace/apikeymetadata/get` to the canonical `/v2/workspace/apikeyconfig/get` endpoint (the old path remains a legacy alias on the backend). No call-site change is required — the method signature is unchanged; only the underlying URL was corrected. [Learn more →](/backend-sdks/python)
+
+</Update>
+
+<Update label="Python SDK (velt-py) v0.1.10" description="May 19, 2026">
+
+### New Features
+
+- [**Self Hosting**]: `PartialCommentAnnotation` now exposes `from` (comment author), `assignedTo`, `targetTextRange`, and `resolvedByUserId` as first-class typed fields. These four keys previously fell through silently via `extra_fields`. [Learn more →](/backend-sdks/python)
+
+- [**Self Hosting**]: New `PartialTargetTextRange` dataclass (exported from `velt_py.models`) represents the selected text snippet a comment annotation is anchored to. [Learn more →](/backend-sdks/python)
+
+### Improvements
+
+- [**Self Hosting**]: `BaseMetadata` now models `sdkVersion` and `documentMetadata`, which were previously dropped silently; self-hosted Mongo writes now preserve both fields.
+
+- [**Self Hosting**]: Introduced an `UNSET` sentinel on `resolvedByUserId` to distinguish "field absent from payload" (no Mongo write) from "explicit null" (the frontend's unresolve action — writes null to Mongo).
+
+### Bug Fixes
+
+None.
+
+</Update>
+
+<Update label="Python SDK (velt-py) v0.1.9" description="April 20, 2026">
+
+### New Features
+
+- [**REST API Backend**]: The `sdk.api.*` namespace is now available, introducing a REST API backend for the Python SDK with feature parity with the Velt Node SDK. [Learn more →](/backend-sdks/python)
+
+- [**REST API Services**]: 17 services are included: `organizations`, `folders`, `documents`, `users`, `userGroups`, `notifications`, `commentAnnotations`, `activities`, `accessControl`, `crdt`, `presence`, `livestate`, `recordings`, `rewriter`, `gdpr`, `workspace`, and `token`.
+
+- [**Typed Request Dataclasses**]: Every `sdk.api.*` method accepts a typed `@dataclass` request object (e.g., `AddOrganizationsRequest`) and returns the raw Velt API response without local reshaping or validation.
+
+- [**camelCase Method Names**]: All `sdk.api.*` method names are camelCase and match the JavaScript/Node SDK one-to-one.
+
+- [**Custom Error Classes**]: Three new error classes are available: `VeltValidationError`, `VeltTokenError`, and `VeltApiError`, all extending the base `VeltSDKError`.
+
+- [**Environment Variable Support**]: The SDK reads `VELT_API_KEY`, `VELT_AUTH_TOKEN`, `VELT_WORKSPACE_ID`, and `VELT_WORKSPACE_AUTH_TOKEN` from the environment for credential configuration.
+
+- [**PyPI Distribution**]: The package is published to PyPI as `velt-py`. Requires Python 3.8+; the `requests` library is installed automatically as a dependency.
+
+</Update>

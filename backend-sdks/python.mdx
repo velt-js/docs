@@ -18,7 +18,7 @@ The [Velt Python SDK](https://pypi.org/project/velt-py) exposes two independent 
 2. Pass the raw request object directly to SDK methods
 3. Return the resulting response object straight to the client
 
-**REST API backend** (`sdk.api.*`) — new in v0.1.9 — provides feature parity with the Velt Node SDK. 20 services, typed `@dataclass` request objects, and raw Velt API responses. No database or AWS configuration needed.
+**REST API backend** (`sdk.api.*`) provides parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2). 20 services, typed `@dataclass` request objects, and raw Velt API responses. No database or AWS configuration needed.
 
 ## Installation
 
@@ -37,7 +37,10 @@ pip install velt-py
 
 ### Initialize the SDK
 
-**Self-hosting initialization** (MongoDB + optional AWS):
+<Tabs>
+<Tab title="Self-hosting">
+
+Self-hosting initialization (MongoDB + optional AWS):
 
 ```python
 from velt_py import VeltSDK
@@ -77,7 +80,10 @@ config = {
 sdk = VeltSDK.initialize(config)
 ```
 
-**REST API-only initialization** (no database needed — new in v0.1.9):
+</Tab>
+<Tab title="REST API">
+
+REST API-only initialization (no database needed):
 
 ```python
 from velt_py import VeltSDK
@@ -95,6 +101,9 @@ result = sdk.api.organizations.getOrganizations(...)
 ```
 
 The `database` section is optional when using only `sdk.api.*`. Set `VELT_API_KEY` and `VELT_AUTH_TOKEN` environment variables as an alternative to passing credentials in the config dict.
+
+</Tab>
+</Tabs>
 
 ## Configuration
 
@@ -771,9 +780,9 @@ async def get_comments(request: Request):
 
 ## REST API Backend
 
-Added in **v0.1.9**. The `sdk.api.*` namespace provides feature parity with the Velt Node SDK for REST. 20 services are available, each accepting typed `@dataclass` request objects and returning the raw Velt API response without local reshaping.
+The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 20 services. Each method takes a typed `@dataclass` request object and returns the raw Velt API response.
 
-No database or AWS configuration is required — only `apiKey` and `authToken`.
+You only need `apiKey` and `authToken` — no database or AWS config.
 
 ```python
 from velt_py import VeltSDK
@@ -789,30 +798,6 @@ sdk = VeltSDK.initialize({
 ```
 
 Every method returns a dict with either a `result` key (success) or an `error` key (failure). See [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse).
-
-### Filtering unknown fields
-
-The add/update methods of `sdk.api.commentAnnotations`, `sdk.api.activities`, and `sdk.api.notifications` accept an optional `filter_unknown_fields: bool = False` keyword. It is opt-in and backed by the `velt_py.models.field_allowlists` module.
-
-- **Default off**: omitted or `False` → payloads are sent exactly as before.
-- **When `True`**: request entity collections are filtered to only the fields the Velt API accepts, dropping unknown/custom top-level keys before the request is sent.
-- **Top-level only**: open-typed fields (`context`, `metadata`, `entityData`, user objects) pass through whole; their nested contents are never filtered.
-- **Fail-open**: if filtering errors, the original unfiltered payload is sent — a write is never blocked.
-
-Affected methods: `addCommentAnnotations(request, filter_unknown_fields=False)`, `updateCommentAnnotations(...)`, `addComments(...)`, `updateComments(...)`, `addActivities(...)`, `updateActivities(...)`, and `updateNotifications(...)`.
-
-`addNotifications` is **not** affected — its top-level fields are already fixed, so only `updateNotifications` participates. On `updateNotifications`, `isRead` / `isArchived` are not accepted by `/v2/notifications/update` (the backend strips them anyway), so with the flag on they are dropped client-side.
-
-```python
-result = sdk.api.activities.addActivities(
-    AddActivitiesRequest(
-        organizationId='org-123', documentId='doc-456',
-        activities=[{'featureType': 'comment', 'actionType': 'comment.add', 'actionUser': {'userId': 'user-1'}, 'internalTrackingId': 'abc-123'}]
-    ),
-    filter_unknown_fields=True,
-)
-# The 'internalTrackingId' key is removed before the request is sent.
-```
 
 ### Organizations
 
@@ -1878,6 +1863,10 @@ result = sdk.api.userGroups.deleteUsersFromGroup(
 
 ### Notifications
 
+<Note>
+**Filtering unknown fields**: `updateNotifications` accepts an optional `filter_unknown_fields: bool = False` keyword (backed by `velt_py.models.field_allowlists`). When `True`, unknown/custom top-level keys are dropped before the request is sent, while open-typed fields (`context`, `metadata`, `entityData`, user objects) pass through whole. Filtering is fail-open: if it errors, the original payload is sent, so a write is never blocked. `addNotifications` is not affected — its top-level fields are already fixed. On `updateNotifications`, `isRead` / `isArchived` are not accepted by `/v2/notifications/update` (the backend strips them anyway), so with the flag on they are dropped client-side.
+</Note>
+
 #### `addNotifications`
 
 - Sends a notification to one or more users on a document.
@@ -1970,7 +1959,7 @@ result = sdk.api.notifications.getNotifications(
 - Updates fields on existing notifications (e.g., mark as read).
 - Params: [UpdateNotificationsRequest](/api-reference/sdk/models/data-models#updatenotificationsrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
-- Accepts the optional `filter_unknown_fields=True` keyword — see [Filtering unknown fields](#filtering-unknown-fields).
+- Accepts the optional `filter_unknown_fields=True` keyword (see the note above).
 
 ```python
 from velt_py.models.notification_api import UpdateNotificationsRequest
@@ -2112,12 +2101,16 @@ result = sdk.api.notifications.setNotificationConfig(
 
 ### Comment Annotations
 
+<Note>
+**Filtering unknown fields**: The add/update methods below accept an optional `filter_unknown_fields: bool = False` keyword (backed by `velt_py.models.field_allowlists`). When `True`, request entity collections are filtered to only the fields the Velt API accepts, dropping unknown/custom top-level keys before the request is sent. Open-typed fields (`context`, `metadata`, `entityData`, user objects) pass through whole — their nested contents are never filtered. Filtering is fail-open: if it errors, the original payload is sent, so a write is never blocked.
+</Note>
+
 #### `addCommentAnnotations`
 
 - Creates one or more comment annotations on a document.
 - Params: [AddCommentAnnotationsRequest](/api-reference/sdk/models/data-models#addcommentannotationsrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
-- Accepts the optional `filter_unknown_fields=True` keyword — see [Filtering unknown fields](#filtering-unknown-fields).
+- Accepts the optional `filter_unknown_fields=True` keyword (see the note above).
 
 ```python
 from velt_py.models.comment_annotation_api import AddCommentAnnotationsRequest
@@ -2253,7 +2246,7 @@ result = sdk.api.commentAnnotations.getCommentAnnotationsCount(
 - Updates annotation fields (e.g., change status).
 - Params: [UpdateCommentAnnotationsRequest](/api-reference/sdk/models/data-models#updatecommentannotationsrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
-- Accepts the optional `filter_unknown_fields=True` keyword — see [Filtering unknown fields](#filtering-unknown-fields).
+- Accepts the optional `filter_unknown_fields=True` keyword (see the note above).
 
 ```python
 from velt_py.models.comment_annotation_api import UpdateCommentAnnotationsRequest
@@ -2332,7 +2325,7 @@ result = sdk.api.commentAnnotations.deleteCommentAnnotations(
 - Adds reply comments to an existing annotation.
 - Params: [AddCommentsRequest](/api-reference/sdk/models/data-models#addcommentsrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
-- Accepts the optional `filter_unknown_fields=True` keyword — see [Filtering unknown fields](#filtering-unknown-fields).
+- Accepts the optional `filter_unknown_fields=True` keyword (see the note above).
 
 ```python
 from velt_py.models.comment_annotation_api import AddCommentsRequest
@@ -2409,7 +2402,7 @@ result = sdk.api.commentAnnotations.getComments(
 - Updates fields on individual comments inside an annotation.
 - Params: [UpdateCommentsRequest](/api-reference/sdk/models/data-models#updatecommentsrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
-- Accepts the optional `filter_unknown_fields=True` keyword — see [Filtering unknown fields](#filtering-unknown-fields).
+- Accepts the optional `filter_unknown_fields=True` keyword (see the note above).
 
 ```python
 from velt_py.models.comment_annotation_api import UpdateCommentsRequest
@@ -2487,12 +2480,27 @@ result = sdk.api.commentAnnotations.deleteComments(
 
 ### Activities
 
+<Note>
+**Filtering unknown fields**: The add/update methods below accept an optional `filter_unknown_fields: bool = False` keyword (backed by `velt_py.models.field_allowlists`). When `True`, request entity collections are filtered to only the fields the Velt API accepts, dropping unknown/custom top-level keys before the request is sent. Open-typed fields (`context`, `metadata`, `entityData`, user objects) pass through whole — their nested contents are never filtered. Filtering is fail-open: if it errors, the original payload is sent, so a write is never blocked.
+</Note>
+
+```python
+result = sdk.api.activities.addActivities(
+    AddActivitiesRequest(
+        organizationId='org-123', documentId='doc-456',
+        activities=[{'featureType': 'comment', 'actionType': 'comment.add', 'actionUser': {'userId': 'user-1'}, 'internalTrackingId': 'abc-123'}]
+    ),
+    filter_unknown_fields=True,
+)
+# The 'internalTrackingId' key is removed before the request is sent.
+```
+
 #### `addActivities`
 
 - Logs one or more activity events.
 - Params: [AddActivitiesRequest](/api-reference/sdk/models/data-models#addactivitiesrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
-- Accepts the optional `filter_unknown_fields=True` keyword — see [Filtering unknown fields](#filtering-unknown-fields).
+- Accepts the optional `filter_unknown_fields=True` keyword (see the note above).
 
 ```python
 from velt_py.models.activity_api import AddActivitiesRequest
@@ -2576,7 +2584,7 @@ result = sdk.api.activities.getActivities(
 - Updates fields on existing activities.
 - Params: [UpdateActivitiesRequest](/api-reference/sdk/models/data-models#updateactivitiesrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
-- Accepts the optional `filter_unknown_fields=True` keyword — see [Filtering unknown fields](#filtering-unknown-fields).
+- Accepts the optional `filter_unknown_fields=True` keyword (see the note above).
 
 ```python
 from velt_py.models.activity_api import UpdateActivitiesRequest

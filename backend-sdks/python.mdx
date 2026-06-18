@@ -232,6 +232,21 @@ sdk = VeltSDK.initialize(config)
 
 The SDK provides methods that accept the raw request from the frontend and return the properly formatted response.
 
+All self-hosting service classes — the `BaseService` base class plus seven resolver services — are importable from `velt_py.services.self_hosting`. As of **v0.1.12**, `RecorderService`, `NotificationService`, and `ActivityService` are also exported — previously they were wired into `SelfHostingBackend` but missing from the package's `__all__`.
+
+```python
+from velt_py.services.self_hosting import (
+    BaseService,
+    CommentService,
+    ReactionService,
+    AttachmentService,
+    RecorderService,      # newly exported in v0.1.12
+    NotificationService,  # newly exported in v0.1.12
+    ActivityService,      # newly exported in v0.1.12
+    UserService,
+)
+```
+
 ### Comments
 
 #### `getComments`
@@ -4942,6 +4957,42 @@ class PartialCommentAnnotation:
 - `targetTextRange` — Typed `PartialTargetTextRange` for the selected text snippet a comment is anchored to.
 - `resolvedByUserId` — See [UNSET sentinel](#unset-sentinel) for the difference between absent (`UNSET`) and explicit `None`.
 - `extra_fields` — Retained as a catch-all because the frontend contract includes `[key: string]: any` for customer-configured `fieldsToRemove` and `additionalFields`.
+
+### `PartialReactionAnnotation`
+
+Represents a partial update payload for a reaction annotation. Starting in **v0.1.12**, the reaction-author field is `from_` (wire key `from`), replacing the former `user` field — aligning with the velt-sdk contract and `PartialCommentAnnotation`.
+
+```python
+from velt_py.models.reaction import PartialReactionAnnotation
+from velt_py.models.user import PartialUser
+
+@dataclass
+class PartialReactionAnnotation:
+    annotationId: str
+    metadata: Optional[BaseMetadata] = None
+    icon: Optional[str] = None
+    from_: Optional[PartialUser] = None             # 'from' on the wire; from_ avoids the Python keyword. Replaces the former 'user' field.
+    extra_fields: Optional[Dict[str, Any]] = None   # Catch-all for customer-configured custom keys.
+```
+
+**Field notes**
+
+- `from_` — Python alias for the JSON key `from` (reserved keyword); serialized as `from`. Replaces the former `user` field (renamed in v0.1.12 to match the velt-sdk contract and the comment models). Constructing with `user=` no longer works — use `from_=`.
+- Backward-compatible reads: `from_dict()` accepts either the canonical `from` key or the legacy `user` key (`from` wins when both are present) and populates `from_`. `to_dict()` always emits `from`. No data migration is required for reaction documents already stored under `user`.
+
+```python
+# Legacy document stored under the old `user` key still resolves:
+ann = PartialReactionAnnotation.from_dict({'annotationId': 'r-1', 'icon': '+1', 'user': {'userId': 'u-legacy'}})
+ann.from_.userId         # 'u-legacy'
+ann.to_dict()['from']    # {'userId': 'u-legacy'}  (re-serialized as `from`)
+```
+
+```python
+# Before (v0.1.11 and earlier):
+PartialReactionAnnotation(annotationId='r-1', icon='+1', user=PartialUser(userId='u-1'))    # -> {'user': {...}}
+# After (v0.1.12):
+PartialReactionAnnotation(annotationId='r-1', icon='+1', from_=PartialUser(userId='u-1'))   # -> {'from': {...}}
+```
 
 ### `PartialTargetTextRange`
 

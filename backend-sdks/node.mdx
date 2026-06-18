@@ -626,6 +626,104 @@ The `sdk.api.*` namespace provides 20 services covering all Velt REST API operat
 
 Every `sdk.api.*` method requires an `organizationId` in its request payload. Velt enforces data isolation per-organization server-side.
 
+### Field Allowlist
+
+Added in **v1.0.4**. The REST add/update methods on `activities`, `commentAnnotations`, and `notifications` accept an optional second argument, `FieldFilterOptions`. When `{ filterUnknownFields: true }` is passed, the SDK narrows the request to exactly the fields the corresponding Velt backend endpoint accepts, silently dropping unknown keys at each described level before sending.
+
+- Opt-in and off by default — omitting `options` (or passing `filterUnknownFields: false`) sends the request unchanged, exactly as before.
+- Fail-open — if filtering hits any unexpected error, the original request is sent unchanged, so a filter bug can never block a write.
+- Top-level / fail-closed within a level — only listed keys survive at each described level, but nested open-typed objects (e.g. `actionUser`, `context`, `metadata`) pass through whole rather than being recursively narrowed.
+- Allowlists are transcribed by hand from the Velt backend Zod schemas (lock-step with the velt-py SDK's self-hosting field allowlist).
+
+```ts
+interface FieldFilterOptions {
+  /** When true, narrow the request to only the fields the Velt backend endpoint
+   *  accepts, silently dropping unknown keys. Fail-open. Defaults to false. */
+  filterUnknownFields?: boolean;
+}
+```
+
+The 8 methods that accept it:
+
+```ts
+// Activities
+sdk.api.activities.addActivities(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
+sdk.api.activities.updateActivities(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
+// Comment annotations + comments
+sdk.api.commentAnnotations.addCommentAnnotations(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
+sdk.api.commentAnnotations.updateCommentAnnotations(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
+sdk.api.commentAnnotations.addComments(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
+sdk.api.commentAnnotations.updateComments(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
+// Notifications
+sdk.api.notifications.addNotifications(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
+sdk.api.notifications.updateNotifications(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
+```
+
+**Example**
+
+```ts
+// Extra fields (internalId) are dropped before the request is sent.
+await sdk.api.commentAnnotations.addCommentAnnotations(
+  {
+    organizationId: 'org-123',
+    documentId: 'doc-1',
+    commentAnnotations: [
+      {
+        location: { id: 'section-1' },
+        commentData: [{ commentText: 'Review this', from: { userId: 'user-1' } }],
+        internalId: 'app-specific-field', // dropped when filtering is enabled
+      },
+    ],
+  },
+  { filterUnknownFields: true },
+);
+```
+
+#### Exported filter utilities
+
+The field-allowlist module is exported from `@veltdev/node` so advanced callers can reuse the same logic.
+
+```ts
+// Functions
+pickKnownFields<T extends object>(data: T, keys: readonly string[]): Partial<T>;
+filterRequest<T extends object>(request: T, spec: FilterSpec): T;
+
+// Types
+interface FilterSpec {
+  keys: readonly string[];              // allowed top-level keys at this level (everything else dropped)
+  arrays?: Record<string, FilterSpec>;  // known array-of-object fields, filtered per item
+  objects?: Record<string, FilterSpec>; // known single-object fields, filtered recursively
+}
+```
+
+- `pickKnownFields(data, keys)` — keeps only own-enumerable keys present in `keys`; values kept by reference (no recursion); non-object/array/null inputs returned unchanged.
+- `filterRequest(request, spec)` — applies a `FilterSpec` recursively; never mutates input; fail-open (returns the original request on any error).
+- Eight per-method specs are exported: `ADD_ACTIVITIES_SPEC`, `UPDATE_ACTIVITIES_SPEC`, `ADD_COMMENT_ANNOTATIONS_SPEC`, `UPDATE_COMMENT_ANNOTATIONS_SPEC`, `ADD_COMMENTS_SPEC`, `UPDATE_COMMENTS_SPEC`, `ADD_NOTIFICATIONS_SPEC`, `UPDATE_NOTIFICATIONS_SPEC`.
+
+#### Allowlisted fields per endpoint
+
+When `filterUnknownFields: true`, only these keys survive (unknown keys dropped):
+
+| Spec (endpoint) | Top-level keys | Nested item filtering |
+|---|---|---|
+| `ADD_ACTIVITIES_SPEC` (`/v2/activities/add`) | `organizationId`, `documentId`, `activities` | `activities[]`: `id`, `featureType`, `actionType`, `actionUser`, `targetEntityId`, `isActivityResolverUsed`, `targetSubEntityId`, `changes`, `entityData`, `entityTargetData`, `displayMessageTemplate`, `displayMessageTemplateData`, `actionIcon` |
+| `UPDATE_ACTIVITIES_SPEC` (`/v2/activities/update`) | `organizationId`, `activities` | `activities[]`: `id`, `changes`, `entityData`, `entityTargetData`, `displayMessageTemplate`, `displayMessageTemplateData`, `actionIcon` |
+| `ADD_COMMENT_ANNOTATIONS_SPEC` (`/v2/commentannotations/add`) | `organizationId`, `documentId`, `commentAnnotations`, `verifyUserPermissions`, `createDocument`, `createOrganization` | `commentAnnotations[]`: `location`, `annotationId`, `targetElement`, `commentData`, `comments`, `status`, `commentType`, `type`, `assignedTo`, `priority`, `context`, `visibility`, `lastUpdated`, `createdAt`, `pageInfo`, `isPageAnnotation`, `positionX`, `positionY`, `screenWidth`, `screenHeight`, `screenScrollHeight`, `screenScrollTop` — its `comments[]`/`commentData[]` use the annotation comment-data set (below) |
+| `UPDATE_COMMENT_ANNOTATIONS_SPEC` (`/v2/commentannotations/update`) | `organizationId`, `documentId`, `annotationIds`, `locationIds`, `userIds`, `updateUsers`, `updatedData` | `updatedData`: `location`, `targetElement`, `from`, `status`, `assignedTo`, `priority`, `context`, `visibility`, `createdAt`, `lastUpdated` |
+| `ADD_COMMENTS_SPEC` (`/v2/commentannotations/comments/add`) | `organizationId`, `documentId`, `annotationId`, `commentData`, `comments`, `verifyUserPermissions`, `createDocument`, `createOrganization` | `commentData[]`/`comments[]`: comment-data set (below) |
+| `UPDATE_COMMENTS_SPEC` (`/v2/commentannotations/comments/update`) | `organizationId`, `documentId`, `annotationId`, `commentIds`, `userIds`, `updatedData` | `updatedData`: `commentText`, `commentHtml`, `from`, `createdAt`, `taggedUserContacts`, `isCommentResolverUsed`, `isCommentTextAvailable`, `lastUpdated`, `context`, `attachments` |
+| `ADD_NOTIFICATIONS_SPEC` (`/v2/notifications/add`) | `organizationId`, `documentId`, `notificationId`, `actionUser`, `isNotificationResolverUsed`, `displayHeadlineMessageTemplate`, `displayHeadlineMessageTemplateData`, `displayBodyMessage`, `displayBodyMessageTemplate`, `displayBodyMessageTemplateData`, `notifyUsers`, `notificationSourceData`, `location`, `metadata`, `notifyAll`, `createDocument`, `createOrganization`, `verifyUserPermissions`, `context`, `isCrossOrganizationEnabled` | the notification is the request itself — nested open-typed dicts pass through whole |
+| `UPDATE_NOTIFICATIONS_SPEC` (`/v2/notifications/update`) | `organizationId`, `documentId`, `locationId`, `userId`, `verifyUserPermissions`, `notifications` | `notifications[]`: `id`, `actionUser`, `displayHeadlineMessageTemplate`, `displayHeadlineMessageTemplateData`, `displayBodyMessage`, `displayBodyMessageTemplate`, `displayBodyMessageTemplateData`, `notifyUsers`, `notificationSourceData`, `location`, `metadata`, `context`, `readByUserIds`, `persistReadForUsers` |
+
+The comment-annotation specs above reference two comment-data key sets:
+
+- Annotation-level `commentData`/`comments` (`ANNOTATION_COMMENT_DATA_KEYS`): `commentText`, `commentHtml`, `commentId`, `from`, `lastUpdated`, `createdAt`, `taggedUserContacts`, `isCommentResolverUsed`, `isCommentTextAvailable`, `triggerNotification`, `triggerActivities`, `agent` — carries the trigger flags but not `context`/`attachments`.
+- Comments-endpoint `commentData`/`comments` (`COMMENT_DATA_KEYS`): `commentText`, `commentHtml`, `commentId`, `from`, `lastUpdated`, `createdAt`, `taggedUserContacts`, `isCommentResolverUsed`, `isCommentTextAvailable`, `context`, `attachments`, `agent` — carries `context`/`attachments` but not the trigger flags.
+
+<Note>
+  `UPDATE_NOTIFICATIONS_SPEC` intentionally excludes `isRead`/`isArchived` — they are absent from the backend `UpdateNotificationsSchemaV2` and unsupported by `/v2/notifications/update`, so they are dropped when filtering is on.
+</Note>
+
 ### Organizations
 
 **Namespace:** `sdk.api.organizations`
@@ -1384,6 +1482,7 @@ await sdk.api.userGroups.deleteUsersFromGroup({
 - Adds one or more notifications targeted to specific users.
 - Params: [AddNotificationsRequest](/api-reference/sdk/models/data-models#addnotificationsrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
 
 ```ts
 await sdk.api.notifications.addNotifications({
@@ -1446,6 +1545,7 @@ await sdk.api.notifications.getNotifications({
 - Updates existing notifications (e.g., mark as read).
 - Params: [UpdateNotificationsRequest](/api-reference/sdk/models/data-models#updatenotificationsrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
 
 ```ts
 await sdk.api.notifications.updateNotifications({
@@ -1540,6 +1640,7 @@ await sdk.api.notifications.setNotificationConfig({
 - Creates comment annotations on a document.
 - Params: [AddCommentAnnotationsRequest](/api-reference/sdk/models/data-models#addcommentannotationsrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
 
 ```ts
 await sdk.api.commentAnnotations.addCommentAnnotations({
@@ -1637,6 +1738,7 @@ await sdk.api.commentAnnotations.getCommentAnnotationsCount({
 - Updates fields on existing annotations (e.g., resolve them).
 - Params: [UpdateCommentAnnotationsRequest](/api-reference/sdk/models/data-models#updatecommentannotationsrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
 
 ```ts
 await sdk.api.commentAnnotations.updateCommentAnnotations({
@@ -1678,6 +1780,7 @@ await sdk.api.commentAnnotations.deleteCommentAnnotations({
 - Adds comments to an existing annotation.
 - Params: [AddCommentsRequest](/api-reference/sdk/models/data-models#addcommentsrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
 
 ```ts
 await sdk.api.commentAnnotations.addComments({
@@ -1739,6 +1842,7 @@ await sdk.api.commentAnnotations.getComments({
 - Updates comments within a specific annotation.
 - Params: [UpdateCommentsRequest](/api-reference/sdk/models/data-models#updatecommentsrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
 
 ```ts
 await sdk.api.commentAnnotations.updateComments({
@@ -1786,6 +1890,7 @@ await sdk.api.commentAnnotations.deleteComments({
 - Logs activity events.
 - Params: [AddActivitiesRequest](/api-reference/sdk/models/data-models#addactivitiesrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
 
 ```ts
 await sdk.api.activities.addActivities({
@@ -1851,6 +1956,7 @@ await sdk.api.activities.getActivities({
 - Updates existing activity events.
 - Params: [UpdateActivitiesRequest](/api-reference/sdk/models/data-models#updateactivitiesrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
 
 ```ts
 await sdk.api.activities.updateActivities({

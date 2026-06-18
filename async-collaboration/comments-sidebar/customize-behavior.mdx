@@ -1379,3 +1379,222 @@ The V2 sidebar uses a single `FilterDropdown` that replaces the V1 per-category 
 For the full [`VeltCommentsSidebarV2Props`](/api-reference/sdk/models/data-models#veltcommentssidebarv2props) type reference, see the data models page.
 
 For wireframe customization, see [Comment Sidebar V2 Structure](/ui-customization/features/async/comments/comment-sidebar-structure-v2).
+
+## Filter, Sort & Quick System
+
+The V2 sidebar exposes its filter, sort, group, and search behavior declaratively through inputs on `VeltCommentsSidebar`. Filters and sorts are described as data; the sidebar renders the matching surfaces and applies the selections client-side via [`applyCommentSidebarClientFilters()`](/api-reference/sdk/api/api-methods#applycommentsidebarclientfilters).
+
+### Filter surfaces
+
+There are three filter surfaces, each driven by its own input:
+
+- **`filters`** — the Main Filter bottom-sheet/menu surface. Pass an array of [`FilterField`](/api-reference/sdk/models/data-models#filterfield) to define its sections. When passed an object instead of `FilterField[]`, it is treated as active selections and routes to the V1 [`setCommentSidebarFilters()`](/api-reference/sdk/api/api-methods#setcommentsidebarfilters) path.
+- **`mini-filters`** — a single header funnel dropdown.
+- **`minimal-filters`** — multiple header dropdowns. When present, these replace the single funnel dropdown. This is the surface that supersedes the removed minimal-actions dropdown.
+
+### Root inputs
+
+| Input | HTML Attribute | Type | Description |
+|-------|----------------|------|-------------|
+| filterOperator | filter-operator | `'and' \| 'or'` | How active filter sections combine |
+| filterPanelLayout | filter-panel-layout | `'bottomSheet' \| 'menu'` | Layout of the Main Filter surface |
+| filterOptionLayout | filter-option-layout | `'dropdown' \| 'checkbox'` | How options render within a section |
+| filterCount | filter-count | boolean | Show per-option facet counts (default `true`) |
+| sortBy | sort-by | `SortBy` | Default sort field (sets the default, not a UI dropdown) |
+| sortOrder | sort-order | `SortOrder` | Default sort direction (`'asc' \| 'desc'`) |
+| sortData | sort-data | string | Custom-field sort path |
+| defaultMinimalFilter | default-minimal-filter | `'all' \| 'read' \| 'unread' \| 'resolved' \| 'open' \| 'assignedToMe' \| 'reset'` | Default minimal filter preset |
+| groupConfig | group-config | `{ enable?, name?, groupBy? }` | Grouping config; grouping defaults to by-location |
+| searchPlaceholder | search-placeholder | string | Placeholder for the header search box |
+| sidebarButtonCountType | sidebar-button-count-type | `'default' \| 'filter'` | What the sidebar trigger count reflects |
+
+`sort-by` / `sort-order` / `sort-data` set the DEFAULT sort; they do not render a sort dropdown. To render a sort dropdown, use a filter-dropdown of `type` `sort` (below).
+
+### Filter-dropdown `type` scoping
+
+A header filter-dropdown's `type` scopes which content it renders:
+
+| `type` | Renders |
+|--------|---------|
+| `filter` | Category checkbox sections built from `fields` |
+| `sort` | Single-select sort options |
+| `quick` | Quick presets and path predicates |
+| `actions` | Combined sort group + quick group separated by a divider — the replacement for the removed minimal-actions dropdown |
+| unset | Default presets plus any configured sections |
+
+In predicates, `value` is a literal (for example a userId `"1.1"`) — there is no `@me` token. Paths auto-flatten nested arrays (for example `comments.taggedUserContacts.contact.userId`).
+
+Each header dropdown is rendered by the filter-dropdown primitive ([`VeltCommentSidebarV2FilterDropdown`](/ui-customization/features/async/comments/comment-sidebar/comment-sidebar-v2-primitives#veltcommentsidebarv2filterdropdown) / `velt-comment-sidebar-filter-dropdown-v2`), which accepts `type`, `fields`, `field`, `label`, `sorts`, `actions`, and `show-category-filters` inputs. Supply them declaratively through `minimal-filters`, or set them directly on the primitive (or its `-wireframe` override) as markup — see the markup example below.
+
+### Examples
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { VeltCommentsSidebarV2 } from '@veltdev/react';
+
+export default function Sidebar() {
+  // Main Filter surface (FilterField[]): built-in fields by id, custom fields via valuePath
+  const filters = [
+    { field: 'status' },
+    { field: 'assigned' },
+    { field: 'authorName', label: 'Written By', valuePath: 'from.name' },
+  ];
+
+  // Object-form filters => active selections (routes to V1 setCommentSidebarFilters)
+  const activeSelections = { status: ['open'] };
+
+  // Single header funnel dropdown (FilterField[], one section per field)
+  const miniFilters = [{ field: 'status' }, { field: 'priority' }, { field: 'involved' }];
+
+  // Multiple header dropdowns (replaces the single funnel)
+  const minimalFilters = [
+    // Sort dropdown: built-in presets + a custom-path sort
+    { type: 'sort', sorts: ['date', 'unread', { label: 'Newest', path: 'comments.createdAt', order: 'desc' }] },
+    // Quick predicate (value is a literal userId, no @me token)
+    { type: 'quick', actions: [{ label: 'Written By Me', path: 'from.userId', value: '1.1' }] },
+    // Combined sort + quick groups with a divider
+    { type: 'actions' },
+  ];
+
+  return (
+    <VeltCommentsSidebarV2
+      filters={filters}
+      miniFilters={miniFilters}
+      minimalFilters={minimalFilters}
+      filterOperator="and"
+      sortBy="comments.createdAt"
+      sortOrder="desc"
+      groupConfig={{ enable: true, groupBy: 'location' }}
+      searchPlaceholder="Search comments"
+      fullScreen={true}
+      onFullscreenClick={(e) => console.log('fullscreen', e)}
+    />
+  );
+}
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comments-sidebar-v2
+  filter-operator="and"
+  sort-by="comments.createdAt"
+  sort-order="desc"
+  search-placeholder="Search comments"
+  full-screen="true">
+</velt-comments-sidebar-v2>
+
+<script>
+  const sidebar = document.querySelector('velt-comments-sidebar-v2');
+
+  // Main Filter surface (FilterField[]): built-in fields by id, custom fields via valuePath
+  sidebar.filters = [
+    { field: 'status' },
+    { field: 'assigned' },
+    { field: 'authorName', label: 'Written By', valuePath: 'from.name' },
+  ];
+
+  // Object-form filters => active selections (routes to V1 setCommentSidebarFilters)
+  // sidebar.filters = { status: ['open'] };
+
+  // Single header funnel dropdown (FilterField[], one section per field)
+  sidebar['mini-filters'] = [{ field: 'status' }, { field: 'priority' }, { field: 'involved' }];
+
+  // Multiple header dropdowns (replaces the single funnel)
+  sidebar['minimal-filters'] = [
+    // Sort dropdown: built-in presets + a custom-path sort
+    { type: 'sort', sorts: ['date', 'unread', { label: 'Newest', path: 'comments.createdAt', order: 'desc' }] },
+    // Quick predicate (value is a literal userId, no @me token)
+    { type: 'quick', actions: [{ label: 'Written By Me', path: 'from.userId', value: '1.1' }] },
+    // Combined sort + quick groups with a divider
+    { type: 'actions' },
+  ];
+
+  sidebar.addEventListener('onFullscreenClick', (e) => console.log('fullscreen', e));
+</script>
+```
+</Tab>
+</Tabs>
+
+### More filter, sort & quick examples
+
+**Combined `actions` dropdown** — one menu with an explicit sort group and a quick group separated by a divider (the replacement for the removed minimal-actions dropdown):
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<VeltCommentsSidebarV2
+  minimalFilters={[
+    {
+      type: 'actions',
+      sorts: ['date', 'unread'],
+      actions: [
+        { preset: 'resolved', label: 'Show resolved comments' },
+        { label: 'Only your mentions', path: 'comments.taggedUserContacts.contact.userId', value: '1.1' },
+      ],
+    },
+  ]}
+/>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comments-sidebar-v2
+  minimal-filters='[{"type":"actions","sorts":["date","unread"],"actions":[{"preset":"resolved","label":"Show resolved comments"},{"label":"Only your mentions","path":"comments.taggedUserContacts.contact.userId","value":"1.1"}]}]'>
+</velt-comments-sidebar-v2>
+```
+</Tab>
+</Tabs>
+
+**Quick filter with multiple predicates** — combine several path predicates with `conditions` + `operator` (paths auto-flatten nested arrays):
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<VeltCommentsSidebarV2
+  minimalFilters={[
+    {
+      type: 'quick',
+      actions: [{
+        label: 'Involved',
+        operator: 'or',
+        conditions: [
+          { path: 'from.userId', value: '1.1' },
+          { path: 'assignedTo.userId', value: '1.1' },
+          { path: 'comments.taggedUserContacts.contact.userId', value: '1.1' },
+        ],
+      }],
+    },
+  ]}
+/>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comments-sidebar-v2
+  minimal-filters='[{"type":"quick","actions":[{"label":"Involved","operator":"or","conditions":[{"path":"from.userId","value":"1.1"},{"path":"assignedTo.userId","value":"1.1"},{"path":"comments.taggedUserContacts.contact.userId","value":"1.1"}]}]}]'>
+</velt-comments-sidebar-v2>
+```
+</Tab>
+</Tabs>
+
+**Configure a dropdown via markup** — set the same `type` / `fields` / `field` / `label` / `sorts` / `actions` / `show-category-filters` inputs directly on the filter-dropdown primitive (or its `-wireframe` override) instead of through `minimal-filters`:
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<VeltCommentSidebarV2FilterDropdown type="sort" sorts={['date', 'unread']} />
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comments-sidebar-filter-dropdown-v2-wireframe type="sort" sorts='["date","unread"]'>
+</velt-comments-sidebar-filter-dropdown-v2-wireframe>
+```
+</Tab>
+</Tabs>
+
+### Fullscreen & isolation
+
+- `full-screen` / `onFullscreenClick` toggle and observe the fullscreen state (surfaced via the `FullscreenButton` wireframe).
+- The V2 sidebar is shadow-DOM isolated by default, matching V1 parity.

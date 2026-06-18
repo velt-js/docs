@@ -18,7 +18,7 @@ The [Velt Python SDK](https://pypi.org/project/velt-py) exposes two independent 
 2. Pass the raw request object directly to SDK methods
 3. Return the resulting response object straight to the client
 
-**REST API backend** (`sdk.api.*`) — new in v0.1.9 — provides feature parity with the Velt Node SDK. 17 services, typed `@dataclass` request objects, and raw Velt API responses. No database or AWS configuration needed.
+**REST API backend** (`sdk.api.*`) — new in v0.1.9 — provides feature parity with the Velt Node SDK. 20 services, typed `@dataclass` request objects, and raw Velt API responses. No database or AWS configuration needed.
 
 ## Installation
 
@@ -771,7 +771,7 @@ async def get_comments(request: Request):
 
 ## REST API Backend
 
-Added in **v0.1.9**. The `sdk.api.*` namespace provides feature parity with the Velt Node SDK for REST. 17 services are available, each accepting typed `@dataclass` request objects and returning the raw Velt API response without local reshaping.
+Added in **v0.1.9**. The `sdk.api.*` namespace provides feature parity with the Velt Node SDK for REST. 20 services are available, each accepting typed `@dataclass` request objects and returning the raw Velt API response without local reshaping.
 
 No database or AWS configuration is required — only `apiKey` and `authToken`.
 
@@ -783,11 +783,36 @@ sdk = VeltSDK.initialize({
     'authToken': 'YOUR_VELT_AUTH_TOKEN'
 })
 
-# All 17 services are accessible under sdk.api.*
-# e.g. sdk.api.organizations, sdk.api.documents, sdk.api.workspace ...
+# All 20 services are accessible under sdk.api.*
+# e.g. sdk.api.organizations, sdk.api.documents, sdk.api.workspace,
+#      sdk.api.agents, sdk.api.memory, sdk.api.workflow ...
 ```
 
 Every method returns a dict with either a `result` key (success) or an `error` key (failure). See [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse).
+
+### Filtering unknown fields
+
+The add/update methods of `sdk.api.commentAnnotations`, `sdk.api.activities`, and `sdk.api.notifications` accept an optional `filter_unknown_fields: bool = False` keyword. It is opt-in and backed by the `velt_py.models.field_allowlists` module.
+
+- **Default off**: omitted or `False` → payloads are sent exactly as before.
+- **When `True`**: request entity collections are filtered to only the fields the Velt API accepts, dropping unknown/custom top-level keys before the request is sent.
+- **Top-level only**: open-typed fields (`context`, `metadata`, `entityData`, user objects) pass through whole; their nested contents are never filtered.
+- **Fail-open**: if filtering errors, the original unfiltered payload is sent — a write is never blocked.
+
+Affected methods: `addCommentAnnotations(request, filter_unknown_fields=False)`, `updateCommentAnnotations(...)`, `addComments(...)`, `updateComments(...)`, `addActivities(...)`, `updateActivities(...)`, and `updateNotifications(...)`.
+
+`addNotifications` is **not** affected — its top-level fields are already fixed, so only `updateNotifications` participates. On `updateNotifications`, `isRead` / `isArchived` are not accepted by `/v2/notifications/update` (the backend strips them anyway), so with the flag on they are dropped client-side.
+
+```python
+result = sdk.api.activities.addActivities(
+    AddActivitiesRequest(
+        organizationId='org-123', documentId='doc-456',
+        activities=[{'featureType': 'comment', 'actionType': 'comment.add', 'actionUser': {'userId': 'user-1'}, 'internalTrackingId': 'abc-123'}]
+    ),
+    filter_unknown_fields=True,
+)
+# The 'internalTrackingId' key is removed before the request is sent.
+```
 
 ### Organizations
 
@@ -1475,6 +1500,24 @@ result = sdk.api.documents.migrateDocumentsStatus(
 }
 ```
 
+#### `getDocumentsCount`
+
+- Gets the document count for an organization. Optionally exclude folder docs or scope to a folder.
+- Params: `GetDocumentsCountRequest` (from `velt_py.models.document`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.document import GetDocumentsCountRequest
+
+result = sdk.api.documents.getDocumentsCount(
+    GetDocumentsCountRequest(
+        organizationId='org-123',
+        excludeFolderDocs=True,
+        folderId='folder-1'
+    )
+)
+```
+
 ### Users
 
 #### `addUsers`
@@ -1518,6 +1561,7 @@ result = sdk.api.users.addUsers(
 - Retrieves users in an organization or document.
 - Params: [GetUsersRequest](/api-reference/sdk/models/data-models#getusersrequest)
 - Returns: [GetUsersResponse](/api-reference/sdk/models/data-models#getusersresponse)
+- Now also supports optional `includeInvolvedDocuments` and `searchKey` (free-text search) filters.
 
 ```python
 from velt_py.models.user_api import GetUsersRequest
@@ -1529,7 +1573,9 @@ result = sdk.api.users.getUsers(
         documentId='yourDocumentId',
         pageSize=100,
         allDocuments=True,
-        groupByDocumentId=True
+        groupByDocumentId=True,
+        includeInvolvedDocuments=True,
+        searchKey='john'
     )
 )
 ```
@@ -1616,6 +1662,107 @@ result = sdk.api.users.deleteUsers(
         }
     }
 }
+```
+
+#### `getUsersCount`
+
+- Gets the user count for an organization. Optionally scope to a document, a user, or all documents.
+- Params: `GetUsersCountRequest` (from `velt_py.models.user_api`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.user_api import GetUsersCountRequest
+
+result = sdk.api.users.getUsersCount(
+    GetUsersCountRequest(organizationId='org-123', allDocuments=True, userId='user-1')
+)
+```
+
+#### `getDocUsers`
+
+- Gets document-level users. Optionally filter by user IDs (max 20; max 5 with `includeInvolvedDocuments`), include involved documents, and paginate.
+- Params: `GetDocUsersRequest` (from `velt_py.models.user_api`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.user_api import GetDocUsersRequest
+
+result = sdk.api.users.getDocUsers(
+    GetDocUsersRequest(organizationId='org-123', userIds=['user-1'], includeInvolvedDocuments=True, pageSize=100)
+)
+```
+
+#### `addUserInvite`
+
+- Creates a user invitation (organization, document, or folder).
+- Params: `AddUserInviteRequest` (from `velt_py.models.user_api`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.user_api import AddUserInviteRequest
+
+result = sdk.api.users.addUserInvite(
+    AddUserInviteRequest(email='invitee@example.com', organizationId='org-123', type='org_user')
+)
+```
+
+#### `respondToInvite`
+
+- Responds to a user invitation (accept, reject, or withdraw).
+- Params: `RespondUserInviteRequest` (from `velt_py.models.user_api`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.user_api import RespondUserInviteRequest
+
+result = sdk.api.users.respondToInvite(
+    RespondUserInviteRequest(
+        email='invitee@example.com', organizationId='org-123', status='ACCEPTED', type='org_user',
+        user={'userId': 'user-1', 'name': 'Invitee'}, authToken='invited-user-auth-token'
+    )
+)
+```
+
+#### `getInvitedUsers`
+
+- Gets invited users for an organization (paginated).
+- Params: `GetInvitedUsersRequest` (from `velt_py.models.user_api`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.user_api import GetInvitedUsersRequest
+
+invited = sdk.api.users.getInvitedUsers(
+    GetInvitedUsersRequest(organizationId='org-123')
+)
+```
+
+#### `getUserInvitations`
+
+- Gets invitations for a specific user email (paginated).
+- Params: `GetUserInvitationsRequest` (from `velt_py.models.user_api`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.user_api import GetUserInvitationsRequest
+
+invitations = sdk.api.users.getUserInvitations(
+    GetUserInvitationsRequest(organizationId='org-123', email='invitee@example.com')
+)
+```
+
+#### `getInvitedPendingUsersCount`
+
+- Gets the count of pending invited users.
+- Params: `GetInvitedPendingUsersCountRequest` (from `velt_py.models.user_api`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.user_api import GetInvitedPendingUsersCountRequest
+
+pending = sdk.api.users.getInvitedPendingUsersCount(
+    GetInvitedPendingUsersCountRequest(organizationId='org-123', type='org_user')
+)
 ```
 
 ### User Groups
@@ -1823,6 +1970,7 @@ result = sdk.api.notifications.getNotifications(
 - Updates fields on existing notifications (e.g., mark as read).
 - Params: [UpdateNotificationsRequest](/api-reference/sdk/models/data-models#updatenotificationsrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+- Accepts the optional `filter_unknown_fields=True` keyword — see [Filtering unknown fields](#filtering-unknown-fields).
 
 ```python
 from velt_py.models.notification_api import UpdateNotificationsRequest
@@ -1969,6 +2117,7 @@ result = sdk.api.notifications.setNotificationConfig(
 - Creates one or more comment annotations on a document.
 - Params: [AddCommentAnnotationsRequest](/api-reference/sdk/models/data-models#addcommentannotationsrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+- Accepts the optional `filter_unknown_fields=True` keyword — see [Filtering unknown fields](#filtering-unknown-fields).
 
 ```python
 from velt_py.models.comment_annotation_api import AddCommentAnnotationsRequest
@@ -2104,6 +2253,7 @@ result = sdk.api.commentAnnotations.getCommentAnnotationsCount(
 - Updates annotation fields (e.g., change status).
 - Params: [UpdateCommentAnnotationsRequest](/api-reference/sdk/models/data-models#updatecommentannotationsrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+- Accepts the optional `filter_unknown_fields=True` keyword — see [Filtering unknown fields](#filtering-unknown-fields).
 
 ```python
 from velt_py.models.comment_annotation_api import UpdateCommentAnnotationsRequest
@@ -2182,6 +2332,7 @@ result = sdk.api.commentAnnotations.deleteCommentAnnotations(
 - Adds reply comments to an existing annotation.
 - Params: [AddCommentsRequest](/api-reference/sdk/models/data-models#addcommentsrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+- Accepts the optional `filter_unknown_fields=True` keyword — see [Filtering unknown fields](#filtering-unknown-fields).
 
 ```python
 from velt_py.models.comment_annotation_api import AddCommentsRequest
@@ -2258,6 +2409,7 @@ result = sdk.api.commentAnnotations.getComments(
 - Updates fields on individual comments inside an annotation.
 - Params: [UpdateCommentsRequest](/api-reference/sdk/models/data-models#updatecommentsrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+- Accepts the optional `filter_unknown_fields=True` keyword — see [Filtering unknown fields](#filtering-unknown-fields).
 
 ```python
 from velt_py.models.comment_annotation_api import UpdateCommentsRequest
@@ -2340,6 +2492,7 @@ result = sdk.api.commentAnnotations.deleteComments(
 - Logs one or more activity events.
 - Params: [AddActivitiesRequest](/api-reference/sdk/models/data-models#addactivitiesrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+- Accepts the optional `filter_unknown_fields=True` keyword — see [Filtering unknown fields](#filtering-unknown-fields).
 
 ```python
 from velt_py.models.activity_api import AddActivitiesRequest
@@ -2423,6 +2576,7 @@ result = sdk.api.activities.getActivities(
 - Updates fields on existing activities.
 - Params: [UpdateActivitiesRequest](/api-reference/sdk/models/data-models#updateactivitiesrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+- Accepts the optional `filter_unknown_fields=True` keyword — see [Filtering unknown fields](#filtering-unknown-fields).
 
 ```python
 from velt_py.models.activity_api import UpdateActivitiesRequest
@@ -2763,6 +2917,24 @@ result = sdk.api.crdt.updateCrdtData(
         'message': 'CRDT data updated successfully.'
     }
 }
+```
+
+#### `deleteCrdtData`
+
+- Deletes CRDT editor data. Optionally target specific `editorIds`; omit to delete all editors for a document.
+- Params: `DeleteCrdtDataRequest` (from `velt_py.models.crdt`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.crdt import DeleteCrdtDataRequest
+
+result = sdk.api.crdt.deleteCrdtData(
+    DeleteCrdtDataRequest(
+        organizationId='org-123',
+        documentId='doc-1',
+        editorIds=['my-collab-note']
+    )
+)
 ```
 
 ### Presence
@@ -3271,6 +3443,7 @@ result = sdk.api.workspace.getApiKeys(
 - Gets metadata for the API key the SDK is authenticated with.
 - Params: [GetApiKeyMetadataRequest](/api-reference/sdk/models/data-models#getapikeymetadatarequest)
 - Returns: [GetApiKeyMetadataResponse](/api-reference/sdk/models/data-models#getapikeymetadataresponse)
+- **Fixed in v0.1.11**: now targets the canonical `/v2/workspace/apikeyconfig/get` endpoint (was `/v2/workspace/apikeymetadata/get`, retained as a legacy backend alias). Method signature is unchanged — no call-site change needed.
 
 ```python
 from velt_py.models.workspace import GetApiKeyMetadataRequest
@@ -3617,6 +3790,1067 @@ result = sdk.api.workspace.updateWebhookConfig(
         'data': None
     }
 }
+```
+
+#### `getRequestedDomains`
+
+- Gets requested (pending) domains.
+- Params: `GetRequestedDomainsRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import GetRequestedDomainsRequest
+
+result = sdk.api.workspace.getRequestedDomains(GetRequestedDomainsRequest())
+```
+
+#### `createDomainRequest`
+
+- Creates a domain access request.
+- Params: `CreateDomainRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import CreateDomainRequest
+
+result = sdk.api.workspace.createDomainRequest(
+    CreateDomainRequest(domain='https://example.com')
+)
+```
+
+#### `acceptRejectAdditionalUrlRequest`
+
+- Accepts or rejects an additional-URL request.
+- Params: `AcceptRejectAdditionalUrlRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import AcceptRejectAdditionalUrlRequest
+
+result = sdk.api.workspace.acceptRejectAdditionalUrlRequest(
+    AcceptRejectAdditionalUrlRequest(action='accept', id='request-1', clientDocId='doc-1')
+)
+```
+
+#### `copyApiKey`
+
+- Copies configuration from one API key to another (workspace-scoped).
+- Params: `CopyApiKeyRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import CopyApiKeyRequest
+
+result = sdk.api.workspace.copyApiKey(
+    CopyApiKeyRequest(sourceApiKey='velt_api_key_1', targetApiKey='velt_api_key_2')
+)
+```
+
+#### `updateApiKeyMetadata`
+
+- Updates API key app configuration (private comments, JWT, default access, AI keys).
+- Params: `UpdateApiKeyMetadataRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import UpdateApiKeyMetadataRequest
+
+result = sdk.api.workspace.updateApiKeyMetadata(
+    UpdateApiKeyMetadataRequest(defaultDocumentAccessType='organizationPrivate')
+)
+```
+
+#### `getNotificationConfig`
+
+- Gets the workspace notification service config.
+- Params: `GetWorkspaceNotificationConfigRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import GetWorkspaceNotificationConfigRequest
+
+result = sdk.api.workspace.getNotificationConfig(GetWorkspaceNotificationConfigRequest())
+```
+
+#### `updateNotificationConfig`
+
+- Updates the workspace notification service config.
+- Params: `UpdateWorkspaceNotificationConfigRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import UpdateWorkspaceNotificationConfigRequest
+
+result = sdk.api.workspace.updateNotificationConfig(
+    UpdateWorkspaceNotificationConfigRequest(useNotificationService=True)
+)
+```
+
+#### `getPermissionProviderConfig`
+
+- Gets the permission provider config.
+- Params: `GetPermissionProviderConfigRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import GetPermissionProviderConfigRequest
+
+result = sdk.api.workspace.getPermissionProviderConfig(GetPermissionProviderConfigRequest())
+```
+
+#### `updatePermissionProviderConfig`
+
+- Updates the permission provider config.
+- Params: `UpdatePermissionProviderConfigRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import UpdatePermissionProviderConfigRequest
+
+result = sdk.api.workspace.updatePermissionProviderConfig(
+    UpdatePermissionProviderConfigRequest(usePermissionProvider=True)
+)
+```
+
+#### `getActivityConfig`
+
+- Gets the activity logs config.
+- Params: `GetActivityConfigRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import GetActivityConfigRequest
+
+result = sdk.api.workspace.getActivityConfig(GetActivityConfigRequest())
+```
+
+#### `updateActivityConfig`
+
+- Updates the activity logs config.
+- Params: `UpdateActivityConfigRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import UpdateActivityConfigRequest
+
+result = sdk.api.workspace.updateActivityConfig(
+    UpdateActivityConfigRequest(activityServiceConfig={'isEnabled': True})
+)
+```
+
+#### `getAdvancedWebhookConfig`
+
+- Gets the advanced (Svix) webhook config.
+- Params: `GetAdvancedWebhookConfigRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import GetAdvancedWebhookConfigRequest
+
+result = sdk.api.workspace.getAdvancedWebhookConfig(GetAdvancedWebhookConfigRequest())
+```
+
+#### `updateAdvancedWebhookConfig`
+
+- Updates the advanced (Svix) webhook config.
+- Params: `UpdateAdvancedWebhookConfigRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import UpdateAdvancedWebhookConfigRequest
+
+result = sdk.api.workspace.updateAdvancedWebhookConfig(
+    UpdateAdvancedWebhookConfigRequest(isEnabled=True)
+)
+```
+
+#### `getAdvancedWebhookEndpoints`
+
+- Lists advanced webhook endpoints.
+- Params: `GetAdvancedWebhookEndpointsRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import GetAdvancedWebhookEndpointsRequest
+
+result = sdk.api.workspace.getAdvancedWebhookEndpoints(GetAdvancedWebhookEndpointsRequest())
+```
+
+#### `createAdvancedWebhookEndpoint`
+
+- Creates an advanced webhook endpoint.
+- Params: `CreateAdvancedWebhookEndpointRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import CreateAdvancedWebhookEndpointRequest
+
+result = sdk.api.workspace.createAdvancedWebhookEndpoint(
+    CreateAdvancedWebhookEndpointRequest(url='https://example.com/webhook')
+)
+```
+
+#### `updateAdvancedWebhookEndpoint`
+
+- Updates an advanced webhook endpoint.
+- Params: `UpdateAdvancedWebhookEndpointRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import UpdateAdvancedWebhookEndpointRequest
+
+result = sdk.api.workspace.updateAdvancedWebhookEndpoint(
+    UpdateAdvancedWebhookEndpointRequest(endpointId='endpoint-1', url='https://example.com/webhook/v2')
+)
+```
+
+#### `deleteAdvancedWebhookEndpoint`
+
+- Deletes an advanced webhook endpoint.
+- Params: `DeleteAdvancedWebhookEndpointRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import DeleteAdvancedWebhookEndpointRequest
+
+result = sdk.api.workspace.deleteAdvancedWebhookEndpoint(
+    DeleteAdvancedWebhookEndpointRequest(endpointId='endpoint-1')
+)
+```
+
+#### `getAdvancedWebhookEndpointSecret`
+
+- Gets an advanced webhook endpoint's signing secret.
+- Params: `GetAdvancedWebhookEndpointSecretRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import GetAdvancedWebhookEndpointSecretRequest
+
+result = sdk.api.workspace.getAdvancedWebhookEndpointSecret(
+    GetAdvancedWebhookEndpointSecretRequest(endpointId='endpoint-1')
+)
+```
+
+#### `ensureWorkspaceAuthToken`
+
+- Ensures a workspace auth token exists (workspace-scoped).
+- Params: `EnsureWorkspaceAuthTokenRequest` (from `velt_py.models.workspace`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workspace import EnsureWorkspaceAuthTokenRequest
+
+result = sdk.api.workspace.ensureWorkspaceAuthToken(EnsureWorkspaceAuthTokenRequest())
+```
+
+### Agents
+
+A new service for managing AI agents, agent versions, executions, prompt tooling, and agent groups (`/v2/agents/*`). 24 methods. Request types are imported from `velt_py.models.agents`.
+
+```python
+from velt_py.models.agents import (
+    CreateAgentRequest, GetAgentRequest, UpdateAgentRequest, UpdateAgentVersionRequest,
+    DeleteAgentRequest, RunAgentExecutionRequest, GetAgentExecutionRequest,
+    ListAgentExecutionsRequest, CountAgentExecutionsRequest, EnhancePromptRequest,
+    CreateAgentGroupRequest, AddAgentsToGroupRequest
+)
+```
+
+#### `createAgent`
+
+- Creates a new agent.
+- Params: `CreateAgentRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.agents.createAgent(
+    CreateAgentRequest(
+        name='QA Agent',
+        description='Checks pages for spelling and broken links',
+        instructions='Find spelling mistakes and broken links on the page.',
+        enabled=True
+    )
+)
+```
+
+#### `getAgent`
+
+- Gets one agent by ID, or lists all agents when `agentId` is omitted.
+- Params: `GetAgentRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.agents.getAgent(GetAgentRequest(agentId='agent-1'))
+```
+
+#### `updateAgent`
+
+- Updates an agent's top-level fields.
+- Params: `UpdateAgentRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.agents.updateAgent(
+    UpdateAgentRequest(agentId='agent-1', description='Updated description', enabled=False)
+)
+```
+
+#### `updateAgentVersion`
+
+- Updates the working version: instructions and config.
+- Params: `UpdateAgentVersionRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.agents.updateAgentVersion(
+    UpdateAgentVersionRequest(agentId='agent-1', instructions='Check all CTAs are blue')
+)
+```
+
+#### `deleteAgent`
+
+- Deletes an agent.
+- Params: `DeleteAgentRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.agents.deleteAgent(DeleteAgentRequest(agentId='agent-1'))
+```
+
+#### `listAgentVersions`
+
+- Lists the version history for an agent.
+- Params: `ListAgentVersionsRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.agents import ListAgentVersionsRequest
+
+result = sdk.api.agents.listAgentVersions(ListAgentVersionsRequest(agentId='agent-1'))
+```
+
+#### `restoreAgentVersion`
+
+- Restores a previous agent version as the working version.
+- Params: `RestoreAgentVersionRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.agents import RestoreAgentVersionRequest
+
+result = sdk.api.agents.restoreAgentVersion(
+    RestoreAgentVersionRequest(agentId='agent-1')
+)
+```
+
+#### `getAgentAnalytics`
+
+- Gets token-usage / AI analytics for an agent.
+- Params: `GetAgentAnalyticsRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.agents import GetAgentAnalyticsRequest
+
+result = sdk.api.agents.getAgentAnalytics(GetAgentAnalyticsRequest(agentId='agent-1'))
+```
+
+#### `runAgentExecution`
+
+- Runs an agent against a URL.
+- Params: `RunAgentExecutionRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.agents.runAgentExecution(
+    RunAgentExecutionRequest(agentId='agent-1', url='https://example.com', organizationId='org-123', documentId='doc-1')
+)
+```
+
+#### `getAgentExecution`
+
+- Gets a single agent execution.
+- Params: `GetAgentExecutionRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.agents.getAgentExecution(
+    GetAgentExecutionRequest(executionId='execution-id', includeResults=True)
+)
+```
+
+#### `listAgentExecutions`
+
+- Lists agent executions (paginated).
+- Params: `ListAgentExecutionsRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.agents.listAgentExecutions(
+    ListAgentExecutionsRequest(agentId='agent-1', pageSize=20)
+)
+```
+
+#### `countAgentExecutions`
+
+- Counts agent executions.
+- Params: `CountAgentExecutionsRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.agents.countAgentExecutions(
+    CountAgentExecutionsRequest(agentIds=['agent-1', 'agent-2'])
+)
+```
+
+#### `enhancePrompt`
+
+- Validates prompt completeness.
+- Params: `EnhancePromptRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.agents.enhancePrompt(EnhancePromptRequest(prompt='Check the colors'))
+```
+
+#### `validatePrompt`
+
+- Expands a simple instruction into a structured QA task.
+- Params: `ValidatePromptRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.agents import ValidatePromptRequest
+
+result = sdk.api.agents.validatePrompt(ValidatePromptRequest(prompt='Check the colors'))
+```
+
+#### `refinePrompt`
+
+- Refines an analysis prompt using demo feedback.
+- Params: `RefinePromptRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.agents import RefinePromptRequest
+
+result = sdk.api.agents.refinePrompt(
+    RefinePromptRequest(
+        analysisPrompt='Check the colors',
+        demoFeedback=[{
+            'demoId': 'demo-1',
+            'demoTitle': 'Landing page',
+            'demoHtml': '<button>Buy now</button>',
+            'demoExpected': 'CTA button should be blue',
+            'feedback': 'Too vague'
+        }]
+    )
+)
+```
+
+#### `resolveConfig`
+
+- Resolves instructions into a full agent config.
+- Params: `ResolveConfigRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.agents import ResolveConfigRequest
+
+result = sdk.api.agents.resolveConfig(ResolveConfigRequest(instructions='Find spelling mistakes on the page.'))
+```
+
+#### `extractAgents`
+
+- Extracts agent definitions from an uploaded file.
+- Params: `ExtractAgentsRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.agents import ExtractAgentsRequest
+
+result = sdk.api.agents.extractAgents(
+    ExtractAgentsRequest(fileBase64='...base64 bytes...', mimeType='application/pdf', fileName='agents.pdf')
+)
+```
+
+#### `createAgentGroup`
+
+- Creates an agent group.
+- Params: `CreateAgentGroupRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+group = sdk.api.agents.createAgentGroup(
+    CreateAgentGroupRequest(name='Marketing Agents', agentIds=['agent-1'])
+)
+```
+
+#### `getAgentGroup`
+
+- Gets an agent group by ID.
+- Params: `GetAgentGroupRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.agents import GetAgentGroupRequest
+
+result = sdk.api.agents.getAgentGroup(GetAgentGroupRequest(groupId='group-1'))
+```
+
+#### `listAgentGroups`
+
+- Lists agent groups.
+- Params: `ListAgentGroupsRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.agents import ListAgentGroupsRequest
+
+result = sdk.api.agents.listAgentGroups(ListAgentGroupsRequest())
+```
+
+#### `updateAgentGroup`
+
+- Updates an agent group.
+- Params: `UpdateAgentGroupRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.agents import UpdateAgentGroupRequest
+
+result = sdk.api.agents.updateAgentGroup(
+    UpdateAgentGroupRequest(groupId='group-1', name='Renamed Group')
+)
+```
+
+#### `deleteAgentGroup`
+
+- Deletes an agent group.
+- Params: `DeleteAgentGroupRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.agents import DeleteAgentGroupRequest
+
+result = sdk.api.agents.deleteAgentGroup(DeleteAgentGroupRequest(groupId='group-1'))
+```
+
+#### `addAgentsToGroup`
+
+- Adds agents to a group.
+- Params: `AddAgentsToGroupRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.agents.addAgentsToGroup(
+    AddAgentsToGroupRequest(groupId='group-1', agentIds=['agent-2', 'agent-3'])
+)
+```
+
+#### `removeAgentsFromGroup`
+
+- Removes agents from a group.
+- Params: `RemoveAgentsFromGroupRequest` (from `velt_py.models.agents`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.agents import RemoveAgentsFromGroupRequest
+
+result = sdk.api.agents.removeAgentsFromGroup(
+    RemoveAgentsFromGroupRequest(groupId='group-1', agentIds=['agent-2'])
+)
+```
+
+### Memory
+
+A new service for semantic search, judgments, knowledge ingestion, reviewer profiles/patterns/stats, and alerts (`/v2/memory/*`). 24 methods. Request types are imported from `velt_py.models.memory`.
+
+```python
+from velt_py.models.memory import (
+    MemorySearchRequest, MemoryAskRequest, QueryJudgmentsRequest, IngestKnowledgeRequest,
+    GetUploadUrlRequest, GetIngestStatusRequest, SearchKnowledgeRequest,
+    ListKnowledgeSourcesRequest, DeleteKnowledgeRequest, ListAlertsRequest
+)
+```
+
+#### `search`
+
+- Runs a semantic search over memory.
+- Params: `MemorySearchRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.memory.search(
+    MemorySearchRequest(query='accessibility issues', limit=10, recencyDays=30)
+)
+```
+
+#### `queryJudgments`
+
+- Queries stored judgments.
+- Params: `QueryJudgmentsRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.memory.queryJudgments(
+    QueryJudgmentsRequest(decision='approve', limit=20)
+)
+```
+
+#### `suggest`
+
+- Returns suggestions from memory.
+- Params: `MemorySuggestRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.memory import MemorySuggestRequest
+
+result = sdk.api.memory.suggest(MemorySuggestRequest(query='accessibility'))
+```
+
+#### `ask`
+
+- Asks a natural-language question over memory.
+- Params: `MemoryAskRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.memory.ask(
+    MemoryAskRequest(question='What were the recent review themes?', recencyDays=30)
+)
+```
+
+#### `getReviewerProfile`
+
+- Gets a reviewer profile.
+- Params: `GetReviewerProfileRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.memory import GetReviewerProfileRequest
+
+result = sdk.api.memory.getReviewerProfile(GetReviewerProfileRequest(targetUserId='user-1'))
+```
+
+#### `getPatterns`
+
+- Gets detected review patterns.
+- Params: `GetPatternsRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.memory import GetPatternsRequest
+
+result = sdk.api.memory.getPatterns(GetPatternsRequest())
+```
+
+#### `getStats`
+
+- Gets memory statistics.
+- Params: `GetStatsRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.memory import GetStatsRequest
+
+result = sdk.api.memory.getStats(GetStatsRequest())
+```
+
+#### `ingestKnowledge`
+
+- Ingests knowledge from an inline file or a `gs://` `fileRef`.
+- Params: `IngestKnowledgeRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.memory.ingestKnowledge(
+    IngestKnowledgeRequest(source='inline', file={'base64': '...base64 bytes...', 'mimeType': 'text/markdown', 'fileName': 'style-guide.md', 'fileSize': 2048})
+)
+```
+
+#### `getUploadUrl`
+
+- Gets a signed upload URL for a large file.
+- Params: `GetUploadUrlRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+upload = sdk.api.memory.getUploadUrl(
+    GetUploadUrlRequest(mimeType='application/pdf', fileSize=10_000_000, fileName='spec.pdf')
+)
+```
+
+#### `getIngestStatus`
+
+- Gets the ingestion status for a knowledge source.
+- Params: `GetIngestStatusRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.memory.getIngestStatus(GetIngestStatusRequest(sourceId='source-id'))
+```
+
+#### `updateKnowledge`
+
+- Updates a knowledge source.
+- Params: `UpdateKnowledgeRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.memory import UpdateKnowledgeRequest
+
+result = sdk.api.memory.updateKnowledge(
+    UpdateKnowledgeRequest(sourceId='source-id', newContent='# Updated Style Guide')
+)
+```
+
+#### `deleteKnowledge`
+
+- Deletes a knowledge source.
+- Params: `DeleteKnowledgeRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.memory.deleteKnowledge(DeleteKnowledgeRequest(sourceId='source-id'))
+```
+
+#### `searchKnowledge`
+
+- Runs a vector search over knowledge, optionally narrowed by `sourceId`.
+- Params: `SearchKnowledgeRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.memory.searchKnowledge(
+    SearchKnowledgeRequest(query='refund policy', sourceId=['source-1', 'source-2'], limit=5)
+)
+```
+
+#### `listKnowledgeSources`
+
+- Lists knowledge sources.
+- Params: `ListKnowledgeSourcesRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+sources = sdk.api.memory.listKnowledgeSources(ListKnowledgeSourcesRequest())
+```
+
+#### `downloadCanonicalMarkdown`
+
+- Downloads the canonical markdown for a knowledge source.
+- Params: `DownloadCanonicalMarkdownRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.memory import DownloadCanonicalMarkdownRequest
+
+result = sdk.api.memory.downloadCanonicalMarkdown(
+    DownloadCanonicalMarkdownRequest(sourceId='source-id')
+)
+```
+
+#### `listExtractedRules`
+
+- Lists rules extracted from ingested knowledge.
+- Params: `ListExtractedRulesRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.memory import ListExtractedRulesRequest
+
+result = sdk.api.memory.listExtractedRules(ListExtractedRulesRequest(sourceId='source-id'))
+```
+
+#### `listAlerts`
+
+- Lists alerts.
+- Params: `ListAlertsRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+alerts = sdk.api.memory.listAlerts(ListAlertsRequest())
+```
+
+#### `dismissAlert`
+
+- Dismisses an alert.
+- Params: `DismissAlertRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.memory import DismissAlertRequest
+
+result = sdk.api.memory.dismissAlert(DismissAlertRequest(alertId='alert-1'))
+```
+
+#### `markAlertActioned`
+
+- Marks an alert as actioned.
+- Params: `MarkAlertActionedRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.memory import MarkAlertActionedRequest
+
+result = sdk.api.memory.markAlertActioned(MarkAlertActionedRequest(alertId='alert-1'))
+```
+
+#### `updateAlertConfig`
+
+- Updates the alert config.
+- Params: `UpdateAlertConfigRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.memory import UpdateAlertConfigRequest
+
+result = sdk.api.memory.updateAlertConfig(UpdateAlertConfigRequest(config={'enabled': True}))
+```
+
+#### `getAlertConfig`
+
+- Gets the alert config.
+- Params: `GetAlertConfigRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.memory import GetAlertConfigRequest
+
+result = sdk.api.memory.getAlertConfig(GetAlertConfigRequest())
+```
+
+#### `triggerConsolidation`
+
+- Triggers memory consolidation (operator).
+- Params: `TriggerConsolidationRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.memory import TriggerConsolidationRequest
+
+result = sdk.api.memory.triggerConsolidation(TriggerConsolidationRequest())
+```
+
+#### `seedActiveApiKeys`
+
+- Seeds active API keys (operator).
+- Params: `SeedActiveApiKeysRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.memory import SeedActiveApiKeysRequest
+
+result = sdk.api.memory.seedActiveApiKeys(SeedActiveApiKeysRequest())
+```
+
+#### `backfillJudgments`
+
+- Backfills judgments (operator).
+- Params: `BackfillJudgmentsRequest` (from `velt_py.models.memory`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.memory import BackfillJudgmentsRequest
+
+result = sdk.api.memory.backfillJudgments(BackfillJudgmentsRequest())
+```
+
+### Workflow
+
+A new service for the Approval Engine / workflow orchestration: definitions, executions, lifecycle events, and step resolution (`/v2/workflow/*`). 14 methods. Request types are imported from `velt_py.models.workflow`.
+
+```python
+from velt_py.models.workflow import (
+    CreateWorkflowDefinitionRequest, GetWorkflowDefinitionRequest, ListWorkflowDefinitionsRequest,
+    DispatchExecutionRequest, GetExecutionRequest, ListExecutionsRequest,
+    ResolveStepRequest, RecordReviewerDecisionRequest
+)
+```
+
+#### `createDefinition`
+
+- Creates a workflow definition.
+- Params: `CreateWorkflowDefinitionRequest` (from `velt_py.models.workflow`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.workflow.createDefinition(
+    CreateWorkflowDefinitionRequest(
+        definitionId='doc-approval', name='Document Approval',
+        nodes=[{'nodeId': 'review', 'type': 'human', 'config': {'reviewers': [{'userId': 'reviewer-1', 'mandatory': True}]}}],
+        edges=[]
+    )
+)
+```
+
+#### `updateDefinition`
+
+- Updates a workflow definition. Supports optimistic concurrency via `ifVersion`.
+- Params: `UpdateWorkflowDefinitionRequest` (from `velt_py.models.workflow`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workflow import UpdateWorkflowDefinitionRequest
+
+result = sdk.api.workflow.updateDefinition(
+    UpdateWorkflowDefinitionRequest(
+        definitionId='doc-approval',
+        name='Document Approval v2',
+        nodes=[{'nodeId': 'review', 'type': 'human', 'config': {'reviewers': [{'userId': 'reviewer-1', 'mandatory': True}]}}],
+        edges=[],
+        ifVersion=1
+    )
+)
+```
+
+#### `deleteDefinition`
+
+- Deletes a workflow definition.
+- Params: `DeleteWorkflowDefinitionRequest` (from `velt_py.models.workflow`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workflow import DeleteWorkflowDefinitionRequest
+
+result = sdk.api.workflow.deleteDefinition(
+    DeleteWorkflowDefinitionRequest(definitionId='doc-approval')
+)
+```
+
+#### `getDefinition`
+
+- Gets a workflow definition.
+- Params: `GetWorkflowDefinitionRequest` (from `velt_py.models.workflow`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.workflow.getDefinition(GetWorkflowDefinitionRequest(definitionId='doc-approval'))
+```
+
+#### `listDefinitions`
+
+- Lists workflow definitions.
+- Params: `ListWorkflowDefinitionsRequest` (from `velt_py.models.workflow`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.workflow.listDefinitions(ListWorkflowDefinitionsRequest(pageSize=20))
+```
+
+#### `dispatchExecution`
+
+- Dispatches a workflow execution.
+- Params: `DispatchExecutionRequest` (from `velt_py.models.workflow`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.workflow.dispatchExecution(
+    DispatchExecutionRequest(definitionId='doc-approval', idempotencyKey='order-12345', triggerContext={'orderId': '12345'})
+)
+```
+
+#### `cancelExecution`
+
+- Cancels a workflow execution.
+- Params: `CancelExecutionRequest` (from `velt_py.models.workflow`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workflow import CancelExecutionRequest
+
+result = sdk.api.workflow.cancelExecution(CancelExecutionRequest(executionId='execution-id'))
+```
+
+#### `getExecution`
+
+- Gets a workflow execution.
+- Params: `GetExecutionRequest` (from `velt_py.models.workflow`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.workflow.getExecution(GetExecutionRequest(executionId='execution-id'))
+```
+
+#### `getExecutionEvents`
+
+- Gets lifecycle events for an execution (paginated).
+- Params: `GetExecutionEventsRequest` (from `velt_py.models.workflow`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workflow import GetExecutionEventsRequest
+
+result = sdk.api.workflow.getExecutionEvents(
+    GetExecutionEventsRequest(executionId='execution-id', pageSize=50)
+)
+```
+
+#### `listExecutions`
+
+- Lists workflow executions.
+- Params: `ListExecutionsRequest` (from `velt_py.models.workflow`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.workflow.listExecutions(
+    ListExecutionsRequest(definitionId='doc-approval', status='running')
+)
+```
+
+#### `cancelStep`
+
+- Cancels a step within an execution.
+- Params: `CancelStepRequest` (from `velt_py.models.workflow`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workflow import CancelStepRequest
+
+result = sdk.api.workflow.cancelStep(
+    CancelStepRequest(executionId='execution-id', stepId='step-id')
+)
+```
+
+#### `resolveStep`
+
+- Resolves a step (admin/reviewer override).
+- Params: `ResolveStepRequest` (from `velt_py.models.workflow`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.workflow.resolveStep(
+    ResolveStepRequest(executionId='execution-id', stepId='step-id', action='force-approve', actorId='admin-1')
+)
+```
+
+#### `recordAgentResolution`
+
+- Records an agent resolution against a blocking-agent step.
+- Params: `RecordAgentResolutionRequest` (from `velt_py.models.workflow`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+from velt_py.models.workflow import RecordAgentResolutionRequest
+
+result = sdk.api.workflow.recordAgentResolution(
+    RecordAgentResolutionRequest(executionId='execution-id', stepId='step-id', responseId='response-1', resolution='resolved', actorId='agent-1')
+)
+```
+
+#### `recordReviewerDecision`
+
+- Records a reviewer decision against a human step.
+- Params: `RecordReviewerDecisionRequest` (from `velt_py.models.workflow`)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+
+```python
+result = sdk.api.workflow.recordReviewerDecision(
+    RecordReviewerDecisionRequest(executionId='execution-id', stepId='step-id', reviewerId='reviewer-1', decision='approve')
+)
 ```
 
 ### Token

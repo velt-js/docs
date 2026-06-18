@@ -47,6 +47,8 @@
 | `sourceType`              | `string`                                                                  | No       | Origin of the annotation. Selects the agent-identity vs human-author header variant rendered for suggestion comments. |
 | `suggestion`              | [`CommentAnnotationSuggestion`](#commentannotationsuggestion)             | No       | Suggestion state for typed-suggestion annotations. Mutated by [`acceptSuggestion()`](/api-reference/sdk/api/api-methods#acceptsuggestion) / [`rejectSuggestion()`](/api-reference/sdk/api/api-methods#rejectsuggestion). |
 | `basicAnchorData`         | `{ xpath: string; topPercentage: number; leftPercentage: number }`        | No       | Client-safe anchor data derived from the target element's xpath. `xpath` is sourced from `targetElement.anchor.fXPath`, falling back to the legacy `targetElement.fXpath`. `topPercentage` and `leftPercentage` default to `0` when not set. Omitted entirely when no xpath source is present. |
+| `involvedUserIds`         | `string[]`                                                                | No       | All user IDs involved in the annotation (subscribed + unsubscribed participants). Read-only, server-derived. |
+| `mentionedUserIds`        | `string[]`                                                                | No       | User IDs @mentioned across the annotation's comments. Read-only, server-derived. |
 
 #### Enum
 
@@ -346,6 +348,20 @@ Structured output produced by an AI agent for a suggestion comment.
 | Property | Type     | Required | Description                                                                                            |
 | -------- | -------- | -------- | ------------------------------------------------------------------------------------------------------ |
 | `title`  | `string` | No       | Bold title rendered at the top of the Agent Suggestion card body. Sourced from `agent.result.title`.   |
+
+#### AgentData
+
+---
+
+AI-agent identity and output for an agent-authored [`Comment`](#comment) (set on `Comment.agent` when `Comment.sourceType` is `'agent'`). Read-only from the SDK.
+
+| Property      | Type                 | Required | Description                                                                |
+| ------------- | -------------------- | -------- | -------------------------------------------------------------------------- |
+| `agentName`   | `string`             | No       | Agent identifier. Always retained for agent-field querying.                |
+| `name`        | `string`             | No       | Agent display name.                                                        |
+| `avatar`      | `string`             | No       | Agent avatar URL.                                                          |
+| `result`      | `{ title?: string }` | No       | Structured agent output; `title` is rendered in the agent suggestion card. |
+| `agentFields` | `string[]`           | No       | Agent field tags used to filter annotation/count queries.                  |
 
 #### CommentAnnotationSuggestion
 
@@ -976,6 +992,9 @@ Logical anchor stored in `annotation.context.textEditorConfig`. Designed to surv
 | `taggedUserContacts`    | `AutocompleteUserContactReplaceData[]` | Yes      | List of users that were @mentioned in this comment with UI metadata.    |
 | `customList`            | `AutocompleteReplaceData[]`            | Yes      | List of custom list items added to the comment.                         |
 | `isDraft`               | `boolean`                              | Yes      | Whether the comment is in draft state.                                  |
+| `sourceType`            | `string`                               | No       | Origin of the comment; `'agent'` indicates AI-agent-authored. Read-only. |
+| `agent`                 | [`AgentData`](#agentdata)              | No       | AI agent identity + output for an agent-authored comment. Read-only.    |
+| `metadata`              | `any`                                  | No       | Customer-supplied metadata bag, persisted as-is when provided.          |
 
 #### AddCommentEvent
 
@@ -1653,6 +1672,7 @@ A reaction annotation represents a placed emoji reaction on a document, comment,
 | `lastUpdated`         | `any`                   | No       | Timestamp when the annotation was last updated (auto-generated).   |
 | `metadata`            | `ReactionMetadata`      | No       | Custom metadata attached to the annotation.                        |
 | `context`             | `Context`               | No       | Context object for the annotation.                                 |
+| `involvedUserIds`     | `string[]`              | No       | All user IDs involved in the reaction annotation. Read-only, server-derived. |
 
 #### Reaction
 
@@ -2383,6 +2403,26 @@ type SidebarSortingCriteria = 'date' | 'unread' | null;
 - `'unread'`: Sort by unread status
 - `null`: No sorting applied
 
+#### SortBy
+
+---
+
+The default sort key for the Comment Sidebar V2 (`sortBy` on [`VeltCommentsSidebarV2Props`](#veltcommentssidebarv2props)). A built-in preset (e.g. `'date'`, `'unread'`) or a custom field key / dot-path (e.g. `'comments.createdAt'`).
+
+```typescript
+type SortBy = string;
+```
+
+#### SortOrder
+
+---
+
+The default sort direction for the Comment Sidebar V2 (`sortOrder` on [`VeltCommentsSidebarV2Props`](#veltcommentssidebarv2props)).
+
+```typescript
+type SortOrder = 'asc' | 'desc';
+```
+
 #### ENUMs
 
 | Enum Name                     | Event Type                 | Description                                         |
@@ -2509,6 +2549,214 @@ type SidebarSortingCriteria = 'date' | 'unread' | null;
 | `enable`        | `boolean`                                                   | No       | Enables or disables grouping |
 | `name`          | `string`                                                    | No       | The name of the group        |
 | `[key: string]` | `{ id?: string, name?: string }[] \| string[] \| undefined` | No       | Custom filter configurations |
+
+#### FilterField
+
+---
+
+Declarative definition of a single filterable field in the Comment Sidebar V2 filter dropdown.
+
+| Property       | Type                                              | Required | Description                                                       |
+| -------------- | ------------------------------------------------- | -------- | ----------------------------------------------------------------- |
+| `field`        | `string`                                          | Yes      | Field identifier. Use a [`BuiltInFilterFieldId`](#builtinfilterfieldid) or a custom id. |
+| `label`        | `string`                                          | No       | Display label for the field.                                      |
+| `select`       | `'single' \| 'multi'`                             | No       | Single- or multi-select behavior.                                |
+| `searchable`   | `boolean`                                         | No       | Show a search box within the field's options.                    |
+| `showCounts`   | `boolean`                                         | No       | Show per-option result counts.                                   |
+| `icon`         | `string`                                          | No       | Icon identifier for the field.                                   |
+| `valuePath`    | `string`                                          | No       | Dot-path into the annotation for a custom field value.           |
+| `includeUnset` | `boolean`                                         | No       | Include annotations with no value for this field.                |
+| `placeholder`  | `string`                                          | No       | Placeholder text for the field's search box.                    |
+| `groupable`    | `boolean`                                         | No       | Allow grouping the list by this field.                          |
+| `order`        | `string[]`                                        | No       | Explicit ordering of option ids.                                |
+| `options`      | [`SidebarFilterValue[]`](#sidebarfiltervalue)     | No       | Predefined selectable options for the field.                    |
+
+#### SidebarFilterValue
+
+---
+
+A single selectable option within a [`FilterField`](#filterfield). Carries the option's id, display label, and optional count/icon used to render and match the option.
+
+#### SidebarMinimalFilterConfig
+
+---
+
+Configuration for one dropdown in the Comment Sidebar V2 `minimal-filters` bar.
+
+| Property  | Type                                                              | Required | Description                                                |
+| --------- | ----------------------------------------------------------------- | -------- | ---------------------------------------------------------- |
+| `type`    | [`SidebarFilterDropdownType`](#sidebarfilterdropdowntype)         | No       | Dropdown kind. Defaults vary by usage.                     |
+| `label`   | `string`                                                          | No       | Display label for the dropdown.                            |
+| `field`   | `string`                                                          | No       | Field identifier for a single-field dropdown.              |
+| `fields`  | [`FilterField[]`](#filterfield)                                   | No       | Fields shown in a `filter` dropdown.                       |
+| `sorts`   | `(string \| `[`SidebarSortConfig`](#sidebarsortconfig)`)[]`       | No       | Sort options shown in a `sort` dropdown.                   |
+| `actions` | `(string \| `[`SidebarQuickFilterConfig`](#sidebarquickfilterconfig)`)[]` | No | Quick filters/actions shown in a `quick` or `actions` dropdown. |
+
+#### SidebarSortConfig
+
+---
+
+A single sort option in a Comment Sidebar V2 sort dropdown.
+
+| Property | Type               | Required | Description                                          |
+| -------- | ------------------ | -------- | ---------------------------------------------------- |
+| `label`  | `string`           | No       | Display label for the sort option.                   |
+| `preset` | `string`           | No       | Built-in sort preset, e.g. `'date'`, `'unread'`.     |
+| `path`   | `string`           | No       | Dot-path for a custom-field sort.                    |
+| `field`  | `string`           | No       | Field identifier to sort by.                         |
+| `order`  | `'asc' \| 'desc'`  | No       | Sort direction.                                      |
+
+#### SidebarQuickFilterConfig
+
+---
+
+A single quick filter (predicate) in a Comment Sidebar V2 quick/actions dropdown.
+
+| Property     | Type                                                       | Required | Description                                          |
+| ------------ | ---------------------------------------------------------- | -------- | ---------------------------------------------------- |
+| `label`      | `string`                                                   | No       | Display label for the quick filter.                  |
+| `preset`     | `string`                                                   | No       | Built-in preset, e.g. `'open'`, `'resolved'`, `'unread'`. |
+| `path`       | `string`                                                   | No       | Dot-path for a single-predicate match.               |
+| `field`      | `string`                                                   | No       | Field identifier for a single-predicate match.       |
+| `value`      | `any`                                                      | No       | Literal value to match, e.g. a userId `"1.1"`.       |
+| `conditions` | [`SidebarQuickCondition[]`](#sidebarquickcondition)        | No       | Multiple predicates evaluated together.              |
+| `operator`   | `'and' \| 'or'`                                            | No       | How `conditions` are combined.                       |
+
+#### SidebarQuickCondition
+
+---
+
+A single predicate within a [`SidebarQuickFilterConfig`](#sidebarquickfilterconfig).
+
+| Property | Type     | Required | Description                              |
+| -------- | -------- | -------- | ---------------------------------------- |
+| `path`   | `string` | No       | Dot-path into the annotation to match.   |
+| `field`  | `string` | No       | Field identifier to match.               |
+| `value`  | `any`    | Yes      | Value to match against.                  |
+
+#### SidebarAnnotationGroup
+
+---
+
+A resolved group of annotations rendered as a collapsible section in the Comment Sidebar V2 list.
+
+| Property        | Type                                      | Required | Description                                        |
+| --------------- | ----------------------------------------- | -------- | -------------------------------------------------- |
+| `id`            | `string`                                  | Yes      | Unique group identifier.                           |
+| `label`         | `string`                                  | Yes      | Group display label.                               |
+| `count`         | `number`                                  | Yes      | Number of annotations in the group.                |
+| `isExpanded`    | `boolean`                                 | Yes      | Whether the group is currently expanded.           |
+| `isCurrentPage` | `boolean`                                 | No       | Whether the group corresponds to the current page. |
+| `annotations`   | [`CommentAnnotation[]`](#commentannotation) | Yes    | Annotations contained in the group.                |
+
+#### SidebarListRow
+
+---
+
+A flattened row in the Comment Sidebar V2 list: either a group header or an annotation belonging to a group.
+
+```typescript
+type SidebarListRow =
+  | { type: 'group'; group: SidebarAnnotationGroup }
+  | { type: 'annotation'; annotation: CommentAnnotation; groupId: string };
+```
+
+#### FilterFieldOperator
+
+---
+
+Boolean operator used to combine filter predicates.
+
+```typescript
+type FilterFieldOperator = 'and' | 'or';
+```
+
+#### SidebarFilterDropdownType
+
+---
+
+Kind of dropdown rendered in the Comment Sidebar V2 `minimal-filters` bar.
+
+```typescript
+type SidebarFilterDropdownType = 'filter' | 'sort' | 'quick' | 'actions';
+```
+
+#### BUILT_IN_FILTER_FIELD_IDS
+
+---
+
+The built-in filterable field ids recognized by the Comment Sidebar V2 filter pipeline.
+
+```typescript
+const BUILT_IN_FILTER_FIELD_IDS = [
+  'status', 'priority', 'category', 'people', 'assigned',
+  'tagged', 'involved', 'location', 'version', 'document',
+] as const;
+
+type BuiltInFilterFieldId = typeof BUILT_IN_FILTER_FIELD_IDS[number];
+```
+
+#### BuiltInFilterFieldId
+
+---
+
+Union of the built-in filter field ids. Derived from [`BUILT_IN_FILTER_FIELD_IDS`](#built_in_filter_field_ids).
+
+#### SectionControlChip
+
+---
+
+A control chip rendered in the Comment Sidebar V2 section header.
+
+```typescript
+type SectionControlChip = { id: string; label: string; isAll: boolean };
+```
+
+#### SectionAllOption
+
+---
+
+Configuration for the "All" option in a Comment Sidebar V2 section control.
+
+```typescript
+type SectionAllOption = { show: boolean; label: string };
+```
+
+#### SidebarSortCriterion
+
+---
+
+A resolved sort criterion produced from a [`SidebarSortConfig`](#sidebarsortconfig). Exported as a helper type for the Comment Sidebar V2 sort pipeline.
+
+#### SidebarQuickPredicate
+
+---
+
+A resolved quick-filter predicate produced from a [`SidebarQuickFilterConfig`](#sidebarquickfilterconfig). Exported as a helper type for the Comment Sidebar V2 quick-filter pipeline.
+
+#### FacetContext
+
+---
+
+Context passed to a [`FilterFieldResolver`](#filterfieldresolver) when building options for a custom filterable field.
+
+| Property      | Type                                        | Required | Description                                   |
+| ------------- | ------------------------------------------- | -------- | --------------------------------------------- |
+| `annotations` | [`CommentAnnotation[]`](#commentannotation) | Yes      | Annotations available to build facet options. |
+| `field`       | [`FilterField`](#filterfield)               | Yes      | The field definition being resolved.          |
+
+#### FilterFieldResolver
+
+---
+
+Registers a custom filterable field in the Comment Sidebar V2 pipeline by supplying option-building and matching logic.
+
+| Property       | Type                                                                     | Required | Description                                                              |
+| -------------- | ------------------------------------------------------------------------ | -------- | ------------------------------------------------------------------------ |
+| `id`           | `string`                                                                 | Yes      | Field id this resolver handles.                                          |
+| `optionSource` | `'catalog' \| 'scan'`                                                    | Yes      | Whether options come from a catalog or by scanning annotations.         |
+| `buildOptions` | `(ctx:` [`FacetContext`](#facetcontext)`) =>` [`SidebarFilterValue[]`](#sidebarfiltervalue) | Yes | Builds selectable options for the field.                                 |
+| `matches`      | `(annotation:` [`CommentAnnotation`](#commentannotation)`, selectedValueIds: string[]) => boolean` | Yes | Returns whether an annotation matches the selected option ids.          |
 
 #### CommentSidebarFilters
 
@@ -2672,11 +2920,46 @@ export class ConfirmDialogComponentConfig {
 
 ---
 
-| Property                   | Type     | Required | Description                                                                          |
-| -------------------------- | -------- | -------- | ------------------------------------------------------------------------------------ |
-| `editPlaceholder`          | `string` | No       | Fallback placeholder text shown in the edit composer for any comment or reply        |
-| `editCommentPlaceholder`   | `string` | No       | Placeholder when editing the first comment in a thread. Takes precedence over `editPlaceholder` |
-| `editReplyPlaceholder`     | `string` | No       | Placeholder when editing a reply (index > 0). Takes precedence over `editPlaceholder` |
+Props accepted by the `VeltCommentDialog` component. The React TypeScript interface exposes the full attribute set of the underlying `<velt-comment-dialog>` HTML element.
+
+| Property                    | Type                                      | Required | Description                                                                          |
+| --------------------------- | ----------------------------------------- | -------- | ------------------------------------------------------------------------------------ |
+| `annotationId`              | `string`                                  | No       | ID of the comment annotation to render                                               |
+| `multiThreadAnnotationId`   | `string`                                  | No       | ID of the multi-thread annotation to render                                          |
+| `darkMode`                  | `boolean`                                 | No       | Enables dark mode styling                                                            |
+| `readOnly`                  | `boolean`                                 | No       | Disables user interaction                                                            |
+| `sidebarMode`               | `boolean`                                 | No       | Renders the dialog in sidebar-mode layout                                            |
+| `isFocusedThreadEnabled`    | `boolean`                                 | No       | Enables the focused-thread view                                                      |
+| `openAnnotationInFocusMode` | `boolean`                                 | No       | Opens the annotation in focus mode                                                   |
+| `expandOnSelection`         | `boolean`                                 | No       | Expands the dialog when the annotation is selected                                   |
+| `inlineCommentMode`         | `boolean`                                 | No       | Renders the dialog in inline comment mode                                            |
+| `inboxMode`                 | `boolean`                                 | No       | Renders the dialog in inbox mode                                                     |
+| `isInsidePdfViewer`         | `boolean`                                 | No       | Indicates the dialog is rendered inside a PDF viewer                                 |
+| `multiThread`               | `boolean`                                 | No       | Enables multi-thread behavior                                                        |
+| `commentComposerMode`       | `boolean`                                 | No       | Renders the dialog as a composer only                                                |
+| `dialogSelection`           | `boolean`                                 | No       | Marks the dialog as selected                                                         |
+| `dialogMode`                | `boolean`                                 | No       | Renders the component in dialog mode                                                 |
+| `focusedThreadMode`         | `boolean`                                 | No       | Renders the dialog in focused-thread mode                                            |
+| `pageModeComposer`          | `boolean`                                 | No       | Renders the dialog as a page-mode composer                                           |
+| `messageTruncation`         | `boolean`                                 | No       | Truncates long comment messages                                                      |
+| `initialEditCommentIndex`   | `number \| string \| null`                | No       | Index of the comment to open in edit mode initially                                  |
+| `messageTruncationLines`    | `number \| string`                        | No       | Number of lines to show before truncating a message                                  |
+| `variant`                   | `string`                                  | No       | Visual variant for the component                                                     |
+| `composerPosition`          | `string`                                  | No       | Position of the composer within the dialog                                           |
+| `sortBy`                    | `string`                                  | No       | Field to sort comments by                                                            |
+| `sortOrder`                 | `string`                                  | No       | Sort order for comments                                                              |
+| `commentPinType`            | `'bubble' \| 'pin' \| 'chart' \| 'text'`  | No       | Type of comment pin associated with the dialog                                       |
+| `containerComponentId`      | `string`                                  | No       | ID of the container component the dialog belongs to                                  |
+| `targetElementId`           | `string`                                  | No       | ID of the target element the dialog is bound to                                      |
+| `targetComposerElementId`   | `string`                                  | No       | Unique identifier for programmatic submission via `submitComment()`                  |
+| `locationVersion`           | `string`                                  | No       | Location version for the dialog                                                      |
+| `locationDisplayName`       | `string`                                  | No       | Display name of the location                                                         |
+| `context`                   | `any`                                     | No       | Custom context data for the dialog                                                   |
+| `commentPlaceholder`        | `string`                                  | No       | Placeholder text for the comment composer                                            |
+| `replyPlaceholder`          | `string`                                  | No       | Placeholder text for the reply composer                                              |
+| `editPlaceholder`           | `string`                                  | No       | Fallback placeholder text shown in the edit composer for any comment or reply        |
+| `editCommentPlaceholder`    | `string`                                  | No       | Placeholder when editing the first comment in a thread. Takes precedence over `editPlaceholder` |
+| `editReplyPlaceholder`      | `string`                                  | No       | Placeholder when editing a reply (index > 0). Takes precedence over `editPlaceholder` |
 
 <Info>
   **Edit placeholder priority order**: `editCommentPlaceholder` / `editReplyPlaceholder` (selected by comment index) → `editPlaceholder` → existing `placeholder` prop → SDK defaults.
@@ -2730,14 +3013,59 @@ export class ConfirmDialogComponentConfig {
 | `readOnly`                          | `boolean`                 | No       | Enable read-only mode                                         |
 | `embedMode`                         | `string \| null`          | No       | Embeds the sidebar inline within a container                  |
 | `floatingMode`                      | `boolean`                 | No       | Renders the sidebar as a floating overlay                     |
-| `position`                          | `string`                  | No       | Sidebar position, e.g., `'right'`, `'left'`                   |
+| `position`                          | `'right' \| 'left'`       | No       | Sidebar position. Narrowed from `string` to `'right' \| 'left'`. |
 | `variant`                           | `string`                  | No       | Sidebar variant, e.g., `'sidebar'`, `'inline'`                |
-| `forceClose`                        | `boolean`                 | No       | Force-close the sidebar                                       |
+| `forceClose`                        | `boolean`                 | No       | Force-close the sidebar. Default `true`.                      |
 | `version`                           | `string`                  | No       | When `"2"`, routes `VeltCommentsSidebar` to the V2 implementation |
 | `onSidebarOpen`                     | `(data: any) => void`     | No       | Callback when sidebar opens                                   |
 | `onSidebarClose`                    | `(data: any) => void`     | No       | Callback when sidebar closes                                  |
 | `onCommentClick`                    | `(data: any) => void`     | No       | Callback when a comment is clicked                            |
 | `onCommentNavigationButtonClick`    | `(data: any) => void`     | No       | Callback when navigation button is clicked                    |
+| `fullScreen`                        | `boolean`                 | No       | Adds a fullscreen toggle button to the header. Default `false`. |
+| `fullExpanded`                      | `boolean`                 | No       | Render the sidebar fully expanded. Default `false`.           |
+| `shadowDom`                         | `boolean`                 | No       | Render the sidebar body inside a shadow root for style isolation. Input default `false`; effective default on (V1 parity) unless disabled via `shadow-dom="false"` / `disableSidebarShadowDOM()`. |
+| `filters`                           | `string \| FilterField[] \| object` | No | Main Filter panel fields. An object of active selections routes to the V1 `setCommentSidebarFilters` path. Default `[]`. |
+| `miniFilters`                       | `string \| FilterField[]` | No       | Single header funnel dropdown (one section per field). Default `[]`. |
+| `minimalFilters`                    | `string \| SidebarMinimalFilterConfig[]` | No | Multiple configurable header dropdowns (`filter`/`sort`/`quick`/`actions`). Default `[]`. |
+| `filterOperator`                    | `'and' \| 'or'`           | No       | How selections across different fields combine. Default `'and'`. |
+| `filterPanelLayout`                 | `'bottomSheet' \| 'menu'` | No       | Main Filter panel layout. Default `'bottomSheet'`.            |
+| `filterOptionLayout`                | `'dropdown' \| 'checkbox'`| No       | Option control rendering. Default `'dropdown'`.               |
+| `filterCount`                       | `boolean`                 | No       | Show per-option facet counts. Default `true`.                 |
+| `filterGhostCommentsInSidebar`      | `boolean`                 | No       | Include ghost comments in the list. Default `false`.          |
+| `systemFiltersOperator`             | `'and' \| 'or'`           | No       | Operator applied to system filters. Unset by default.         |
+| `sortBy`                            | [`SortBy`](#sortby)       | No       | Default sort field (sets the default sort, not a UI dropdown). Unset by default. |
+| `sortOrder`                         | [`SortOrder`](#sortorder) | No       | Default sort order. Unset by default.                         |
+| `sortData`                          | `string`                  | No       | Custom-field sort path. Unset by default.                     |
+| `defaultMinimalFilter`              | `'all' \| 'read' \| 'unread' \| 'resolved' \| 'open' \| 'assignedToMe' \| 'reset'` | No | Default active quick filter. Unset by default. |
+| `customActions`                     | `boolean`                 | No       | Enable custom actions. Default `false`.                       |
+| `excludeLocationIds`                | `string[]`                | No       | Location ids to exclude from the list. Default `[]`.          |
+| `sidebarButtonCountType`            | `'default' \| 'filter'`   | No       | `'filter'` makes the comment-sidebar button badge track the live filtered count instead of the total. Unset by default. |
+| `groupConfig`                       | `{ enable?: boolean; name?: string; groupBy?: string }` | No | Grouping config; defaults to grouping by location when enabled. Unset by default. |
+| `currentLocationSuffix`             | `boolean`                 | No       | Append a current-location suffix. Default `false`.            |
+| `dialogVariant`                     | `string`                  | No       | Variant for the embedded comment dialog. Default `'sidebar'`. |
+| `focusedThreadDialogVariant`        | `string`                  | No       | Variant for the focused-thread dialog. Default `'sidebar'`.   |
+| `pageModeComposerVariant`           | `string`                  | No       | Variant for the page-mode composer. Default `'sidebar'`.      |
+| `dialogSelection`                   | `boolean`                 | No       | Allow selecting a dialog from the list. Default `true`.       |
+| `expandOnSelection`                 | `boolean`                 | No       | Expand the dialog on selection. Default `true`.               |
+| `openAnnotationInFocusMode`         | `boolean`                 | No       | Open annotations in focus mode. Default `false`.              |
+| `searchPlaceholder`                 | `string`                  | No       | Placeholder text for the search box. Default `'Search comments'`. |
+| `pageModePlaceholder`               | `string`                  | No       | Placeholder for the page-mode composer. Default `''`.         |
+| `commentPlaceholder`                | `string`                  | No       | Placeholder for the comment composer. Default `''`.           |
+| `replyPlaceholder`                  | `string`                  | No       | Placeholder for the reply composer. Default `''`.             |
+| `editPlaceholder`                   | `string`                  | No       | Fallback placeholder shown in the edit composer. Default `''`. |
+| `editCommentPlaceholder`            | `string`                  | No       | Placeholder when editing the first comment. Default `''`.     |
+| `editReplyPlaceholder`              | `string`                  | No       | Placeholder when editing a reply. Default `''`.               |
+| `context`                           | `object`                  | No       | Context data (JSON) passed to the sidebar. Default `null`.    |
+| `measuredSize`                      | `number`                  | No       | Estimated row size (px) used by virtual scrolling. Default `220`. |
+| `minBufferPx`                       | `number`                  | No       | Minimum virtual-scroll buffer in px. Default `1000`.          |
+| `maxBufferPx`                       | `number`                  | No       | Maximum virtual-scroll buffer in px. Default `2000`.          |
+| `urlNavigation`                     | `boolean`                 | No       | Enable URL-based navigation to comments. Default `false`.     |
+| `enableUrlNavigation`               | `boolean`                 | No       | Deprecated alias for `urlNavigation`. Default `false`.        |
+| `queryParamsComments`               | `boolean`                 | No       | Sync the selected comment to URL query params. Default `false`. |
+| `onFullscreenClick`                 | `(data: any) => void`     | No       | Fires when the fullscreen toggle button is clicked.           |
+| `openSidebar`                       | `(data: any) => void`     | No       | Deprecated V1 compatibility alias (prefer `onSidebarOpen`).   |
+| `sidebarCommentClick`               | `(data: any) => void`     | No       | Deprecated V1 compatibility alias (prefer `onCommentClick`).  |
+| `onSidebarCommentClick`             | `(data: any) => void`     | No       | Deprecated V1 compatibility alias (prefer `onCommentClick`).  |
 
 #### VeltInlineCommentsSectionProps
 
@@ -3408,7 +3736,6 @@ Configuration for cross-organization "For You" notifications. Merges For You not
 | `enabled`                  | `boolean`                     | No       | Enable or disable cross-org notifications. Defaults to `true` when opted in.      |
 | `organizationIds`          | `string[]`                    | No       | Allowlist of org IDs to include. When omitted, all indexed orgs are eligible.     |
 | `excludeOrganizationIds`   | `string[]`                    | No       | Org IDs to exclude. The current org is always excluded regardless of this field.  |
-| `maxOrganizations`         | `number`                      | No       | Upper bound on orgs queried. Defaults to `20`.                                    |
 | `feeds`                    | `('forYou' \| 'all')[]`       | No       | Feed targets. Only `'forYou'` is supported; `'all'` is ignored with a warning.    |
 
 #### FirestorePaths
@@ -4366,13 +4693,39 @@ The `dataProvider` event emits different resolver event types depending on the d
 
 ---
 
-| Property      | Type     | Required | Description                       |
-| ------------- | -------- | -------- | --------------------------------- |
-| `baseUrl`     | `string` | Yes      | Base URL of the page.             |
-| `path`        | `string` | Yes      | Path of the page.                 |
-| `queryParams` | `string` | No       | Query parameters of the page URL. |
-| `title`       | `string` | Yes      | Title of the page.                |
-| `url`         | `string` | Yes      | Full URL of the page.             |
+Page info attached to newly created data. Set via [`setPageInfo()`](/api-reference/sdk/api/api-methods#setpageinfo); readable via `documentMetadata.pageInfo` at `setDocumentId`/`setDocuments` call time.
+
+| Property      | Type                          | Required | Description                                      |
+| ------------- | ----------------------------- | -------- | ------------------------------------------------ |
+| `url`         | `string`                      | No       | Full URL of the page.                            |
+| `path`        | `string`                      | No       | Path of the page.                                |
+| `queryParams` | `string`                      | No       | Query parameters of the page URL.                |
+| `baseUrl`     | `string`                      | No       | Base URL of the page.                            |
+| `title`       | `string`                      | No       | Title of the page.                               |
+| `arrowUrl`    | `string`                      | No       | URL associated with arrow annotations.           |
+| `areaUrl`     | `string`                      | No       | URL associated with area annotations.            |
+| `commentUrl`  | `string`                      | No       | URL associated with comment annotations.         |
+| `tagUrl`      | `string`                      | No       | URL associated with tag annotations.             |
+| `recorderUrl` | `string`                      | No       | URL associated with recordings.                  |
+| `screenWidth` | `number`                      | No       | Screen width of the page, in pixels.             |
+| `deviceInfo`  | [`IDeviceInfo`](#ideviceinfo) | No       | Device information captured for the page.        |
+
+#### IDeviceInfo
+
+---
+
+Device information captured by the SDK and attached to [`PageInfo`](#pageinfo). Populated automatically from the browser environment.
+
+| Property         | Type     | Required | Description                                       |
+| ---------------- | -------- | -------- | ------------------------------------------------- |
+| `userAgent`      | `string` | No       | User agent string of the browser.                 |
+| `browserName`    | `string` | No       | Browser name, e.g. `Chrome`.                      |
+| `browserVersion` | `string` | No       | Browser version.                                  |
+| `deviceType`     | `string` | No       | Device type, e.g. `desktop` or `mobile`.          |
+| `osName`         | `string` | No       | Operating system name, e.g. `macOS`.              |
+| `osVersion`      | `string` | No       | Operating system version.                         |
+| `screenWidth`    | `number` | No       | Screen width of the device, in pixels.            |
+| `screenHeight`   | `number` | No       | Screen height of the device, in pixels.           |
 
 #### VeltAuthTokenRequest
 
@@ -5665,15 +6018,20 @@ Map of currently selected annotations, keyed by `annotationId`. Used across mult
 
 ---
 
-| Property      | Type     | Required | Description                            |
-| ------------- | -------- | -------- | -------------------------------------- |
-| `url`         | `string` | No       | URL of the webpage                     |
-| `path`        | `string` | No       | Path of the webpage excluding base url |
-| `baseUrl`     | `string` | No       | Base URL (domain) of a webpage         |
-| `title`       | `string` | No       | Title of the webpage                   |
-| `commentUrl`  | `string` | No       | Reference url of a comment annotation  |
-| `recorderUrl` | `string` | No       | Reference url of a recorder annotation |
-| `screenWidth` | `number` | No       | User's screen width. Auto generated.   |
+| Property      | Type                          | Required | Description                            |
+| ------------- | ----------------------------- | -------- | -------------------------------------- |
+| `url`         | `string`                      | No       | URL of the webpage                     |
+| `path`        | `string`                      | No       | Path of the webpage excluding base url |
+| `queryParams` | `string`                      | No       | Query parameters of the page URL       |
+| `baseUrl`     | `string`                      | No       | Base URL (domain) of a webpage         |
+| `title`       | `string`                      | No       | Title of the webpage                   |
+| `arrowUrl`    | `string`                      | No       | Reference url of an arrow annotation   |
+| `areaUrl`     | `string`                      | No       | Reference url of an area annotation    |
+| `commentUrl`  | `string`                      | No       | Reference url of a comment annotation  |
+| `tagUrl`      | `string`                      | No       | Reference url of a tag annotation      |
+| `recorderUrl` | `string`                      | No       | Reference url of a recorder annotation |
+| `screenWidth` | `number`                      | No       | User's screen width. Auto generated.   |
+| `deviceInfo`  | [`IDeviceInfo`](#ideviceinfo) | No       | Device information. Auto generated.    |
 
 #### `getThumbnailTag` Method
 
@@ -6128,6 +6486,14 @@ Configuration interface for Permission Provider. Velt validates access requests 
 | `retryConfig`      | [AuthRetryConfig](#authretryconfig) | No       | Configuration for retrying failed permission requests. Defaults to 3 retries with 2000ms delay.                                                                                                            |
 | `forceRefresh`     | `boolean`                           | No       | Set to `true` if access control changes frequently. Forces re-validation on each access check in the current session. Default: `false`                                                                     |
 | `revokeAccessOn`   | [RevokeAccessOn[]](#revokeaccesson) | No       | Configure automatic access revocation triggers. Revokes permissions when specified events occur (e.g., document unset or user logout).                                                                     |
+| `dev`              | `boolean`                           | No       | Opt-in: resolve permissions in the browser for local testing. Honored only for dev/test API keys; production keys always use the server-side provider. Default: `false`.                                   |
+| `endpointConfig`   | [ResolverEndpointConfig](#resolverendpointconfig) | No | URL resolver for the dev resolver. SDK POSTs `{ data: { requests:` [PermissionQuery[]](#permissionquery) `} }` to the URL. Takes precedence over `resolvePermissions`.                              |
+| `resolvePermissions` | `(request:` [PermissionResolverRequest](#permissionresolverrequest)`) => Promise<`[PermissionResult[]](#permissionresult) `\|` [ResolverResponse](#resolverresponse)`<PermissionResult[]>>` | No | In-browser callback resolver. Invoked with the same request envelope as the server-side provider. |
+| `resolveTimeout`   | `number`                            | No       | Per-call deadline in milliseconds for the dev resolver. Default: `60000`.                                                                                                                                  |
+
+<Info>
+The dev resolver fails closed: resolver errors, timeouts, and malformed payloads all deny access. When both are set, `endpointConfig.url` takes precedence over `resolvePermissions`. A one-shot `console.warn` fires when the dev resolver is active or when `dev: true` is set without a usable resolver.
+</Info>
 
 #### PermissionQuery
 
@@ -6139,6 +6505,16 @@ Request structure for permission queries sent to the Permission Provider.
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `userId`   | `string`                                                                                                                                                                              | Yes      | ID of the user requesting access to the resource.                                                                                                                                                                                                                                                                                                                          |
 | `resource` | `{ type:` [PermissionResourceType](#permissionresourcetype)`; id: string; source:` [PermissionSource](#permissionsource)`; organizationId: string; context?:` [Context](#context)`; parentFolderId?: string }` | Yes      | Resource the user is requesting access to. The `type` uses [`PermissionResourceType`](#permissionresourcetype) enum. The `source` field identifies which SDK method triggered the permission check. The optional `context` field is present only when `isContextEnabled: true` and contains context values set during setDocuments. Includes `organizationId` for context. The optional `parentFolderId` field is set when the document was created via `setDocuments()` with a `folderId` option — it forwards the folder context through the permission request so the document is created and attached to its parent folder. |
+
+#### PermissionResolverRequest
+
+---
+
+Request envelope passed to dev permission resolvers ([`resolvePermissions`](#veltpermissionprovider)). Byte-identical to the server-side Real-Time Permission Provider contract, so an existing `/api/check-permissions` handler works unchanged from either caller.
+
+| Property        | Type                                  | Required | Description                                       |
+| --------------- | ------------------------------------- | -------- | -------------------------------------------------- |
+| `data.requests` | [PermissionQuery[]](#permissionquery) | Yes      | Permission queries to resolve in a single request. |
 
 #### PermissionResult
 

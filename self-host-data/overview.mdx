@@ -167,6 +167,33 @@ Your endpoint should respond with HTTP `2xx` and a JSON body of `{ "data": … }
 Attachment and recording uploads are the exception — they use `multipart/form-data` rather than JSON, because a binary file is involved. See [Attachment & recording storage](#attachment-&-recording-storage).
 </Note>
 
+#### Dynamic headers and cross-origin credentials
+
+[`ResolverEndpointConfig.headers`](/api-reference/sdk/models/data-models#resolverendpointconfig) accepts either a static object or an async function. The function form is resolved **on every request** — including each retry attempt — so you can forward short-lived per-user tokens (e.g., a freshly minted JWT) without embedding a static secret. Pair it with `credentials: 'include'` when your resolver endpoint relies on cross-origin cookie or session auth.
+
+```ts
+const getFreshToken = async (): Promise<string> => {
+  // fetch / refresh a short-lived JWT from your auth provider
+  return '...';
+};
+
+await Velt.setDataProviders({
+  comment: {
+    config: {
+      saveConfig: {
+        url: 'https://your-backend.com/api/velt/comments/save',
+        headers: async () => ({
+          Authorization: `Bearer ${await getFreshToken()}`,
+        }),
+        credentials: 'include',
+      },
+    },
+  },
+});
+```
+
+Both `headers` and `credentials` are available on every endpoint-based resolver — `comment`, `reaction`, `recorder`, `activity`, `notification`, `attachment`, and the `endpointConfig` on [`VeltPermissionProvider`](/api-reference/sdk/models/data-models#veltpermissionprovider). Existing static `headers` configurations keep working unchanged; when `credentials` is omitted, the request is byte-identical to prior behavior.
+
 ### Metadata your provider receives
 
 Every `get` / `save` / `delete` request includes a `metadata` object ([`BaseMetadata`](/api-reference/sdk/models/data-models#basemetadata)) describing the organization/document context, so you can scope the data correctly in your backend. Velt sends you a **client-facing** subset: it maps Velt's internal IDs back to **the IDs you originally passed to Velt** and removes purely internal bookkeeping fields.

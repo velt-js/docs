@@ -372,7 +372,8 @@ res.json({ data: result, success: true, statusCode: 200 });
 ### save
 Save comments to your database. Return a success or error response. On error we will retry.
 - Param: [`SaveCommentResolverRequest`](/api-reference/sdk/models/data-models#savecommentresolverrequest)
-  - Note in the `SaveCommentResolverRequest` object, you will receive [the event name](/api-reference/sdk/models/data-models#resolveractions) that triggered the save.
+  - The request includes the [event name](/api-reference/sdk/models/data-models#resolveractions) that triggered the save. By default, only the four core PII events ([`COMMENT_ANNOTATION_ADD`, `COMMENT_ADD`, `COMMENT_UPDATE`, `COMMENT_DELETE`](/api-reference/sdk/models/data-models#resolveractions)) reach this endpoint. Opt into more via [`additionalSaveEvents`](#additional-save-events).
+  - When the save is triggered by an action on a specific comment, the request also includes a `targetComment` ([`PartialComment`](/api-reference/sdk/models/data-models#partialcomment)) resolved from `commentId`. Read it directly instead of scanning `commentAnnotation[*].comments` yourself.
 - Return: [`Promise<ResolverResponse<T>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
 <Warning>
@@ -548,6 +549,66 @@ res.json({ success: true, statusCode: 200 });
 </Tab>
 </Tabs>
 
+### Additional save events
+
+By default, the comment `save` endpoint receives only the four core PII events from [`ResolverActions`](/api-reference/sdk/models/data-models#resolveractions): `COMMENT_ANNOTATION_ADD`, `COMMENT_ADD`, `COMMENT_UPDATE`, and `COMMENT_DELETE`. Use `config.additionalSaveEvents` to opt into additional annotation-level lifecycle events on the same endpoint — useful for activity feeds, audit trails, and downstream workflows that need to react to status changes, assignments, approvals, reactions, and more.
+
+- The full set of opt-in events is defined by [`CommentResolverSaveEvent`](/api-reference/sdk/models/data-models#commentresolversaveevent).
+- The same stripped [`PartialCommentAnnotation`](/api-reference/sdk/models/data-models#partialcommentannotation) payload you already receive is sent — no new data egress.
+- Additional events bypass the deduplication gate that drops core saves with no PII change, so they are delivered even when the underlying text hasn't changed.
+- Annotation-level events (e.g., `STATUS_CHANGE`, `ASSIGN`) omit `commentId` and `targetComment` because the action targets the whole annotation. Reaction events (`REACTION_ADD`, `REACTION_DELETE`) include both, since the reaction is on a specific comment.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { CommentResolverSaveEvent } from '@veltdev/types';
+
+const commentDataProvider = {
+  config: {
+    saveConfig: {
+      url: 'https://your-backend.com/api/velt/comments/save',
+    },
+    additionalSaveEvents: [
+      { event: CommentResolverSaveEvent.STATUS_CHANGE },
+      { event: CommentResolverSaveEvent.ASSIGN },
+      { event: CommentResolverSaveEvent.APPROVE },
+      { event: CommentResolverSaveEvent.REACTION_ADD },
+    ],
+  },
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ comment: commentDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+import { CommentResolverSaveEvent } from '@veltdev/types';
+
+await Velt.setDataProviders({
+  comment: {
+    config: {
+      saveConfig: {
+        url: 'https://your-backend.com/api/velt/comments/save',
+      },
+      additionalSaveEvents: [
+        { event: CommentResolverSaveEvent.STATUS_CHANGE },
+        { event: CommentResolverSaveEvent.ASSIGN },
+        { event: CommentResolverSaveEvent.APPROVE },
+        { event: CommentResolverSaveEvent.REACTION_ADD },
+      ],
+    },
+  },
+});
+```
+</Tab>
+</Tabs>
+
+Inspect the `event` field on the incoming [`SaveCommentResolverRequest`](/api-reference/sdk/models/data-models#savecommentresolverrequest) to branch on the event type. The field is typed as the union of [`ResolverActions`](/api-reference/sdk/models/data-models#resolveractions) and [`CommentResolverSaveEvent`](/api-reference/sdk/models/data-models#commentresolversaveevent), so a single handler can serve both core and additional events.
+
 ### config
 Configuration for the comment data provider.
 - Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig). Relevant properties:
@@ -557,6 +618,7 @@ Configuration for the comment data provider.
   - `deleteRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for delete operations.
   - `additionalFields`: `string[]`. Custom fields that are **copied** into the resolver request payloads sent to your backend while still being **kept** in Velt's database. Use this when you want a copy of a field in your own backend (e.g., for analytics or search) without removing it from Velt — for example `status`, `assignedTo`, `priority`.
   - `fieldsToRemove`: `string[]`. Custom fields that are **moved** out of Velt's database into yours: they are sent to your backend, deleted from Velt's storage, and merged back on read. Use this for custom fields that must not be stored by Velt at all (e.g., `internalTicketId`). See [Excluding & extending fields](/self-host-data/overview#excluding--extending-fields) for the full behavior comparison.
+  - `additionalSaveEvents`: [`AdditionalSaveEventConfig[]`](/api-reference/sdk/models/data-models#additionalsaveeventconfig). Opt in to additional annotation-level save events (status change, priority change, assign, approve, reactions, subscriptions, and more) on the same save endpoint. See [Additional save events](#additional-save-events).
 
 <Warning>
 `fieldsToRemove` is only for your own custom fields. Never list a field Velt uses to query, scope, position, sync, or render an annotation (e.g., `metadata`, `annotationId`, `status`, `location`, `from`, `isCommentResolverUsed`) or comments will fail to load, appear in the wrong place, or break filtering. If in doubt, use `additionalFields` instead. See the [full list of fields to avoid](/self-host-data/overview#excluding--extending-fields).

@@ -241,7 +241,7 @@ sdk = VeltSDK.initialize(config)
 
 The SDK provides methods that accept the raw request from the frontend and return the properly formatted response.
 
-All self-hosting service classes — the `BaseService` base class plus seven resolver services — are importable from `velt_py.services.self_hosting`. As of **v0.1.12**, `RecorderService`, `NotificationService`, and `ActivityService` are also exported — previously they were wired into `SelfHostingBackend` but missing from the package's `__all__`.
+All self-hosting service classes — the `BaseService` base class plus the resolver services — are importable from `velt_py.services.self_hosting`. As of **v0.1.12**, `RecorderService`, `NotificationService`, and `ActivityService` are also exported — previously they were wired into `SelfHostingBackend` but missing from the package's `__all__`. **v0.1.14** adds `ResolverAuthService`, the DB-free service backing [`sdk.selfHosting.verifyToken`](#resolver-authentication).
 
 ```python
 from velt_py.services.self_hosting import (
@@ -249,10 +249,11 @@ from velt_py.services.self_hosting import (
     CommentService,
     ReactionService,
     AttachmentService,
-    RecorderService,      # newly exported in v0.1.12
-    NotificationService,  # newly exported in v0.1.12
-    ActivityService,      # newly exported in v0.1.12
+    RecorderService,        # newly exported in v0.1.12
+    NotificationService,    # newly exported in v0.1.12
+    ActivityService,        # newly exported in v0.1.12
     UserService,
+    ResolverAuthService,    # new in v0.1.14
 )
 ```
 
@@ -305,6 +306,27 @@ def save_comments(request):
 ```python
 { 'success': True, 'statusCode': 200, 'data': { ... } }
 ```
+
+<Note>
+**New in v0.1.14**: `SaveCommentResolverRequest` adds an optional `targetComment: PartialComment` field carrying the specific comment the action occurred on, and its `event` field is now typed `Optional[Union[ResolverActions, CommentResolverSaveEvent, str]]` to accept the 14 additional save events the frontend can opt into via [`ResolverConfig.additionalSaveEvents`](/api-reference/sdk/models/data-models#commentresolversaveevent). Both changes are additive and backward-compatible — every existing payload still parses byte-identically, and `saveComments` never persists `targetComment`.
+
+```python
+from velt_py import SaveCommentResolverRequest, CommentResolverSaveEvent, ResolverActions
+
+save_request = SaveCommentResolverRequest.from_dict(data)
+
+if save_request.targetComment is not None:
+    # Request context only — saveComments does not write this to MongoDB.
+    print(save_request.targetComment.commentId)
+
+if save_request.event == CommentResolverSaveEvent.STATUS_CHANGE:
+    ...  # annotation status changed
+elif save_request.event == ResolverActions.COMMENT_UPDATE:
+    ...  # core event (unchanged)
+
+sdk.selfHosting.comments.saveComments(save_request)
+```
+</Note>
 
 #### `deleteComment`
 
@@ -663,6 +685,90 @@ result = sdk.selfHosting.token.getToken(
 ```
 
 > Note: `getToken` takes positional / keyword arguments — it does NOT accept a dataclass request object. Signature: `getToken(organizationId, userId, email=None, isAdmin=False)`.
+
+### Resolver authentication
+
+<Note>**New in v0.1.14.**</Note>
+
+`sdk.selfHosting.verifyToken` authenticates the credential the Velt frontend forwards to your resolver endpoints. It is opt-in via a `resolver_auth` config block, framework-agnostic, and fail-closed: it returns a structured `VerifyTokenResult` and never raises for a verification outcome.
+
+When to use it: if you forward a short-lived per-user bearer token (for example, a JWT signed by your IdP) from the Velt frontend to your resolver endpoints, call `verifyToken` at the top of every resolver handler to confirm the token before reading or writing data. Without it, the resolver services trust only the server-side `apiKey` scoping and the `organizationId` in the payload.
+
+Install the JWT extra to use the built-in verifier. The custom-callback path and all non-auth SDK features require no new dependency:
+
+```bash
+pip install 'velt-py[auth]'
+```
+
+#### Configure `resolver_auth`
+
+Add a `resolver_auth` block to `VeltSDK.initialize`. Pick exactly one path: the built-in `jwt` verifier, or a custom `verify` callback (the custom callback takes priority if both are set).
+
+```python
+from velt_py import VeltSDK
+
+sdk = VeltSDK.initialize({
+    'database': {...},
+    'resolver_auth': {
+        # Option 1: Built-in JWT verifier (HS256 example).
+        'jwt': {
+            'secret': 'your-hmac-secret',          # HS* — or use one of:
+            # 'public_key': '-----BEGIN PUBLIC KEY-----...',  # static RS*/ES* key
+            # 'jwks_url': 'https://your-idp/.well-known/jwks.json',  # RS*/ES* via JWKS
+            'algorithms': ['HS256'],               # required allowlist
+            'issuer': 'https://your-idp',          # optional, enforced when set
+            'audience': 'velt',                    # optional, enforced when set
+            'leeway': 30,                          # optional clock skew (seconds)
+            # 'require': ['exp'],                  # optional: reject tokens missing these claims
+        },
+        # Option 2: Custom escape hatch — takes priority over `jwt`.
+        # 'verify': lambda token, headers: my_decode(token),  # return a claims dict or None
+        # Optional header / scheme overrides (defaults shown):
+        # 'header': 'Authorization',
+        # 'scheme': 'Bearer',
+    },
+})
+```
+
+#### Verify a token in a resolver handler
+
+```python
+def save_comments(request):
+    result = sdk.selfHosting.verifyToken(headers=request.headers)
+    if not result.verified:
+        return JsonResponse(
+            {'success': False, 'errorCode': result.errorCode, 'statusCode': 401},
+            status=401,
+        )
+
+    # result.claims holds the decoded payload. If you need tenant isolation,
+    # assert the relevant claim against the payload's organizationId yourself.
+    save_request = SaveCommentResolverRequest.from_dict(request.json)
+    return sdk.selfHosting.comments.saveComments(save_request)
+```
+
+You can also pass the token directly: `sdk.selfHosting.verifyToken(token='<raw_jwt>')`. `**overrides` keyword arguments merge over the configured `resolver_auth` block, so you can pass a one-off `jwt`, `verify`, `header`, or `scheme` per call.
+
+#### `VerifyTokenResult`
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `verified` | `bool` | `True` only when a token was present and fully verified, or a custom callback returned non-`None` claims. |
+| `claims` | `Optional[dict]` | The decoded token payload when `verified=True`; `None` otherwise. |
+| `error` | `Optional[str]` | Generic, code-based error message. Never contains the token or signing secret. |
+| `errorCode` | `Optional[str]` | One of: `MISSING_TOKEN`, `EXPIRED`, `INVALID_SIGNATURE`, `CLAIM_MISMATCH`, `ALGORITHM_NOT_ALLOWED`, `KEY_RESOLUTION_FAILED`, `VERIFICATION_FAILED`, `NOT_CONFIGURED`, `DEPENDENCY_MISSING`. |
+
+#### Security properties
+
+- **Fail-closed.** Every error, ambiguity, or missing input yields `verified=False`. No code path returns `verified=True` unless a token was present and fully verified.
+- **Algorithm pinning.** The `algorithms` allowlist is required and always passed to PyJWT. `alg=none` is rejected unconditionally. Mixed symmetric + asymmetric allowlists are rejected to prevent HS/RS algorithm-confusion attacks. A PEM string supplied as `jwt.secret` is also rejected (PEM-as-HMAC-secret forgery).
+- **HTTPS-only JWKS.** `jwks_url` must use `https://`. Redirect downgrades to `http://` and 3xx responses from JWKS endpoints are rejected. The JWKS cache is keyed by `(url, kid)` to prevent cross-issuer key reuse.
+- **No credential leakage.** Error messages are code-based and never contain the token, signing secret, or decoded claims.
+- **Authentication only.** The helper never reads `apiKey`, `organizationId`, or the resolver database. The resolver services keep their own `apiKey` / `organizationId` scoping. If you need tenant isolation, compare the relevant claim against the resolver payload's `organizationId` yourself.
+
+#### When `resolver_auth` is not configured
+
+`verifyToken` returns `verified=False, errorCode='NOT_CONFIGURED'`. It does not raise and does not silently pass. The rest of the SDK is unaffected.
 
 ### Framework Examples
 

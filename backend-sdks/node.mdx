@@ -150,6 +150,39 @@ const sdk = VeltSDK.initialize({
 ```
 
 </Tab>
+<Tab title="Resolver Auth (Optional)">
+
+Configure how the SDK verifies bearer tokens that the Velt frontend forwards to your endpoint-based resolvers. Used only when you call `sdk.selfHosting.verifyToken`. See [Verify resolver tokens](#verify-resolver-tokens) for usage.
+
+```ts
+const sdk = VeltSDK.initialize({
+  database: { connection_string: 'mongodb+srv://...' },
+  resolverAuth: {
+    jwt: {
+      algorithms: ['RS256'],                                    // required — algorithm allowlist
+      jwksUrl: 'https://your-idp/.well-known/jwks.json',        // or: publicKey / secret
+      issuer: 'https://your-idp/',                              // optional — enforced when set
+      audience: 'velt',                                         // optional — enforced when set
+      leeway: 10,                                               // optional — clock tolerance in seconds
+      require: ['exp'],                                         // optional — required claims
+    },
+    // or use a custom verifier instead of `jwt`:
+    // verify: async (token, headers) => ({ sub: 'user-1' }),
+    header: 'Authorization',                                    // optional — default 'Authorization'
+    scheme: 'Bearer',                                           // optional — default 'Bearer'
+  },
+});
+```
+
+Install the optional `jose` peer dependency for the built-in JWT/JWKS path:
+
+```bash
+npm install jose@^5
+```
+
+`jose` is pinned to v5 for Node 18 compatibility. The custom `verify` callback path needs no extra dependency.
+
+</Tab>
 <Tab title="Complete Example">
 
 Full configuration with database and credentials.
@@ -628,6 +661,87 @@ const token = (tokenResult.data as { token: string }).token;
 ```ts
 { success: true, statusCode: 200, data: { token: 'eyJhbGciOiJIUzI1NiIs...' } }
 ```
+
+### Token Verification
+
+Access via the synchronous `sdk.selfHosting` namespace (no `await`).
+
+#### `verifyToken`
+
+Verifies the bearer token the Velt frontend forwards to your endpoint-based resolvers. The helper is:
+
+- **Database-free** — callable immediately after `VeltSDK.initialize`, no MongoDB connection required.
+- **Fail-closed** — every error path returns `{ verified: false }` with an `errorCode`. It never throws.
+- **Authentication only** — returns the decoded claims verbatim. Authorization decisions are yours to make.
+
+Use it inside any resolver endpoint (comments, reactions, users, attachments, etc.) to confirm the request came from your authenticated frontend before you read or write data.
+
+Configure verification once on `VeltSDK.initialize` via [`resolverAuth`](#self-hosting-configuration), then call `verifyToken` per request.
+
+```ts
+// In your resolver endpoint:
+const result = await sdk.selfHosting.verifyToken({ headers: request.headers });
+
+if (!result.verified) {
+  return response.status(401).json({
+    error: result.error,
+    errorCode: result.errorCode,
+  });
+}
+
+const userId = result.claims?.sub;
+```
+
+You can also pass a raw token directly, or override config per call (deep-merged with `jwt`):
+
+```ts
+// Pass a raw token instead of extracting it from headers:
+const result = await sdk.selfHosting.verifyToken({ token: rawToken });
+
+// Override just the clock leeway for this call:
+const result = await sdk.selfHosting.verifyToken({
+  headers: request.headers,
+  jwt: { leeway: 30 },
+});
+```
+
+**Response**
+
+```ts
+{
+  verified: true,
+  claims: { sub: 'user-1', iss: 'https://your-idp/', exp: 1750000000 }
+}
+```
+
+```ts
+// On failure:
+{ verified: false, error: 'Token expired', errorCode: 'EXPIRED' }
+```
+
+**Error codes** (`ResolverAuthErrorCode`)
+
+| Code                    | When                                                                                                  |
+| ----------------------- | ----------------------------------------------------------------------------------------------------- |
+| `NOT_CONFIGURED`        | Neither `jwt` nor a `verify` callback is configured                                                   |
+| `MISSING_TOKEN`         | No token found in headers, or scheme did not match                                                    |
+| `EXPIRED`               | JWT `exp` claim has passed (beyond `leeway`)                                                          |
+| `INVALID_SIGNATURE`     | Signature verification failed, or the token is malformed                                              |
+| `CLAIM_MISMATCH`        | Configured `issuer` / `audience` is wrong or missing; or a `require`d claim is absent                 |
+| `ALGORITHM_NOT_ALLOWED` | `alg=none`; algorithm outside the allowlist; mixed symmetric+asymmetric allowlist; missing allowlist  |
+| `KEY_RESOLUTION_FAILED` | No usable key; JWKS URL is not HTTPS; JWKS fetch failed; redirect downgrade detected                  |
+| `DEPENDENCY_MISSING`    | Built-in JWT path used but `jose` is not installed                                                    |
+| `VERIFICATION_FAILED`   | Custom callback threw or returned falsy; unexpected internal error (fail-closed catch-all)            |
+
+**Security behavior**
+
+- `alg=none` is always rejected, even if mistakenly included in the allowlist.
+- Mixed symmetric and asymmetric algorithms in `algorithms` are refused (prevents HS/RS confusion).
+- A PEM placed in `jwt.secret` is refused (prevents algorithm confusion via public key as HMAC secret).
+- JWKS is fetched only over `https://`. `http://` URLs and redirect downgrades to `http://` are rejected before any fetch.
+- JWKS documents are cached per URL with a 5-minute TTL (not per `kid`), so attacker-varied `kid` values cannot trigger unbounded fetches or cache growth.
+- The unverified token header's `alg` is checked against the allowlist **before** any network call, so disallowed tokens never trigger a JWKS fetch.
+- The `error` field is generic and code-based — it never contains the token or signing secret.
 
 ## REST API Backend
 

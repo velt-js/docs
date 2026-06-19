@@ -9,6 +9,114 @@ description: Release Notes of changes added to the core Velt SDK
 - `@veltdev/client`
 - `@veltdev/sdk`
 
+<Update label="5.0.4" description="June 19, 2026">
+
+### New Features
+
+- [**Self-Hosted Data**]: Resolver endpoints now support **dynamic (async) headers and `credentials`** so you can mint short-lived bearer tokens per request and enable cookie/session auth on cross-origin endpoints. `headers` accepts either a static object (existing behavior) or an async function that is resolved on every request — including every retry — so each retry gets a fresh token. The new optional `credentials` field (`'include' | 'same-origin' | 'omit'`) is forwarded to `fetch()`. Available on every endpoint-based resolver: `comment`, `recorder`, `reaction`, `activity`, `notification`, `attachment`, and the permission provider's `endpointConfig`. Fully backward-compatible. [Learn more →](/api-reference/sdk/models/data-models#resolverendpointconfig)
+
+  ```ts
+  client.setDataProviders({
+    comment: {
+      config: {
+        saveConfig: {
+          url: 'https://your-backend.com/api/velt/comments/save',
+          headers: async () => ({ Authorization: `Bearer ${await getFreshToken()}` }),
+          credentials: 'include',
+        },
+      },
+    },
+  });
+  ```
+
+- [**Self-Hosted Data**]: New opt-in `additionalSaveEvents` field on the comment `ResolverConfig` lets your save endpoint receive non-core annotation-level lifecycle events — status changes, priority changes, assignments, approvals, reactions, subscriptions, and more — beyond the 4 core PII events. Use it to drive activity feeds, audit trails, and downstream workflows. A new `CommentResolverSaveEvent` enum defines the 14 supported event values. Additive and backward-compatible (default is no extra events). [Learn more →](/api-reference/sdk/models/data-models#resolverconfig)
+
+  ```ts
+  client.setDataProviders({
+    comment: {
+      config: {
+        additionalSaveEvents: [
+          { event: CommentResolverSaveEvent.STATUS_CHANGE },
+          { event: CommentResolverSaveEvent.ASSIGN },
+          { event: CommentResolverSaveEvent.APPROVE },
+          { event: CommentResolverSaveEvent.REACTION_ADD },
+        ],
+        saveConfig: { url: 'https://your-backend.com/api/velt/comments/save' },
+      },
+    },
+  });
+  ```
+
+- [**Self-Hosted Data**]: The comment resolver save payload (`SaveCommentResolverRequest`) gains a new optional `targetComment` field. When a save is triggered by an action on a specific comment, the SDK now resolves and attaches the full `PartialComment` object so your backend no longer has to re-derive it from `commentId`. No new data egress — `targetComment` is a convenience alias for data already present in the payload. [Learn more →](/api-reference/sdk/models/data-models#savecommentresolverrequest)
+
+### Improvements
+
+- [**Self-Hosted Data**]: `SaveCommentResolverRequest.event` is now typed as `ResolverActions | CommentResolverSaveEvent` so handlers can type-safely switch on both core PII events and the new opt-in `additionalSaveEvents`. Existing handlers continue to work unchanged.
+
+- [**Comments**]: The stored `CommentAnnotationVisibilityConfig` type gains an `organizationIds?: string[]` field, so reading back `annotation.visibilityConfig.organizationIds` from a multi-org private comment is now correctly typed. No behavior changes. [Learn more →](/api-reference/sdk/models/data-models#commentvisibilityconfig)
+
+### Bug Fixes
+
+- [**Comments**]: The stored `visibilityConfig` mirror on a private comment (`organizationPrivate` or `restricted`) now always includes the comment author's `userId` in `visibilityConfig.userIds`. Previously, on certain write paths the mirror could omit the author even though the underlying access fields included the author's self token, which could cause the author to be filtered out on the REST read path. Fixed across all five write paths (`addComment`, `saveComment`, `updateVisibility`, `addCommentAnnotation`, and the V2 composer inline/temp path). A third-party editor updating visibility no longer drops the original author from the stored config.
+
+</Update>
+
+<Update label="5.0.3" description="June 18, 2026">
+
+### New Features
+
+- [**Comments**]: **Multi-organization comment visibility ("Selected Teams")**. An `organizationPrivate` comment can now be shared with **multiple** teams at once via a new optional `organizationIds: string[]` field on [`CommentVisibilityConfig`](/api-reference/sdk/models/data-models#commentvisibilityconfig). Works across [`updateVisibility`](/async-collaboration/comments/customize-behavior), [`enablePrivateMode`](/async-collaboration/comments/customize-behavior), and `addCommentAnnotation`. `organizationId` and `organizationIds` are merged and de-duplicated, so you can mix them. Fully backward-compatible — existing single-org usage is unchanged.
+
+  ```ts
+  commentElement.enablePrivateMode({
+    type: 'organizationPrivate',
+    organizationIds: ['org-A', 'org-B'],
+  });
+
+  commentElement.updateVisibility({
+    annotationId: '<annotationId>',
+    type: 'organizationPrivate',
+    organizationIds: ['org-A', 'org-B'],
+  });
+  ```
+
+- [**Comments**]: New in-dialog **"Selected Teams" picker** — the team analogue of the existing "Selected People" user picker. Provide the list of selectable teams via the new `contactElement.updateOrgList()` API; the picker then appears automatically in the comment dialog's visibility banner. Picking teams persists as `organizationPrivate` with one access token per picked team. `updateOrgList` is a full-replace on every call; pass `{ orgList: [] }` to clear the picker.
+
+  ```ts
+  const contactElement = client.getContactElement();
+  contactElement.updateOrgList({
+    orgList: [
+      { id: 'team-eng', name: 'Team Eng' },
+      { id: 'team-design', name: 'Design' },
+      { id: 'team-ops', name: 'Operations' },
+    ],
+  });
+  ```
+
+- [**Comments**]: The "Selected Teams" picker is also exposed as a standalone primitive and as a wireframe slot, so you can render it anywhere in a custom comment-dialog visibility banner. React: `<VeltCommentDialogVisibilityBannerDropdownContentOrgPicker />`. HTML: `<velt-comment-dialog-visibility-banner-dropdown-content-org-picker>`.
+
+### API Changes
+
+- [**Comments**]: [`PrivateModeConfig`](/api-reference/sdk/models/data-models) (the config passed to `enablePrivateMode`) now formally accepts `organizationId` and `organizationIds` for `organizationPrivate` mode. Previously the type omitted `organizationId` even though the underlying runtime already honored it.
+
+### Bug Fixes
+
+- [**Comments**]: A comment author now **always** keeps access to their own private comment. Previously, on certain write paths (including a third-party visibility edit) the author's self access token could be missing, causing the author to lose sight of their own `organizationPrivate` or `restricted` comment after a refresh. Every non-public write now stamps the original author's self token.
+
+- [**Comments**]: **"Your Team"** visibility now scopes to the **logged-in user's** organization, not the document's. In cross-org documents, a member's "Your Team" comment was being attached to the document's owning org instead of the author's own org. Single-org users see no change. On write paths that throw, a user with no resolvable org now produces a clear error instead of silently writing the document's org.
+
+- [**Comments**]: The comment read path now **fails closed**: a viewer's org visibility token is granted only after the permission service confirms the viewer is actually a member of that org. If membership cannot be confirmed (denied, empty, or errored probe), the org token is withheld and comments still load with public + the viewer's own private comments — private comments are never shown to a viewer whose org membership isn't verified.
+
+- [**Comments**]: `fetchCommentAnnotations` now post-filters its results by the caller's visibility. A private annotation is returned only if the caller is the author, holds an intersecting visibility token, or is listed in `visibilityConfig.userIds`. The same fail-closed org-membership gate as the live read path applies.
+
+- [**Comments**]: Private comments are no longer disabled when switching documents. Previously, switching to a document under a different organization could silently flip the "private comments enabled" flag to `false`.
+
+- [**Comments**]: The V2 comment dialog composer now honors `enablePrivateMode` org targets. Previously, when `enablePrivateMode` was configured with explicit `organizationIds`, the composer-submit path would write the viewer's own org instead of the configured target orgs.
+
+- [**Comments**]: Submitting a comment from the "Selected Teams" picker no longer drops or narrows the picked teams. The composer-submit path now forwards the teams committed by the picker; on any partial token resolution it falls through to the explicit configs (and ultimately the user's own org) rather than forwarding a narrowed subset.
+
+</Update>
+
 <Update label="5.0.2" description="June 17, 2026">
 
 ### Bug Fixes

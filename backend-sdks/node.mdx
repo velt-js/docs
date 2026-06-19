@@ -18,7 +18,7 @@ The [Velt Node SDK](https://www.npmjs.com/package/@veltdev/node) exposes two ind
 2. Call the relevant SDK method with the raw request payload
 3. Return the resulting response directly to the client
 
-**REST API backend** (`sdk.api.*`) provides feature parity with the Velt Python SDK. 20 services, fully-typed TypeScript request objects, and raw Velt API responses. No database or AWS configuration needed.
+**REST API backend** (`sdk.api.*`) provides parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2). 18 services, fully-typed TypeScript request objects, and raw Velt API responses. No database or AWS configuration needed.
 
 ## Installation
 
@@ -44,7 +44,10 @@ npm install @aws-sdk/client-s3   # required only if using S3 for attachments
 
 ### Initialize the SDK
 
-**Self-hosting initialization** (MongoDB + optional AWS):
+<Tabs>
+<Tab title="Self-hosting">
+
+Self-hosting initialization (MongoDB + optional AWS):
 
 ```ts
 import { VeltSDK } from '@veltdev/node';
@@ -62,7 +65,10 @@ const sdk = VeltSDK.initialize({
 });
 ```
 
-**REST API-only initialization** (no database needed):
+</Tab>
+<Tab title="REST API">
+
+REST API-only initialization (no database needed):
 
 ```ts
 import { VeltSDK } from '@veltdev/node';
@@ -77,6 +83,9 @@ const result = await sdk.api.organizations.getOrganizations({ organizationIds: [
 ```
 
 The `database` section is optional when using only `sdk.api.*`. Set `VELT_API_KEY` and `VELT_AUTH_TOKEN` environment variables as an alternative to passing credentials in the config object.
+
+</Tab>
+</Tabs>
 
 ### Shutdown
 
@@ -622,18 +631,13 @@ const token = (tokenResult.data as { token: string }).token;
 
 ## REST API Backend
 
-The `sdk.api.*` namespace provides 20 services covering all Velt REST API operations. No database or AWS configuration is required — only `apiKey` and `authToken`.
+The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 18 services. Each method takes a fully-typed TypeScript request object and returns the raw Velt API response. You only need `apiKey` and `authToken` — no database or AWS config.
 
 Every `sdk.api.*` method requires an `organizationId` in its request payload. Velt enforces data isolation per-organization server-side.
 
 ### Field Allowlist
 
-Added in **v1.0.4**. The REST add/update methods on `activities`, `commentAnnotations`, and `notifications` accept an optional second argument, `FieldFilterOptions`. When `{ filterUnknownFields: true }` is passed, the SDK narrows the request to exactly the fields the corresponding Velt backend endpoint accepts, silently dropping unknown keys at each described level before sending.
-
-- Opt-in and off by default — omitting `options` (or passing `filterUnknownFields: false`) sends the request unchanged, exactly as before.
-- Fail-open — if filtering hits any unexpected error, the original request is sent unchanged, so a filter bug can never block a write.
-- Top-level / fail-closed within a level — only listed keys survive at each described level, but nested open-typed objects (e.g. `actionUser`, `context`, `metadata`) pass through whole rather than being recursively narrowed.
-- Allowlists are transcribed by hand from the Velt backend Zod schemas (lock-step with the velt-py SDK's self-hosting field allowlist).
+The REST add/update methods on `activities`, `commentAnnotations`, and `notifications` accept an optional second argument, `FieldFilterOptions`. Pass `{ filterUnknownFields: true }` to narrow the request to exactly the fields the corresponding Velt backend endpoint accepts. See the note at the top of each service section for the behavior summary; the per-endpoint field lists are below.
 
 ```ts
 interface FieldFilterOptions {
@@ -641,42 +645,6 @@ interface FieldFilterOptions {
    *  accepts, silently dropping unknown keys. Fail-open. Defaults to false. */
   filterUnknownFields?: boolean;
 }
-```
-
-The 8 methods that accept it:
-
-```ts
-// Activities
-sdk.api.activities.addActivities(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
-sdk.api.activities.updateActivities(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
-// Comment annotations + comments
-sdk.api.commentAnnotations.addCommentAnnotations(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
-sdk.api.commentAnnotations.updateCommentAnnotations(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
-sdk.api.commentAnnotations.addComments(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
-sdk.api.commentAnnotations.updateComments(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
-// Notifications
-sdk.api.notifications.addNotifications(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
-sdk.api.notifications.updateNotifications(request, options?: FieldFilterOptions): Promise<VeltApiResponse>;
-```
-
-**Example**
-
-```ts
-// Extra fields (internalId) are dropped before the request is sent.
-await sdk.api.commentAnnotations.addCommentAnnotations(
-  {
-    organizationId: 'org-123',
-    documentId: 'doc-1',
-    commentAnnotations: [
-      {
-        location: { id: 'section-1' },
-        commentData: [{ commentText: 'Review this', from: { userId: 'user-1' } }],
-        internalId: 'app-specific-field', // dropped when filtering is enabled
-      },
-    ],
-  },
-  { filterUnknownFields: true },
-);
 ```
 
 #### Exported filter utilities
@@ -1477,12 +1445,16 @@ await sdk.api.userGroups.deleteUsersFromGroup({
 
 **Namespace:** `sdk.api.notifications`
 
+<Note>
+**Filtering unknown fields**: The add/update methods below accept an optional `options?: FieldFilterOptions` second argument. When `{ filterUnknownFields: true }` is passed, unknown/custom keys are dropped before the request is sent, narrowing the payload to exactly the fields the Velt backend endpoint accepts. Open-typed objects (`actionUser`, `context`, `metadata`, user objects) pass through whole. Filtering is fail-open: if it errors, the original payload is sent, so a write is never blocked. `UPDATE_NOTIFICATIONS_SPEC` intentionally excludes `isRead`/`isArchived` — they are unsupported by `/v2/notifications/update`, so they are dropped when filtering is on. See [Field Allowlist](#field-allowlist) for the full per-endpoint field list.
+</Note>
+
 #### `addNotifications`
 
 - Adds one or more notifications targeted to specific users.
 - Params: [AddNotificationsRequest](/api-reference/sdk/models/data-models#addnotificationsrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
-- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending (see the note above).
 
 ```ts
 await sdk.api.notifications.addNotifications({
@@ -1545,7 +1517,7 @@ await sdk.api.notifications.getNotifications({
 - Updates existing notifications (e.g., mark as read).
 - Params: [UpdateNotificationsRequest](/api-reference/sdk/models/data-models#updatenotificationsrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
-- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending (see the note above).
 
 ```ts
 await sdk.api.notifications.updateNotifications({
@@ -1635,12 +1607,34 @@ await sdk.api.notifications.setNotificationConfig({
 
 **Namespace:** `sdk.api.commentAnnotations`
 
+<Note>
+**Filtering unknown fields**: The add/update methods below accept an optional `options?: FieldFilterOptions` second argument. When `{ filterUnknownFields: true }` is passed, request entity collections are narrowed to only the fields the Velt backend endpoint accepts, dropping unknown/custom keys before the request is sent. Open-typed objects (`from`, `context`, `metadata`, user objects) pass through whole — their nested contents are never filtered. Filtering is fail-open: if it errors, the original payload is sent, so a write is never blocked. See [Field Allowlist](#field-allowlist) for the full per-endpoint field list.
+</Note>
+
+```ts
+// Extra fields (internalId) are dropped before the request is sent.
+await sdk.api.commentAnnotations.addCommentAnnotations(
+  {
+    organizationId: 'org-123',
+    documentId: 'doc-1',
+    commentAnnotations: [
+      {
+        location: { id: 'section-1' },
+        commentData: [{ commentText: 'Review this', from: { userId: 'user-1' } }],
+        internalId: 'app-specific-field', // dropped when filtering is enabled
+      },
+    ],
+  },
+  { filterUnknownFields: true },
+);
+```
+
 #### `addCommentAnnotations`
 
 - Creates comment annotations on a document.
 - Params: [AddCommentAnnotationsRequest](/api-reference/sdk/models/data-models#addcommentannotationsrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
-- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending (see the note above).
 
 ```ts
 await sdk.api.commentAnnotations.addCommentAnnotations({
@@ -1738,7 +1732,7 @@ await sdk.api.commentAnnotations.getCommentAnnotationsCount({
 - Updates fields on existing annotations (e.g., resolve them).
 - Params: [UpdateCommentAnnotationsRequest](/api-reference/sdk/models/data-models#updatecommentannotationsrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
-- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending (see the note above).
 
 ```ts
 await sdk.api.commentAnnotations.updateCommentAnnotations({
@@ -1780,7 +1774,7 @@ await sdk.api.commentAnnotations.deleteCommentAnnotations({
 - Adds comments to an existing annotation.
 - Params: [AddCommentsRequest](/api-reference/sdk/models/data-models#addcommentsrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
-- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending (see the note above).
 
 ```ts
 await sdk.api.commentAnnotations.addComments({
@@ -1842,7 +1836,7 @@ await sdk.api.commentAnnotations.getComments({
 - Updates comments within a specific annotation.
 - Params: [UpdateCommentsRequest](/api-reference/sdk/models/data-models#updatecommentsrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
-- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending (see the note above).
 
 ```ts
 await sdk.api.commentAnnotations.updateComments({
@@ -1885,12 +1879,16 @@ await sdk.api.commentAnnotations.deleteComments({
 
 **Namespace:** `sdk.api.activities`
 
+<Note>
+**Filtering unknown fields**: The add/update methods below accept an optional `options?: FieldFilterOptions` second argument. When `{ filterUnknownFields: true }` is passed, request entity collections are narrowed to only the fields the Velt backend endpoint accepts, dropping unknown/custom keys before the request is sent. Open-typed objects (`actionUser`, `entityData`, `context`, `metadata`) pass through whole — their nested contents are never filtered. Filtering is fail-open: if it errors, the original payload is sent, so a write is never blocked. See [Field Allowlist](#field-allowlist) for the full per-endpoint field list.
+</Note>
+
 #### `addActivities`
 
 - Logs activity events.
 - Params: [AddActivitiesRequest](/api-reference/sdk/models/data-models#addactivitiesrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
-- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending (see the note above).
 
 ```ts
 await sdk.api.activities.addActivities({
@@ -1956,7 +1954,7 @@ await sdk.api.activities.getActivities({
 - Updates existing activity events.
 - Params: [UpdateActivitiesRequest](/api-reference/sdk/models/data-models#updateactivitiesrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
-- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending. See [Field Allowlist](#field-allowlist).
+- Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending (see the note above).
 
 ```ts
 await sdk.api.activities.updateActivities({
@@ -3228,6 +3226,7 @@ await sdk.api.token.getToken('org-123', 'user-1', 'john@example.com', false);
 }
 ```
 
+{/*
 ### Agents
 
 **Namespace:** `sdk.api.agents`
@@ -3493,8 +3492,8 @@ These shared/nested config interfaces are referenced by the request types above.
 
 ```ts
 interface ResponseFieldDescriptions { summary?: string; title?: string; description?: string; severity?: string; targetText?: string; suggestion?: string; isPageLevel?: string; issueType?: string; confidence?: string; htmlSelector?: string; findingType?: string; }
-interface KnowledgeConfig { useMemory?: boolean; maxChunks?: number; /* 1..20 */ maxPatterns?: number; /* 1..20 */ maxActivities?: number; /* 1..20 */ }
-interface ContextGatheringConfig { strategies?: string[]; /* non-empty when present */ strategyOptions?: Record<string, Record<string, unknown>>; }
+interface KnowledgeConfig { useMemory?: boolean; maxChunks?: number; /* 1..20 * / maxPatterns?: number; /* 1..20 * / maxActivities?: number; /* 1..20 * / }
+interface ContextGatheringConfig { strategies?: string[]; /* non-empty when present * / strategyOptions?: Record<string, Record<string, unknown>>; }
 interface AgentExecutionConfig { responseDescriptions?: ResponseFieldDescriptions; executionStrategy?: string; serviceId?: string; strategyOptions?: Record<string, Record<string, unknown>>; knowledge?: KnowledgeConfig; }
 interface AgentResponseConfig { useAiFormatting?: boolean; formattingPrompt?: string; responseAdapter?: string; }
 interface AgentPostProcessConfig { guardrails?: { enabled?: boolean }; matchAndMerge?: { enabled?: boolean }; pinResolution?: { enabled?: boolean }; annotations?: { enabled?: boolean; strategy?: string }; analytics?: { enabled?: boolean }; customProcessors?: string[]; }
@@ -3504,7 +3503,7 @@ interface AgentCrossPageConfig { enabled: boolean; targetProperty: string; pageD
 interface AgentScopeConfig { pageScope?: string[]; pageScopeExclude?: string[]; contentTypes?: string[]; crossPage?: AgentCrossPageConfig; }
 interface AgentSetupSampleFinding { message: string; elementSelector?: string; isCorrect?: boolean; }
 interface AgentSetupSample { content: string; source: 'synthetic' | 'user-provided'; findings: AgentSetupSampleFinding[]; pmVerdict?: 'correct' | 'incorrect'; pmNotes?: string; }
-interface AgentChecklistOrigin { checklistId: string; checklistVersion: number; /* int >= 0 */ sectionRefs: string[]; memoryRuleIds: string[]; deduplicatedFrom?: number; /* int >= 0 */ }
+interface AgentChecklistOrigin { checklistId: string; checklistVersion: number; /* int >= 0 * / sectionRefs: string[]; memoryRuleIds: string[]; deduplicatedFrom?: number; /* int >= 0 * / }
 interface AgentSetupConfig { setupSamples?: AgentSetupSample[]; checklistOrigin?: AgentChecklistOrigin; }
 interface PromptUserContextField { id: string; title: string; type: string; example?: string; defaultValue?: string | number | boolean; }
 interface PromptRefinerDemoFeedback { demoId: string; demoTitle: string; demoHtml: string; demoExpected: string; feedback: string; }
@@ -3766,10 +3765,11 @@ These shared/nested config interfaces are referenced by the request types above.
 ```ts
 type MemoryKnowledgeMimeType = 'application/pdf' | 'text/csv' | 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' | 'text/plain';
 interface MemoryDateRange { start: string | number; end: string | number; } // ISO-8601 string or ms epoch; server enforces start <= end
-interface MemorySearchFilters { decision?: string; judgeType?: string; contentType?: string; reviewerId?: string; annotationId?: string; /* non-empty when present; triggers annotation shortcut */ dateRange?: MemoryDateRange; }
-interface MemoryAlertConfig { enabled?: boolean; maxAlertsPerWeek?: number; /* int >= 0 */ enabledAlertTypes?: string[]; severityThreshold?: 'high' | 'medium' | 'low'; }
-interface MemoryIngestInlineFile { base64: string; mimeType: MemoryKnowledgeMimeType; fileName: string; /* 1..255 */ fileSize: number; /* positive int, <= 5,242,880 (5 MB) */ }
+interface MemorySearchFilters { decision?: string; judgeType?: string; contentType?: string; reviewerId?: string; annotationId?: string; /* non-empty when present; triggers annotation shortcut * / dateRange?: MemoryDateRange; }
+interface MemoryAlertConfig { enabled?: boolean; maxAlertsPerWeek?: number; /* int >= 0 * / enabledAlertTypes?: string[]; severityThreshold?: 'high' | 'medium' | 'low'; }
+interface MemoryIngestInlineFile { base64: string; mimeType: MemoryKnowledgeMimeType; fileName: string; /* 1..255 * / fileSize: number; /* positive int, <= 5,242,880 (5 MB) * / }
 ```
+*/}
 
 ### Approval Workflows
 

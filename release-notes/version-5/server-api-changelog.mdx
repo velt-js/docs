@@ -1,0 +1,61 @@
+---
+title: "Velt Server API Changelog"
+rss: true
+description: Release Notes of changes added to the Velt server-side REST APIs (shared-firebase-function)
+---
+
+<Update label="June 23, 2026" description="Knowledge Search: Combined Chunk + Rule Results">
+
+### New Features
+
+- **Knowledge Search: Opt-In Combined Results (`includeRules`)**: The `POST /v2/memory/knowledge/search` endpoint now accepts an optional `includeRules` boolean field. When `true`, the search embeds the query once and runs parallel vector searches over both the `knowledge_chunks` corpus (reference content) and the `custom_context` corpus (extracted rules). Both result sets are merged into a single relevance-ranked list, with each hit tagged by a `kind` discriminator (`"chunk"` or `"rule"`). Rule hits additionally carry a `ruleId` (the rule's Firestore doc id) and an optional `category` field. When `includeRules` is omitted or `false`, the response shape is unchanged from prior behavior. [Learn more →](/ai/memory/setup)
+
+  **Request example:**
+  ```bash
+  curl -X POST https://api.velt.dev/v2/memory/knowledge/search \
+    -H "x-velt-api-key: $VELT_API_KEY" \
+    -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+    -H "content-type: application/json" \
+    -d '{ "data": { "query": "image format requirements", "includeRules": true, "limit": 5 } }'
+  ```
+
+  **New request fields:**
+
+  | Field | Type | Required | Default | Description |
+  |-------|------|----------|---------|-------------|
+  | `includeRules` | `boolean` | no | `false` | When `true`, also searches the extracted-rules corpus and merges results with chunk hits. Non-boolean values are rejected with a `400`. |
+
+  **Response when `includeRules: true`:**
+  ```json
+  {
+    "result": {
+      "results": [
+        {
+          "kind": "rule",
+          "ruleId": "rule_3f2...",
+          "sourceId": "src_checklist",
+          "text": "All images must be WEBP, max width 1200px",
+          "score": 0.09,
+          "category": "§Navigation Bar"
+        },
+        {
+          "kind": "chunk",
+          "sourceId": "src_brief",
+          "text": "Our target audience is enterprise buyers...",
+          "score": 0.21
+        }
+      ],
+      "recordsSearched": 2
+    }
+  }
+  ```
+
+### API Changes
+
+- **`KnowledgeRuleHit` — New type for rule search results**: A new TypeScript interface `KnowledgeRuleHit` describes a single extracted-rule search hit surfaced in the `knowledgeSearch` response when `includeRules: true`. Fields: `ruleId` (string), `sourceId?` (string), `text` (string), `score?` (number, cosine distance), `category?` (string).
+
+- **`KnowledgeSearchSchema` — New `includeRules` field**: The Zod validation schema for `POST /v2/memory/knowledge/search` gains an optional `includeRules: boolean` field. Non-boolean values (e.g., the string `"true"`) now return `400` instead of being silently ignored.
+
+- **`limit` and `sourceId` semantics when `includeRules: true`**: `limit` is the combined cap across both corpora (global top-N after merge). `sourceId` narrows both corpora simultaneously. Existing `1–50` bounds on `limit` still apply.
+
+</Update>

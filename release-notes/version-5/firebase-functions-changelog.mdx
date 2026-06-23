@@ -1,0 +1,100 @@
+---
+title: "Velt Firebase Functions Changelog"
+description: Release notes for Velt's shared Firebase backend platform (Approval Engine, Custom Agents, Platform Services)
+---
+
+### Platform Components
+- Approval Engine API
+- Custom Agents (SDK Functions)
+- Platform Services
+
+<Update label="June 23, 2026" description="Approval Engine & Agent Tooling">
+
+### Breaking Changes
+
+- **[Approval Engine]**: Removed the `onReject` per-human-node shorthand and the top-level `loops[]` array from the Approval Engine workflow contract. All routing — approve paths, reject paths, group fan-out/in, and loop-backs — must now be expressed through a unified `edges[]` array. Any definition that contains `HumanNodeConfig.onReject` or a top-level `loops[]` will be rejected at write time with `INVALID_ARGUMENT`. Existing in-flight executions and already-stored definitions are unaffected.
+
+  **Migration guide:**
+
+  | Old form | New `edges[]` equivalent |
+  |---|---|
+  | `"onReject": { "routeToNodeId": "rework-notice" }` | `{ "from": "human-review", "to": "rework-notice", "on": "reject" }` |
+  | `"onReject": { "loopBack": { "toNodeId": "agent-draft", "maxIterations": 3 } }` | `{ "from": "human-review", "to": "agent-draft", "on": "reject", "loop": { "maxIterations": 3 } }` |
+  | `"loops": [{ "entryNodeId": "agent-draft", "bodyNodeIds": [...], "maxIterations": 3 }]` | `{ "from": "human-review", "to": "agent-draft", "on": "reject", "loop": { "maxIterations": 3 } }` |
+  | `onReject.loopBack.onExhausted.routeToNodeId` | sibling `{ "from": "human-review", "to": "escalate", "on": "exhausted" }` edge |
+
+  **New `EdgeSchema` fields:**
+
+  | Field | Type | Required | Notes |
+  |---|---|---|---|
+  | `from` | `EdgeEndpoint` | yes | Bare string or `{ kind:"node", nodeId }` or `{ kind:"group", groupId }` |
+  | `to` | `EdgeEndpoint` | yes | Same |
+  | `on` | `"approve" \| "reject" \| "always" \| "exhausted" \| "custom"` | no (default `"always"`) | Semantic role |
+  | `when` | JSON-AST string | only for `on:"custom"` | Custom predicate |
+  | `loop` | `{ maxIterations: 1–20 }` | only on `on:"reject"` back-edge | Marks the edge as a loop-back |
+
+### New Features
+
+- **[Approval Engine]**: Every `DefinitionView` (from `create`, `get`, and `list`) now exposes a read-only `compiled` block. `compiled.forwardEdges` is the runtime edge list the engine drives execution from — group endpoints fully expanded and `on` roles compiled to predicate ASTs. `compiled.loops` contains server-derived loop regions. Clients building visual graph editors can consume `compiled.forwardEdges` directly instead of re-implementing group expansion client-side.
+
+  ```ts
+  interface CompiledGraph {
+    forwardEdges: Array<{
+      from: string;          // resolved node id
+      to: string;            // resolved node id
+      role: "approve" | "reject" | "always" | "exhausted" | "custom";
+      when: JsonAst | null;  // deterministic predicate AST; null for "always"
+      fromGroupId?: string;  // set when the authored `from` was a group
+      toGroupId?: string;    // set when the authored `to` was a group
+    }>;
+    loops: Array<{
+      loopId: string;
+      entryNodeId: string;
+      bodyNodeIds: string[];
+      maxIterations: number;
+      onExhausted: { routeToNodeId: string } | null;
+    }>;
+  }
+  ```
+
+- **[Approval Engine]**: `waitAll` groups can now be **edge sources** (`from: { kind:"group", groupId }`), giving them collective approve/reject fan-out with **unanimity** decision logic — `approve` if every member approved, `reject` otherwise. `cancelOnQuorum` groups can also be edge sources for collective approve fan-out. Group-to-node fan-out (`to: { kind:"group", groupId }`) is now accepted for all quorum policies.
+
+- **[Approval Engine]**: Human and agent nodes now accept optional `name` (1–200 chars) and `description` (max 2000 chars) fields, echoed verbatim in `NodeView`. These cosmetic fields let visual graph editors attach stable human-readable labels per node without affecting runtime behavior.
+
+- **[Custom Agents]**: Added `"rest-api"` context-gathering strategy. When configured, the agent fetches up to 10 customer-defined REST endpoints at execution time and injects the results into the prompt via the `{{restApiData}}` template variable. Supports `{{variable}}`, `{{userContext.X}}`, and `{{variables.X}}` templating in `url`, `headers`, `query`, and `body`. Auth secrets (`bearer`, `basic`, `header`) are encrypted at rest and redacted on every read.
+
+  | Field | Type | Required | Notes |
+  |---|---|---|---|
+  | `endpoints` | `RestApiEndpoint[]` | yes | 1–10 endpoints |
+  | `maxResponseBytes` | number | no | Per-endpoint cap. Default 1 000 000, max 5 000 000 |
+
+- **[Custom Agents]**: Added `"mcp-tools"` execution strategy. The agent connects to one or more customer-configured MCP servers (remote HTTP/Streamable HTTP transport), runs a capped multi-turn tool-calling loop, and returns a structured `CommonAgentResponse`. Supports per-server tool allowlists. Auth headers are encrypted at rest and redacted on read. Works with both Claude and Gemini providers.
+
+  ```json
+  {
+    "execution": {
+      "executionStrategy": "mcp-tools",
+      "mcpServers": [
+        {
+          "url": "https://docs.example.com/mcp",
+          "auth": { "type": "header", "headers": { "X-Api-Key": "sk_xxx" } },
+          "allowedTools": ["search_docs", "fetch_page"]
+        }
+      ]
+    }
+  }
+  ```
+
+- **[Custom Agents]**: Added `docs-code-comparison` built-in agent. Uses the MCP tool loop to verify code snippets on a landing page against the docs site and reports any mismatches as annotations.
+
+### Improvements
+
+- **[Custom Agents]**: `updateAgentConfig` now performs a **deep merge** instead of a shallow merge. Partial update calls now correctly preserve nested config fields (e.g., `execution.mcpServers`) not present in the update payload.
+
+- **[Custom Agents]**: `create` and `update-version` payloads now explicitly reject server-managed metadata fields (`managedBy`, `metadata.type`, `metadata.category`, `metadata.internal`, `metadata.apiKey`) with a per-field `400 INVALID_ARGUMENT` error.
+
+### Bug Fixes
+
+- **[Platform]**: Fixed non-deterministic project-card counts in email digests. The structured memory ask now runs at `temperature: 0`, the `recencyDays` recency window is anchored to UTC-day boundaries, and the grounding gate now keys only on deterministic signals (removing the `confidence` float). Two digest runs within the same UTC day over the same data will now produce identical project card counts and names.
+
+</Update>

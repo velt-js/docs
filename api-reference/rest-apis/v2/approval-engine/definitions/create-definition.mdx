@@ -48,19 +48,15 @@ Use this API to register a new workflow definition (the static blueprint of node
     </ParamField>
 
     <ParamField body="nodes" type="array" required>
-      1–100 nodes. Each node has `nodeId`, `type` (`agent` / `human` / `webhook` — `webhook` validates but its runtime is deferred in v1), and a `config` block. See node configuration details in [Customize Behavior](/ai/approval-engine/customize-behavior#node-configuration). Each node also accepts an optional `slaMs` (integer, ms) — SLA deadline for the step.
+      1–100 nodes. Each node has `nodeId`, `type` (`agent` / `human` / `webhook` — `webhook` validates but its runtime is deferred in v1), and a `config` block. Optional cosmetic `name` (1–200 chars) and `description` (≤ 2000 chars) labels are echoed verbatim on `NodeView` and have no effect on runtime behavior. See node configuration details in [Customize Behavior](/ai/approval-engine/customize-behavior#node-configuration). Each node also accepts an optional `slaMs` (integer, ms) — SLA deadline for the step.
     </ParamField>
 
     <ParamField body="edges" type="array" required>
-      0–500 edges. Each edge: `{ from, to, when? }`. The optional `when` expression is evaluated against the source step's output — see [edge gating expressions](/ai/approval-engine/customize-behavior#edge-gating-expressions).
+      0–500 edges. Each edge: `{ from, to, on?, when?, loop? }`. Endpoints may be a node id string or `{ kind: "node" | "group", nodeId | groupId }`. `on` (one of `"approve" | "reject" | "always" | "exhausted" | "custom"`, default `"always"`) sets the semantic role — `approve` and `reject` auto-compile their predicates. `when` carries a JSON-AST predicate and is valid only when `on: "custom"`. `loop: { maxIterations: 1–20 }` is valid only on `on: "reject"` edges and marks the edge as a loop back-edge; the server derives the loop region from it. See [Edge object](/ai/approval-engine/customize-behavior#edge-object), [Group edge endpoints](/ai/approval-engine/customize-behavior#group-edge-endpoints), [Edge validation](/ai/approval-engine/customize-behavior#edge-validation), and [Loops](/ai/approval-engine/customize-behavior#loops).
     </ParamField>
 
     <ParamField body="groups" type="array">
       0–100 parallel-group definitions. See [parallel groups and quorum policies](/ai/approval-engine/customize-behavior#parallel-groups-and-quorum-policies).
-    </ParamField>
-
-    <ParamField body="loops" type="array">
-      0–20 loop region declarations. A loop region lets a workflow re-enter an earlier node when a reviewer rejects, with previous-attempt context threaded forward and a hard cap on iterations. See [loop regions](/ai/approval-engine/customize-behavior#loop-regions) for the full schema, body-shape constraints, and linter rules.
     </ParamField>
 
     <ParamField body="triggers" type="array">
@@ -107,7 +103,11 @@ Use this API to register a new workflow definition (the static blueprint of node
 #### Edge object example
 
 ```JSON
-{ "from": "brand-check", "to": "legal-review", "when": "output.passesBrandCheck == true" }
+[
+  { "from": "brand-check", "to": "legal-review", "on": "approve" },
+  { "from": "human-review", "to": "agent-draft", "on": "reject", "loop": { "maxIterations": 3 } },
+  { "from": "human-review", "to": "human-escalate", "on": "exhausted" }
+]
 ```
 
 ## **Example Requests**
@@ -156,17 +156,23 @@ Use this API to register a new workflow definition (the static blueprint of node
     "version": 1,
     "scope": { "level": "apiKey", "organizationId": null, "documentId": null },
     "nodes": [ /* echoed back with resolved defaults */ ],
-    "edges": [ /* echoed back with when: null for unset gates */ ],
+    "edges": [ /* authored edges, echoed back byte-for-byte */ ],
     "groups": [ /* echoed back */ ],
     "triggers": null,
     "tags": null,
     "custom": null,
+    "compiled": {
+      "forwardEdges": [ /* runtime forward edges: group endpoints expanded, on roles compiled to whenAst */ ],
+      "loops": [ /* server-derived loop regions */ ]
+    },
     "createdAt": 1731432000000,
     "updatedAt": 1731432000000,
     "status": "active"
   }
 }
 ```
+
+The `compiled` block is read-only. `compiled.forwardEdges` is the runtime forward edge list the engine drives execution from — group endpoints are expanded to one compiled edge per member (tagged with `fromGroupId` / `toGroupId`), and `on` roles are compiled to deterministic predicate ASTs. `compiled.loops` is the derived loop region list. The authored `edges` echo `sourceEdges` byte-for-byte. See [Object reference](/ai/approval-engine/customize-behavior#object-reference) for the full `CompiledGraph` shape.
 
 #### Failure Response
 

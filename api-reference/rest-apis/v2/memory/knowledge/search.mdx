@@ -34,7 +34,13 @@ Use this API to run a semantic vector search over the **content of your ingested
     </ParamField>
 
     <ParamField body="limit" type="integer">
-      Maximum number of results to return.
+      Maximum number of results to return. Accepts `1` to `50`. When `includeRules` is `true`, this is the combined cap across both corpora after merging — not a per-corpus quota.
+    </ParamField>
+
+    <ParamField body="includeRules" type="boolean" default="false">
+      When `true`, also vector-search the extracted-rules corpus and merge results with knowledge chunks into a single relevance-ranked list. The query is embedded only once and shared across both searches. When `false` or omitted, the response shape is unchanged from chunk-only search. Non-boolean values are rejected with a `400`.
+
+      When `includeRules` is `true`, `sourceId` narrows both corpora simultaneously.
     </ParamField>
 
     <Note>
@@ -80,11 +86,25 @@ Use this API to run a semantic vector search over the **content of your ingested
 }
 ```
 
+#### Search chunks and extracted rules together
+
+```JSON
+{
+  "data": {
+    "query": "image format requirements",
+    "includeRules": true,
+    "limit": 5
+  }
+}
+```
+
 # Response
 
-Each result includes the matched `sourceId`, the chunk `text`, and a `score`: the cosine distance, where **lower is more relevant**. `recordsSearched` reports how many sources were queried.
+Each result includes the matched `sourceId`, the chunk `text`, and a `score`: the cosine distance, where **lower is more relevant**. `recordsSearched` reports how many items are in the returned `results` array after merging and truncating to `limit`.
 
-#### Success Response
+When `includeRules` is `true`, every item also carries a `kind` discriminator (`"chunk"` or `"rule"`). Rule items add a `ruleId` and an optional `category`. Results from both corpora are merged, sorted ascending by `score`, deduplicated, and truncated to `limit`.
+
+#### Success Response (chunks only)
 
 ```JSON
 {
@@ -97,6 +117,32 @@ Each result includes the matched `sourceId`, the chunk `text`, and a `score`: th
       }
     ],
     "recordsSearched": 1
+  }
+}
+```
+
+#### Success Response (with `includeRules: true`)
+
+```JSON
+{
+  "result": {
+    "results": [
+      {
+        "kind": "rule",
+        "ruleId": "rule_3f2...",
+        "sourceId": "src_checklist",
+        "text": "All images must be WEBP, max width 1200px",
+        "score": 0.09,
+        "category": "Navigation Bar"
+      },
+      {
+        "kind": "chunk",
+        "sourceId": "src_brief",
+        "text": "Our target audience is enterprise buyers...",
+        "score": 0.21
+      }
+    ],
+    "recordsSearched": 2
   }
 }
 ```

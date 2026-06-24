@@ -9,6 +9,52 @@ description: Release Notes of changes added to the core Velt SDK
 - `@veltdev/client`
 - `@veltdev/sdk`
 
+<Update label="5.0.4" description="June 19, 2026">
+
+### New Features
+
+- [**Self Hosting**]: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig) now supports **dynamic per-request headers**. Pass an `async () => Promise<Record<string, string>>` to `headers` to mint a short-lived bearer token on every request (and every retry), instead of embedding a static secret. Applies to every endpoint-based resolver: `comment`, `recorder`, `reaction`, `activity`, `notification`, `attachment`, and the `endpointConfig` on [`VeltPermissionProvider`](/api-reference/sdk/models/data-models#veltpermissionprovider). Existing static `headers` objects continue to work unchanged. [Learn more →](/self-host-data/overview)
+
+- [**Self Hosting**]: New optional `credentials` field on [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig) (`'include' | 'same-origin' | 'omit'`) is forwarded to `fetch()`, enabling cookie/session auth on cross-origin resolver endpoints. When unset, the key is omitted from the request — byte-identical to the prior behavior. [Learn more →](/self-host-data/overview)
+
+- [**Self Hosting**]: New opt-in `additionalSaveEvents` field on the comment `ResolverConfig` delivers non-core annotation-level lifecycle events (status change, priority change, assign, approve, suggestion accept/reject, reaction add/delete, subscribe/unsubscribe, and more) to your existing save endpoint. Useful for activity feeds, audit trails, and downstream workflows that need to track changes beyond the 4 core PII events. Opt in per-config via the new `CommentResolverSaveEvent` enum; when omitted, behavior is byte-identical to before. [Learn more →](/self-host-data/comments)
+
+- [**Self Hosting**]: The comment resolver save payload now includes a `targetComment` convenience field. When a save is triggered by an action on a specific comment, the SDK resolves the full `PartialComment` from `commentId` and attaches it to `SaveCommentResolverRequest.targetComment`, so your backend no longer has to re-derive it from the `commentAnnotation[*].comments` map. Omitted when `commentId` is absent or unmatched. [Learn more →](/self-host-data/comments)
+
+### Bug Fixes
+
+- [**Comments**]: The stored `visibilityConfig` mirror on a private annotation (`organizationPrivate` or `restricted`) now always includes the author's `userId` in `visibilityConfig.userIds`, matching the author self-token already present in the underlying access fields. Previously, a third-party editing a private comment's visibility could drop the original author from the stored config and filter them out of REST reads (including `fetchCommentAnnotations`). All five write paths — `addComment`, `saveComment`, [`updateVisibility`](/async-collaboration/comments/customize-behavior#updatevisibility), [`addCommentAnnotation`](/async-collaboration/comments/customize-behavior#addcommentannotation), and the V2 composer inline path — now share a single helper that stamps the author. [Learn more →](/async-collaboration/comments/customize-behavior#updatevisibility)
+
+</Update>
+
+<Update label="5.0.3" description="June 18, 2026">
+
+### New Features
+
+- [**Comments**]: New **multi-organization comment visibility** ("Selected Teams"). [`CommentVisibilityConfig`](/api-reference/sdk/models/data-models#commentvisibilityconfig) gains an optional `organizationIds: string[]` field so a single `organizationPrivate` comment can be scoped to multiple teams at once. Works across [`enablePrivateMode()`](/api-reference/sdk/api/api-methods#enableprivatemode), [`updateVisibility()`](/api-reference/sdk/api/api-methods#updatevisibility), and [`addCommentAnnotation()`](/async-collaboration/comments/customize-behavior#addcommentannotation). Fully additive — existing single-org `organizationId` usage and existing stored annotations continue to work unchanged; the two fields are merged and de-duplicated when both are present. [Learn more →](/async-collaboration/comments/customize-behavior#enableprivatemode)
+
+- [**Comments**]: New `contactElement.updateOrgList()` API supplies the list of selectable teams shown in the in-dialog **"Selected Teams"** visibility picker (the team analogue of the existing "Selected People" user picker). Picking teams persists through the multi-org API as `organizationPrivate` with one access token per picked team. Pass `{ orgList: [] }` to clear the picker. [Learn more →](/async-collaboration/comments/customize-behavior)
+
+- [**Comments**]: New **"Selected Teams" picker** standalone component and wireframe slot — `VeltCommentDialogVisibilityBannerDropdownContentOrgPicker` (React) / `<velt-comment-dialog-visibility-banner-dropdown-content-org-picker>` (HTML) — for use in custom comment-dialog visibility-banner wireframes alongside the existing user picker. [Learn more →](/ui-customization/features/async/comments/comment-dialog/wireframe-variables)
+
+### Bug Fixes
+
+- [**Comments**]: The author of a private comment (`organizationPrivate` or `restricted`) no longer loses access to their own comment after a refresh or after a third party edits its visibility. Every non-public write now stamps the original author's self access token, and the visibility-update path resolves the author from the cached annotation (instead of stamping the editor's identity). [Learn more →](/async-collaboration/comments/customize-behavior#updatevisibility)
+
+- [**Comments**]: "Your Team" visibility now scopes to the **logged-in user's** organization (`user.clientOrganizationId`) instead of the document's organization. In cross-org documents, a comment posted as "Your Team" is now attached to the author's team, not the org that owns the document. Single-org users see no change. [Learn more →](/async-collaboration/comments/customize-behavior#enableprivatemode)
+
+- [**Comments**]: The comment read path is now **fail-closed** for organization-private comments. A viewer's org visibility token is granted only after the permission service confirms the viewer is actually a member of that org; if membership cannot be confirmed (denied, empty, or errored probe), the org token is withheld and comments still load with public + the viewer's own private comments. Private comments are never shown to a viewer whose org membership isn't confirmed. [Learn more →](/key-concepts/overview)
+
+- [**Comments**]: `fetchCommentAnnotations` now post-filters its results by the caller's visibility, mirroring the live listener. A private annotation is returned only if the caller is the author, holds an intersecting visibility token, or is listed in the annotation's `visibilityConfig.userIds`. [Learn more →](/async-collaboration/comments/customize-behavior)
+
+- [**Comments**]: Private comments stay enabled when switching to a document under a different organization. Previously, the services-cache reset during a document switch incorrectly flipped the private-comments-enabled flag to `false`. [Learn more →](/async-collaboration/comments/customize-behavior#enableprivatemode)
+
+- [**Comments**]: The V2 comment dialog composer now honors explicit org targets set via [`enablePrivateMode()`](/api-reference/sdk/api/api-methods#enableprivatemode). Submitting a comment while private mode is configured with explicit `organizationIds`/`organizationId` now writes those orgs verbatim instead of falling back to the viewer's own org. With no explicit orgs configured, it falls back to the logged-in user's own org as before. [Learn more →](/async-collaboration/comments/customize-behavior#enableprivatemode)
+
+- [**Comments**]: Submitting a comment after picking teams in the "Selected Teams" picker no longer silently drops or narrows the picked teams. The composer-submit path now forwards the committed multi-team selection (trusting resolved org ids only when every committed token resolves), instead of rebuilding visibility from scratch and overwriting the picker's selection. [Learn more →](/async-collaboration/comments/customize-behavior#enableprivatemode)
+
+</Update>
+
 <Update label="5.0.2" description="June 17, 2026">
 
 ### Bug Fixes

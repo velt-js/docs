@@ -1,0 +1,105 @@
+---
+title: "Custom Agents"
+description: "Configure custom agent context gathering, tool execution, built-in agents, and configuration safety rules."
+---
+
+Custom agents can gather external context before they run and can use tool-calling execution loops when a single LLM call is not enough.
+
+## REST API context gathering
+
+Use the `rest-api` context-gathering strategy when your agent needs live data from your own APIs before it executes, such as user profiles, CRM records, entitlement state, or billing status. Velt fetches the configured endpoints at execution time and injects the collected results into the prompt with the `{{restApiData}}` template variable.
+
+```json
+{
+  "contextGathering": {
+    "strategies": ["web-page-text", "rest-api"],
+    "strategyOptions": {
+      "rest-api": {
+        "endpoints": [
+          {
+            "url": "https://api.example.com/customers/{{userContext.customerId}}",
+            "description": "Customer profile and subscription state",
+            "method": "GET",
+            "auth": {
+              "type": "header",
+              "headers": { "X-Api-Key": "YOUR_API_KEY" }
+            },
+            "cacheTtlSeconds": 300,
+            "timeoutMs": 10000,
+            "responsePath": "data.customer"
+          }
+        ],
+        "maxResponseBytes": 1000000
+      }
+    }
+  }
+}
+```
+
+### `strategyOptions["rest-api"]`
+
+| Field              | Type                | Required | Notes                                                        |
+| ------------------ | ------------------- | -------- | ------------------------------------------------------------ |
+| `endpoints`        | `RestApiEndpoint[]` | yes      | 1–10 endpoints.                                              |
+| `maxResponseBytes` | number              | no       | Per-endpoint cap. Default `1000000`, max `5000000`.          |
+
+### `RestApiEndpoint`
+
+| Field             | Type                                      | Required | Notes                                                                 |
+| ----------------- | ----------------------------------------- | -------- | --------------------------------------------------------------------- |
+| `url`             | string                                    | yes      | SSRF-validated URL. Supports `{{variable}}` templating.               |
+| `description`     | string                                    | yes      | Surfaced in the prompt alongside the URL and response.                |
+| `method`          | `"GET"` / `"POST"` / `"PUT"` / `"PATCH"` / `"DELETE"` | no       | Default `"GET"`.                                                      |
+| `auth`            | `RestApiAuthConfig`                       | no       | `none`, `bearer`, `basic`, or `header`. Secret fields are encrypted at rest and redacted on read. |
+| `headers`         | `Record<string, string>`                  | no       | Request headers. Supports templating.                                 |
+| `query`           | `Record<string, string>`                  | no       | Query parameters. Supports templating.                                |
+| `body`            | unknown                                   | no       | Request body. Supports templating.                                    |
+| `cacheTtlSeconds` | number                                    | no       | In-process cache TTL per Cloud Function instance. Default `0`, max `86400`. |
+| `timeoutMs`       | number                                    | no       | Per-request timeout. Default `10000`, max `30000`.                    |
+| `responsePath`    | string                                    | no       | Dot-path to extract a sub-field of the JSON response.                 |
+
+Templating is supported in `url`, `headers`, `query`, and `body` with `{{variable}}`, `{{userContext.X}}`, and `{{variables.X}}`. Endpoint URLs are SSRF-guarded and block internal, loopback, and link-local hosts. Secret auth fields are encrypted at rest and redacted on every read path.
+
+## MCP tool execution
+
+Use `execution.executionStrategy: "mcp-tools"` when the agent needs a multi-turn tool loop. The agent connects to one or more customer-configured MCP servers over remote HTTP / Streamable HTTP transport, sends only the allowed tool schemas to the model, executes model-requested tools, and returns a structured response.
+
+```json
+{
+  "execution": {
+    "executionStrategy": "mcp-tools",
+    "mcpServers": [
+      {
+        "url": "https://docs.example.com/mcp",
+        "auth": {
+          "type": "header",
+          "headers": { "X-Api-Key": "YOUR_API_KEY" }
+        },
+        "allowedTools": ["search_docs", "fetch_page"]
+      }
+    ]
+  }
+}
+```
+
+MCP auth headers are encrypted at rest and redacted on read. Per-server tool allowlists, per-turn redaction, and a max-turn cap prevent runaway loops. Tool-call errors are forwarded back to the model as tool errors. Claude and Gemini provider adapters support the tool loop; providers that do not support tools fail with `AI_TOOLS_NOT_SUPPORTED`.
+
+## Built-in docs code comparison agent
+
+The built-in `docs-code-comparison` agent verifies code snippets on a landing page against your docs site and reports mismatches as annotations. It uses `web-page-text` context gathering with `includeCodeBlocks: true` and the `mcp-tools` execution strategy against a remote docs MCP server. It works with Claude and Gemini.
+
+## Configuration safety
+
+Partial custom-agent config updates deep-merge nested objects, so updating one field under `execution` or `contextGathering` preserves sibling fields such as `execution.mcpServers`.
+
+Create and update-version payloads reject server-managed keys with `400 INVALID_ARGUMENT`:
+
+- `managedBy`
+- `metadata.type`
+- `metadata.category`
+- `metadata.internal`
+- `metadata.apiKey`
+
+A defense-in-depth strip also runs at the Firestore write layer before data is persisted. Agent config reads and version snapshots redact encrypted auth ciphertext before returning data to clients. If redaction fails, the request fails closed instead of returning unredacted secrets.
+
+Strategies that require instructions (`ai`, `service+ai`, and `stagehand-agent`) reject create and update payloads with `400 INVALID_ARGUMENT` when `instructions` is missing or empty.

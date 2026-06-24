@@ -5,14 +5,59 @@ description: Upgrade to Velt SDK v6.0.0-beta.1 and opt into modular feature chun
 
 ## Overview
 - **Modular SDK**: The SDK now ships as an eager `velt.js` core (bootstrap + facade) plus 19 lazy-loaded feature chunks (comment, cursor, presence, huddle, recorder, notification, reaction, and more). Each feature is fetched on demand instead of bundled into one eager payload.
-- **Backward compatible**: The public `Velt` / `Snippyly` API is unchanged. Existing integrations work as-is.
+- **Modular SDK backward compatibility**: The public `Velt` / `Snippyly` browser API is unchanged. Existing browser integrations work as-is unless they also author Approval Engine definitions with the legacy rejection contract.
 - **New opt-in control APIs**: Use `featureAllowList` at init to preload only the features you use, and `preload<Feature>()` to warm a chunk or load tag-only features ahead of time.
 
 ## Breaking Changes
 
-**None — fully backward compatible.** Existing integrations work unchanged. If you do not pass `featureAllowList`, the SDK preserves pre-modular behavior and preloads all chunks in the background.
+- [**Modular SDK**] None. The public `Velt` / `Snippyly` API is unchanged. If you do not pass `featureAllowList`, the SDK preserves pre-modular behavior and preloads all chunks in the background.
+
+- [**Approval Engine — unified `edges[]` contract**] The Approval Engine removed the per-human-node `onReject` shorthand and the authored top-level `loops[]` array. All workflow transitions — approve routing, reject routing, group fan-out/in, and loop-backs — are now expressed as a single unified `edges[]` array. Human nodes no longer carry any rejection config; a human node's reject path is an outgoing `on:"reject"` edge.
+  - **Who is affected:** any definition that POSTs `HumanNodeConfig.onReject` (`routeToNodeId` or `loopBack`) or a top-level `loops[]` array. These are now rejected at write time with `INVALID_ARGUMENT`.
+  - **Who is not affected:** already-stored definitions and in-flight executions. The runtime still consumes the compiled forward edges and derived loops unchanged.
+  - **Why:** the prior model had two ways to express rejection that desugared at write time into a form callers never saw, breaking round-trip symmetry. Under the unified model, `POST.edges === GET.edges`.
 
 ## How to Upgrade
+
+### Approval Engine: migrate to `edges[]`
+
+Rewrite every `onReject` field and every `loops[]` entry as one or more `edges[]` entries before writing new definitions.
+
+| Old form | New edge equivalent |
+| --- | --- |
+| `"onReject": { "routeToNodeId": "rework-notice" }` | `{ "from": "human-review", "to": "rework-notice", "on": "reject" }` |
+| `"onReject": { "loopBack": { "toNodeId": "agent-draft", "maxIterations": 3 } }` | `{ "from": "human-review", "to": "agent-draft", "on": "reject", "loop": { "maxIterations": 3 } }` |
+| `"loops": [{ "loopId": "...", "entryNodeId": "agent-draft", "bodyNodeIds": [...], "maxIterations": 3 }]` | `{ "from": "human-review", "to": "agent-draft", "on": "reject", "loop": { "maxIterations": 3 } }` |
+| `onReject.loopBack.onExhausted.routeToNodeId` | sibling `{ "from": "human-review", "to": "escalate", "on": "exhausted" }` edge |
+
+**New `EdgeSchema` fields:**
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `from` | `EdgeEndpoint` | yes | Bare node-id string, or `{ kind: "node", nodeId }`, or `{ kind: "group", groupId }`. |
+| `to` | `EdgeEndpoint` | yes | Same shape as `from`. |
+| `on` | `"approve" \| "reject" \| "always" \| "exhausted" \| "custom"` | no (default `"always"`) | Semantic role. `approve` / `reject` auto-compile their predicates. |
+| `when` | JSON-AST string | only for `on:"custom"` | Custom predicate. Invalid on any other edge. |
+| `loop` | `{ maxIterations: 1–20 }` | only on an `on:"reject"` back-edge | Marks the reject edge as a loop-back; the server derives the loop region. |
+
+**New `INVALID_ARGUMENT` compile error keys.** A definition that violates the unified contract is rejected with one of these keys in the error message:
+
+| Error key | Cause |
+| --- | --- |
+| `APPROVAL_EDGE_CUSTOM_REQUIRES_WHEN` | `on:"custom"` without a non-empty `when`. |
+| `APPROVAL_EDGE_WHEN_ONLY_FOR_CUSTOM` | `when` supplied on a non-custom edge. |
+| `APPROVAL_EDGE_LOOP_REQUIRES_REJECT` | `loop` on a non-reject edge. |
+| `APPROVAL_EDGE_LOOP_TARGET_NOT_ANCESTOR` | `reject`+`loop` whose `to` is not an ancestor of `from`. |
+| `APPROVAL_EDGE_REJECT_CYCLE_REQUIRES_LOOP` | `on:"reject"` to an ancestor without `loop` (unmarked cycle). |
+| `APPROVAL_EDGE_EXHAUSTED_REQUIRES_LOOP_SIBLING` | `on:"exhausted"` with no sibling `reject`+`loop` from the same `from`. |
+| `APPROVAL_HUMAN_NODE_REQUIRES_REJECT_PATH` | Human node with no outgoing `on:"reject"` edge. |
+| `APPROVAL_EDGE_GROUP_TO_GROUP_FORBIDDEN` | Both endpoints are group containers. |
+| `APPROVAL_GROUP_FROM_REJECT_REQUIRES_LOOP` | Forward `on:"reject"` from a `joinOnQuorum` / `cancelOnQuorum` group (dead edge — those policies fan out only on approval-quorum). |
+| `APPROVAL_GROUP_FROM_LOOP_REQUIRES_JOINONQUORUM` | `reject`+`loop` back-edge from a non-`joinOnQuorum` group. |
+
+For the full edge model, group-as-edge-source semantics, and the read-only `compiled` block, see [Customize Behavior](/ai/approval-engine/customize-behavior) and [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition).
+
+## How to Upgrade the Modular SDK
 
 Adopting the modular SDK is optional. Update the package and your existing code keeps working. To opt into on-demand loading, use the following control APIs.
 

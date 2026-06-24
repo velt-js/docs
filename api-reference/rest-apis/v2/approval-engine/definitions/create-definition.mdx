@@ -3,7 +3,7 @@ title: "Create Definition"
 api: "POST https://api.velt.dev/v2/workflow/definitions/create"
 ---
 
-Use this API to register a new workflow definition (the static blueprint of nodes, edges, and optional parallel groups). Definitions are linted at write time — invalid graphs are rejected with an explicit linter code.
+Use this API to register a new workflow definition (the static blueprint of nodes, edges, and optional parallel groups). Definitions are validated at write time — schema errors, `compileGraph` edge-contract errors, and linter graph-shape errors are rejected with explicit validation keys.
 
 # Endpoint
 
@@ -48,19 +48,27 @@ Use this API to register a new workflow definition (the static blueprint of node
     </ParamField>
 
     <ParamField body="nodes" type="array" required>
-      1–100 nodes. Each node has `nodeId`, `type` (`agent` / `human` / `webhook` — `webhook` validates but its runtime is deferred in v1), and a `config` block. See node configuration details in [Customize Behavior](/ai/approval-engine/customize-behavior#node-configuration). Each node also accepts an optional `slaMs` (integer, ms) — SLA deadline for the step.
+      1–100 nodes. Each node has `nodeId`, `type` (`agent` / `human` / `webhook` — `webhook` validates but its runtime is deferred in v1), and a `config` block. See node configuration details in [Customize Behavior](/ai/approval-engine/customize-behavior#node-configuration). Each node also accepts an optional `slaMs` (integer, ms) — SLA deadline for the step — and optional cosmetic `name` (1–200 chars) and `description` (≤ 2000 chars) labels echoed verbatim in the response.
     </ParamField>
 
     <ParamField body="edges" type="array" required>
-      0–500 edges. Each edge: `{ from, to, when? }`. The optional `when` expression is evaluated against the source step's output — see [edge gating expressions](/ai/approval-engine/customize-behavior#edge-gating-expressions).
+      0–500 edges. Each edge: `{ from, to, on?, when?, loop? }`. `from` / `to` are `EdgeEndpoint`s — a bare node-id string, `{ kind: "node", nodeId }`, or `{ kind: "group", groupId }`.
+
+      | Field  | Type            | Required                          | Notes                                                                                                          |
+      | ------ | --------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+      | `from` | `EdgeEndpoint`  | yes                               | Source node or group.                                                                                          |
+      | `to`   | `EdgeEndpoint`  | yes                               | Target node or group.                                                                                          |
+      | `on`   | enum            | no (default `"always"`)           | `approve` / `reject` / `always` / `exhausted` / `custom`. `approve` and `reject` auto-compile their predicates. |
+      | `when` | JSON-AST string | only when `on:"custom"`           | Custom predicate over the source step's output. Invalid on any other `on` role. See [custom predicates](/ai/approval-engine/customize-behavior#custom-predicates). |
+      | `loop` | `{ maxIterations }` | only on an `on:"reject"` back-edge | `maxIterations` 1–20. Marks the reject edge as a loop-back; the server derives the loop region. A sibling `on:"exhausted"` edge handles cap exhaustion. |
+
+      A `human` node must have an outgoing `on:"reject"` edge or the definition is rejected with `APPROVAL_HUMAN_NODE_REQUIRES_REJECT_PATH`. See [the edge model](/ai/approval-engine/customize-behavior#edge-model) for the full role and loop semantics.
     </ParamField>
 
     <ParamField body="groups" type="array">
       0–100 parallel-group definitions. See [parallel groups and quorum policies](/ai/approval-engine/customize-behavior#parallel-groups-and-quorum-policies).
-    </ParamField>
 
-    <ParamField body="loops" type="array">
-      0–20 loop region declarations. A loop region lets a workflow re-enter an earlier node when a reviewer rejects, with previous-attempt context threaded forward and a hard cap on iterations. See [loop regions](/ai/approval-engine/customize-behavior#loop-regions) for the full schema, body-shape constraints, and linter rules.
+      A group can be an edge source (`from: { kind: "group", groupId }`): a `waitAll` group fans out a collective approve/reject decision by unanimity (every member approved → approve, else reject), and a `cancelOnQuorum` group fans out a collective approve successor on quorum. A forward `on:"reject"` from a `joinOnQuorum` / `cancelOnQuorum` group is a rejected dead edge. Edge-to-group fan-out (`to: { kind: "group", groupId }`) is accepted for all quorum policies.
     </ParamField>
 
     <ParamField body="triggers" type="array">
@@ -99,15 +107,21 @@ Use this API to register a new workflow definition (the static blueprint of node
 {
   "nodeId": "brand-check",
   "type": "agent",
+  "name": "Brand check",
+  "description": "Verifies copy against brand guidelines.",
   "config": { "agentId": "brand-agent-v1", "blocking": false, "requireNonEmptyOutput": true },
   "slaMs": 3600000
 }
 ```
 
-#### Edge object example
+#### Edge object examples
 
 ```JSON
-{ "from": "brand-check", "to": "legal-review", "when": "output.passesBrandCheck == true" }
+{ "from": "brand-check", "to": "legal-review", "on": "approve" }
+{ "from": "human-review", "to": "rework-notice", "on": "reject" }
+{ "from": "human-review", "to": "agent-draft", "on": "reject", "loop": { "maxIterations": 3 } }
+{ "from": "human-review", "to": "escalate", "on": "exhausted" }
+{ "from": "brand-check", "to": "legal-review", "on": "custom", "when": "{\"op\":\"eq\",\"args\":[{\"var\":\"output.passesBrandCheck\"},true]}" }
 ```
 
 ## **Example Requests**
@@ -121,24 +135,16 @@ Use this API to register a new workflow definition (the static blueprint of node
     "name": "Marketing copy approval",
     "scope": { "level": "apiKey" },
     "nodes": [
-      { "nodeId": "agent-draft",   "type": "agent",  "config": { "agentId": "copy-agent-v1" } },
-      { "nodeId": "human-legal",   "type": "human",  "config": { "reviewers": [{ "userId": "u_legal_01", "mandatory": true }] } },
-      { "nodeId": "human-brand",   "type": "human",  "config": { "reviewers": [{ "userId": "u_brand_01", "mandatory": true }] } },
-      { "nodeId": "agent-publish", "type": "agent",  "config": { "agentId": "publish-agent-v1" } }
+      { "nodeId": "agent-draft",   "type": "agent", "config": { "agentId": "copy-agent-v1" } },
+      { "nodeId": "human-review",  "type": "human", "config": { "reviewers": [{ "userId": "u_reviewer_01", "mandatory": true }] } },
+      { "nodeId": "agent-publish", "type": "agent", "config": { "agentId": "publish-agent-v1" } },
+      { "nodeId": "agent-rework",  "type": "agent", "config": { "agentId": "rework-agent-v1" } }
     ],
     "edges": [
-      { "from": "agent-draft",  "to": "human-legal" },
-      { "from": "agent-draft",  "to": "human-brand" },
-      { "from": "human-legal",  "to": "agent-publish" },
-      { "from": "human-brand",  "to": "agent-publish" }
-    ],
-    "groups": [{
-      "groupId": "parallel-review",
-      "memberNodeIds": ["human-legal", "human-brand"],
-      "expectedSteps": 2,
-      "quorum": 2,
-      "onQuorumMet": "joinOnQuorum"
-    }]
+      { "from": "agent-draft", "to": "human-review" },
+      { "from": "human-review", "to": "agent-publish", "on": "approve" },
+      { "from": "human-review", "to": "agent-rework", "on": "reject" }
+    ]
   }
 }
 ```
@@ -155,9 +161,26 @@ Use this API to register a new workflow definition (the static blueprint of node
     "description": null,
     "version": 1,
     "scope": { "level": "apiKey", "organizationId": null, "documentId": null },
-    "nodes": [ /* echoed back with resolved defaults */ ],
-    "edges": [ /* echoed back with when: null for unset gates */ ],
-    "groups": [ /* echoed back */ ],
+    "nodes": [
+      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1" } },
+      { "nodeId": "human-review", "type": "human", "config": { "reviewers": [{ "userId": "u_reviewer_01", "mandatory": true }] } },
+      { "nodeId": "agent-publish", "type": "agent", "config": { "agentId": "publish-agent-v1" } },
+      { "nodeId": "agent-rework", "type": "agent", "config": { "agentId": "rework-agent-v1" } }
+    ],
+    "edges": [
+      { "from": "agent-draft", "to": "human-review" },
+      { "from": "human-review", "to": "agent-publish", "on": "approve" },
+      { "from": "human-review", "to": "agent-rework", "on": "reject" }
+    ],
+    "groups": null,
+    "compiled": {
+      "forwardEdges": [
+        { "from": "agent-draft", "to": "human-review", "role": "always", "when": null },
+        { "from": "human-review", "to": "agent-publish", "role": "approve", "when": { "op": "eq", "args": [{ "var": "output.decision" }, "approve"] } },
+        { "from": "human-review", "to": "agent-rework", "role": "reject", "when": { "op": "eq", "args": [{ "var": "output.decision" }, "reject"] } }
+      ],
+      "loops": []
+    },
     "triggers": null,
     "tags": null,
     "custom": null,
@@ -167,6 +190,8 @@ Use this API to register a new workflow definition (the static blueprint of node
   }
 }
 ```
+
+The read-only `compiled` block is added to every `DefinitionView` (create / get / list). `compiled.forwardEdges` is the runtime forward-edge list the engine drives execution from; `compiled.loops` is the derived loop region list. The authored `edges` still echo `sourceEdges` byte-for-byte. See [Get Definition](/api-reference/rest-apis/v2/approval-engine/definitions/get-definition) for the full `compiled` schema.
 
 #### Failure Response
 
@@ -179,7 +204,7 @@ Use this API to register a new workflow definition (the static blueprint of node
 }
 ```
 
-**Errors:** `INVALID_ARGUMENT` (schema or linter failure; message includes the linter code) / `ALREADY_EXISTS` (definitionId already in use).
+**Errors:** `INVALID_ARGUMENT` (schema, `compileGraph`, or linter failure; message includes the validation key) / `ALREADY_EXISTS` (definitionId already in use).
 
 <ResponseExample>
 ```js
@@ -190,9 +215,12 @@ Use this API to register a new workflow definition (the static blueprint of node
     "description": null,
     "version": 1,
     "scope": { "level": "apiKey", "organizationId": null, "documentId": null },
-    "nodes": [],
+    "nodes": [
+      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1" } }
+    ],
     "edges": [],
-    "groups": [],
+    "groups": null,
+    "compiled": { "forwardEdges": [], "loops": [] },
     "triggers": null,
     "tags": null,
     "custom": null,

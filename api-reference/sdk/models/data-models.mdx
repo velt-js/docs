@@ -11039,9 +11039,9 @@ Request payload for `sdk.api.agents.createAgent`. Accepts additional passthrough
 | `name` | `string` | Yes | Agent display name. |
 | `description` | `string` | No | Human-readable agent description. |
 | `rawInstructions` | `string` | No | Unprocessed natural-language instructions. |
-| `instructions` | `string` | No | Resolved/structured instructions. |
+| `instructions` | `string` | No | Resolved/structured instructions. Required when the configured strategy is `ai`, `service+ai`, or `stagehand-agent`. |
 | `enabled` | `boolean` | No | Whether the agent is active. |
-| `metadata` | `Record<string, unknown>` | No | Arbitrary metadata. |
+| `metadata` | `Record<string, unknown>` | No | Arbitrary metadata. Server-managed metadata keys (`type`, `category`, `internal`, `apiKey`) are rejected on create/update-version payloads. |
 | `contextGathering` | `ContextGatheringConfig` | No | Context gathering configuration. |
 | `execution` | `AgentExecutionConfig` | No | Execution configuration. |
 | `response` | `AgentResponseConfig` | No | Response configuration. |
@@ -11049,6 +11049,8 @@ Request payload for `sdk.api.agents.createAgent`. Accepts additional passthrough
 | `input` | `AgentInputConfig` | No | Input configuration. |
 | `scope` | `AgentScopeConfig` | No | Scope configuration. |
 | `setup` | `AgentSetupConfig` | No | Setup configuration. |
+
+Create and update-version payloads also reject the top-level server-managed `managedBy` field with `400 INVALID_ARGUMENT`.
 
 ### `UpdateAgentRequest` (Node)
 
@@ -11063,13 +11065,13 @@ Request payload for `sdk.api.agents.updateAgent`.
 
 ### `UpdateAgentVersionRequest` (Node)
 
-Request payload for `sdk.api.agents.updateAgentVersion`. Accepts additional passthrough fields.
+Request payload for `sdk.api.agents.updateAgentVersion`. Accepts additional passthrough fields. Partial updates deep-merge nested config objects, so omitted siblings under `execution`, `contextGathering`, and similar blocks are preserved.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `agentId` | `string` | Yes | Agent to version. |
 | `rawInstructions` | `string` | No | Unprocessed natural-language instructions. |
-| `instructions` | `string` | No | Resolved/structured instructions. |
+| `instructions` | `string` | No | Resolved/structured instructions. Required when the configured strategy is `ai`, `service+ai`, or `stagehand-agent`. |
 | `phaseTimeoutMs` | `number` | No | Positive integer phase timeout in ms. |
 | `contextGathering` | `ContextGatheringConfig` | No | Context gathering configuration. |
 | `execution` | `AgentExecutionConfig` | No | Execution configuration. |
@@ -11078,6 +11080,8 @@ Request payload for `sdk.api.agents.updateAgentVersion`. Accepts additional pass
 | `input` | `AgentInputConfig` | No | Input configuration. |
 | `scope` | `AgentScopeConfig` | No | Scope configuration. |
 | `setup` | `AgentSetupConfig` | No | Setup configuration. |
+
+Update-version payloads also reject the top-level server-managed `managedBy` field and server-managed metadata keys (`metadata.type`, `metadata.category`, `metadata.internal`, `metadata.apiKey`) with `400 INVALID_ARGUMENT`.
 
 ### `DeleteAgentRequest` (Node)
 
@@ -11280,6 +11284,76 @@ Request payload for `sdk.api.agents.removeAgentsFromGroup`.
 |-------|------|----------|-------------|
 | `groupId` | `string` | Yes | Target group. |
 | `agentIds` | `string[]` | Yes | Agents to remove, 1..100. |
+
+### Agent configuration nested types (Node)
+
+These config types are referenced by `CreateAgentRequest` and `UpdateAgentVersionRequest`.
+
+```ts
+interface ResponseFieldDescriptions {
+  summary?: string;
+  title?: string;
+  description?: string;
+  severity?: string;
+  targetText?: string;
+  suggestion?: string;
+  isPageLevel?: string;
+  issueType?: string;
+  confidence?: string;
+  htmlSelector?: string;
+  findingType?: string;
+}
+
+type RestApiAuthConfig =
+  | { type: 'none' }
+  | { type: 'bearer'; token: string }
+  | { type: 'basic'; username: string; password: string }
+  | { type: 'header'; headers: Record<string, string> };
+
+interface RestApiEndpoint {
+  url: string;
+  description: string;
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  auth?: RestApiAuthConfig;
+  headers?: Record<string, string>;
+  query?: Record<string, string>;
+  body?: unknown;
+  cacheTtlSeconds?: number; // default 0, max 86400
+  timeoutMs?: number; // default 10000, max 30000
+  responsePath?: string;
+}
+
+interface RestApiContextStrategyOptions {
+  endpoints: RestApiEndpoint[]; // 1..10
+  maxResponseBytes?: number; // default 1000000, max 5000000
+}
+
+interface ContextGatheringConfig {
+  strategies?: string[]; // include 'rest-api' to inject {{restApiData}}
+  strategyOptions?: {
+    'rest-api'?: RestApiContextStrategyOptions;
+  } & Record<string, Record<string, unknown>>;
+}
+
+type McpAuthConfig = { type: 'none' } | { type: 'header'; headers: Record<string, string> };
+
+interface McpServerConfig {
+  url: string;
+  auth?: McpAuthConfig;
+  allowedTools?: string[];
+}
+
+interface AgentExecutionConfig {
+  executionStrategy?: 'default' | 'ai' | 'service+ai' | 'stagehand-agent' | 'mcp-tools' | string;
+  mcpServers?: McpServerConfig[];
+  responseDescriptions?: ResponseFieldDescriptions;
+  serviceId?: string;
+  strategyOptions?: Record<string, Record<string, unknown>>;
+  knowledge?: Record<string, unknown>;
+}
+```
+
+Secret-bearing `rest-api` and `mcp-tools` auth fields are encrypted at rest and returned redacted on read paths, including agent version snapshots.
 
 ### `MemorySearchRequest` (Node)
 
@@ -11534,9 +11608,8 @@ Request payload for `sdk.api.approval.createDefinition`.
 | `description` | `string` | No | Description, up to 2000 chars. |
 | `scope` | `ApprovalScope` | No | Definition scope. |
 | `nodes` | `ApprovalNode[]` | Yes | Workflow nodes, 1..100. |
-| `edges` | `ApprovalEdge[]` | Yes | Workflow edges; may be empty; max 500. |
+| `edges` | `ApprovalEdge[]` | Yes | Workflow edges (unified `EdgeSchema`: `from`/`to`/`on`/`when`/`loop`); may be empty; max 500. Reject paths and loop-backs are `on:'reject'` edges. |
 | `groups` | `ApprovalGroup[]` | No | Node groups. |
-| `loops` | `ApprovalLoop[]` | No | Loop definitions. |
 | `triggers` | `ApprovalTrigger[]` | No | Trigger definitions. |
 | `tags` | `string[]` | No | Tags. |
 | `custom` | `Record<string, unknown>` | No | Arbitrary custom data. |
@@ -11582,6 +11655,70 @@ Request payload for `sdk.api.approval.listDefinitions`.
 | `cursor` | `number` | No | Pagination cursor. |
 | `organizationId` | `string` | No | Organization context. |
 | `documentId` | `string` | No | Document context. |
+
+### Approval graph nested types (Node)
+
+These graph types are referenced by approval definition requests and `DefinitionView` responses.
+
+```ts
+type JsonAst = Record<string, unknown>;
+
+type ApprovalEdgeEndpoint = string | { kind: 'node'; nodeId: string } | { kind: 'group'; groupId: string };
+
+interface ApprovalEdge {
+  from: ApprovalEdgeEndpoint;
+  to: ApprovalEdgeEndpoint;
+  on?: 'approve' | 'reject' | 'always' | 'exhausted' | 'custom'; // default 'always'
+  when?: string; // JSON-AST string, only valid when on === 'custom'
+  loop?: { maxIterations: number }; // 1..20, only on an on:'reject' back-edge
+}
+
+interface ApprovalNodeBase {
+  nodeId: string;
+  type: 'agent' | 'human' | 'webhook';
+  slaMs?: number;
+  requireNonEmptyOutput?: boolean;
+  name?: string; // 1..200
+  description?: string; // max 2000
+}
+
+type ApprovalNode =
+  | (ApprovalNodeBase & { type: 'agent'; config: Record<string, unknown> })
+  | (ApprovalNodeBase & {
+      type: 'human';
+      config: {
+        reviewerIds?: string[];
+        reviewers?: Array<{ userId: string; mandatory: boolean }>;
+        reviewerEmails?: string[];
+        commentBody?: string;
+      };
+    })
+  | (ApprovalNodeBase & { type: 'webhook'; config: Record<string, unknown> });
+
+interface ApprovalCompiledForwardEdge {
+  from: string;
+  to: string;
+  role: 'approve' | 'reject' | 'always' | 'exhausted' | 'custom';
+  when: JsonAst | null;
+  fromGroupId?: string;
+  toGroupId?: string;
+}
+
+interface ApprovalCompiledLoop {
+  loopId: string;
+  entryNodeId: string;
+  bodyNodeIds: string[];
+  maxIterations: number;
+  onExhausted: { routeToNodeId: string } | null;
+}
+
+interface ApprovalCompiledGraph {
+  forwardEdges: ApprovalCompiledForwardEdge[];
+  loops: ApprovalCompiledLoop[];
+}
+```
+
+Every `DefinitionView` returned by create, get, and list includes read-only `compiled.forwardEdges` and `compiled.loops` alongside the authored `edges`.
 
 ### `ApprovalDispatchExecutionRequest` (Node)
 

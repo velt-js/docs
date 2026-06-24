@@ -11,7 +11,11 @@ description: Release Notes of changes added to the core Velt SDK
 
 <Update label="6.0.0-beta.1" description="June 23, 2026">
 
-First beta of the modular SDK. The public `Velt` / `Snippyly` API is fully backward compatible — existing integrations work unchanged.
+First beta of the modular SDK. The public `Velt` / `Snippyly` browser API is fully backward compatible — existing browser integrations work unchanged. Approval Engine definition authors should review the breaking `edges[]` contract change below.
+
+### Breaking Changes
+
+- [**Approval Engine**]: Workflow transitions are now expressed through a single unified `edges[]` array. The per-human-node `onReject` shorthand and the authored top-level `loops[]` array have been removed — a human node's reject path is now an outgoing edge, and loop-backs are reject edges marked with `loop`. Definitions using `onReject` or `loops[]` are rejected at write time with `INVALID_ARGUMENT`; already-stored definitions and in-flight executions are unaffected. See the upgrade guide for the migration mapping. [Learn more →](/release-notes/version-6/upgrade-guide)
 
 ### New Features
 
@@ -25,6 +29,18 @@ First beta of the modular SDK. The public `Velt` / `Snippyly` API is fully backw
 
 - [**Memory**]: `knowledge/search` now strictly validates `includeRules` — non-boolean values (e.g. the string `"true"` or `1`) are rejected with a `400` instead of being silently ignored. [Learn more →](/api-reference/rest-apis/v2/memory/knowledge/search)
 
+- [**Approval Engine**]: Every `DefinitionView` (on create, get, and list) now carries a read-only `compiled` block — `compiled.forwardEdges` is the runtime forward-edge list the engine drives execution from (group endpoints expanded, edge roles compiled), and `compiled.loops` is the server-derived loop region list. Clients can render the runtime graph without re-implementing the compiler. The authored `edges` still echo back byte-for-byte. Additive. [Learn more →](/api-reference/rest-apis/v2/approval-engine/definitions/get-definition)
+
+- [**Approval Engine**]: `waitAll` and `cancelOnQuorum` groups can now be edge sources. A `waitAll` source produces a collective approve/reject fan-out with unanimity (approve only if every member approved, else reject); a `cancelOnQuorum` source fires one collective approve-successor on quorum. Edge-to-group fan-out is accepted for all quorum policies. [Learn more →](/ai/approval-engine/customize-behavior)
+
+- [**Approval Engine**]: Nodes accept optional cosmetic `name` (1–200 chars) and `description` (max 2000 chars) fields, echoed verbatim in `NodeView` for stable per-node labels in visual editors. Both are additive and have no runtime effect. [Learn more →](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition)
+
+- [**Agents**]: New `rest-api` context-gathering strategy for custom agents. An agent can fetch up to 10 customer-defined REST endpoints at execution time and inject the results into the prompt via the `{{restApiData}}` template variable. Outbound requests are SSRF-guarded, and endpoint auth secrets are encrypted at rest and redacted on every read path.
+
+- [**Agents**]: New `mcp-tools` execution strategy for custom agents. The agent connects to one or more customer-configured MCP servers and runs a multi-turn tool-calling loop (with per-server tool allowlists and a max-turn cap) before returning a structured response. Provider-agnostic across Claude and Gemini.
+
+- [**Agents**]: New `docs-code-comparison` built-in agent that verifies code snippets on a landing page against the docs site using the MCP tool loop, reporting mismatches as annotations.
+
 ### Improvements
 
 - [**Core**]: `getXElement()` accessors (e.g. `getCommentElement()`) now return non-blocking lazy facades that kick off the chunk load and return immediately, preserving the synchronous, never-null contract — void calls are queued and flushed, promise calls await the load, and `on(...)` / observable subscriptions bridge through once the chunk lands. Each accessor also auto-enables its feature. Existing code compiles and runs unchanged. [Learn more →](/api-reference/sdk/api/api-methods)
@@ -37,10 +53,28 @@ First beta of the modular SDK. The public `Velt` / `Snippyly` API is fully backw
 
 - [**Core**]: New lazy element-facade classes (`LazyXElement`, e.g. `LazyCommentElement`) returned by `getXElement()` and cast to the public element types — no change to your code. [Learn more →](/api-reference/sdk/api/api-methods)
 
+- [**Core**]: `ApiKeySecretCipher` now centralizes the shared `${apiKey}:${salt}` AES-GCM encrypt/decrypt pattern used for customer LLM provider keys and REST API auth secrets. `CryptoUtil` now lives under `core/crypto/`, and CRDT imports it directly from that layer. No runtime behavior change.
+
+- [**Approval Engine**]: Structural validations that depend on authored edge provenance now run in `compileGraph` before loop extraction, while DAG integrity and group/loop-shape checks run on the compiled forward-only graph. This keeps new `APPROVAL_EDGE_*` errors separate from linter graph-shape errors and removes order-dependent validation behavior.
+
+- [**Agents**]: Partial updates to a custom agent config now deep-merge instead of shallow-merge, so nested fields (e.g. `execution.mcpServers`) are preserved when you update siblings. Create and update-version payloads now also reject server-managed fields (`managedBy`, `metadata.*`) with a per-key `400`.
+
+- [**Agents**]: Customer LLM API-key lookup and decryption now live in shared `ProviderApiKeyService`, so Rewriter, agents, and future LLM consumers use the same provider fallback and decrypt-failure analytics behavior.
+
+- [**Agents**]: Claude and Gemini providers now implement `askAIWithTools(request, executor)` for capped, provider-agnostic tool loops. Token usage is accumulated across turns, tool errors are forwarded back to the model, and callers fail with `AI_TOOLS_NOT_SUPPORTED` when the selected provider does not implement tool calling.
+
+- [**Agents**]: MCP client connections now enforce per-server tool allowlists, send `mcp-client-name` / `mcp-client-version` metadata headers, and return structured tool errors to the model instead of throwing opaque tool-call failures.
+
 ### Bug Fixes
 
 - [**Recorder**]: The video player now loads transcription/subtitle embeds when their chunk is deferred — it proactively ensures the recorder chunk is loaded, upgrading the `<snippyly-subtitles-embed>` / `<snippyly-transcription-embed>` elements so subtitles and transcription work even when the recorder chunk wasn't eagerly loaded. Fire-and-forget, idempotent, errors logged. [Learn more →](/api-reference/sdk/api/api-methods)
 
 - [**Reactions**]: The reaction pin active-state highlight is now reliable under the Angular Elements lifecycle. `<velt-reaction-pin>` tracks its per-`annotationId` subscription separately and tears down only that subscription on `annotationId` change (not the blanket unsubscribe), so the user subscription survives and the current user's reaction pin reliably shows its active highlight (`active` class / `aria-pressed`). [Learn more →](/api-reference/sdk/api/api-methods)
+
+- [**Memory**]: The email digest project-card count is now deterministic within a UTC day. Two digest runs over identical data on the same UTC day now produce the same project list and card names — the ask runs at temperature 0, the recency window is anchored to UTC-day boundaries, and the grounding gate keys only on deterministic signals.
+
+- [**Agents**]: Agent create and update now correctly return `400` when `instructions` are missing for strategies that require them (`ai`, `service+ai`, `stagehand-agent`).
+
+- [**Agents**]: Agent version snapshots (`listVersions`) now redact encrypted auth secrets fail-closed — no `{ __enc }` ciphertext leaks on the read path, and the call rethrows rather than returning unredacted data if redaction fails.
 
 </Update>

@@ -42,7 +42,7 @@ Both approaches are fully backward compatible and can be used together.
 | Feature | Function based | Endpoint based |
 |---------|----------------|----------------|
 | **Best For** | Complex setups requiring middleware logic, dynamic headers, or transformation before sending | Standard REST APIs where you just need to pass the request "as-is" to the backend |
-| **Implementation** | You write the `fetch()` or `axios` code | You provide the `url` string and `headers` object |
+| **Implementation** | You write the `fetch()` or `axios` code | You provide the endpoint `url`, static or async `headers`, and optional `credentials` |
 | **Flexibility** | High | Medium |
 | **Speed** | Medium | High |
 
@@ -252,6 +252,125 @@ Velt.setDataProviders({ comment: commentDataProvider });
 </Tab>
 </Tabs>
 
+### Async headers and credentials
+
+On any endpoint config (`getConfig`, `saveConfig`, `deleteConfig`), `headers` can be an async function that is resolved on every request — including each retry — so a short-lived per-request token stays fresh. Set `credentials: 'include'` to forward cookies for cross-origin cookie/session auth. When `credentials` is unset, `fetch()` keeps its default behavior.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const getFreshToken = async () => {
+  const response = await fetch('/api/velt/resolver-token');
+  const { token } = await response.json();
+  return token;
+};
+
+const commentResolverConfig = {
+  saveConfig: {
+    url: 'https://your-backend.com/api/velt/comments/save',
+    headers: async () => ({ Authorization: `Bearer ${await getFreshToken()}` }),
+    credentials: 'include'
+  }
+};
+
+const commentDataProvider = {
+  config: commentResolverConfig
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ comment: commentDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const getFreshToken = async () => {
+  const response = await fetch('/api/velt/resolver-token');
+  const { token } = await response.json();
+  return token;
+};
+
+const commentResolverConfig = {
+  saveConfig: {
+    url: 'https://your-backend.com/api/velt/comments/save',
+    headers: async () => ({ Authorization: `Bearer ${await getFreshToken()}` }),
+    credentials: 'include'
+  }
+};
+
+const commentDataProvider = {
+  config: commentResolverConfig
+};
+
+Velt.setDataProviders({ comment: commentDataProvider });
+```
+</Tab>
+</Tabs>
+
+### additionalSaveEvents
+
+By default the save endpoint receives only the 4 core PII events (`COMMENT_ANNOTATION_ADD`, `COMMENT_ADD`, `COMMENT_UPDATE`, `COMMENT_DELETE`). Opt in per-config via `additionalSaveEvents` to also receive non-core, annotation-level lifecycle events (e.g. status, assignment, approval, reactions) on the same save endpoint. The event values come from [`CommentResolverSaveEvent`](/api-reference/sdk/models/data-models#commentresolversaveevent).
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { CommentResolverSaveEvent } from '@veltdev/react';
+
+const commentResolverConfig = {
+  additionalSaveEvents: [
+    { event: CommentResolverSaveEvent.STATUS_CHANGE },
+    { event: CommentResolverSaveEvent.ASSIGN },
+    { event: CommentResolverSaveEvent.APPROVE },
+    { event: CommentResolverSaveEvent.REACTION_ADD }
+  ],
+  saveConfig: {
+    url: 'https://your-backend.com/api/velt/comments/save',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  }
+};
+
+const commentDataProvider = {
+  config: commentResolverConfig
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ comment: commentDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const commentResolverConfig = {
+  additionalSaveEvents: [
+    { event: 'comment_annotation.status_change' },
+    { event: 'comment_annotation.assign' },
+    { event: 'comment_annotation.approve' },
+    { event: 'comment.reaction_add' }
+  ],
+  saveConfig: {
+    url: 'https://your-backend.com/api/velt/comments/save',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  }
+};
+
+const commentDataProvider = {
+  config: commentResolverConfig
+};
+
+Velt.setDataProviders({ comment: commentDataProvider });
+```
+</Tab>
+</Tabs>
+
+Behavior nuances:
+- Additional events bypass the PII-change dedup gate — they are sent even when no PII changed.
+- The same stripped [`PartialCommentAnnotation`](/api-reference/sdk/models/data-models#partialcommentannotation) payload is sent, so there is no new data egress.
+- For annotation-level events, `commentId` and `targetComment` are omitted (no specific target comment). For reaction events (`comment.reaction_add` / `comment.reaction_delete`), both are included since the reaction is on a specific comment.
+
 ## Function based DataProvider
 
 Implement custom methods to handle data operations yourself.
@@ -372,7 +491,8 @@ res.json({ data: result, success: true, statusCode: 200 });
 ### save
 Save comments to your database. Return a success or error response. On error we will retry.
 - Param: [`SaveCommentResolverRequest`](/api-reference/sdk/models/data-models#savecommentresolverrequest)
-  - Note in the `SaveCommentResolverRequest` object, you will receive [the event name](/api-reference/sdk/models/data-models#resolveractions) that triggered the save.
+  - Note in the `SaveCommentResolverRequest` object, you will receive the event name that triggered the save — one of [`ResolverActions`](/api-reference/sdk/models/data-models#resolveractions) (the 4 core PII events) or, when opted in via `additionalSaveEvents`, a [`CommentResolverSaveEvent`](/api-reference/sdk/models/data-models#commentresolversaveevent).
+  - The payload also includes an optional `targetComment` (the full [`PartialComment`](/api-reference/sdk/models/data-models#partialcomment) for the comment identified by `commentId`), so your backend no longer needs to re-derive it by scanning `commentAnnotation[*].comments`. It is omitted when `commentId` is absent or unmatched.
 - Return: [`Promise<ResolverResponse<T>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
 <Warning>

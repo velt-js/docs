@@ -1,14 +1,12 @@
 name: release-note-to-docs-pr
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Turns a newly-added release note in snippyly/internal-release-notes into a
-# docs PR by running the committed 7-agent pipeline headless, then opening a PR
-# off main and tagging the reviewer.
+# Turns a changed release note in snippyly/internal-release-notes into a docs PR
+# by running the committed 7-agent pipeline through deterministic checkpoints.
 #
 # Triggered by a repository_dispatch (type: new-release-note) sent from the
 # source repo's notify-docs-on-release-note.yml. Also runnable manually via
-# workflow_dispatch for testing (keep the source push trigger disabled until
-# the verification matrix in the plan is green).
+# workflow_dispatch for dry runs, forced reruns, and resume testing.
 #
 # Mirrors .github/workflows/docs-sync-skills.yml (cross-repo checkout via
 # CROSS_REPO_PAT, headless Claude via ANTHROPIC_API_KEY, fail-loud notify).
@@ -22,20 +20,48 @@ on:
     inputs:
       path:
         description: "Release-note path within the source repo, e.g. release-notes/v6.0.0-beta.2.md"
-        required: true
-        type: string
-      sha:
-        description: "Source repo commit SHA to read the note from (defaults to main)."
         required: false
         type: string
+      release_note_url:
+        description: "GitHub blob/raw URL to a release note. URL runs default to resume mode."
+        required: false
+        type: string
+      sha:
+        description: "Source repo commit SHA/ref to read the note from. Overrides the ref parsed from release_note_url."
+        required: false
+        type: string
+      change_type:
+        description: "Source change type: added, modified, renamed, or deleted."
+        required: false
+        default: added
+        type: choice
+        options:
+          - added
+          - modified
+          - renamed
+          - deleted
+      mode:
+        description: "auto skips completed work, resume continues checkpoints, force reruns all stages."
+        required: false
+        default: resume
+        type: choice
+        options:
+          - auto
+          - resume
+          - force
+      dry_run:
+        description: "Classify and print route without branch, PR, or agent side effects."
+        required: false
+        default: false
+        type: boolean
 
 # Default notes get a per-note group; shared-firebase-function notes share one
 # group so concurrent appends can't race-push the same release branch.
 concurrency:
   group: >-
-    ${{ contains(github.event.client_payload.path || inputs.path, 'shared-firebase-function')
+    ${{ contains(github.event.client_payload.path || inputs.path || github.event.client_payload.release_note_url || inputs.release_note_url, 'shared-firebase-function')
         && 'rn2docs-firebase-append'
-        || format('rn2docs-{0}', github.event.client_payload.path || inputs.path) }}
+        || format('rn2docs-{0}', github.event.client_payload.path || inputs.path || github.event.client_payload.release_note_url || inputs.release_note_url || github.run_id) }}
   cancel-in-progress: false   # never cancel a running pipeline — risk of a partial PR
 
 permissions:
@@ -52,19 +78,6 @@ jobs:
     timeout-minutes: 350   # the full 7-agent pipeline is long; GH job ceiling is 6h
 
     steps:
-      - name: Resolve inputs (path + sha)
-        id: inputs
-        run: |
-          NOTE_PATH="${{ github.event.client_payload.path || inputs.path }}"
-          NOTE_SHA="${{ github.event.client_payload.sha || inputs.sha }}"
-          if [ -z "$NOTE_PATH" ]; then
-            echo "::error::No release-note path provided (client_payload.path / inputs.path)."
-            exit 1
-          fi
-          echo "note_path=$NOTE_PATH" >> "$GITHUB_OUTPUT"
-          echo "note_sha=$NOTE_SHA"   >> "$GITHUB_OUTPUT"
-          echo "Resolved note: $NOTE_PATH @ ${NOTE_SHA:-main}"
-
       - name: Checkout docs (full history)
         uses: actions/checkout@v4
         with:
@@ -74,11 +87,30 @@ jobs:
           token: ${{ secrets.CROSS_REPO_PAT }}
           path: docs
 
+      - name: Resolve inputs
+        id: inputs
+        env:
+          CLIENT_PAYLOAD_PATH: ${{ github.event.client_payload.path }}
+          CLIENT_PAYLOAD_RELEASE_NOTE_URL: ${{ github.event.client_payload.release_note_url }}
+          CLIENT_PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+          CLIENT_PAYLOAD_CHANGE_TYPE: ${{ github.event.client_payload.change_type }}
+          CLIENT_PAYLOAD_SOURCE_REPO: ${{ github.event.client_payload.source_repo }}
+          CLIENT_PAYLOAD_MODE: ${{ github.event.client_payload.mode }}
+          CLIENT_PAYLOAD_DRY_RUN: ${{ github.event.client_payload.dry_run }}
+          INPUT_PATH: ${{ inputs.path }}
+          INPUT_RELEASE_NOTE_URL: ${{ inputs.release_note_url }}
+          INPUT_SHA: ${{ inputs.sha }}
+          INPUT_CHANGE_TYPE: ${{ inputs.change_type }}
+          INPUT_SOURCE_REPO: snippyly/internal-release-notes
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: bash docs/scripts/release-notes/resolve-release-note-input.sh
+
       - name: Checkout source release-notes repo
         uses: actions/checkout@v4
         with:
-          repository: snippyly/internal-release-notes
-          ref: ${{ steps.inputs.outputs.note_sha || 'main' }}
+          repository: ${{ steps.inputs.outputs.source_repo }}
+          ref: ${{ steps.inputs.outputs.note_ref || 'main' }}
           fetch-depth: 1
           token: ${{ secrets.CROSS_REPO_PAT }}
           path: source
@@ -91,21 +123,42 @@ jobs:
       - name: Install claude-code CLI
         run: npm install -g @anthropic-ai/claude-code
 
+      - name: Verify Claude Code supports Opus 4.8
+        run: |
+          set -euo pipefail
+          VERSION="$(claude --version | awk '{print $1}')"
+          REQUIRED="2.1.154"
+          if [ "$(printf '%s\n%s\n' "$REQUIRED" "$VERSION" | sort -V | head -n1)" != "$REQUIRED" ]; then
+            echo "::error::Claude Code $VERSION is too old for claude-opus-4-8. Install v2.1.154 or newer."
+            exit 1
+          fi
+          echo "Claude Code $VERSION supports claude-opus-4-8."
+
       - name: Configure git identity (docs)
         working-directory: docs
         run: |
           git config user.name  "release-notes-bot"
           git config user.email "release-notes-bot@users.noreply.github.com"
 
-      - name: Run release-note pipeline (headless orchestrator)
+      - name: Run release-note pipeline
         working-directory: docs
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN:          ${{ secrets.CROSS_REPO_PAT }}
           NOTE_REPO:         ${{ env.NOTE_REPO }}
+          SOURCE_REPO:       ${{ steps.inputs.outputs.source_repo }}
+          SOURCE_SHA:        ${{ steps.inputs.outputs.note_ref }}
+          SOURCE_NOTE_URL:   ${{ steps.inputs.outputs.source_note_url }}
+          CHANGE_TYPE:       ${{ steps.inputs.outputs.change_type }}
           NOTE_PATH:         ${{ steps.inputs.outputs.note_path }}
           SOURCE_DIR:        ${{ github.workspace }}/source
-          PIPELINE_MAX_TURNS: "600"
+          PIPELINE_MODE:     ${{ steps.inputs.outputs.pipeline_mode }}
+          PIPELINE_DRY_RUN:  ${{ steps.inputs.outputs.pipeline_dry_run }}
+          PIPELINE_MODEL:    claude-opus-4-8
+          AGENT_MAX_TURNS:   "100"
+          RUN_URL:           ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DOCS_REPO:         ${{ env.DOCS_REPO }}
+          ANTHROPIC_DEFAULT_OPUS_MODEL: claude-opus-4-8
         run: bash scripts/release-notes/run-release-note-pipeline.sh
 
       - name: Notify on failure (never fail silently)
@@ -113,9 +166,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
         run: |
-          NOTE_PATH="${{ steps.inputs.outputs.note_path }}"
+          NOTE_PATH="${{ steps.inputs.outputs.note_path || inputs.path || inputs.release_note_url || github.event.client_payload.path || github.event.client_payload.release_note_url }}"
+          NOTE_URL="${{ steps.inputs.outputs.source_note_url || inputs.release_note_url || github.event.client_payload.release_note_url }}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          MSG="⚠️ release-note → docs PR pipeline failed for \`${NOTE_PATH}\`. No docs PR was produced. Pipeline run: ${RUN_URL} — @yoen-velt"
+          MSG="⚠️ release-note → docs PR pipeline failed for \`${NOTE_PATH}\`. No docs PR was produced. Pipeline run: ${RUN_URL}. Rerun with release_note_url: ${NOTE_URL:-unavailable} — @yoen-velt"
           # Surface the failure as an issue on the docs repo so it is never dropped.
           gh issue create --repo velt-js/docs \
             --title "release-note pipeline failed: ${NOTE_PATH}" \

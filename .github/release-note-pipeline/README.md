@@ -1,52 +1,102 @@
-# Release-note → docs-PR automation
+# Release-note -> docs-PR automation
 
-When a new release note is added to `snippyly/internal-release-notes/release-notes/**`,
-this automation runs the committed 7-agent pipeline (`.claude/agents/Agent-1..7-*.md`)
-against this repo, opens a docs PR off `main` named after the note, and tags
-`@yoen-velt` for review. Human review happens **at the PR**, not mid-pipeline.
+When a Markdown release note changes in
+`snippyly/internal-release-notes/release-notes/**`, the source repo dispatches
+an event to `velt-js/docs`. The docs workflow classifies the note, creates or
+reuses the right PR branch, and runs the committed release-note agents
+sequentially on Opus 4.8 with checkpoints after every stage.
 
 ## Flow
 
 ```
-internal-release-notes (source)                 velt-js/docs (this repo)
-notify-docs-on-release-note.yml  ─repository_dispatch─►  release-note-to-docs-pr.yml
-  push → release-notes/**                          run-release-note-pipeline.sh
-  detect ADDED *.md (diff-filter=A)                  → orchestrator.md (headless Claude)
-  1 dispatch per file                                  → Agent-1..7 (subagents) → PR
+internal-release-notes                         velt-js/docs
+notify-docs-on-release-note.yml  --dispatch--> release-note-to-docs-pr.yml
+  push -> release-notes/**                       run-release-note-pipeline.sh
+  changed *.md                                    classify + branch/PR/checkpoint
+  added/modified/renamed                          Agent-1..7 on claude-opus-4-8
+  deleted -> docs triage issue                    commit/push after each stage
 ```
 
-## Pieces
+## Files
 
 | Path | Repo | Role |
 |---|---|---|
-| `.github/workflows/release-note-to-docs-pr.yml` | this repo | dispatch-triggered; runs the pipeline + opens the PR |
-| `.github/release-note-pipeline/orchestrator.md` | this repo | the headless orchestrator prompt (classify → route → run agents → PR) |
-| `scripts/release-notes/run-release-note-pipeline.sh` | this repo | invokes the Claude CLI headless with the orchestrator |
-| `.github/release-note-pipeline/source-repo/notify-docs-on-release-note.yml` | **copy to** `internal-release-notes` | detects added notes → `repository_dispatch` |
+| `.github/workflows/release-note-to-docs-pr.yml` | `velt-js/docs` | Receives dispatches and runs the deterministic pipeline |
+| `scripts/release-notes/run-release-note-pipeline.sh` | `velt-js/docs` | Routing, branch/PR reuse, checkpointing, restart behavior |
+| `scripts/release-notes/run-release-note-agent.sh` | `velt-js/docs` | Runs one committed agent on `claude-opus-4-8` |
+| `scripts/release-notes/lib.sh` | `velt-js/docs` | Shared route/classification helpers |
+| `.github/release-note-pipeline/source-repo/notify-docs-on-release-note.yml` | copy to `snippyly/internal-release-notes` | Active source trigger |
 
-## Routing (encoded in `orchestrator.md`)
+## Routing
 
-- `release-notes/v*.md` (core SDK) → new branch off `main` = filename stem, own PR.
-- `release-notes/shared-firebase-function-*.md` → append to the **newest open core-SDK release PR** (else new branch + tag).
-- `release-notes/velt-py-sdk/v*.md` → branch/PR `velt-py-<ver>`.
-- `release-notes/velt-node-sdk/v*.md` → branch `velt-node-docs-<ver>`, PR title `velt-node-<ver>`.
-- anything else → `unknown` → draft PR + tag for triage (never auto-processed).
+- `release-notes/v*.md` -> core SDK, branch/title `<version>`.
+- `release-notes/shared-firebase-function-*.md` -> append to newest open core SDK release PR.
+- `release-notes/velt-py-sdk/v*.md` -> branch/title `velt-py-<version>`.
+- `release-notes/velt-node-sdk/v*.md` -> branch `velt-node-docs-<version>`, title `velt-node-<version>`.
+- Anything else -> draft triage PR with the sanitized public note only.
+- Firebase with no open core release PR -> draft triage PR; agents do not invent a changelog home.
 
-Tagging: assignee `yoen-velt` + `@yoen-velt` comment + `documentation` label.
-Idempotency: branch/PR/changelog state is the durable record (pre-flight skips already-shipped notes).
+## Internal sections
 
-## Secrets
+Source release notes may include private context at the bottom. The docs runner
+creates a public-only local input note before any agent runs and stops copying
+content at the first `Internal`, `For Internal Use`, or `Internal Context`
+header. Agents are not given access to the raw source checkout, and the
+committed `.claude/release-notes/input-*.md` file contains only the sanitized
+public portion.
 
-- **this repo** already has `ANTHROPIC_API_KEY` + `CROSS_REPO_PAT` (used by `docs-sync-skills.yml`). No new secret here.
-- **`internal-release-notes`** needs `DOCS_DISPATCH_PAT` — a PAT with `repo` scope on `velt-js/docs` (may reuse the `CROSS_REPO_PAT` value).
+## Restart behavior
 
-## Rollout (phased — same as `docs-sync-skills.yml`)
+- The runner saves input, route metadata, logs, and stage checkpoints under
+  `.claude/release-notes/runs/<safe-stem>/`.
+- A draft PR is created before agent work starts, then the branch is pushed
+  after each successful stage.
+- `mode=auto` skips completed checkpointed runs and resumes incomplete branches.
+- `mode=resume` ignores legacy changelog skip heuristics and continues from the
+  next missing checkpoint.
+- `mode=force` reruns every stage; source `modified` and `renamed` dispatches
+  are treated as force reruns.
+- Manual runs can provide `release_note_url` instead of `path`. URL-based runs
+  default to `mode=resume`, so a failed run caused by API credits, rate limits,
+  or transient agent runtime issues can continue from the last checkpoint.
+- Push failures never force-push. The runner comments on the PR or creates a
+  docs issue with the failed stage and workflow run URL.
 
-1. Copy `source-repo/notify-docs-on-release-note.yml` into
-   `internal-release-notes/.github/workflows/` (push trigger stays **commented out**).
-2. Add the `DOCS_DISPATCH_PAT` secret to `internal-release-notes`.
-3. Test `release-note-to-docs-pr.yml` directly via `workflow_dispatch` (provide a `path`)
-   against a throwaway test note. Verify branch/classification/PR/tagging.
-4. Run the verification matrix (see the project plan): already-shipped guard, core-SDK,
-   firebase append, velt-py/velt-node naming, idempotency re-run.
-5. Only then uncomment the `push:` trigger in the source workflow to go live.
+## Model pinning
+
+The workflow installs Claude Code, verifies `claude --version >= 2.1.154`, sets
+`ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-8`, and invokes every agent with
+`--model claude-opus-4-8`. Agent 1-7 frontmatter is pinned to the same model.
+
+## Manual checks
+
+Dry-run route check:
+
+```bash
+gh workflow run release-note-to-docs-pr.yml -R velt-js/docs \
+  -f path=release-notes/v6.0.0-beta.2.md \
+  -f dry_run=true
+```
+
+Resume from a source note URL after a failed run:
+
+```bash
+gh workflow run release-note-to-docs-pr.yml -R velt-js/docs \
+  -f release_note_url=https://github.com/snippyly/internal-release-notes/blob/main/release-notes/v6.0.0-beta.2.md
+```
+
+Local non-agent tests:
+
+```bash
+bash scripts/release-notes/test-routing.sh
+bash scripts/release-notes/test-detector.sh
+bash scripts/release-notes/test-url-parser.sh
+bash scripts/release-notes/test-resolver.sh
+bash scripts/release-notes/test-internal-trim.sh
+```
+
+## Required secrets
+
+- `velt-js/docs`: `ANTHROPIC_API_KEY`, `CROSS_REPO_PAT`.
+- `snippyly/internal-release-notes`: `DOCS_DISPATCH_PAT` with access to
+  dispatch workflows and create fallback issues in `velt-js/docs`.

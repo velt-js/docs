@@ -101,6 +101,8 @@ Config-based endpoint for saving comments. The SDK automatically makes HTTP POST
 - Request body format: [`SaveCommentResolverRequest`](/api-reference/sdk/models/data-models#savecommentresolverrequest)
 - Response format: [`ResolverResponse<T>`](/api-reference/sdk/models/data-models#resolverresponse)
 
+Set [`additionalSaveEvents`](#config) in your comment resolver config to opt into non-core save events, such as status changes, priority changes, assignments, approvals, comment-level reactions, and subscription changes.
+
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
@@ -372,7 +374,8 @@ res.json({ data: result, success: true, statusCode: 200 });
 ### save
 Save comments to your database. Return a success or error response. On error we will retry.
 - Param: [`SaveCommentResolverRequest`](/api-reference/sdk/models/data-models#savecommentresolverrequest)
-  - Note in the `SaveCommentResolverRequest` object, you will receive [the event name](/api-reference/sdk/models/data-models#resolveractions) that triggered the save.
+  - Note in the `SaveCommentResolverRequest` object, you will receive the event name that triggered the save. Core values use [`ResolverActions`](/api-reference/sdk/models/data-models#resolveractions); opt-in non-core values use [`CommentResolverSaveEvent`](/api-reference/sdk/models/data-models#commentresolversaveevent) or a raw string.
+  - When the frontend can resolve the comment from `commentId`, the request may include `targetComment?: PartialComment`. Use it as request context in your handler; `saveComments` does not persist it automatically.
 - Return: [`Promise<ResolverResponse<T>>`](/api-reference/sdk/models/data-models#resolverresponse)
 
 <Warning>
@@ -557,6 +560,7 @@ Configuration for the comment data provider.
   - `deleteRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for delete operations.
   - `additionalFields`: `string[]`. Custom fields that are **copied** into the resolver request payloads sent to your backend while still being **kept** in Velt's database. Use this when you want a copy of a field in your own backend (e.g., for analytics or search) without removing it from Velt — for example `status`, `assignedTo`, `priority`.
   - `fieldsToRemove`: `string[]`. Custom fields that are **moved** out of Velt's database into yours: they are sent to your backend, deleted from Velt's storage, and merged back on read. Use this for custom fields that must not be stored by Velt at all (e.g., `internalTicketId`). See [Excluding & extending fields](/self-host-data/overview#excluding--extending-fields) for the full behavior comparison.
+  - `additionalSaveEvents`: [`CommentResolverSaveEvent[]`](/api-reference/sdk/models/data-models#commentresolversaveevent). Additional non-core comment events to send to your save resolver, such as status changes, priority changes, assignment changes, approvals, comment-level reactions, and subscription changes.
 
 <Warning>
 `fieldsToRemove` is only for your own custom fields. Never list a field Velt uses to query, scope, position, sync, or render an annotation (e.g., `metadata`, `annotationId`, `status`, `location`, `from`, `isCommentResolverUsed`) or comments will fail to load, appear in the wrong place, or break filtering. If in doubt, use `additionalFields` instead. See the [full list of fields to avoid](/self-host-data/overview#excluding--extending-fields).
@@ -569,7 +573,14 @@ const commentResolverConfig = {
   saveRetryConfig: { retryCount: 3, retryDelay: 2000 },
   deleteRetryConfig: { retryCount: 3, retryDelay: 2000 },
   additionalFields: ['status', 'assignedTo', 'priority'],
-  fieldsToRemove: ['internalTicketId']
+  fieldsToRemove: ['internalTicketId'],
+  additionalSaveEvents: [
+    'comment_annotation.status_change',
+    'comment_annotation.priority_change',
+    'comment_annotation.assign',
+    'comment.reaction_add',
+    'comment.reaction_delete'
+  ]
 };
 ```
 

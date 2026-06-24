@@ -1,0 +1,123 @@
+name: release-note-to-docs-pr
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Turns a newly-added release note in snippyly/internal-release-notes into a
+# docs PR by running the committed 7-agent pipeline headless, then opening a PR
+# off main and tagging the reviewer.
+#
+# Triggered by a repository_dispatch (type: new-release-note) sent from the
+# source repo's notify-docs-on-release-note.yml. Also runnable manually via
+# workflow_dispatch for testing (keep the source push trigger disabled until
+# the verification matrix in the plan is green).
+#
+# Mirrors .github/workflows/docs-sync-skills.yml (cross-repo checkout via
+# CROSS_REPO_PAT, headless Claude via ANTHROPIC_API_KEY, fail-loud notify).
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  repository_dispatch:
+    types: [new-release-note]
+
+  workflow_dispatch:
+    inputs:
+      path:
+        description: "Release-note path within the source repo, e.g. release-notes/v6.0.0-beta.2.md"
+        required: true
+        type: string
+      sha:
+        description: "Source repo commit SHA to read the note from (defaults to main)."
+        required: false
+        type: string
+
+# Default notes get a per-note group; shared-firebase-function notes share one
+# group so concurrent appends can't race-push the same release branch.
+concurrency:
+  group: >-
+    ${{ contains(github.event.client_payload.path || inputs.path, 'shared-firebase-function')
+        && 'rn2docs-firebase-append'
+        || format('rn2docs-{0}', github.event.client_payload.path || inputs.path) }}
+  cancel-in-progress: false   # never cancel a running pipeline — risk of a partial PR
+
+permissions:
+  contents: read
+
+env:
+  DOCS_REPO: velt-js/docs
+  NOTE_REPO: snippyly/internal-release-notes
+
+jobs:
+  run-pipeline:
+    name: Run pipeline & open PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 350   # the full 7-agent pipeline is long; GH job ceiling is 6h
+
+    steps:
+      - name: Resolve inputs (path + sha)
+        id: inputs
+        run: |
+          NOTE_PATH="${{ github.event.client_payload.path || inputs.path }}"
+          NOTE_SHA="${{ github.event.client_payload.sha || inputs.sha }}"
+          if [ -z "$NOTE_PATH" ]; then
+            echo "::error::No release-note path provided (client_payload.path / inputs.path)."
+            exit 1
+          fi
+          echo "note_path=$NOTE_PATH" >> "$GITHUB_OUTPUT"
+          echo "note_sha=$NOTE_SHA"   >> "$GITHUB_OUTPUT"
+          echo "Resolved note: $NOTE_PATH @ ${NOTE_SHA:-main}"
+
+      - name: Checkout docs (full history)
+        uses: actions/checkout@v4
+        with:
+          repository: velt-js/docs
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: docs
+
+      - name: Checkout source release-notes repo
+        uses: actions/checkout@v4
+        with:
+          repository: snippyly/internal-release-notes
+          ref: ${{ steps.inputs.outputs.note_sha || 'main' }}
+          fetch-depth: 1
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: source
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install claude-code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure git identity (docs)
+        working-directory: docs
+        run: |
+          git config user.name  "release-notes-bot"
+          git config user.email "release-notes-bot@users.noreply.github.com"
+
+      - name: Run release-note pipeline (headless orchestrator)
+        working-directory: docs
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN:          ${{ secrets.CROSS_REPO_PAT }}
+          NOTE_REPO:         ${{ env.NOTE_REPO }}
+          NOTE_PATH:         ${{ steps.inputs.outputs.note_path }}
+          SOURCE_DIR:        ${{ github.workspace }}/source
+          PIPELINE_MAX_TURNS: "600"
+        run: bash scripts/release-notes/run-release-note-pipeline.sh
+
+      - name: Notify on failure (never fail silently)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+        run: |
+          NOTE_PATH="${{ steps.inputs.outputs.note_path }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="⚠️ release-note → docs PR pipeline failed for \`${NOTE_PATH}\`. No docs PR was produced. Pipeline run: ${RUN_URL} — @yoen-velt"
+          # Surface the failure as an issue on the docs repo so it is never dropped.
+          gh issue create --repo velt-js/docs \
+            --title "release-note pipeline failed: ${NOTE_PATH}" \
+            --body "$MSG" \
+            --label documentation || true

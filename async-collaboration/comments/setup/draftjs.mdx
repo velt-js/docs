@@ -1,0 +1,327 @@
+---
+title: "DraftJS Setup"
+---
+
+![](/gifs/Add-Text-Comments.gif)
+
+## Setup
+
+#### Step 1: Add Comment components
+
+- Add the `Velt Comments` component to the root of your app.
+- This component is required to render comments in your app.
+- Set the `text mode` prop to `false` to hide the default text comment tool.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```js
+    <VeltProvider apiKey="API_KEY">
+      <VeltComments textMode={false} />
+    </VeltProvider>
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 2: Install the Velt DraftJS extension
+
+```bash
+npm i @veltdev/draftjs-velt-comments draft-js
+```
+
+#### Step 3: Create a DraftJS editor component with Velt Comments
+
+Use `DraftJSVeltEditor` instead of the standard DraftJS `Editor`. This wrapper component handles the DraftJS decorator setup, content change detection, and annotation tracking.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```js
+    import { useState } from 'react';
+    import { EditorState } from 'draft-js';
+    import { DraftJSVeltEditor } from '@veltdev/draftjs-velt-comments';
+
+    function DraftJSEditor() {
+      const [editorState, setEditorState] = useState(() =>
+        EditorState.createEmpty()
+      );
+
+      return (
+        <DraftJSVeltEditor
+          editorState={editorState}
+          onChange={setEditorState}
+          placeholder="Start typing..."
+        />
+      );
+    }
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 4: Add a comment button
+
+- Add a button that users can click after selecting text in the DraftJS editor.
+- Use `onMouseDown` with `preventDefault()` so the browser does not move focus away from the editor and clear the current text selection.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```js
+    import { useCallback, useEffect, useRef, useState } from 'react';
+    import { EditorState } from 'draft-js';
+    import {
+      DraftJSVeltEditor,
+      addComment,
+    } from '@veltdev/draftjs-velt-comments';
+
+    function DraftJSEditor() {
+      const [editorState, setEditorState] = useState(() =>
+        EditorState.createEmpty()
+      );
+
+      const editorRef = useRef({ editorState, setEditorState });
+
+      useEffect(() => {
+        editorRef.current = { editorState, setEditorState };
+      }, [editorState]);
+
+      const handleAddComment = useCallback(() => {
+        addComment({ editor: editorRef.current });
+      }, []);
+
+      return (
+        <div>
+          <button
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={handleAddComment}
+          >
+            Add Comment
+          </button>
+
+          <DraftJSVeltEditor
+            editorState={editorState}
+            onChange={setEditorState}
+            placeholder="Start typing..."
+          />
+        </div>
+      );
+    }
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 5: Call `addComment` to add a comment
+
+- Call this method to add a comment to selected text in the DraftJS editor.
+- Params: [`AddCommentRequest`](/api-reference/sdk/models/data-models#addcommentrequest-7)
+  - `editor`: DraftJS editor wrapper object with `{ editorState, setEditorState }`.
+  - `editorId`: Id of the editor. Use this if you have multiple DraftJS editors on the same page. (optional)
+  - `context`: Add custom metadata to the Comment Annotation. [Learn more](/async-collaboration/comments/customize-behavior#metadata). (optional)
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```js
+    import { addComment } from '@veltdev/draftjs-velt-comments';
+
+    const addCommentRequest = {
+      editor,
+      editorId: 'EDITOR_ID',
+      context: {
+        storyId: 'story-id',
+        storyName: 'story-name',
+      },
+    };
+
+    addComment(addCommentRequest);
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 6: Render comments in DraftJS editor
+
+- Get comment data from Velt SDK and render it in the DraftJS editor.
+- Params: [`RenderCommentsRequest`](/api-reference/sdk/models/data-models#rendercommentsrequest-7)
+  - `editor`: DraftJS editor wrapper object with `{ editorState, setEditorState }`.
+  - `editorId`: Id of the editor. Use this if you have multiple DraftJS editors on the same page. (optional)
+  - `commentAnnotations`: Array of Comment Annotation objects.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```js
+    import { useEffect, useRef, useState } from 'react';
+    import { EditorState } from 'draft-js';
+    import { useCommentAnnotations } from '@veltdev/react';
+    import {
+      DraftJSVeltEditor,
+      renderComments,
+    } from '@veltdev/draftjs-velt-comments';
+
+    function DraftJSEditor() {
+      const annotations = useCommentAnnotations();
+      const [editorState, setEditorState] = useState(() =>
+        EditorState.createEmpty()
+      );
+
+      const editorRef = useRef({ editorState, setEditorState });
+
+      useEffect(() => {
+        editorRef.current = { editorState, setEditorState };
+      }, [editorState]);
+
+      useEffect(() => {
+        renderComments({
+          editor: editorRef.current,
+          editorId: 'EDITOR_ID',
+          commentAnnotations: annotations ?? [],
+        });
+      }, [annotations]);
+
+      return (
+        <DraftJSVeltEditor
+          editorState={editorState}
+          onChange={setEditorState}
+        />
+      );
+    }
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 7: Export content without Velt comment entities (optional)
+
+- When saving editor content to your backend, remove Velt comment entities to keep your stored content clean.
+- Use `exportContentStateWithoutComments` before converting DraftJS content to raw JSON.
+
+```js
+import { convertToRaw } from 'draft-js';
+import { exportContentStateWithoutComments } from '@veltdev/draftjs-velt-comments';
+
+const cleanContent = exportContentStateWithoutComments(
+  editorState.getCurrentContent()
+);
+
+const rawContent = convertToRaw(cleanContent);
+```
+
+#### Step 8: Style the commented text
+
+- Style the commented text by adding CSS for the `velt-comment-text` element.
+
+```css
+velt-comment-text {
+  background-color: rgba(255, 255, 0, 0.3);
+  border-bottom: 2px solid #ffcc00;
+  cursor: pointer;
+}
+
+velt-comment-text:hover {
+  background-color: rgba(255, 255, 0, 0.5);
+}
+
+velt-comment-text.velt-comment-selected {
+  background-color: rgba(255, 255, 0, 0.5);
+}
+```
+
+## Complete Example
+
+<Frame>
+  <iframe
+    src="https://sample-apps-draftjs-comments-demo.vercel.app/"
+    className="w-full"
+    height="500px"
+  ></iframe>
+</Frame>
+
+## APIs
+
+#### [DraftJSVeltEditor](/api-reference/sdk/api/api-methods#draftjsvelteditor)
+
+A wrapper around the DraftJS `Editor` component that automatically handles decorator setup, content change detection, and Velt annotation context updates.
+
+- Props: [`DraftJSVeltEditorProps`](/api-reference/sdk/models/data-models#draftjsvelteditorprops)
+  - `editorState`: Current DraftJS editor state.
+  - `onChange`: Callback when the editor state changes.
+  - `editorId`: Optional editor ID for multi-editor scenarios.
+  - All other standard DraftJS `Editor` props are forwarded.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```jsx
+    import { DraftJSVeltEditor } from '@veltdev/draftjs-velt-comments';
+
+    <DraftJSVeltEditor
+      editorState={editorState}
+      onChange={setEditorState}
+      editorId="my-editor"
+      placeholder="Start typing..."
+    />
+    ```
+  </Tab>
+</Tabs>
+
+#### [addComment()](/api-reference/sdk/api/api-methods#addcomment-8)
+
+Creates a comment annotation for the currently selected text in the editor.
+
+- Signature: `async (request:` [AddCommentRequest](/api-reference/sdk/models/data-models#addcommentrequest-7)`) => Promise<void>`
+- Params: `request:` [AddCommentRequest](/api-reference/sdk/models/data-models#addcommentrequest-7)
+- Returns: `Promise<void>`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```jsx
+    import { addComment } from '@veltdev/draftjs-velt-comments';
+
+    const handleAddComment = () => {
+      addComment({ editor, editorId: 'my-editor' });
+    };
+
+    <button
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={handleAddComment}
+    >
+      Comment
+    </button>
+    ```
+  </Tab>
+</Tabs>
+
+#### [renderComments()](/api-reference/sdk/api/api-methods#rendercomments-8)
+
+Renders and highlights comment annotations in the DraftJS editor.
+
+- Signature: `(request:` [RenderCommentsRequest](/api-reference/sdk/models/data-models#rendercommentsrequest-7)`) => void`
+- Params: `request:` [RenderCommentsRequest](/api-reference/sdk/models/data-models#rendercommentsrequest-7)
+- Returns: `void`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```jsx
+    import { renderComments } from '@veltdev/draftjs-velt-comments';
+
+    useEffect(() => {
+      renderComments({
+        editor: editorRef.current,
+        editorId: 'my-editor',
+        commentAnnotations,
+      });
+    }, [commentAnnotations]);
+    ```
+  </Tab>
+</Tabs>
+
+#### [exportContentStateWithoutComments()](/api-reference/sdk/api/api-methods#exportcontentstatewithoutcomments)
+
+Returns a DraftJS `ContentState` without Velt comment entities. Use it before saving content outside Velt.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```jsx
+    import { convertToRaw } from 'draft-js';
+    import { exportContentStateWithoutComments } from '@veltdev/draftjs-velt-comments';
+
+    const cleanContent = exportContentStateWithoutComments(
+      editorState.getCurrentContent()
+    );
+    const rawContent = convertToRaw(cleanContent);
+    ```
+  </Tab>
+</Tabs>

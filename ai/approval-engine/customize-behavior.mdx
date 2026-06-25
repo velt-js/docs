@@ -14,6 +14,8 @@ Every node has a `nodeId`, a `type` (`agent`, `human`, or `webhook`), a `config`
 | Field                   | Type    | Notes                                                                                                                                                |
 | ----------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `agentId`               | string  | Required.                                                                                                                                            |
+| `url`                   | string  | Static absolute URL the agent should act on, `≤ 2000` chars. Use this to pin a fixed target (e.g. a production domain) directly in the definition.    |
+| `urlPath`               | string  | Dot-path into `triggerContext` that resolves the URL the agent should act on. Bare hostnames without an `http(s)://` scheme are automatically normalized to `https://` before dispatch. |
 | `promptOverride`        | string  | `≤ 8000` chars.                                                                                                                                      |
 | `inputMapping`          | object  | Pass step inputs to the agent.                                                                                                                       |
 | `blocking`              | boolean | Default `false`. When `true`, the step parks in `waiting` until external resolutions arrive via `/steps/recordAgentResolution`.                      |
@@ -21,18 +23,46 @@ Every node has a `nodeId`, a `type` (`agent`, `human`, or `webhook`), a `config`
 | `agentMaxRuntimeMs`     | integer | `≤ 86400000`.                                                                                                                                        |
 | `requireNonEmptyOutput` | boolean | Fail the step if the agent returns an empty output.                                                                                                  |
 
+At least one of `url` or `urlPath` must be present. If both are set, `url` takes precedence. Definitions supplying neither are rejected at write time with `APPROVAL_AGENT_NODE_REQUIRES_URL_OR_URLPATH`.
+
 ```json theme={null}
 {
   "nodeId": "brand-check",
   "type": "agent",
   "config": {
     "agentId": "brand-agent-v1",
+    "url": "https://production.example.com",
     "blocking": false,
     "requireNonEmptyOutput": true
   },
   "slaMs": 3600000
 }
 ```
+
+#### Agent results summary
+
+When an agent step completes, its `output.agentResultsSummary` includes a `severityCounts` breakdown and a bounded `findings` sample (up to 50 top-severity findings) you can read directly from downstream nodes — no extra subcollection read required.
+
+```typescript theme={null}
+interface SummaryFinding {
+  title: string;
+  description: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  sourceUrl?: string;
+  issueType?: string;
+  url?: string;  // agent-specific target URL (e.g. the broken link's href)
+}
+
+interface ResultsSummary {
+  // ... existing fields ...
+  severityCounts?: Record<'critical' | 'high' | 'medium' | 'low' | 'info', number>;
+  findings?: SummaryFinding[];  // bounded to top-50, sorted by severity
+}
+```
+
+Reference these from edge expressions or notification templates as `{{input.agentResultsSummary.severityCounts.high}}` or `{{input.agentResultsSummary.findings}}`.
+
+The **broken links agent** additionally reports an `auth_required` error type for findings that redirect to a login wall, alongside the existing `http_error`, `timeout`, `network_error`, and `unknown` types.
 
 ### Human nodes
 
@@ -55,6 +85,68 @@ Exactly one of `reviewers[]` (preferred) or `reviewerIds[]` (legacy) must be pro
   }
 }
 ```
+
+### Notification nodes
+
+A `notification` node sends a formatted email or Slack message from inside the workflow — no extra cloud function required. Drop one in after an agent or human node to push findings summaries, approval decisions, or any formatted message to stakeholders.
+
+| Field             | Type      | Notes                                                                                                                |
+| ----------------- | --------- | -------------------------------------------------------------------------------------------------------------------- |
+| `channel`         | enum      | `email` or `slack`.                                                                                                  |
+| `recipients`      | string\[] | Email only. 1–50 email addresses. Required when `channel` is `email`.                                                |
+| `subjectTemplate` | string    | Email only. Subject line template, `≤ 2000` chars.                                                                   |
+| `slackTarget`     | string    | Slack only. A channel id (e.g. `C0123ABC`) or an `https` incoming-webhook URL. Webhook URLs are validated against an SSRF allowlist. |
+| `bodyTemplate`    | string    | Required. Message body template, 1–16000 chars.                                                                      |
+| `format`          | enum      | `text` (default), `html`, or `slack-blocks` (Slack-only).                                                            |
+
+The node interpolates `{{dot.path}}` tokens against three template roots:
+
+| Root             | Resolves to                                                                                          |
+| ---------------- | ---------------------------------------------------------------------------------------------------- |
+| `input.*`        | The predecessor step's `output`.                                                                     |
+| `execution.*`    | `{ executionId, definitionId, correlationId, triggerContext }`.                                      |
+| `step.*`         | The notification step's metadata.                                                                    |
+
+Substitution is safe dot-path only — no `eval` or `new Function`. Missing tokens render as empty strings; object/array values are JSON-stringified.
+
+```json theme={null}
+{
+  "nodeId": "notify-stakeholders",
+  "type": "notification",
+  "config": {
+    "channel": "email",
+    "recipients": ["lead@acme.dev", "pm@acme.dev"],
+    "subjectTemplate": "Approval {{input.decision}} for {{execution.triggerContext.page.title}}",
+    "bodyTemplate": "Findings: {{input.agentResultsSummary.summary}}",
+    "format": "text"
+  }
+}
+```
+
+```json theme={null}
+{
+  "nodeId": "slack-notify",
+  "type": "notification",
+  "config": {
+    "channel": "slack",
+    "slackTarget": "C0123ABC",
+    "bodyTemplate": "Agent run completed with decision: {{input.decision}}",
+    "format": "text"
+  }
+}
+```
+
+#### Delivery prerequisites
+
+- **Email** delivery requires the workspace to be on the SendGrid email service. If not configured, the step fails with `notification-email-not-configured`.
+- **Slack channel ids** require `workspace.slackConfig.botToken`. If not configured, the step fails with `notification-slack-not-configured`.
+- **Slack incoming-webhook URLs** must be `https` and resolve to an allowed host (SSRF-guarded at both write time and delivery time).
+
+#### Delivery semantics
+
+For email, partial delivery (at least one of N recipients reached) marks the step `completed`; zero deliveries make it `failed` and retryable. For Slack, configuration-class errors (4xx, `channel_not_found`, `invalid_auth`) are terminal; 5xx, network errors, and `rate_limited` are retryable.
+
+Common runtime error codes: `notification-config-missing-channel`, `notification-email-no-recipients`, `notification-email-delivery-failed`, `notification-slack-no-target`, `notification-slack-ssrf-blocked:*`, `notification-slack-blocks-invalid-json`, `notification-slack-api-error:*`.
 
 ### Per-human-node `onReject` shorthand
 
@@ -129,6 +221,83 @@ The shorthand satisfies the strict-mode reject-path rule, but at runtime `joinOn
 ### Canonical form after desugaring
 
 The stored definition has `onReject` STRIPPED from human node configs and the synthesized edges/loops appended to the top-level arrays. `GET /definitions/get` returns the canonical form (auto-synthesized loops carry a `loopId` prefix `auto_<nodeId>_loopback`). If you want to preserve your original input, store it on your side.
+
+## Triggers
+
+A trigger is a way for a workflow to start without your backend explicitly calling [Dispatch Execution](/api-reference/rest-apis/v2/approval-engine/executions/dispatch-execution). Each trigger has a stable `triggerId` and an optional `schedule` block, `inboundWebhook` block, or both. A scheduled or inbound execution inherits its definition's `scope` (org/document), so you don't need to repeat scope on the trigger.
+
+### Schedule triggers
+
+Add a `schedule` block to fire executions automatically on a cron cadence. The engine scans enabled schedules every minute and dispatches a fresh execution for each due trigger — no external scheduler required.
+
+| Field             | Type    | Notes                                                                                                            |
+| ----------------- | ------- | ---------------------------------------------------------------------------------------------------------------- |
+| `cron`            | string  | Standard 5-field cron expression (`minute hour dom month dow`). Validated at write time.                          |
+| `timezone`        | string  | IANA timezone (e.g. `America/Los_Angeles`). DST handled by the evaluator.                                         |
+| `enabled`         | boolean | Only enabled schedules are indexed and fired. Setting `false` removes the index entry without deleting the trigger. |
+| `payloadTemplate` | object  | Optional static object merged into `triggerContext.schedule.payload` on every dispatch.                          |
+
+```json theme={null}
+{
+  "triggerId": "nightly-audit",
+  "schedule": {
+    "cron": "0 2 * * *",
+    "timezone": "America/Los_Angeles",
+    "enabled": true,
+    "payloadTemplate": { "source": "nightly" }
+  }
+}
+```
+
+The dispatched execution's `triggerContext.schedule` carries `{ triggerId, scheduledAt, payload }`.
+
+**At-most-once delivery.** Missed runs (e.g. during downtime) are not replayed. The idempotency key for each scheduled dispatch is `sched:<definitionId>:<triggerId>:<nextRunAt>`.
+
+**Validation:** invalid cron or timezone strings are rejected at the API boundary with `APPROVAL_SCHEDULE_CRON_INVALID` or `APPROVAL_SCHEDULE_TIMEZONE_INVALID`.
+
+### Inbound webhook triggers
+
+Add an `inboundWebhook` block to let external systems POST directly to the engine and dispatch an execution. The handler supports provider presets so GitHub, Vercel, and custom signature schemes work without a translation proxy.
+
+| Field                | Type      | Notes                                                                                                                  |
+| -------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `authMode`           | enum      | `hmac` or `bearer`.                                                                                                    |
+| `secret`             | string    | 16–512 chars. The real authenticator.                                                                                  |
+| `provider`           | enum      | `velt` (default), `github`, `vercel`, or `custom`.                                                                     |
+| `signatureHeader`    | string    | `custom` only. Header carrying the hex signature.                                                                      |
+| `signatureAlgorithm` | enum      | `custom` only. `sha1` or `sha256`.                                                                                     |
+| `signaturePrefix`    | string    | `custom` only. Prefix stripped before hex comparison (e.g. `sha256=`).                                                 |
+| `eventNameHeader`    | string    | `custom` only. Header carrying the event name.                                                                         |
+| `allowedEvents`      | string\[] | 1–50 event names to allow. Non-matching events return HTTP 200 with `event-ignored` and do not dispatch.               |
+| `idempotencyHeader`  | string    | Header to read the idempotency key from (e.g. `x-github-delivery`).                                                    |
+| `idempotencyBodyPath`| string    | Dot-path into the body for the idempotency key.                                                                        |
+| `payloadMapping`     | enum      | `velt` only. `pass-through` or `wrap`.                                                                                 |
+
+Provider presets:
+
+| `provider`       | Signature header        | Algorithm    | Prefix        | Event-name source                                                |
+| ---------------- | ----------------------- | ------------ | ------------- | ---------------------------------------------------------------- |
+| `velt` (default) | `x-velt-signature`      | HMAC-SHA256  | `sha256=`     | body `type`                                                      |
+| `github`         | `x-hub-signature-256`   | HMAC-SHA256  | `sha256=`     | `x-github-event` header                                          |
+| `vercel`         | `x-vercel-signature`    | HMAC-SHA1    | _(none)_      | `x-vercel-deployment-event` header → body `type`                |
+| `custom`         | `signatureHeader`       | configurable | configurable  | `eventNameHeader` (optional)                                     |
+
+For non-velt providers, the entire request body becomes `triggerContext` (no `.payload` unwrap). The `apiKey`, `definitionId`, and `triggerId` may be supplied as query parameters in addition to headers — useful when the external system can't inject custom headers.
+
+```json theme={null}
+{
+  "triggerId": "ci-build",
+  "inboundWebhook": {
+    "authMode": "hmac",
+    "secret": "github-webhook-secret",
+    "provider": "github",
+    "allowedEvents": ["workflow_run", "push"],
+    "idempotencyHeader": "x-github-delivery"
+  }
+}
+```
+
+Schema-level validation codes: `APPROVAL_INBOUND_CUSTOM_PROVIDER_REQUIRES_SIGNATURE_FIELDS`, `APPROVAL_INBOUND_SIGNATURE_FIELDS_CUSTOM_ONLY`, `APPROVAL_INBOUND_PROVIDER_REQUIRES_HMAC`.
 
 ## Edge gating expressions
 

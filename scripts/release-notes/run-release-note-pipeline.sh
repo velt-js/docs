@@ -23,6 +23,7 @@ DRY_RUN="${PIPELINE_DRY_RUN:-false}"
 MODEL="${PIPELINE_MODEL:-claude-opus-4-8}"
 RUN_URL="${RUN_URL:-}"
 SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
+FAILURE_NOTIFIED_FILE="${FAILURE_NOTIFIED_FILE:-${RUNNER_TEMP:-/tmp}/release-note-failure-notified}"
 DOCS_ROOT="$PWD"
 
 case "$MODE" in
@@ -324,6 +325,12 @@ Rerun with release_note_url: $(source_note_url)
   else
     create_issue "release-note pipeline failed: ${NOTE_PATH}" "$body"
   fi
+
+  mkdir -p "$(dirname "$FAILURE_NOTIFIED_FILE")"
+  {
+    printf 'notified_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf 'stage=%q\n' "$stage"
+  } > "$FAILURE_NOTIFIED_FILE"
 }
 
 checkout_branch() {

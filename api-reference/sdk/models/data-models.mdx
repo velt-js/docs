@@ -571,12 +571,13 @@ Configuration for text formatting toolbar options in comment composers.
 
 ---
 
-| Property            | Type                                          | Required | Description                                                                       |
-| ------------------- | --------------------------------------------- | -------- | --------------------------------------------------------------------------------- |
-| `commentAnnotation` | `{ [key: string]: PartialCommentAnnotation }` | Yes      | Map of comment annotation data to save                                            |
-| `metadata`          | `BaseMetadata`                                | No       | Additional metadata for the request. eg: apikey, organizationId, documentId, etc. |
-| `event`             | `ResolverActions`                             | No       | Event name that caused the save request                                           |
-| `commentId`         | `string`                                      | No       | ID of the comment to save                                                         |
+| Property            | Type                                                 | Required | Description                                                                                          |
+| ------------------- | ---------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------- |
+| `commentAnnotation` | `{ [key: string]: PartialCommentAnnotation }`        | Yes      | Map of comment annotation data to save                                                              |
+| `metadata`          | `BaseMetadata`                                       | No       | Additional metadata for the request. eg: apikey, organizationId, documentId, etc.                   |
+| `event`             | `ResolverActions \| CommentResolverSaveEvent \| string` | No   | Event that caused the save. Also accepts `CommentResolverSaveEvent` members and raw strings (forward-compat). |
+| `commentId`         | `string`                                             | No       | ID of the comment to save                                                                           |
+| `targetComment`     | `PartialComment`                                     | No       | The comment the action occurred on, resolved by the frontend from `commentId`. Request context only — never persisted by `saveComments`. |
 
 #### DeleteCommentResolverRequest
 
@@ -5354,6 +5355,31 @@ An enum that defines the different types of actions that can trigger resolver ev
 | `RECORDER_ANNOTATION_UPDATE` | `'recorder_annotation.update'` | Triggered when a recorder annotation is updated        |
 | `RECORDER_ANNOTATION_DELETE` | `'recorder_annotation.delete'` | Triggered when a recorder annotation is deleted        |
 
+#### CommentResolverSaveEvent
+
+---
+
+An enum of the comment save-resolver events surfaced to a `saveComments` resolver. May appear as the `event` value on [`SaveCommentResolverRequest`](#savecommentresolverrequest).
+
+| Name                 | Value                                     | Description                                          |
+| -------------------- | ----------------------------------------- | ---------------------------------------------------- |
+| `STATUS_CHANGE`      | `'comment_annotation.status_change'`      | Annotation status changed                            |
+| `PRIORITY_CHANGE`    | `'comment_annotation.priority_change'`    | Annotation priority changed                          |
+| `ASSIGN`             | `'comment_annotation.assign'`             | Annotation assigned to a user                        |
+| `ACCESS_MODE_CHANGE` | `'comment_annotation.access_mode_change'` | Annotation access mode changed                       |
+| `CUSTOM_LIST_CHANGE` | `'comment_annotation.custom_list_change'` | A custom list field on the annotation changed        |
+| `APPROVE`            | `'comment_annotation.approve'`            | Annotation approved                                  |
+| `ACCEPT`             | `'comment.accept'`                        | Comment accepted                                     |
+| `REJECT`             | `'comment.reject'`                        | Comment rejected                                     |
+| `SUGGESTION_ACCEPT`  | `'comment_annotation.suggestion_accept'`  | Suggestion accepted                                  |
+| `SUGGESTION_REJECT`  | `'comment_annotation.suggestion_reject'`  | Suggestion rejected                                  |
+| `REACTION_ADD`       | `'comment.reaction_add'`                  | Reaction added to a comment                          |
+| `REACTION_DELETE`    | `'comment.reaction_delete'`               | Reaction removed from a comment                      |
+| `SUBSCRIBE`          | `'comment_annotation.subscribe'`          | User subscribed to the annotation                    |
+| `UNSUBSCRIBE`        | `'comment_annotation.unsubscribe'`        | User unsubscribed from the annotation                |
+
+> **Note:** `CommentResolverSaveEvent.REACTION_ADD` (`'comment.reaction_add'`) and `CommentResolverSaveEvent.REACTION_DELETE` (`'comment.reaction_delete'`) are comment-level reaction events and are **distinct** from `ResolverActions.REACTION_ADD` (`'reaction.add'`) and `ResolverActions.REACTION_DELETE` (`'reaction.delete'`), which belong to the reaction resolver — same member names, different values.
+
 #### UserResolverModuleName
 
 ---
@@ -5587,6 +5613,7 @@ Config-based resolver endpoint configuration. SDK handles HTTP requests, headers
 | `deleteConfig`    | `ResolverEndpointConfig` | No       | Config-based endpoint for delete operations    |
 | `additionalFields` | `string[]`              | No       | Custom fields copied to resolver payloads but retained in Velt's storage |
 | `fieldsToRemove`  | `string[]`              | No       | Fields stripped from Velt's storage before writing to your resolver endpoint |
+| `additionalSaveEvents` | `CommentResolverSaveEvent[]` | No | Additional non-core comment save events that the frontend should send to a comment save resolver. |
 
 #### ResolverResponse
 
@@ -11191,6 +11218,61 @@ Request payload for `sdk.api.workspace.resetAuthToken`.
 |-------|------|----------|-------------|
 | `apiKey` | `string` | Yes | API key whose auth token should be rotated. |
 
+### `ResolverAuthConfig` (Node)
+
+The `resolverAuth` option on `VeltConfig`, configuring `sdk.selfHosting.verifyToken`. See [`verifyToken`](/backend-sdks/node#verifytoken).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `jwt` | [`ResolverAuthJwtConfig`](#resolverauthjwtconfig-node) | No | Built-in JWT/JWKS verification config. |
+| `verify` | [`ResolverAuthVerifyCallback`](#resolverauthverifycallback-node) | No | Custom verification callback. Takes priority over the built-in `jwt` path when both are configured. |
+| `header` | `string` | No | Header to read the token from. Default `'Authorization'`. |
+| `scheme` | `string` | No | Auth scheme prefix. Default `'Bearer'`. Set to `''` to read the raw header value. |
+
+### `ResolverAuthErrorCode` (Node)
+
+A union of the 9 machine-readable failure codes returned on [`VerifyTokenResult.errorCode`](#verifytokenresult-node). The same values are exported as the readonly `string[]` const `RESOLVER_AUTH_ERROR_CODES`.
+
+| Code | When |
+|------|------|
+| `NOT_CONFIGURED` | Neither `jwt` nor a `verify` callback is configured. |
+| `MISSING_TOKEN` | No token found in headers, or wrong scheme. |
+| `EXPIRED` | JWT `exp` claim has passed (beyond `leeway`). |
+| `INVALID_SIGNATURE` | Signature verification failed, or malformed token. |
+| `CLAIM_MISMATCH` | Configured `issuer`/`audience` wrong or absent; or a required claim is missing. |
+| `ALGORITHM_NOT_ALLOWED` | `alg=none`; algorithm outside the allowlist; mixed symmetric+asymmetric allowlist; missing allowlist. |
+| `KEY_RESOLUTION_FAILED` | No usable key; JWKS URL is not HTTPS; JWKS fetch failed or returned non-2xx; redirect downgrade detected. |
+| `DEPENDENCY_MISSING` | Built-in JWT path used but `jose` is not installed. |
+| `VERIFICATION_FAILED` | Custom callback threw or returned falsy; unexpected internal error (fail-closed catch-all). |
+
+### `ResolverAuthJwtConfig` (Node)
+
+Built-in JWT/JWKS verification config — the `jwt` field on [`ResolverAuthConfig`](#resolverauthconfig-node).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `algorithms` | `string[]` | Conditional | Algorithm allowlist (algorithm pinning). Required when using the built-in JWT verifier. |
+| `jwksUrl` | `string` | No | HTTPS JWKS endpoint (one of jwksUrl / publicKey / secret). |
+| `publicKey` | `string \| Record<string, unknown>` | No | Static PEM public key or JWK object. |
+| `secret` | `string \| Uint8Array` | No | HMAC secret for HS* algorithms. |
+| `issuer` | `string` | No | Expected `iss`; enforced when set. |
+| `audience` | `string \| string[]` | No | Expected `aud`; enforced when set. |
+| `leeway` | `number` | No | Clock tolerance in seconds. |
+| `require` | `string[]` | No | Required claims (e.g. `['exp']`). |
+
+### `ResolverAuthVerifyCallback` (Node)
+
+Custom verification callback — the `verify` field on [`ResolverAuthConfig`](#resolverauthconfig-node). Return an object to populate `claims`, a truthy non-object value to accept with `claims` undefined, or a falsy value to fail closed.
+
+```ts
+type ResolverAuthVerifyCallback = (
+  token: string,
+  headers?: Record<string, string | string[] | undefined> | Headers | Iterable<[string, string]>
+) => unknown | Promise<unknown>;
+```
+
+Returning falsy (or throwing) fails closed with [`errorCode`](#resolverautherrorcode-node) `VERIFICATION_FAILED`.
+
 ### `SaveActivitiesRequest` SH (Node)
 
 Request payload for `sdk.selfHosting.getActivities().saveActivities`.
@@ -11428,6 +11510,34 @@ Request payload for `sdk.api.workspace.updateWebhookConfig`.
 |-------|------|----------|-------------|
 | `useWebhookService` | `boolean` | Yes | Toggle the webhook service. |
 | `webhookServiceConfig` | `{ authToken: string; rawNotificationUrl?: string; processedNotificationUrl?: string }` | Yes | Webhook destinations and shared secret. |
+
+### `VeltConfig` (Node)
+
+Configuration passed to `VeltSDK.initialize`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `database` | `DatabaseConfig` | Yes | MongoDB connection config. In `@veltdev/node@1.0.7`, this is still validated during initialization, including when you only use `sdk.api.*` or `sdk.selfHosting.verifyToken`. |
+| `apiKey` | `string` | No | Velt API key. Falls back to `VELT_API_KEY`. |
+| `authToken` | `string` | No | Velt auth token. Falls back to `VELT_AUTH_TOKEN`. |
+| `workspaceId` | `string` | No | Workspace ID. Falls back to `VELT_WORKSPACE_ID`. |
+| `workspaceAuthToken` | `string` | No | Workspace auth token. Falls back to `VELT_WORKSPACE_AUTH_TOKEN`. |
+| `user_schema` | `Record<string, string \| string[]>` | No | User schema mapping. |
+| `collections` | `CollectionNames` | No | Custom collection names for self-hosting data. |
+| `aws` | `AwsConfig` | No | AWS S3 config for attachment storage. |
+| `environment` | `'prod' \| 'staging'` | No | SDK API environment. |
+| `resolverAuth` | [`ResolverAuthConfig`](#resolverauthconfig-node) | No | Token verification config for `sdk.selfHosting.verifyToken`. |
+
+### `VerifyTokenResult` (Node)
+
+Result returned by `sdk.selfHosting.verifyToken`. See [`verifyToken`](/backend-sdks/node#verifytoken).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `verified` | `boolean` | Yes | Whether the credential passed verification. |
+| `claims` | `Record<string, unknown>` | No | Decoded JWT payload; present when verified. |
+| `error` | `string` | No | Generic, code-based message — never contains the token or secret. |
+| `errorCode` | [`ResolverAuthErrorCode`](#resolverautherrorcode-node) | No | Machine-readable failure code. |
 
 ### `CreateAgentRequest` (Node)
 

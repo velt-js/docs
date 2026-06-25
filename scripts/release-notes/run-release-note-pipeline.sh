@@ -34,7 +34,25 @@ if [ "$MODE" = "auto" ] && { [ "$CHANGE_TYPE" = "modified" ] || [ "$CHANGE_TYPE"
   MODE="force"
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BOOTSTRAP_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RUNTIME_ROOT="${RUNNER_TEMP:-/tmp}/release-note-pipeline-runtime-${GITHUB_RUN_ID:-$$}"
+SCRIPT_DIR="$RUNTIME_ROOT/scripts"
+AGENTS_ROOT="$RUNTIME_ROOT/agents"
+AGENT_SOURCES=()
+
+rm -rf "$RUNTIME_ROOT"
+mkdir -p "$SCRIPT_DIR" "$AGENTS_ROOT"
+cp "$BOOTSTRAP_SCRIPT_DIR"/*.sh "$SCRIPT_DIR/"
+
+if [ -d "$DOCS_ROOT/.claude/agents" ]; then
+  shopt -s nullglob
+  AGENT_SOURCES=( "$DOCS_ROOT"/.claude/agents/Agent-*.md )
+  shopt -u nullglob
+  if [ "${#AGENT_SOURCES[@]}" -gt 0 ]; then
+    cp "${AGENT_SOURCES[@]}" "$AGENTS_ROOT/"
+  fi
+fi
+
 # shellcheck source=./lib.sh
 source "$SCRIPT_DIR/lib.sh"
 
@@ -408,6 +426,7 @@ run_agent_stage() {
     RN_CHANGELOG="$RN_CHANGELOG" \
     BACKEND_ONLY="$BACKEND_ONLY" \
     ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+    AGENTS_ROOT="$AGENTS_ROOT" \
     SOURCE_DIR="$SOURCE_DIR" \
     NOTE_PATH="$NOTE_PATH" \
     PIPELINE_MODEL="$MODEL" \

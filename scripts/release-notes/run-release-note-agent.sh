@@ -19,9 +19,10 @@ STAGE="${2:?stage id is required, e.g. 01-agent-1}"
 MODEL="${PIPELINE_MODEL:-claude-opus-4-8}"
 MAX_TURNS="${AGENT_MAX_TURNS:-80}"
 DOCS_ROOT="${DOCS_ROOT:-$PWD}"
+AGENTS_ROOT="${AGENTS_ROOT:-$DOCS_ROOT/.claude/agents}"
 
 shopt -s nullglob
-AGENT_FILES=( "$DOCS_ROOT"/.claude/agents/Agent-*-"${AGENT}".md )
+AGENT_FILES=( "$AGENTS_ROOT"/Agent-*-"${AGENT}".md )
 shopt -u nullglob
 
 if [ "${#AGENT_FILES[@]}" -eq 0 ]; then

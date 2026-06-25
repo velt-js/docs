@@ -1,0 +1,434 @@
+---
+title: "ProseMirror Setup"
+---
+
+![](/gifs/Add-Text-Comments.gif)
+
+## Setup
+
+#### Step 1: Add Comment components
+
+- Add the `Velt Comments` component to the root of your app.
+- This component is required to render comments in your app.
+- Set the `text mode` prop to `false` to hide the default text comment tool.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```js
+    <VeltProvider apiKey="API_KEY">
+      <VeltComments textMode={false} />
+    </VeltProvider>
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```html
+    <body>
+      <velt-comments text-mode="false"></velt-comments>
+    </body>
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 2: Install the Velt ProseMirror extension
+
+```bash
+npm i prosemirror-velt-comments prosemirror-model prosemirror-state prosemirror-view
+```
+
+For the examples below, also install the standard ProseMirror example packages:
+
+```bash
+npm i prosemirror-schema-basic prosemirror-example-setup
+```
+
+#### Step 3: Configure the ProseMirror editor with the Velt Comments plugin
+
+Add `VeltCommentsPlugin` to the `plugins` array when creating your `EditorState`.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect, useRef } from 'react';
+    import { schema } from 'prosemirror-schema-basic';
+    import { exampleSetup } from 'prosemirror-example-setup';
+    import { EditorState } from 'prosemirror-state';
+    import { EditorView } from 'prosemirror-view';
+    import { VeltCommentsPlugin } from 'prosemirror-velt-comments';
+
+    const EDITOR_ID = 'my-editor';
+
+    function ProseMirrorEditor() {
+      const containerRef = useRef(null);
+      const viewRef = useRef(null);
+
+      useEffect(() => {
+        if (!containerRef.current) return;
+
+        const state = EditorState.create({
+          schema,
+          plugins: [
+            ...exampleSetup({ schema }),
+            VeltCommentsPlugin({ editorId: EDITOR_ID }),
+          ],
+        });
+
+        const view = new EditorView(containerRef.current, { state });
+        viewRef.current = view;
+
+        return () => {
+          view.destroy();
+          viewRef.current = null;
+        };
+      }, []);
+
+      return <div ref={containerRef} />;
+    }
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```js
+    import { schema } from 'prosemirror-schema-basic';
+    import { exampleSetup } from 'prosemirror-example-setup';
+    import { EditorState } from 'prosemirror-state';
+    import { EditorView } from 'prosemirror-view';
+    import { VeltCommentsPlugin } from 'prosemirror-velt-comments';
+
+    const state = EditorState.create({
+      schema,
+      plugins: [
+        ...exampleSetup({ schema }),
+        VeltCommentsPlugin({ editorId: 'my-editor' }),
+      ],
+    });
+
+    const view = new EditorView(document.querySelector('#editor'), { state });
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 4: Add a comment button to your ProseMirror editor
+
+Add a button that users can click to add comments after selecting text in the ProseMirror editor.
+
+**Important:** Use `onMouseDown` with `preventDefault()` so the browser does not move focus away from the editor before `addComment` reads the current selection.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from 'prosemirror-velt-comments';
+
+    const handleAddComment = () => {
+      if (!viewRef.current) return;
+
+      addComment({
+        view: viewRef.current,
+        editorId: EDITOR_ID,
+      });
+    };
+
+    <button
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={handleAddComment}
+    >
+      Add Comment
+    </button>
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```js
+    import { addComment } from 'prosemirror-velt-comments';
+
+    const addCommentButton = document.querySelector('#add-comment');
+
+    addCommentButton.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+    });
+
+    addCommentButton.addEventListener('click', () => {
+      addComment({ view, editorId: 'my-editor' });
+    });
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 5: Call `addComment` to add a comment
+
+- Call this method to add a comment to selected text in the ProseMirror editor.
+- Params: [`AddCommentRequest`](/api-reference/sdk/models/data-models#addcommentrequest-8). It has the following properties:
+  - `view`: ProseMirror `EditorView`.
+  - `editorId`: Id of the editor. Use this if you have multiple ProseMirror editors on the same page. (optional)
+  - `context`: Add custom metadata to the Comment Annotation. [Learn more](/async-collaboration/comments/customize-behavior#metadata). (optional)
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from 'prosemirror-velt-comments';
+
+    const addCommentRequest = {
+      view: viewRef.current,
+      editorId: 'EDITOR_ID',
+      context: {
+        storyId: 'story-id',
+        storyName: 'story-name',
+      },
+    };
+
+    addComment(addCommentRequest);
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```js
+    import { addComment } from 'prosemirror-velt-comments';
+
+    const addCommentRequest = {
+      view,
+      editorId: 'EDITOR_ID',
+      context: {
+        storyId: 'story-id',
+        storyName: 'story-name',
+      },
+    };
+
+    addComment(addCommentRequest);
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 6: Render comments in ProseMirror editor
+
+- Get the comment data from Velt SDK and render it in the ProseMirror editor.
+- Params: [`RenderCommentsRequest`](/api-reference/sdk/models/data-models#rendercommentsrequest-8). It has the following properties:
+  - `view`: ProseMirror `EditorView`.
+  - `editorId`: Id of the editor. Use this if you have multiple ProseMirror editors on the same page. (optional)
+  - `commentAnnotations`: Array of Comment Annotation objects.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect } from 'react';
+    import { useCommentAnnotations } from '@veltdev/react';
+    import { renderComments } from 'prosemirror-velt-comments';
+
+    const commentAnnotations = useCommentAnnotations();
+
+    useEffect(() => {
+      if (!viewRef.current) return;
+
+      renderComments({
+        view: viewRef.current,
+        editorId: 'EDITOR_ID',
+        commentAnnotations: commentAnnotations ?? [],
+      });
+    }, [commentAnnotations]);
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```js
+    import { renderComments } from 'prosemirror-velt-comments';
+
+    const commentElement = Velt.getCommentElement();
+    commentElement.getAllCommentAnnotations().subscribe((annotations) => {
+      renderComments({
+        view,
+        editorId: 'EDITOR_ID',
+        commentAnnotations: annotations,
+      });
+    });
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 7: Re-apply ProseMirror comment highlights (optional)
+
+- ProseMirror renders comment highlights as view-only overlay elements.
+- The integration does not write Velt comment marks into your ProseMirror schema or saved document.
+- Save your ProseMirror document normally. After you recreate the `EditorView` or replace document content, call `renderComments` again.
+
+```ts
+const json = view.state.doc.toJSON();
+// Save json to your backend.
+
+renderComments({
+  view,
+  editorId: 'EDITOR_ID',
+  commentAnnotations,
+});
+```
+
+#### Step 8: Style the commented text
+
+- You can style the commented text by adding CSS for the `velt-comment-text` element.
+- Use the `comment-available` attribute to apply styles only after comment data has loaded.
+
+```css
+velt-comment-text[comment-available="true"] {
+  background-color: rgba(255, 255, 0, 0.3);
+  border-bottom: 2px solid #ffcc00;
+  cursor: pointer;
+}
+
+velt-comment-text[comment-available="true"]:hover {
+  background-color: rgba(255, 255, 0, 0.5);
+}
+
+velt-comment-text.velt-comment-selected {
+  background-color: rgba(255, 255, 0, 0.5);
+}
+```
+
+## Complete Example
+
+<Frame>
+  <iframe
+    src="https://sample-apps-prosemirror-comments-demo.vercel.app/"
+    className="w-full"
+    height="500px"
+  ></iframe>
+</Frame>
+
+## APIs
+
+#### [VeltCommentsPlugin()](/api-reference/sdk/api/api-methods#veltcommentsplugin)
+
+Creates the ProseMirror plugin that powers Velt comments. Add it to your editor state's `plugins` array.
+
+- Params: `config?:` [`VeltCommentsPluginConfig`](/api-reference/sdk/models/data-models#veltcommentspluginconfig-1)
+- Returns: ProseMirror `Plugin`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { schema } from 'prosemirror-schema-basic';
+    import { exampleSetup } from 'prosemirror-example-setup';
+    import { EditorState } from 'prosemirror-state';
+    import { VeltCommentsPlugin } from 'prosemirror-velt-comments';
+
+    const state = EditorState.create({
+      schema,
+      plugins: [
+        ...exampleSetup({ schema }),
+        VeltCommentsPlugin({ editorId: 'my-editor' }),
+      ],
+    });
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```js
+    import { VeltCommentsPlugin } from 'prosemirror-velt-comments';
+
+    VeltCommentsPlugin({ editorId: 'my-editor' });
+    ```
+  </Tab>
+</Tabs>
+
+#### [addComment()](/api-reference/sdk/api/api-methods#addcomment-9)
+
+Creates a comment annotation for the currently selected text in the editor.
+
+- Signature: `async (request:` [`AddCommentRequest`](/api-reference/sdk/models/data-models#addcommentrequest-8)`) => Promise<void>`
+- Params: `request:` [`AddCommentRequest`](/api-reference/sdk/models/data-models#addcommentrequest-8)
+- Returns: `Promise<void>`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from 'prosemirror-velt-comments';
+
+    const handleAddComment = () => {
+      if (!viewRef.current) return;
+      addComment({ view: viewRef.current, editorId: 'my-editor' });
+    };
+
+    <button
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={handleAddComment}
+    >
+      Comment
+    </button>
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```js
+    import { addComment } from 'prosemirror-velt-comments';
+
+    addComment({
+      view,
+      editorId: 'my-editor',
+      context: { customData: 'value' },
+    });
+    ```
+  </Tab>
+</Tabs>
+
+#### [renderComments()](/api-reference/sdk/api/api-methods#rendercomments-9)
+
+Renders and highlights comment annotations in the ProseMirror editor.
+
+- Signature: `(request:` [`RenderCommentsRequest`](/api-reference/sdk/models/data-models#rendercommentsrequest-8)`) => void`
+- Params: `request:` [`RenderCommentsRequest`](/api-reference/sdk/models/data-models#rendercommentsrequest-8)
+- Returns: `void`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect } from 'react';
+    import { useCommentAnnotations } from '@veltdev/react';
+    import { renderComments } from 'prosemirror-velt-comments';
+
+    const annotations = useCommentAnnotations();
+
+    useEffect(() => {
+      if (!viewRef.current) return;
+
+      renderComments({
+        view: viewRef.current,
+        editorId: 'my-editor',
+        commentAnnotations: annotations ?? [],
+      });
+    }, [annotations]);
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```js
+    import { renderComments } from 'prosemirror-velt-comments';
+
+    const commentElement = Velt.getCommentElement();
+    commentElement.getAllCommentAnnotations().subscribe((annotations) => {
+      renderComments({
+        view,
+        editorId: 'my-editor',
+        commentAnnotations: annotations,
+      });
+    });
+    ```
+  </Tab>
+</Tabs>
+
+#### [isVeltAvailable()](/api-reference/sdk/api/api-methods#isveltavailable)
+
+Checks whether the Velt SDK is loaded on `window.Velt`.
+
+- Params: none
+- Returns: `boolean`
+
+```ts
+import { isVeltAvailable } from 'prosemirror-velt-comments';
+
+if (isVeltAvailable()) {
+  renderComments({ view, editorId: 'my-editor', commentAnnotations });
+}
+```
+
+#### [veltCommentsPluginKey](/api-reference/sdk/api/api-methods#veltcommentspluginkey)
+
+The ProseMirror `PluginKey` used by the package. Use it only for advanced inspection of plugin state.
+
+- Params: none
+- Returns: `PluginKey`
+
+```ts
+import { veltCommentsPluginKey } from 'prosemirror-velt-comments';
+
+const state = veltCommentsPluginKey.getState(view.state);
+const anchors = state?.anchors;
+```

@@ -103,13 +103,70 @@ A method is considered "provided" if it has **either** a function **or** a corre
 | | Function based | Endpoint based |
 |---|---|---|
 | **Best for** | Complex setups requiring middleware logic, dynamic headers, or transformation before sending | Standard REST APIs where you just need to pass the request "as-is" to the backend |
-| **Implementation** | You write the `fetch()` or `axios` code | You provide the `url` string and `headers` object |
+| **Implementation** | You write the `fetch()` or `axios` code | You provide the endpoint `url`, static or async `headers`, and optional `credentials` |
 | **Flexibility** | High | Medium |
 | **Speed** | Medium | High |
 
 <Tip>
 For URL mode, build your endpoints with Velt's official server SDKs — [Node.js](/backend-sdks/node) and [Python](/backend-sdks/python) — which ship request parsers, payload types, and response helpers for every resolver operation. You can self-host on any infrastructure (AWS, GCP, Azure, custom) as long as the request/response shapes match.
 </Tip>
+
+### Async headers and credentials
+
+On any endpoint config (`getConfig`, `saveConfig`, `deleteConfig`) of any provider, `headers` can be an async function that is resolved on every request — including each retry — so a short-lived per-request token stays fresh. Set `credentials: 'include'` to forward cookies for cross-origin cookie/session auth. When `credentials` is unset, `fetch()` keeps its default behavior.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const getFreshToken = async () => {
+  const response = await fetch('/api/velt/resolver-token');
+  const { token } = await response.json();
+  return token;
+};
+
+const commentResolverConfig = {
+  saveConfig: {
+    url: 'https://your-backend.com/api/velt/comments/save',
+    headers: async () => ({ Authorization: `Bearer ${await getFreshToken()}` }),
+    credentials: 'include'
+  }
+};
+
+const commentDataProvider = {
+  config: commentResolverConfig
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ comment: commentDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const getFreshToken = async () => {
+  const response = await fetch('/api/velt/resolver-token');
+  const { token } = await response.json();
+  return token;
+};
+
+const commentResolverConfig = {
+  saveConfig: {
+    url: 'https://your-backend.com/api/velt/comments/save',
+    headers: async () => ({ Authorization: `Bearer ${await getFreshToken()}` }),
+    credentials: 'include'
+  }
+};
+
+const commentDataProvider = {
+  config: commentResolverConfig
+};
+
+Velt.setDataProviders({ comment: commentDataProvider });
+```
+</Tab>
+</Tabs>
 
 ## The provider contract
 
@@ -128,6 +185,7 @@ Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig).
 | `getConfig` | [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig) | HTTP endpoint for reads (URL style). |
 | `saveConfig` | [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig) | HTTP endpoint for saves (URL style). |
 | `deleteConfig` | [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig) | HTTP endpoint for deletes (URL style). |
+| `additionalSaveEvents` | [`AdditionalSaveEventConfig[]`](/api-reference/sdk/models/data-models#additionalsaveeventconfig) | Comment resolver only. Opt-in non-core comment lifecycle events for the existing save endpoint. |
 | `additionalFields` | `string[]` | Custom fields to **copy** into your DB while keeping them in Velt's. See [Excluding & extending fields](#excluding-&-extending-fields). |
 | `fieldsToRemove` | `string[]` | Custom fields to **move** out of Velt's DB into yours. See [Excluding & extending fields](#excluding-&-extending-fields). |
 | `additionalSaveEvents` | [`CommentResolverSaveEvent[]`](/api-reference/sdk/models/data-models#commentresolversaveevent) | Comment resolver only. Additional non-core comment save events to send to your save endpoint. |

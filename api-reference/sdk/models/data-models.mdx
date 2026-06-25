@@ -42,7 +42,7 @@
 | `targetElementId`         | `string`                                                                  | No       | ID of the target element for the comment annotation if available                                                                                                                          |
 | `viewedBy`                | [`Users[]`](#user)                                                        | No       | List of users who have viewed/read this comment annotation                                                                                                                                |
 | `unread`                  | `boolean`                                                                 | No       | Whether the annotation is unread by current user                                                                                                                                          |
-| `visibilityConfig`        | [`CommentAnnotationVisibilityConfig`](#commentannotationvisibilityconfig) | No       | Human-readable visibility configuration for the annotation. Contains type, organizationId, and userIds. Defaults to `{ type: 'public' }` for new annotations without explicit visibility. |
+| `visibilityConfig`        | [`CommentAnnotationVisibilityConfig`](#commentannotationvisibilityconfig) | No       | Human-readable visibility configuration for the annotation. Contains type, organizationId, organizationIds, and userIds. Defaults to `{ type: 'public' }` for new annotations without explicit visibility. |
 | `agent`                   | [`CommentAnnotationAgent`](#commentannotationagent)                       | No       | Present when the annotation was authored by an AI agent. Carries the agent identity and structured result used to render the Agent Suggestion card. |
 | `sourceType`              | `string`                                                                  | No       | Origin of the annotation. Selects the agent-identity vs human-author header variant rendered for suggestion comments. |
 | `suggestion`              | [`CommentAnnotationSuggestion`](#commentannotationsuggestion)             | No       | Suggestion state for typed-suggestion annotations. Mutated by [`acceptSuggestion()`](/api-reference/sdk/api/api-methods#acceptsuggestion) / [`rejectSuggestion()`](/api-reference/sdk/api/api-methods#rejectsuggestion). |
@@ -338,10 +338,10 @@ Human-readable visibility configuration stored on a comment annotation.
 
 | Property         | Type                                              | Required | Description                                                                                           |
 | ---------------- | ------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
-| `type`           | [`CommentVisibilityType`](#commentvisibilitytype) | Yes      | The visibility type for the comment annotation.                                                       |
-| `organizationId` | `string`                                          | No       | The organization ID for organization-private visibility.                                              |
-| `organizationIds` | `string[]`                                       | No       | Organization IDs for `organizationPrivate` visibility (display-only mirror of the visibility config; visible to all listed orgs). |
-| `userIds`        | `string[]`                                        | No       | The user IDs for restricted visibility. Always includes the current user when type is `'restricted'`. |
+| `type`            | [`CommentVisibilityType`](#commentvisibilitytype) | Yes      | The visibility type for the comment annotation.                                                       |
+| `organizationId`  | `string`                                          | No       | The organization ID for organization-private visibility.                                              |
+| `organizationIds` | `string[]`                                         | No       | Organization IDs for `organizationPrivate` visibility (display-only mirror of `CommentVisibilityConfig.organizationIds`; visible to all listed orgs). |
+| `userIds`         | `string[]`                                         | No       | User IDs that can see the comment (display-only mirror of the self tokens in `context.accessFields`). For non-public comments this ALWAYS includes the author's `userId`, reflecting the author self-token invariant. |
 
 
 #### CommentAnnotationSubscribedUsers
@@ -571,13 +571,13 @@ Configuration for text formatting toolbar options in comment composers.
 
 ---
 
-| Property            | Type                                                 | Required | Description                                                                                          |
-| ------------------- | ---------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------- |
-| `commentAnnotation` | `{ [key: string]: PartialCommentAnnotation }`        | Yes      | Map of comment annotation data to save                                                              |
-| `metadata`          | `BaseMetadata`                                       | No       | Additional metadata for the request. eg: apikey, organizationId, documentId, etc.                   |
-| `event`             | `ResolverActions \| CommentResolverSaveEvent \| string` | No   | Event that caused the save. Also accepts `CommentResolverSaveEvent` members and raw strings (forward-compat). |
-| `commentId`         | `string`                                             | No       | ID of the comment to save                                                                           |
-| `targetComment`     | `PartialComment`                                     | No       | The comment the action occurred on, resolved by the frontend from `commentId`. Request context only — never persisted by `saveComments`. |
+| Property            | Type                                          | Required | Description                                                                       |
+| ------------------- | --------------------------------------------- | -------- | --------------------------------------------------------------------------------- |
+| `commentAnnotation` | `{ [key: string]: PartialCommentAnnotation }` | Yes      | Map of comment annotation data to save                                            |
+| `metadata`          | `BaseMetadata`                                | No       | Additional metadata for the request. eg: apikey, organizationId, documentId, etc. |
+| `event`             | [`ResolverActions`](#resolveractions) \| [`CommentResolverSaveEvent`](#commentresolversaveevent) \| `string` | No       | The save event. One of the 4 core PII events (`ResolverActions`) or, when opted in via `additionalSaveEvents`, a non-core annotation-level event (`CommentResolverSaveEvent`). Also accepts raw strings for forward-compatibility. |
+| `commentId`         | `string`                                      | No       | ID of the comment to save                                                         |
+| `targetComment`     | [`PartialComment`](#partialcomment)           | No       | The comment the action occurred on, resolved by the frontend from `commentId` against the payload's `commentAnnotation[*].comments` map. A convenience alias for data already in the payload (no new data egress) and request context only — never persisted by `saveComments`. Omitted when `commentId` is absent or unmatched. |
 
 #### DeleteCommentResolverRequest
 
@@ -5359,26 +5359,38 @@ An enum that defines the different types of actions that can trigger resolver ev
 
 ---
 
-An enum of the comment save-resolver events surfaced to a `saveComments` resolver. May appear as the `event` value on [`SaveCommentResolverRequest`](#savecommentresolverrequest).
+Non-core, annotation-level comment save events that customers can opt into receiving via [`ResolverConfig.additionalSaveEvents`](#resolverconfig), beyond the 4 core PII events. May appear as the `event` value on [`SaveCommentResolverRequest`](#savecommentresolverrequest).
 
-| Name                 | Value                                     | Description                                          |
-| -------------------- | ----------------------------------------- | ---------------------------------------------------- |
-| `STATUS_CHANGE`      | `'comment_annotation.status_change'`      | Annotation status changed                            |
-| `PRIORITY_CHANGE`    | `'comment_annotation.priority_change'`    | Annotation priority changed                          |
-| `ASSIGN`             | `'comment_annotation.assign'`             | Annotation assigned to a user                        |
-| `ACCESS_MODE_CHANGE` | `'comment_annotation.access_mode_change'` | Annotation access mode changed                       |
-| `CUSTOM_LIST_CHANGE` | `'comment_annotation.custom_list_change'` | A custom list field on the annotation changed        |
-| `APPROVE`            | `'comment_annotation.approve'`            | Annotation approved                                  |
-| `ACCEPT`             | `'comment.accept'`                        | Comment accepted                                     |
-| `REJECT`             | `'comment.reject'`                        | Comment rejected                                     |
-| `SUGGESTION_ACCEPT`  | `'comment_annotation.suggestion_accept'`  | Suggestion accepted                                  |
-| `SUGGESTION_REJECT`  | `'comment_annotation.suggestion_reject'`  | Suggestion rejected                                  |
-| `REACTION_ADD`       | `'comment.reaction_add'`                  | Reaction added to a comment                          |
-| `REACTION_DELETE`    | `'comment.reaction_delete'`               | Reaction removed from a comment                      |
-| `SUBSCRIBE`          | `'comment_annotation.subscribe'`          | User subscribed to the annotation                    |
-| `UNSUBSCRIBE`        | `'comment_annotation.unsubscribe'`        | User unsubscribed from the annotation                |
+| Name                 | Value                                    | Description                                                       |
+| -------------------- | ---------------------------------------- | ---------------------------------------------------------------- |
+| `STATUS_CHANGE`      | `'comment_annotation.status_change'`     | Triggered when the annotation status changes                     |
+| `PRIORITY_CHANGE`    | `'comment_annotation.priority_change'`   | Triggered when the annotation priority changes                   |
+| `ASSIGN`             | `'comment_annotation.assign'`            | Triggered when the annotation is assigned                        |
+| `ACCESS_MODE_CHANGE` | `'comment_annotation.access_mode_change'`| Triggered when the annotation access mode changes                |
+| `CUSTOM_LIST_CHANGE` | `'comment_annotation.custom_list_change'`| Triggered when an annotation custom list value changes           |
+| `APPROVE`            | `'comment_annotation.approve'`           | Triggered when the annotation is approved                        |
+| `ACCEPT`             | `'comment.accept'`                       | Triggered when a comment suggestion is accepted                  |
+| `REJECT`             | `'comment.reject'`                       | Triggered when a comment suggestion is rejected                  |
+| `SUGGESTION_ACCEPT`  | `'comment_annotation.suggestion_accept'` | Triggered when an annotation suggestion is accepted              |
+| `SUGGESTION_REJECT`  | `'comment_annotation.suggestion_reject'` | Triggered when an annotation suggestion is rejected              |
+| `REACTION_ADD`       | `'comment.reaction_add'`                 | Triggered when a reaction is added to a comment                  |
+| `REACTION_DELETE`    | `'comment.reaction_delete'`              | Triggered when a reaction is removed from a comment              |
+| `SUBSCRIBE`          | `'comment_annotation.subscribe'`         | Triggered when a user subscribes to the annotation               |
+| `UNSUBSCRIBE`        | `'comment_annotation.unsubscribe'`       | Triggered when a user unsubscribes from the annotation           |
 
-> **Note:** `CommentResolverSaveEvent.REACTION_ADD` (`'comment.reaction_add'`) and `CommentResolverSaveEvent.REACTION_DELETE` (`'comment.reaction_delete'`) are comment-level reaction events and are **distinct** from `ResolverActions.REACTION_ADD` (`'reaction.add'`) and `ResolverActions.REACTION_DELETE` (`'reaction.delete'`), which belong to the reaction resolver — same member names, different values.
+<Note>
+  `CommentResolverSaveEvent.REACTION_ADD` (`'comment.reaction_add'`) and `CommentResolverSaveEvent.REACTION_DELETE` (`'comment.reaction_delete'`) are comment-level reaction events and are **distinct** from [`ResolverActions`](#resolveractions)`.REACTION_ADD` (`'reaction.add'`) and `ResolverActions.REACTION_DELETE` (`'reaction.delete'`), which belong to the reaction resolver — same member names, different values.
+</Note>
+
+#### AdditionalSaveEventConfig
+
+---
+
+Element type of [`ResolverConfig.additionalSaveEvents`](#resolverconfig).
+
+| Property | Type                                                    | Required | Description                                                                       |
+| -------- | ------------------------------------------------------- | -------- | --------------------------------------------------------------------------------- |
+| `event`  | [`CommentResolverSaveEvent`](#commentresolversaveevent) | Yes      | The non-core annotation-level event to opt into delivering to the save endpoint.  |
 
 #### UserResolverModuleName
 
@@ -5592,10 +5604,11 @@ _Introduced in `@veltdev/node` v1.0.2._ The SDK exposes `partialTargetTextRangeF
 
 Config-based resolver endpoint configuration. SDK handles HTTP requests, headers, and response formatting automatically.
 
-| Property  | Type                     | Required | Description                                 |
-| --------- | ------------------------ | -------- | ------------------------------------------- |
-| `url`     | `string`                 | Yes      | Backend endpoint URL for resolver operation |
-| `headers` | `Record<string, string>` | No       | Custom HTTP headers for the request         |
+| Property      | Type                                                                  | Required | Description                                                                                                                                                                                              |
+| ------------- | --------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `url`         | `string`                                                              | Yes      | Backend endpoint URL for resolver operation                                                                                                                                                             |
+| `headers`     | `Record<string, string> \| (() => Promise<Record<string, string>>)`  | No       | Static headers object (captured once) OR an async function resolved on every request — including each retry — so a short-lived per-request token is always fresh.                                        |
+| `credentials` | `'include' \| 'same-origin' \| 'omit'`                                | No       | Forwarded to `fetch()` for cookie/session auth on resolver endpoints. Omitted when unset (fetch keeps its `'same-origin'` default — byte-identical to prior behavior). Use `'include'` for cross-origin cookie/session auth. |
 
 #### ResolverConfig
 
@@ -5613,7 +5626,7 @@ Config-based resolver endpoint configuration. SDK handles HTTP requests, headers
 | `deleteConfig`    | `ResolverEndpointConfig` | No       | Config-based endpoint for delete operations    |
 | `additionalFields` | `string[]`              | No       | Custom fields copied to resolver payloads but retained in Velt's storage |
 | `fieldsToRemove`  | `string[]`              | No       | Fields stripped from Velt's storage before writing to your resolver endpoint |
-| `additionalSaveEvents` | `CommentResolverSaveEvent[]` | No | Additional non-core comment save events that the frontend should send to a comment save resolver. |
+| `additionalSaveEvents` | [`AdditionalSaveEventConfig[]`](#additionalsaveeventconfig) | No | Opt-in list of additional (non-core) annotation-level save events delivered to the existing save endpoint, beyond the 4 core PII events. Absent/empty ⇒ no extra events (default, backward-compatible). |
 
 #### ResolverResponse
 
@@ -5666,6 +5679,18 @@ Generic response format for backend endpoints and data providers.
 | `save`   | `(request: SaveCommentResolverRequest) => Promise<ResolverResponse<T>>`                                       | No       | Function to save comment annotations   |
 | `delete` | `(request: DeleteCommentResolverRequest) => Promise<ResolverResponse<undefined>>`                             | No       | Function to delete comment annotations |
 | `config` | `ResolverConfig`                                                                                              | No       | Configuration for the data provider    |
+
+#### PartialCommentAnnotationResult
+
+---
+
+Resolver result payload for comment annotation data after PII stripping.
+
+| Property       | Type                                                                       | Required | Description                                               |
+| -------------- | -------------------------------------------------------------------------- | -------- | --------------------------------------------------------- |
+| `strippedData` | `Record<string, PartialCommentAnnotation> \| null`                         | Yes      | Annotation data with configured PII fields stripped       |
+| `originalData` | [`CommentAnnotation`](#commentannotation) \| `null`                        | Yes      | Original annotation data before PII stripping             |
+| `eventType`    | [`ResolverActions`](#resolveractions) \| [`CommentResolverSaveEvent`](#commentresolversaveevent) | No       | Resolver action or opted-in comment save event that produced this result |
 
 #### ReactionAnnotationDataProvider
 
@@ -6918,7 +6943,7 @@ Configuration interface for Permission Provider. Velt validates access requests 
 | `forceRefresh`     | `boolean`                           | No       | Set to `true` if access control changes frequently. Forces re-validation on each access check in the current session. Default: `false`                                                                     |
 | `revokeAccessOn`   | [RevokeAccessOn[]](#revokeaccesson) | No       | Configure automatic access revocation triggers. Revokes permissions when specified events occur (e.g., document unset or user logout).                                                                     |
 | `dev`              | `boolean`                           | No       | Opt-in: resolve permissions in the browser for local testing. Honored only for dev/test API keys; production keys always use the server-side provider. Default: `false`.                                   |
-| `endpointConfig`   | [ResolverEndpointConfig](#resolverendpointconfig) | No | URL resolver for the dev resolver. SDK POSTs `{ data: { requests:` [PermissionQuery[]](#permissionquery) `} }` to the URL. Takes precedence over `resolvePermissions`.                              |
+| `endpointConfig`   | [ResolverEndpointConfig](#resolverendpointconfig) | No | URL resolver for the dev resolver. SDK POSTs `{ data: { requests:` [PermissionQuery[]](#permissionquery) `} }` to the URL. Supports static or async headers and optional `credentials` through `ResolverEndpointConfig`. Takes precedence over `resolvePermissions`. |
 | `resolvePermissions` | `(request:` [PermissionResolverRequest](#permissionresolverrequest)`) => Promise<`[PermissionResult[]](#permissionresult) `\|` [ResolverResponse](#resolverresponse)`<PermissionResult[]>>` | No | In-browser callback resolver. Invoked with the same request envelope as the server-side provider. |
 | `resolveTimeout`   | `number`                            | No       | Per-call deadline in milliseconds for the dev resolver. Default: `60000`.                                                                                                                                  |
 

@@ -9,6 +9,42 @@ description: Release Notes of changes added to the core Velt SDK
 - `@veltdev/client`
 - `@veltdev/sdk`
 
+<Update label="Approval Engine — June 25, 2026" description="June 25, 2026">
+
+### New Features
+
+- [**Approval Engine**]: **Scheduled (cron) triggers.** Workflow triggers now accept a `schedule` block (`cron` + IANA `timezone` + `enabled`, with an optional `payloadTemplate`) so recurring workflows like nightly audits start automatically — no external scheduler needed. Invalid cron or timezone values are rejected at write time. Scheduled executions inherit the definition's organization/document scope; missed runs are not replayed. [Learn more →](/ai/approval-engine/setup)
+
+- [**Approval Engine**]: **Notification nodes (email & Slack).** A new `notification` node type sends an email (via SendGrid) or Slack message (channel id or incoming-webhook URL) directly from a workflow step. `bodyTemplate` and `subjectTemplate` support `{{dot.path}}` interpolation over the predecessor step's output and the execution's `triggerContext`. Email recipients are capped at 50; Slack supports `text`, `html`, and `slack-blocks` formats. Partial email delivery still marks the step completed; zero deliveries fails retryably. [Learn more →](/ai/approval-engine/customize-behavior)
+
+- [**Approval Engine**]: **Provider-aware inbound webhooks.** Inbound webhook triggers now support `github` (HMAC-SHA256, `x-hub-signature-256`), `vercel` (HMAC-SHA1, `x-vercel-signature`), and `custom` (caller-supplied header, algorithm, and prefix) signature presets, alongside the default `velt` preset. `apiKey`, `definitionId`, and `triggerId` can also be passed as query parameters, and an optional `allowedEvents` list filters which events dispatch executions. GitHub Actions and Vercel deployment webhooks can now drive workflows directly with no translation proxy. [Learn more →](/ai/approval-engine/customize-behavior)
+
+### Improvements
+
+- [**Approval Engine**]: **Agent nodes accept a static `url`.** Agent nodes can now pin a fixed absolute URL via a new `url` field instead of (or in addition to) `urlPath`. When both are set, `url` wins. Bare hostnames resolved from `urlPath` (e.g. `my-app.vercel.app`) are auto-normalized to `https://` before dispatch. Definitions providing neither field are rejected at write time. [Learn more →](/ai/approval-engine/customize-behavior)
+
+- [**Approval Engine**]: **Human nodes: `reviewerEmails` + mandatory reject path.** Human nodes now accept an optional `reviewerEmails[]` (up to 50 addresses) that's echoed on the step output and used to address reviewers. The linter also now rejects any definition where a human node lacks an outgoing `reject` edge (forward route or `reject+loop` back-edge) — previously this only failed at runtime when a reviewer rejected. [Learn more →](/ai/approval-engine/customize-behavior)
+
+- [**Approval Engine**]: **Richer agent results summary.** The `agentResultsSummary` projected onto step outputs now includes `severityCounts` (per-severity breakdown) and a bounded `findings` sample (up to 50 top-severity findings, trimmed CRITICAL → INFO). You can reference these in notification templates — for example, `{{input.agentResultsSummary.severityCounts.high}}` — without an extra subcollection read. [Learn more →](/ai/approval-engine/customize-behavior)
+
+- [**Broken Links Agent**]: **Auth-wall detection.** The broken links agent now flags pages that redirect to a login prompt with a new `errorType: "auth_required"` rather than reporting them as valid links. [Learn more →](/ai/approval-engine/overview)
+
+- [**Approval Engine**]: **Hard-delete (`purge`) and tombstone reuse.** Delete Definition now accepts an optional `purge: true` to physically remove the definition and all version snapshots; the default soft-delete behavior is unchanged. The response includes a new `purged` boolean. Creating a definition over a previously deleted (tombstoned) `definitionId` now succeeds — `ALREADY_EXISTS` is raised only for active definitions. [Learn more →](/api-reference/rest-apis/v2/approval-engine/definitions/delete-definition)
+
+- [**Memory API**]: **`totalActivities` cap clarified.** `POST /v2/memory/stats/get` documents that `totalActivities` is capped at `10000`; treat that value as "at least 10,000". [Learn more →](/api-reference/rest-apis/v2/memory/stats/get)
+
+- [**Comment Annotations**]: **Delete by `agentId`.** `POST /v2/commentannotations/delete` now accepts an optional `agentId` to scope deletions to a single agent. Combine with `agentSuggestions: true` to delete only that agent's unaccepted suggestions. V1 is unaffected. [Learn more →](/api-reference/rest-apis/v2/comments-feature/comment-annotations/delete-comment-annotations)
+
+### Bug Fixes
+
+- [**Memory API**]: **Ingest status response shape corrected.** `POST /v1/memory/ingest/status` documentation now matches the live response: download URLs are `originalDownloadUrl` and `canonicalMdDownloadUrl` (not `originalUrl` / `canonicalMdUrl`), and `startedAt`, `updatedAt`, `mimeType`, and `metadata` are documented. The `pending` value has been removed from the `status` union — actual values are `processing | completed | failed`.
+
+- [**Approval Engine**]: **Atomic schedule index updates.** Schedule-trigger index rebuilds during definition create/update are now a single all-or-nothing batch, so a failed write can no longer leave the index in a partially rebuilt state that silently stops schedules from firing. If the schedule-sync step fails, the definition write is rolled back rather than persisted inconsistently. Recreating a definition over a tombstoned id now clears any stale schedule entries first.
+
+- [**Approval Engine**]: **Concurrent delete + failed create no longer revives a definition.** The compensating rollback path now checks for a concurrent tombstone before reversing a write, so a racing delete + failed create/update sequence correctly leaves the definition deleted.
+
+</Update>
+
 <Update label="5.0.2" description="June 17, 2026">
 
 ### Bug Fixes

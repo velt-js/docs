@@ -32,6 +32,7 @@ pip install velt-py
 - Django 4.2.26+ (only if using the self-hosting backend)
 - MongoDB (Percona Server or MongoDB Atlas) for self-hosting
 - `requests` for REST API calls (installed automatically)
+- Optional `velt-py[auth]` extra (PyJWT>=2.8.0, cryptography>=42.0.0) — required only for the built-in JWT/JWKS verifier path of [`verifyToken`](#resolver-token-verification). Install with `pip install 'velt-py[auth]'`. Core install (`pip install velt-py`), the custom-callback verify path, and all non-auth features need no new dependency.
 
 ## Quick Start
 
@@ -194,6 +195,33 @@ config = {
 ```
 
 </Tab>
+<Tab title="Resolver Auth">
+
+Optional `resolver_auth` block enabling [`sdk.selfHosting.verifyToken`](#resolver-token-verification). The built-in JWT verifier requires `pip install 'velt-py[auth]'`; the custom `verify` callback needs no new dependency.
+
+```python
+config = {
+    'resolver_auth': {
+        # Built-in JWT verifier (HS256 example):
+        'jwt': {
+            'secret': 'your-hmac-secret',          # HS* — or for RS*/ES*:
+            # 'public_key': '-----BEGIN PUBLIC KEY-----...',
+            # 'jwks_url': 'https://your-idp/.well-known/jwks.json',
+            'algorithms': ['HS256'],               # REQUIRED allowlist
+            'issuer': 'https://your-idp',          # optional, enforced when set
+            'audience': 'velt',                    # optional, enforced when set
+            'leeway': 30,                          # optional clock skew (seconds)
+            # 'require': ['exp'],                  # optional: reject tokens missing these claims
+        },
+        # OR a custom escape hatch (takes priority over `jwt`):
+        # 'verify': lambda token, headers: my_decode(token),  # return claims dict or None
+    }
+}
+```
+
+See [Resolver Token Verification](#resolver-token-verification) for full detail.
+
+</Tab>
 <Tab title="Complete Example">
 
 Full configuration with database, AWS, collections, and user schema.
@@ -305,6 +333,8 @@ def save_comments(request):
 ```python
 { 'success': True, 'statusCode': 200, 'data': { ... } }
 ```
+
+> As of **v0.1.14**, when used as a save-resolver handler the inbound `event` may be a `ResolverActions` OR a `CommentResolverSaveEvent` member (or a raw string for forward-compat), and the request may carry `targetComment` (request context only — never persisted). See the [`SaveCommentResolverRequest`](#savecommentresolverrequest) entry under Data Models for these additions.
 
 #### `deleteComment`
 
@@ -663,6 +693,71 @@ result = sdk.selfHosting.token.getToken(
 ```
 
 > Note: `getToken` takes positional / keyword arguments — it does NOT accept a dataclass request object. Signature: `getToken(organizationId, userId, email=None, isAdmin=False)`.
+
+### Resolver Token Verification
+
+`sdk.selfHosting.verifyToken(headers=None, token=None, **overrides) -> VerifyTokenResult` authenticates the credential the Velt frontend forwards to your resolver endpoints. New in **v0.1.14**. It is **opt-in** via the `resolver_auth` config block, **framework-agnostic**, and **fail-closed** — it returns a structured [`VerifyTokenResult`](#verifytokenresult) and never raises for a verification outcome. It is **authentication only**: it never consults `apiKey`, `organizationId`, or the resolver database; resolver services keep their own scoping. `result.claims` is informational — assert tenant claims against the resolver payload's `organizationId` yourself if you need tenant isolation.
+
+The built-in JWT/JWKS verifier requires the optional extra: `pip install 'velt-py[auth]'`. The custom-callback (`verify`) path needs no new dependency. Configure `resolver_auth` in the [Resolver Auth config tab](#self-hosting-configuration).
+
+- Params:
+  - `headers` — Incoming request headers; the token is extracted from the configured header.
+  - `token` — A raw JWT string, passed directly instead of `headers`.
+  - `**overrides` — One-off `jwt` / `verify` / `header` / `scheme` that merge over the configured `resolver_auth` without changing global config.
+- Returns: [`VerifyTokenResult`](#verifytokenresult) — see the Data Models entry for fields.
+
+```python
+# In your resolver handler:
+result = sdk.selfHosting.verifyToken(headers=request.headers)  # or token='<raw_jwt>'
+if not result.verified:
+    return HttpResponse(status=401)   # result.errorCode tells you why
+# result.claims holds the decoded payload
+sdk.selfHosting.comments.saveComments(SaveCommentResolverRequest.from_dict(data))
+```
+
+**Error codes** (`result.errorCode`)
+
+| Code | When |
+|------|------|
+| `MISSING_TOKEN` | No token found in header / not passed, empty, or wrong scheme. |
+| `EXPIRED` | Token `exp` is in the past. |
+| `INVALID_SIGNATURE` | Signature did not verify against the resolved key. |
+| `CLAIM_MISMATCH` | `issuer`, `audience`, or a `require`d claim failed the check. |
+| `ALGORITHM_NOT_ALLOWED` | Token `alg` is not in the configured allowlist. |
+| `KEY_RESOLUTION_FAILED` | JWKS fetch / `public_key` / `secret` could not yield a usable key. |
+| `VERIFICATION_FAILED` | Generic verification failure not covered above. |
+| `NOT_CONFIGURED` | `resolver_auth` is not configured. |
+| `DEPENDENCY_MISSING` | Built-in verifier used without the `velt-py[auth]` extra installed. |
+
+**Token extraction**
+
+Extracted from the configured header (default `Authorization`, case-insensitive), stripping the configured scheme prefix (default `Bearer`); or pass `token='<raw_jwt>'`. Missing, empty, or wrong-scheme credentials → `MISSING_TOKEN`.
+
+**Built-in JWT path — key resolution**
+
+- `jwt.secret` → symmetric HS256/384/512. A PEM string in `secret` is rejected to prevent PEM-as-HMAC forgery.
+- `jwt.public_key` → static RSA/EC key for RS\* / ES\*.
+- `jwt.jwks_url` → fetched over HTTPS, cached in-process by `(url, kid)`. A fetch failure, non-2xx response, or unresolvable `kid` → `KEY_RESOLUTION_FAILED` without raising.
+
+**Security properties**
+
+- **Fail-closed** — never `verified=True` unless a token was present and fully verified.
+- **Algorithm pinning** — the allowlist is always required and passed to PyJWT; `alg=none` is rejected unconditionally even if listed; mixed symmetric + asymmetric allowlists are rejected (HS/RS confusion).
+- **HTTPS-only JWKS** — `jwks_url` must be `https://`; a redirect downgrade https→http is rejected; 3xx responses are rejected; cache is scoped by `(url, kid)`, not `kid` alone.
+- **No credential leakage** — the token, secret, and claims never appear in error strings or logs.
+- **Authentication only** — never consults `apiKey`, `organizationId`, or the resolver database.
+
+**Per-call overrides**
+
+`**overrides` kwargs merge over the configured `resolver_auth`, letting you supply a one-off `jwt`, `verify`, `header`, or `scheme` without mutating global config.
+
+**When `resolver_auth` is not configured**
+
+`verifyToken` returns `verified=False` with `errorCode='NOT_CONFIGURED'`. It does not raise and does not silently pass.
+
+**`ResolverAuthService`**
+
+Newly exported in `velt_py.services.self_hosting.__all__` — the DB-free service backing `verifyToken`. Direct use is optional.
 
 ### Framework Examples
 
@@ -5056,6 +5151,76 @@ class BaseMetadata:
 ```
 
 No import change is required — `BaseMetadata` is populated automatically from the incoming request payload. The fix applies transparently to all `saveComments` calls.
+
+### `VerifyTokenResult`
+
+Structured result returned by [`sdk.selfHosting.verifyToken`](#resolver-token-verification). New in **v0.1.14**. Module: `velt_py.models.resolver_auth`; exported from `velt_py` and `velt_py.models`.
+
+```python
+from velt_py.models import VerifyTokenResult
+
+@dataclass
+class VerifyTokenResult:
+    verified: bool
+    claims: Optional[Dict] = None
+    error: Optional[str] = None
+    errorCode: Optional[str] = None
+```
+
+**Field notes**
+
+- `verified` — `True` only when a token was present and fully verified, or a custom callback returned non-`None` claims.
+- `claims` — Decoded payload when verified; otherwise `None`.
+- `error` — Generic, code-based message; never contains the token or secret.
+- `errorCode` — One of: `MISSING_TOKEN`, `EXPIRED`, `INVALID_SIGNATURE`, `CLAIM_MISMATCH`, `ALGORITHM_NOT_ALLOWED`, `KEY_RESOLUTION_FAILED`, `VERIFICATION_FAILED`, `NOT_CONFIGURED`, `DEPENDENCY_MISSING`.
+
+### `CommentResolverSaveEvent`
+
+Enum of comment save-resolver actions the frontend forwards to your save handler. New in **v0.1.14**. A `(str, Enum)` exported from `velt_py` and `velt_py.models`; wire values are byte-identical to the upstream frontend enum.
+
+```python
+from velt_py import CommentResolverSaveEvent
+from velt_py.models import CommentResolverSaveEvent  # same class
+```
+
+| Member | Wire value |
+|--------|-----------|
+| `STATUS_CHANGE` | `comment_annotation.status_change` |
+| `PRIORITY_CHANGE` | `comment_annotation.priority_change` |
+| `ASSIGN` | `comment_annotation.assign` |
+| `ACCESS_MODE_CHANGE` | `comment_annotation.access_mode_change` |
+| `CUSTOM_LIST_CHANGE` | `comment_annotation.custom_list_change` |
+| `APPROVE` | `comment_annotation.approve` |
+| `ACCEPT` | `comment.accept` |
+| `REJECT` | `comment.reject` |
+| `SUGGESTION_ACCEPT` | `comment_annotation.suggestion_accept` |
+| `SUGGESTION_REJECT` | `comment_annotation.suggestion_reject` |
+| `REACTION_ADD` | `comment.reaction_add` |
+| `REACTION_DELETE` | `comment.reaction_delete` |
+| `SUBSCRIBE` | `comment_annotation.subscribe` |
+| `UNSUBSCRIBE` | `comment_annotation.unsubscribe` |
+
+**Parse order** — `SaveCommentResolverRequest.from_dict` tries `ResolverActions` FIRST (preserving every existing value), then `CommentResolverSaveEvent`, then keeps the raw string for unknown future values.
+
+**Distinctness** — `CommentResolverSaveEvent.REACTION_ADD` (`comment.reaction_add`) is distinct from `ResolverActions.REACTION_ADD` (`reaction.add`, the reaction-resolver action); the parse order routes each correctly.
+
+### `SaveCommentResolverRequest`
+
+The full shared shape is documented in the [API reference](/api-reference/sdk/models/data-models#savecommentresolverrequest). This entry covers only the **v0.1.14** additions — additive; existing payloads parse byte-identically.
+
+```python
+from velt_py import SaveCommentResolverRequest, CommentResolverSaveEvent
+
+request = SaveCommentResolverRequest.from_dict(data)
+if request.targetComment is not None:
+    print(request.targetComment.commentId)   # request context — NOT written to MongoDB
+sdk.selfHosting.comments.saveComments(request)
+```
+
+**Field notes**
+
+- `targetComment: Optional[PartialComment]` — The comment the action occurred on, resolved by the frontend from `commentId`. `from_dict` parses it fail-open (a malformed/partial dict never raises). `to_dict` emits it only when not `None`. `saveComments` NEVER persists it (request context only).
+- `event: Optional[Union[ResolverActions, CommentResolverSaveEvent, str]]` — Widened. Every existing `ResolverActions` value still parses to the same member. Parse order: `ResolverActions` first, then [`CommentResolverSaveEvent`](#commentresolversaveevent), then raw string for unknown future values.
 
 ## Resources
 

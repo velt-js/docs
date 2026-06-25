@@ -168,6 +168,69 @@ rn_route_json() {
     }'
 }
 
+rn_slack_pr_payload() {
+  local pr_url="${1:?pr url is required}"
+  local pr_number="${2:?pr number is required}"
+  local pr_title="${3:?pr title is required}"
+  local note_path="${4:?note path is required}"
+  local route="${5:?route is required}"
+  local source_url="${6:?source url is required}"
+  local run_url="${7:-}"
+  local status="${8:-In progress}"
+  local run_text="not provided"
+
+  if [ -n "$run_url" ]; then
+    run_text="<$run_url|GitHub Actions run>"
+  fi
+
+  jq -n \
+    --arg pr_url "$pr_url" \
+    --arg pr_number "$pr_number" \
+    --arg pr_title "$pr_title" \
+    --arg note_path "$note_path" \
+    --arg route "$route" \
+    --arg source_url "$source_url" \
+    --arg run_text "$run_text" \
+    --arg status "$status" \
+    '{
+      text: "Release-note docs PR created: #\($pr_number) \($pr_title)",
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "*Release-note docs PR created*\n<\($pr_url)|#\($pr_number) \($pr_title)>"
+          }
+        },
+        {
+          type: "section",
+          fields: [
+            {
+              type: "mrkdwn",
+              text: "*Release note:*\n`\($note_path)`"
+            },
+            {
+              type: "mrkdwn",
+              text: "*Route:*\n`\($route)`"
+            },
+            {
+              type: "mrkdwn",
+              text: "*Source:*\n<\($source_url)|release note>"
+            },
+            {
+              type: "mrkdwn",
+              text: "*Run:*\n\($run_text)"
+            },
+            {
+              type: "mrkdwn",
+              text: "*Status:*\n\($status)"
+            }
+          ]
+        }
+      ]
+    }'
+}
+
 rn_is_core_release_branch() {
   local branch="${1:?branch is required}"
   [[ "$branch" =~ ^v[0-9] ]]

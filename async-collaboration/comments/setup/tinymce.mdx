@@ -71,7 +71,7 @@ The TinyMCE integration renders comment highlights as view-only overlay elements
 
 `tinymce` is a peer dependency and must be provided by your TinyMCE app. Import the self-hosted TinyMCE assets used by your editor so `@tinymce/tinymce-react` and the Velt plugin use the same TinyMCE instance.
 
-#### Step 3: Create a TinyMCE editor component with Velt Comments
+#### Step 3: Configure the TinyMCE editor with the Velt Comments plugin
 
 Add `VeltCommentsPlugin` to the TinyMCE `plugins` list and set `velt_comments_editor_id` in the editor init options. Capture the TinyMCE editor instance from `onInit` or the `init` event, then render Velt comment annotations into the editor with `renderComments`.
 
@@ -336,6 +336,125 @@ velt-comment-text.velt-comment-selected {
 }
 ```
 
+#### Using TinyMCE without React
+
+For a vanilla TinyMCE app, initialize Velt with `@veltdev/client`, add the Velt comments web component to the page, and subscribe to annotations through the Velt comment element.
+
+```bash
+npm install @veltdev/client
+```
+
+```html
+<velt-comments text-mode="false"></velt-comments>
+<button id="add-comment-btn">Add Comment</button>
+<div id="editor"></div>
+```
+
+```ts
+import { initVelt } from '@veltdev/client';
+import tinymce from 'tinymce';
+import {
+  VeltCommentsPlugin,
+  addComment,
+  renderComments,
+} from '@veltdev/tinymce-velt-comments';
+
+const EDITOR_ID = 'my-editor';
+
+const velt = await initVelt('YOUR_API_KEY');
+
+await velt.identify({
+  userId: 'user-1',
+  organizationId: 'org-1',
+  name: 'User One',
+  email: 'user@example.com',
+});
+
+velt.setDocument('document-id', { documentName: 'Document name' });
+
+const [editor] = await tinymce.init({
+  selector: '#editor',
+  license_key: 'gpl',
+  plugins: [VeltCommentsPlugin],
+  toolbar: 'bold italic | addveltcomment',
+  velt_comments_editor_id: EDITOR_ID,
+});
+
+document.getElementById('add-comment-btn')?.addEventListener('mousedown', (event) => {
+  event.preventDefault();
+});
+
+document.getElementById('add-comment-btn')?.addEventListener('click', () => {
+  void addComment({ editor, editorId: EDITOR_ID });
+});
+
+velt.getCommentElement()?.getAllCommentAnnotations().subscribe((annotations) => {
+  renderComments({ editor, editorId: EDITOR_ID, commentAnnotations: annotations });
+});
+```
+
+#### Multiple TinyMCE editors
+
+When using multiple editors on the same page, provide a unique `editorId` to TinyMCE's `velt_comments_editor_id` init option, `addComment`, and `renderComments`.
+
+```ts
+const [editor1] = await tinymce.init({
+  target: document.querySelector('#editor-1') as HTMLElement,
+  license_key: 'gpl',
+  plugins: [VeltCommentsPlugin],
+  toolbar: 'addveltcomment',
+  velt_comments_editor_id: 'editor-1',
+});
+
+const [editor2] = await tinymce.init({
+  target: document.querySelector('#editor-2') as HTMLElement,
+  license_key: 'gpl',
+  plugins: [VeltCommentsPlugin],
+  toolbar: 'addveltcomment',
+  velt_comments_editor_id: 'editor-2',
+});
+
+await addComment({ editor: editor1, editorId: 'editor-1' });
+await addComment({ editor: editor2, editorId: 'editor-2' });
+
+renderComments({
+  editor: editor1,
+  editorId: 'editor-1',
+  commentAnnotations,
+});
+
+renderComments({
+  editor: editor2,
+  editorId: 'editor-2',
+  commentAnnotations,
+});
+```
+
+#### TypeScript support
+
+The package includes TypeScript definitions. Key type exports:
+
+```ts
+import type {
+  AddCommentRequest,
+  RenderCommentsRequest,
+  TinymceVeltCommentsConfig,
+  CommentAnnotationContext,
+} from '@veltdev/tinymce-velt-comments';
+import type { CommentAnnotation } from '@veltdev/types';
+```
+
+Runtime exports:
+
+```ts
+import {
+  VeltCommentsPlugin,
+  registerVeltCommentsPlugin,
+  addComment,
+  renderComments,
+} from '@veltdev/tinymce-velt-comments';
+```
+
 ## Complete Example
 
 <Frame>
@@ -485,122 +604,3 @@ Resolves Velt comment annotations back to TinyMCE DOM ranges and renders stable 
     ```
   </Tab>
 </Tabs>
-
-## Using Without React
-
-For a vanilla TinyMCE app, initialize Velt with `@veltdev/client`, add the Velt comments web component to the page, and subscribe to annotations through the Velt comment element.
-
-```bash
-npm install @veltdev/client
-```
-
-```html
-<velt-comments text-mode="false"></velt-comments>
-<button id="add-comment-btn">Add Comment</button>
-<div id="editor"></div>
-```
-
-```ts
-import { initVelt } from '@veltdev/client';
-import tinymce from 'tinymce';
-import {
-  VeltCommentsPlugin,
-  addComment,
-  renderComments,
-} from '@veltdev/tinymce-velt-comments';
-
-const EDITOR_ID = 'my-editor';
-
-const velt = await initVelt('YOUR_API_KEY');
-
-await velt.identify({
-  userId: 'user-1',
-  organizationId: 'org-1',
-  name: 'User One',
-  email: 'user@example.com',
-});
-
-velt.setDocument('document-id', { documentName: 'Document name' });
-
-const [editor] = await tinymce.init({
-  selector: '#editor',
-  license_key: 'gpl',
-  plugins: [VeltCommentsPlugin],
-  toolbar: 'bold italic | addveltcomment',
-  velt_comments_editor_id: EDITOR_ID,
-});
-
-document.getElementById('add-comment-btn')?.addEventListener('mousedown', (event) => {
-  event.preventDefault();
-});
-
-document.getElementById('add-comment-btn')?.addEventListener('click', () => {
-  void addComment({ editor, editorId: EDITOR_ID });
-});
-
-velt.getCommentElement()?.getAllCommentAnnotations().subscribe((annotations) => {
-  renderComments({ editor, editorId: EDITOR_ID, commentAnnotations: annotations });
-});
-```
-
-## Multiple Editors
-
-When using multiple editors on the same page, provide a unique `editorId` to TinyMCE's `velt_comments_editor_id` init option, `addComment`, and `renderComments`.
-
-```ts
-const [editor1] = await tinymce.init({
-  target: document.querySelector('#editor-1') as HTMLElement,
-  license_key: 'gpl',
-  plugins: [VeltCommentsPlugin],
-  toolbar: 'addveltcomment',
-  velt_comments_editor_id: 'editor-1',
-});
-
-const [editor2] = await tinymce.init({
-  target: document.querySelector('#editor-2') as HTMLElement,
-  license_key: 'gpl',
-  plugins: [VeltCommentsPlugin],
-  toolbar: 'addveltcomment',
-  velt_comments_editor_id: 'editor-2',
-});
-
-await addComment({ editor: editor1, editorId: 'editor-1' });
-await addComment({ editor: editor2, editorId: 'editor-2' });
-
-renderComments({
-  editor: editor1,
-  editorId: 'editor-1',
-  commentAnnotations,
-});
-
-renderComments({
-  editor: editor2,
-  editorId: 'editor-2',
-  commentAnnotations,
-});
-```
-
-## TypeScript Support
-
-The package includes TypeScript definitions. Key type exports:
-
-```ts
-import type {
-  AddCommentRequest,
-  RenderCommentsRequest,
-  TinymceVeltCommentsConfig,
-  CommentAnnotationContext,
-} from '@veltdev/tinymce-velt-comments';
-import type { CommentAnnotation } from '@veltdev/types';
-```
-
-Runtime exports:
-
-```ts
-import {
-  VeltCommentsPlugin,
-  registerVeltCommentsPlugin,
-  addComment,
-  renderComments,
-} from '@veltdev/tinymce-velt-comments';
-```

@@ -4,7 +4,9 @@ When a Markdown release note changes in
 `snippyly/internal-release-notes/release-notes/**`, the source repo dispatches
 an event to `velt-js/docs`. The docs workflow classifies the note, creates or
 reuses the right PR branch, and runs the committed release-note agents
-sequentially on Opus 4.8 with checkpoints after every stage.
+sequentially on Opus 4.8 with checkpoints after every stage. When the runner
+creates a new draft PR, it can also post a non-blocking Slack notification to
+`#docs-automation`.
 
 ## Flow
 
@@ -93,10 +95,14 @@ bash scripts/release-notes/test-detector.sh
 bash scripts/release-notes/test-url-parser.sh
 bash scripts/release-notes/test-resolver.sh
 bash scripts/release-notes/test-internal-trim.sh
+bash scripts/release-notes/test-slack-payload.sh
 ```
 
 ## Required secrets
 
 - `velt-js/docs`: `ANTHROPIC_API_KEY`, `CROSS_REPO_PAT`.
+- `velt-js/docs`: optional `DOCS_AUTOMATION_SLACK_WEBHOOK_URL`, an incoming
+  webhook configured for the `#docs-automation` channel. If missing or
+  temporarily failing, the runner logs the Slack failure and continues.
 - `snippyly/internal-release-notes`: `DOCS_DISPATCH_PAT` with access to
   dispatch workflows and create fallback issues in `velt-js/docs`.

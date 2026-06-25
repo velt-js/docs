@@ -22,6 +22,7 @@ MODE="${PIPELINE_MODE:-auto}"
 DRY_RUN="${PIPELINE_DRY_RUN:-false}"
 MODEL="${PIPELINE_MODEL:-claude-opus-4-8}"
 RUN_URL="${RUN_URL:-}"
+SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
 DOCS_ROOT="$PWD"
 
 case "$MODE" in
@@ -207,6 +208,44 @@ create_issue() {
   gh issue create --repo "$DOCS_REPO" --title "$title" --body "$body" --label documentation || true
 }
 
+notify_slack_pr_created() {
+  local status="$1"
+  local payload_file
+
+  if [ "$DRY_RUN" = "true" ]; then
+    log "Dry run: would notify Slack about PR #${PR_NUMBER:-unknown}"
+    return 0
+  fi
+
+  if [ -z "$SLACK_WEBHOOK_URL" ]; then
+    log "Slack notification skipped: DOCS_AUTOMATION_SLACK_WEBHOOK_URL is not configured"
+    return 0
+  fi
+
+  payload_file="${RUNNER_TEMP:-/tmp}/release-note-pr-${PR_NUMBER}.slack.json"
+  rn_slack_pr_payload \
+    "$PR_URL" \
+    "$PR_NUMBER" \
+    "$RN_TITLE" \
+    "$NOTE_PATH" \
+    "$RN_CLASS" \
+    "$(source_note_url)" \
+    "$RUN_URL" \
+    "$status" > "$payload_file"
+
+  if curl -fsS \
+    -X POST \
+    -H 'Content-Type: application/json; charset=utf-8' \
+    --data-binary "@${payload_file}" \
+    "$SLACK_WEBHOOK_URL" >/dev/null; then
+    log "Notified Slack for PR #$PR_NUMBER"
+  else
+    log "Slack notification failed for PR #$PR_NUMBER; continuing without failing the release-note pipeline"
+  fi
+
+  rm -f "$payload_file"
+}
+
 ensure_pr_for_current_branch() {
   local status="$1"
   local existing body_file url pr_json
@@ -245,6 +284,7 @@ ensure_pr_for_current_branch() {
   pr_json="$(gh pr view "$url" --repo "$DOCS_REPO" --json number,url)"
   PR_NUMBER="$(printf '%s' "$pr_json" | jq -r '.number')"
   log "Created draft PR #$PR_NUMBER: $PR_URL"
+  notify_slack_pr_created "$status"
 }
 
 notify_failure() {

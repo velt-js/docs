@@ -1,0 +1,345 @@
+---
+title: "CKEditor Setup"
+description: "Add Velt comments to a CKEditor 5 editor with the Velt CKEditor comments plugin."
+---
+
+![Add text comments in an editor](/gifs/Add-Text-Comments.gif)
+
+The CKEditor integration renders comment highlights as view-only overlay elements positioned over the commented text. It does not modify your CKEditor schema, saved HTML, or undo history. Highlight positions are tracked with CKEditor model ranges and re-positioned as the document changes.
+
+## Setup
+
+#### Step 1: Add Comment components
+
+- Add the `Velt Comments` component to the root of your app. This component is required to create and render comments in your app.
+- Authenticate the user with `authProvider` and set the Velt document before users add comments.
+- Set the `textMode` prop to `false` to hide the default Velt text comment tool. CKEditor selections are handled by `@veltdev/ckeditor-velt-comments`.
+- Add `VeltCommentsSidebar` if you want a Google Docs-style comment sidebar.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { VeltComments, VeltCommentsSidebar, VeltProvider, useSetDocument } from '@veltdev/react';
+
+    const user = {
+      userId: 'user-1',
+      organizationId: 'org-1',
+      name: 'User One',
+      email: 'user@example.com',
+    };
+
+    function VeltSetup() {
+      useSetDocument('document-id', { documentName: 'Document name' });
+      return null;
+    }
+
+    function App() {
+      return (
+        <VeltProvider apiKey="API_KEY" authProvider={{ user }}>
+          <VeltSetup />
+          <VeltComments textMode={false} />
+          <VeltCommentsSidebar />
+          {/* Your app content */}
+        </VeltProvider>
+      );
+    }
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 2: Install the Velt CKEditor extension
+
+```bash
+npm i @veltdev/ckeditor-velt-comments @ckeditor/ckeditor5-react ckeditor5
+```
+
+`ckeditor5` is a peer dependency of the Velt CKEditor package and must be provided by your app. Import the CKEditor CSS once in your app so the editor and the Velt overlay render correctly.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import 'ckeditor5/ckeditor5.css';
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 3: Configure the CKEditor editor with the Velt Comments plugin
+
+Add `VeltCommentsPlugin` to the CKEditor `plugins` list and configure it with `veltComments`. Capture the editor instance from `onReady`, then render Velt comment annotations into that instance with `renderComments`.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect, useState } from 'react';
+    import { CKEditor } from '@ckeditor/ckeditor5-react';
+    import {
+      ClassicEditor,
+      Essentials,
+      Paragraph,
+      Heading,
+      Bold,
+      Italic,
+      Link,
+      List,
+      BlockQuote,
+      type Editor,
+    } from 'ckeditor5';
+    import { useCommentAnnotations } from '@veltdev/react';
+    import {
+      VeltCommentsPlugin,
+      renderComments,
+    } from '@veltdev/ckeditor-velt-comments';
+    import 'ckeditor5/ckeditor5.css';
+
+    const EDITOR_ID = 'my-editor';
+
+    function CKEditorWithComments() {
+      const [editor, setEditor] = useState<Editor | null>(null);
+      const annotations = useCommentAnnotations();
+
+      useEffect(() => {
+        if (!editor) return;
+
+        renderComments({
+          editor,
+          editorId: EDITOR_ID,
+          commentAnnotations: annotations ?? [],
+        });
+      }, [editor, annotations]);
+
+      return (
+        <CKEditor
+          editor={ClassicEditor}
+          config={{
+            licenseKey: 'GPL',
+            plugins: [
+              Essentials,
+              Paragraph,
+              Heading,
+              Bold,
+              Italic,
+              Link,
+              List,
+              BlockQuote,
+              VeltCommentsPlugin,
+            ],
+            toolbar: [
+              'undo',
+              'redo',
+              '|',
+              'heading',
+              '|',
+              'bold',
+              'italic',
+              'link',
+              '|',
+              'bulletedList',
+              'numberedList',
+              '|',
+              'blockQuote',
+            ],
+            initialData: '<p>Select text, then add a comment.</p>',
+            veltComments: { editorId: EDITOR_ID },
+          }}
+          onReady={(nextEditor) => setEditor(nextEditor)}
+          onAfterDestroy={() => setEditor(null)}
+        />
+      );
+    }
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 4: Add a comment button to your CKEditor editor
+
+Add a button that users can click to add comments after selecting text in the CKEditor editor.
+
+**Important:** Use `onMouseDown` with `preventDefault()` so the browser does not move focus away from the editor before `addComment` reads the current selection. Keep the actual `addComment` call in `onClick`.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from '@veltdev/ckeditor-velt-comments';
+
+    const handleAddComment = () => {
+      if (!editor) return;
+
+      void addComment({
+        editor,
+        editorId: EDITOR_ID,
+      });
+    };
+
+    <button
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={handleAddComment}
+    >
+      Add Comment
+    </button>
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 5: Call `addComment` to add a comment
+
+- Call this method to add a comment to selected text in the CKEditor editor.
+- Params: [`AddCommentRequest`](/api-reference/sdk/models/data-models#ckeditor-addcommentrequest). It has the following properties:
+  - `editor`: CKEditor 5 `Editor` instance from `onReady`.
+  - `editorId`: Id of the editor. Use this if you have multiple CKEditor editors on the same page. (optional)
+  - `context`: [`CommentAnnotationContext`](/api-reference/sdk/models/data-models#ckeditor-commentannotationcontext) for custom metadata to attach to the Comment Annotation. [Learn more](/async-collaboration/comments/customize-behavior#metadata). (optional)
+- Returns: `Promise<void>`.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from '@veltdev/ckeditor-velt-comments';
+
+    const addCommentRequest = {
+      editor,
+      editorId: 'EDITOR_ID',
+      context: {
+        storyId: 'story-id',
+        storyName: 'story-name',
+      },
+    };
+
+    void addComment(addCommentRequest);
+    ```
+  </Tab>
+</Tabs>
+
+The library automatically writes `context.textEditorConfig` with the selected text, its occurrence index in the document, and the editor ID when one is provided.
+
+#### Step 6: Render comments in CKEditor editor
+
+- Get the comment data from Velt SDK and render it in the CKEditor editor.
+- Params: [`RenderCommentsRequest`](/api-reference/sdk/models/data-models#ckeditor-rendercommentsrequest). It has the following properties:
+  - `editor`: CKEditor 5 `Editor` instance.
+  - `editorId`: Id of the editor. Use this if you have multiple CKEditor editors on the same page. (optional)
+  - `commentAnnotations`: Array of [`CommentAnnotation`](/api-reference/sdk/models/data-models#commentannotation) objects.
+- Returns: `void`.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect } from 'react';
+    import { useCommentAnnotations } from '@veltdev/react';
+    import { renderComments } from '@veltdev/ckeditor-velt-comments';
+
+    const commentAnnotations = useCommentAnnotations();
+
+    useEffect(() => {
+      if (!editor) return;
+
+      renderComments({
+        editor,
+        editorId: 'EDITOR_ID',
+        commentAnnotations: commentAnnotations ?? [],
+      });
+    }, [editor, commentAnnotations]);
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 7: Re-apply highlights after reloading content
+
+Comment highlights are view-only overlay elements. They are not stored in the CKEditor document, so your saved HTML, schema, and undo history stay clean.
+
+Call `renderComments` whenever the editor is recreated or its content is replaced. The `useEffect` in Step 6 handles this automatically when the `editor` instance or the annotation list changes.
+
+#### Step 8: Style the commented text
+
+- Comment highlights are rendered as `velt-comment-text` overlay markers.
+- You can override the marker styles in your app CSS.
+
+```css
+velt-comment-text {
+  background-color: rgba(255, 212, 0, 0.4);
+  border-bottom: 2px solid #ffd400;
+  cursor: pointer;
+}
+
+velt-comment-text:hover,
+velt-comment-text[comment-selected="true"],
+velt-comment-text.velt-comment-selected {
+  background-color: rgba(255, 212, 0, 0.7);
+}
+```
+
+## Complete Example
+
+<Frame>
+  <iframe
+    src="https://sample-apps-ckeditor-comments-demo.vercel.app/"
+    className="w-full"
+    height="500px"
+  ></iframe>
+</Frame>
+
+## APIs
+
+#### [VeltCommentsPlugin](/api-reference/sdk/api/api-methods#ckeditor-veltcommentsplugin)
+
+The CKEditor 5 plugin that powers Velt comments. Add it to the `<CKEditor>` component's `config.plugins` list and configure it with `config.veltComments`.
+
+- Config: [`VeltCommentsPluginConfig`](/api-reference/sdk/models/data-models#ckeditor-veltcommentspluginconfig)
+- Returns: CKEditor plugin class
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { VeltCommentsPlugin } from '@veltdev/ckeditor-velt-comments';
+
+    <CKEditor
+      editor={ClassicEditor}
+      config={{
+        plugins: [Essentials, Paragraph, VeltCommentsPlugin],
+        veltComments: { editorId: 'my-editor' },
+      }}
+    />
+    ```
+  </Tab>
+</Tabs>
+
+#### [addComment()](/api-reference/sdk/api/api-methods#ckeditor-addcomment)
+
+Creates a comment annotation for the currently selected text in CKEditor.
+
+- Signature: `async (request:` [`AddCommentRequest`](/api-reference/sdk/models/data-models#ckeditor-addcommentrequest)`) => Promise<void>`
+- Params: `request:` [`AddCommentRequest`](/api-reference/sdk/models/data-models#ckeditor-addcommentrequest)
+- Returns: `Promise<void>`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from '@veltdev/ckeditor-velt-comments';
+
+    void addComment({
+      editor,
+      editorId: 'my-editor',
+    });
+    ```
+  </Tab>
+</Tabs>
+
+#### [renderComments()](/api-reference/sdk/api/api-methods#ckeditor-rendercomments)
+
+Resolves and highlights Velt comment annotations in CKEditor.
+
+- Signature: `(request:` [`RenderCommentsRequest`](/api-reference/sdk/models/data-models#ckeditor-rendercommentsrequest)`) => void`
+- Params: `request:` [`RenderCommentsRequest`](/api-reference/sdk/models/data-models#ckeditor-rendercommentsrequest)
+- Returns: `void`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { renderComments } from '@veltdev/ckeditor-velt-comments';
+
+    renderComments({
+      editor,
+      editorId: 'my-editor',
+      commentAnnotations: annotations ?? [],
+    });
+    ```
+  </Tab>
+</Tabs>

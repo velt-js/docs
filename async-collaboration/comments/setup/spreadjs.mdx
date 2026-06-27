@@ -1,0 +1,322 @@
+---
+title: "SpreadJS Setup"
+---
+
+![](/gifs/Add-Text-Comments.gif)
+
+The SpreadJS integration renders each Velt comment as a view-only overlay positioned over the commented cell or range. It does not modify your workbook. Comment anchors are stored as durable `{ sheetName, row, col, rowCount, colCount }` data and re-resolved to pixels with SpreadJS cell geometry whenever comments render.
+
+## Setup
+
+#### Step 1: Add Comment components
+
+- Add the `Velt Comments` component to the root of your app. This component is required to create and render comments in your app.
+- Authenticate the user with `authProvider` and set the Velt document before users add comments.
+- Set the `textMode` prop to `false` to hide the default Velt text comment tool. SpreadJS selections are handled by `@veltdev/spreadjs-velt-comments`.
+- Add `VeltCommentsSidebar` if you want a Google Docs-style comment sidebar.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { VeltComments, VeltCommentsSidebar, VeltProvider, useSetDocument } from '@veltdev/react';
+
+    const user = {
+      userId: 'user-1',
+      organizationId: 'org-1',
+      name: 'User One',
+      email: 'user@example.com',
+    };
+
+    function VeltSetup() {
+      useSetDocument('spreadsheet-id', { documentName: 'Spreadsheet name' });
+      return null;
+    }
+
+    function App() {
+      return (
+        <VeltProvider apiKey="API_KEY" authProvider={{ user }}>
+          <VeltSetup />
+          <VeltComments textMode={false} />
+          <VeltCommentsSidebar />
+          {/* Your app content */}
+        </VeltProvider>
+      );
+    }
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 2: Install the Velt SpreadJS extension
+
+```bash
+npm i @veltdev/spreadjs-velt-comments @mescius/spread-sheets @mescius/spread-sheets-io
+```
+
+`@mescius/spread-sheets` is a peer dependency of the Velt SpreadJS package. `@mescius/spread-sheets-io` is required when you import XLSX files into a workbook.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import '@mescius/spread-sheets/styles/gc.spread.sheets.excel2013white.css';
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 3: Configure a SpreadJS workbook with Velt Comments
+
+Create the workbook, import your spreadsheet, then attach `SpreadJSVeltComments` after the import completes. The same workbook instance is used by `addComment` and `renderComments`.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect, useRef, useState } from 'react';
+    import { useCommentAnnotations } from '@veltdev/react';
+    import {
+      SpreadJSVeltComments,
+      renderComments,
+      type AttachedExtension,
+      type SpreadInstance,
+    } from '@veltdev/spreadjs-velt-comments';
+
+    const EDITOR_ID = 'my-workbook';
+
+    function SpreadsheetEditor() {
+      const hostRef = useRef<HTMLDivElement | null>(null);
+      const workbookRef = useRef<SpreadInstance | null>(null);
+      const extensionRef = useRef<AttachedExtension | null>(null);
+      const [instance, setInstance] = useState<SpreadInstance | null>(null);
+      const annotations = useCommentAnnotations();
+
+      useEffect(() => {
+        if (!hostRef.current || workbookRef.current) return;
+
+        let cancelled = false;
+        const host = hostRef.current;
+
+        import('@mescius/spread-sheets').then(async (spreadModule) => {
+          const GC = 'default' in spreadModule ? spreadModule.default : spreadModule;
+          await import('@mescius/spread-sheets-io');
+          if (cancelled || workbookRef.current) return;
+
+          const workbook = new GC.Spread.Sheets.Workbook(host);
+          workbookRef.current = workbook;
+
+          const response = await fetch('/your-workbook.xlsx');
+          const file = new File([await response.blob()], 'your-workbook.xlsx');
+
+          workbook.import(
+            file,
+            () => {
+              if (cancelled) return;
+
+              extensionRef.current = SpreadJSVeltComments
+                .configure({ editorId: EDITOR_ID })
+                .attach(workbook);
+              setInstance(workbook);
+            },
+            (error: unknown) => console.error('XLSX import failed', error),
+            { fileType: GC.Spread.Sheets.FileType.excel },
+          );
+        });
+
+        return () => {
+          cancelled = true;
+          extensionRef.current?.detach();
+          workbookRef.current?.destroy();
+          workbookRef.current = null;
+          setInstance(null);
+        };
+      }, []);
+
+      useEffect(() => {
+        if (!instance) return;
+
+        renderComments({
+          instance,
+          commentAnnotations: annotations ?? [],
+        });
+      }, [instance, annotations]);
+
+      return <div ref={hostRef} style={{ width: '100%', height: '100vh' }} />;
+    }
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 4: Add a comment button or selection bubble
+
+SpreadJS renders the grid to a canvas, so there is no DOM text selection for a default text bubble menu. Use the workbook's selected cell/range state to show your own button or contextual bubble, then call `addComment({ instance })`.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from '@veltdev/spreadjs-velt-comments';
+
+    const handleAddComment = async () => {
+      if (!instance) return;
+
+      const result = await addComment({ instance });
+      if (!result) {
+        console.warn('Select a cell or range before adding a comment.');
+      }
+    };
+
+    <button onClick={handleAddComment}>Add Comment</button>
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 5: Call `addComment` to add a comment
+
+- Call this method to add a comment to the currently selected cell or range.
+- Params: [`AddCommentArgs`](/api-reference/sdk/models/data-models#spreadjs-addcommentargs). It has the following properties:
+  - `instance`: SpreadJS workbook instance created with `new GC.Spread.Sheets.Workbook(host)`.
+- Returns: [`Promise<AddCommentResult | null>`](/api-reference/sdk/models/data-models#spreadjs-addcommentresult). It returns `null` if no cell/range is selected or Velt is not loaded.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from '@veltdev/spreadjs-velt-comments';
+
+    const result = await addComment({ instance });
+    ```
+  </Tab>
+</Tabs>
+
+To scope comments to a specific workbook on pages with multiple SpreadJS instances, pass an editor id when attaching the extension:
+
+```tsx
+SpreadJSVeltComments.configure({ editorId: 'EDITOR_ID' }).attach(workbook);
+```
+
+#### Step 6: Render comments in the workbook
+
+- Get comment data from the Velt SDK and render it in the SpreadJS workbook.
+- Params: [`RenderCommentsArgs`](/api-reference/sdk/models/data-models#spreadjs-rendercommentsargs). It has the following properties:
+  - `instance`: SpreadJS workbook instance.
+  - `commentAnnotations`: Array of Comment Annotation objects.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect } from 'react';
+    import { useCommentAnnotations } from '@veltdev/react';
+    import { renderComments } from '@veltdev/spreadjs-velt-comments';
+
+    const commentAnnotations = useCommentAnnotations();
+
+    useEffect(() => {
+      if (!instance) return;
+
+      renderComments({
+        instance,
+        commentAnnotations: commentAnnotations ?? [],
+      });
+    }, [instance, commentAnnotations]);
+    ```
+  </Tab>
+</Tabs>
+
+Highlights are view-only. The library re-derives each highlight from its [`TextEditorConfig`](/api-reference/sdk/models/data-models#spreadjs-texteditorconfig) anchor and SpreadJS repositions the overlays across scroll, zoom, row/column resize, and sheet changes. Re-run `renderComments` when Velt's annotation list changes or when you import a new workbook.
+
+#### Step 7: Clean up the Velt SpreadJS extension
+
+`SpreadJSVeltComments.configure(...).attach(instance)` returns an [`AttachedExtension`](/api-reference/sdk/models/data-models#spreadjs-attachedextension). Call `detach()` in your effect cleanup to remove listeners, clear per-instance state, and remove overlay elements before destroying the workbook.
+
+```tsx
+return () => {
+  extensionRef.current?.detach();
+  extensionRef.current = null;
+  workbookRef.current?.destroy();
+};
+```
+
+#### Step 8: Style the commented cells
+
+- Each comment is rendered through a `.velt-spreadjs-overlay` layer with a `.velt-spreadjs-highlight` range fill and a `velt-comment-text` marker.
+- Override the default inline highlight styles with `!important`.
+
+```css
+.velt-spreadjs-highlight {
+  background-color: rgba(255, 212, 0, 0.36) !important;
+  border: 1.5px solid rgba(255, 170, 0, 0.95) !important;
+}
+
+velt-comment-text:hover .velt-spreadjs-highlight,
+velt-comment-text[comment-selected="true"] .velt-spreadjs-highlight,
+velt-comment-text.velt-comment-selected .velt-spreadjs-highlight {
+  background-color: rgba(255, 212, 0, 0.62) !important;
+}
+```
+
+## Complete Example
+
+<Frame>
+  <iframe
+    src="https://sample-apps-spreadjs-comments-demo.vercel.app/"
+    className="w-full"
+    height="500px"
+  ></iframe>
+</Frame>
+
+## APIs
+
+#### [SpreadJSVeltComments](/api-reference/sdk/api/api-methods#spreadjs-spreadjsveltcomments)
+
+Creates the Velt Comments extension for a SpreadJS workbook. Use `SpreadJSVeltComments.configure(...).attach(instance)` to attach it to a workbook instance.
+
+- Config: [`SpreadJSVeltCommentsConfig`](/api-reference/sdk/models/data-models#spreadjs-spreadjsveltcommentsconfig)
+- Returns: `SpreadJSVeltComments`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { SpreadJSVeltComments } from '@veltdev/spreadjs-velt-comments';
+
+    const attached = SpreadJSVeltComments
+      .configure({ editorId: 'my-workbook' })
+      .attach(instance);
+
+    attached.detach();
+    ```
+  </Tab>
+</Tabs>
+
+#### [addComment()](/api-reference/sdk/api/api-methods#spreadjs-addcomment)
+
+Creates a comment annotation for the currently selected SpreadJS cell or range.
+
+- Signature: `async (args: AddCommentArgs) => Promise<AddCommentResult | null>`
+- Params: `args:` [`AddCommentArgs`](/api-reference/sdk/models/data-models#spreadjs-addcommentargs)
+- Returns: `Promise<AddCommentResult | null>`; see [`AddCommentResult`](/api-reference/sdk/models/data-models#spreadjs-addcommentresult).
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from '@veltdev/spreadjs-velt-comments';
+
+    const result = await addComment({ instance });
+    ```
+  </Tab>
+</Tabs>
+
+#### [renderComments()](/api-reference/sdk/api/api-methods#spreadjs-rendercomments)
+
+Renders and updates Velt comment highlights in the SpreadJS workbook.
+
+- Signature: `(args:` [`RenderCommentsArgs`](/api-reference/sdk/models/data-models#spreadjs-rendercommentsargs)`) => void`
+- Params: `args:` [`RenderCommentsArgs`](/api-reference/sdk/models/data-models#spreadjs-rendercommentsargs)
+- Returns: `void`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { renderComments } from '@veltdev/spreadjs-velt-comments';
+
+    renderComments({
+      instance,
+      commentAnnotations: annotations ?? [],
+    });
+    ```
+  </Tab>
+</Tabs>

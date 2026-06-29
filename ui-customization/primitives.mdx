@@ -1,0 +1,228 @@
+---
+title: "Primitives"
+sidebarTitle: "Primitives"
+description: "Compose Velt primitive components for custom layouts and UI library integration."
+---
+
+**What it is:** Velt's **building-block components** that you compose yourself. Each one comes with Velt's default design *and* full behavior, and there's a sub-component for nearly every child piece. You fetch the data, loop it, pass the props, arrange the pieces into any layout, wrap them in any UI library, and add your own interactivity. **Most control, most effort.**
+
+**Use it when** (any of these): you need your **own UI component library** inside the comment UI, your **own interactivity/state**, to **place Velt pieces anywhere** in your tree, to **compose layouts** beyond what wireframe slots offer, or to customize a **leaf** piece (via that leaf's wireframe). (Decision tree Q3.)
+
+**Don't use it when:** wireframe slots already express the layout you need: wireframes are **less work** because Velt does the data-fetching/looping/wiring for you. Reach for primitives only when you need the extra control. (And for pure theming, just use [CSS](/ui-customization/styling).)
+
+---
+
+## The model
+
+**You do the composition.** A primitive is a **normal React component** that renders a Velt custom element (`<velt-…>`). Examples: `VeltComments`, `VeltCommentDialog`, `VeltCommentsSidebar`, `VeltCommentBubble`, `VeltCommentText`, `VeltNotificationsPanel`, `VeltReactionTool`: plus a sub-component for nearly every child.
+
+The trade vs. wireframes: **you** write the React that Velt would otherwise do for you. To show all threads you fetch the annotations, `.map()` them, and pass each `annotationId` into a `VeltCommentDialog`; to render a thread you take the comments array, loop it, and pass each `comment` into a thread-card primitive; you handle conditional show/hide yourself. That's more work, and in return you get full layout control, your UI library, and real interactivity.
+
+> **Primitives vs. wireframes:** two *parallel* APIs, not layers of each other, and you can combine them on one surface. A primitive renders Velt's default UI (which you compose); a wireframe supplies layout markup that Velt fills. **Deep layout control:** because there's a sub-component for nearly every child, you can rebuild a piece's layout by composing its sub-components (e.g. a custom header from the header's sub-components). **The one limit:** *leaf* primitives (deepest pieces, no children) can't be restructured as primitives: to customize a leaf, use **that leaf's wireframe** (even inside an otherwise-primitive build).
+
+Component and sub-component names: [`Component catalog`](/ui-customization/reference/component-catalog). Layout/mode props: [`Component config`](/ui-customization/reference/component-config).
+
+---
+
+## Steps
+
+<Steps>
+<Step title="Drop in the component">
+
+```tsx
+import { VeltComments, VeltCommentsSidebar } from '@veltdev/react';
+
+<VeltComments shadowDom={false} />
+<VeltCommentsSidebar shadowDom={false} />
+```
+
+That alone gives you fully working comments with Velt's default design. (Keep `shadowDom={false}` if you'll style them: see [`CSS`](/ui-customization/styling).)
+
+</Step>
+
+<Step title="Toggle features with props">
+
+Trim the UI to your design by switching features off: **never** by hiding them with CSS. These are all real `VeltComments` props:
+
+```tsx
+<VeltComments
+  shadowDom={false}
+  userMentions={true}
+  reactions={false}
+  recordings="none"
+  attachments={false}
+  status={false}
+  priority={false}
+  commentTool={false}
+  collapsedComments={true}
+  commentPlaceholder="Add a comment…"
+  replyPlaceholder="Reply…"
+/>
+```
+
+All `<VeltComments>` props are in [`Props`](/ui-customization/reference/props); layout/mode props for the sidebar/dialog/notifications are in [`Component config`](/ui-customization/reference/component-config). Don't guess prop names.
+
+</Step>
+
+<Step title="Build a real comment UI: fetch → loop → render">
+
+`VeltComments` renders the *whole* default comments experience for you. But when you want your **own** layout from primitives, **you do the data plumbing yourself**: fetch the annotations with a hook, loop them, and render a dialog/thread primitive per annotation by passing its `annotationId`. That's the actual "primitive implementation":
+
+```tsx
+import { VeltCommentDialog, useCommentAnnotations, useVeltInitState } from '@veltdev/react';
+import type { CommentAnnotation } from '@veltdev/types';
+
+function MyCommentsList() {
+  const ready = useVeltInitState();
+  // 1) FETCH: reactive; re-renders when comments change (incl. other users live)
+  const annotations: CommentAnnotation[] = useCommentAnnotations() ?? [];
+
+  if (!ready) return <MySkeleton />;
+  if (annotations.length === 0) return <MyEmptyState />;
+
+  return (
+    <div className="my-list">
+      {/* 2) LOOP: one row per annotation */}
+      {annotations.map((a) => (
+        <section key={a.annotationId} className="my-row">
+          <header>{a.comments?.[0]?.from?.name}</header>
+          {/* 3) RENDER a Velt primitive, scoped by annotation-id: Velt fills in
+                 the thread (comments, composer, reactions, resolve, …) with full behavior.
+                 defaultCondition skips the internal show/hide gate so YOU control visibility. */}
+          <VeltCommentDialog annotationId={a.annotationId} fullExpanded defaultCondition={false} />
+        </section>
+      ))}
+    </div>
+  );
+}
+```
+
+> **Use `VeltCommentDialog`, not `VeltCommentThread`.** `VeltCommentThread` is **deprecated**: `VeltCommentDialog` is the supported per-thread primitive (same `annotationId` API). Don't reach for `VeltCommentThread` in new code.
+
+What's happening, and why it's different from `<VeltComments>`:
+- **`useCommentAnnotations()`** is the data source: a reactive array of `CommentAnnotation` ([`Hooks`](/ui-customization/reference/hooks)). You can filter/sort/group it however your design needs *before* rendering.
+- **You `.map()` it** and render a primitive per item. `VeltCommentDialog` takes an **`annotationId`** and renders that thread's full UI + behavior: you're not re-implementing comments, you're placing Velt's thread inside *your* row layout. (`defaultCondition={false}` opts out of the primitive's internal visibility gate: see the [`default-condition`](#default-condition--you-control-showhide-primitives-only) note below.)
+- This is exactly the trade vs. [wireframes](/ui-customization/layout): wireframes do the fetch+loop for you (you only supply slot markup); **primitives make you write the fetch+loop, in exchange for full control** over the surrounding structure and the freedom to wrap each row in your UI library.
+- To *create* a thread from your own composer, pair this with the action hooks (`useAddCommentAnnotation`, `useAddComment`: see [headless](/ui-customization/headless), which is the same data layer taken all the way).
+
+> Single known thread? You can skip the loop and render one `<VeltCommentDialog annotationId={id} fullExpanded defaultCondition={false} />` directly.
+
+#### `default-condition`: you control show/hide (primitives only)
+
+Every primitive has an **internal visibility condition**: it decides on its own whether to render (e.g. a `VeltCommentDialog` shows only when its annotation is "selected"/open). The **`defaultCondition`** prop lets you **bypass that internal gate** and force the component to render regardless, so **you** own the show/hide logic from your side:
+
+```tsx
+{/* Render this thread no matter Velt's internal selected/open state: you decide when to mount it */}
+<VeltCommentDialog annotationId={a.annotationId} defaultCondition={false} fullExpanded />
+```
+
+- `defaultCondition={false}` = **skip** the internal condition → the component renders whenever you mount it (you gate it with your own `{show && <…/>}`, routing, tabs, etc.).
+- Omit it = the primitive uses its **own** built-in condition (default behavior).
+
+This is essential for the fetch→loop→render pattern above (you're deliberately rendering a dialog per row, so you don't want each one waiting to be "selected").
+
+<Warning>
+**Wireframes do NOT have this.** A wireframe always renders through Velt's **internal condition**: there is no `defaultCondition` escape hatch. If your design needs to force-show/force-hide a piece on your own logic, that's a reason to use a **primitive**, not a wireframe. (In a wireframe you can only react to Velt's state via `velt-if` on the exposed variables: you can't override whether Velt decides to render the component at all.)
+</Warning>
+
+</Step>
+
+<Step title="Wrap in your UI library">
+
+Because primitives are real components, your design-system components work normally around them:
+
+```tsx
+// MUI, shadcn, Radix, Ant, Chakra, Tailwind: all fine
+<Card className="my-thread-card">
+  <CardHeader title="Discussion" />
+  <CardContent>
+    <VeltCommentDialog annotationId={annotationId} fullExpanded />
+  </CardContent>
+</Card>
+```
+
+Your `<Card>` keeps its own state, click handlers, and styling. Velt renders the dialog inside it. This is exactly what **wireframes cannot do** (their slot markup is cloned, so interactive components inside them go dead: see [`Wireframes`](/ui-customization/layout) and [`Edge cases and limitations`](/ui-customization/edge-cases-and-limitations)).
+
+</Step>
+
+<Step title="Theme with CSS">
+
+Match colors/spacing to your brand via `--velt-*` variables: see [`CSS`](/ui-customization/styling).
+</Step>
+</Steps>
+
+---
+
+## What it can and can't do
+
+| ✅ Primitives can | ❌ Primitives can't |
+|---|---|
+| Render fully working Velt UI | Restructure a **leaf** piece (no children): use that leaf's **wireframe** instead |
+| Restructure layout by composing **sub-component** primitives (custom header, custom thread-card, etc.) | Save you from writing the composition (you fetch/loop/pass props yourself) |
+| Be composed inside your **own UI library**, with your own interactivity/state | None |
+| Be placed **anywhere** in your tree | None |
+| Toggle features via props; be themed with CSS | None |
+
+Primitives **do** give deep layout control (via sub-components). The two reasons to *not* use them: (1) a wireframe already expresses the layout with less work, or (2) you only need to restructure a single **leaf**: do that with the leaf's wireframe.
+
+---
+
+## Notes & deep-dives
+
+### Worked example: a custom dialog header with a custom dropdown (your UI library + Velt items)
+
+A very common need: you build your own comment dialog from primitives, and in the header you want **status / priority / options** dropdowns that use **your own UI-library dropdown** (Radix/MUI/etc.) for the open/close shell, but still drive Velt's real behavior, with **wireframe-styled items**. Here's how the pieces fit.
+
+Velt ships a full **primitive** dropdown family for each (all real React components that carry behavior):
+
+- Status: `VeltCommentDialogStatusDropdown` (props `annotationId`, `onChangeStatus`, `disabled`) → `…Trigger` (`…TriggerName` / `…TriggerIcon` / `…TriggerArrow`) + `…Content` → `…ContentItem` (props `statusObj` / `statusId` / `statusIndex`) → `…ContentItemIcon` / `…ContentItemName`.
+- Priority: `VeltCommentDialogPriorityDropdown…` (same shape; item also has `…ContentItemTick`).
+- Options: `VeltCommentDialogOptionsDropdown` → `…Trigger` + `…Content` → individual action items `…ContentEdit`, `…ContentDelete` (`…DeleteComment` / `…DeleteThread`), `…ContentAssign`, `…ContentMakePrivate` (`…Enable`/`…Disable`), `…ContentNotification` (`…Subscribe`/`…Unsubscribe`), `…ContentMarkAsRead`.
+
+You have three ways to make the dropdown "yours": pick by how much of the shell you want to own:
+
+**Option A: Velt dropdown shell, your item styling (least effort).** Use the primitive dropdown as-is and restyle each item by registering its **wireframe content** (`VeltCommentDialogStatusDropdownContentWireframe` → `.Item` → `.Icon` / `.Name`). You keep Velt's open/close + set-status behavior; items look fully custom.
+
+**Option B: your UI-library dropdown shell + Velt primitive items (the case you asked about).** Render *your* library's dropdown. It can be interactive because primitives are real React; the wireframe cloning limit does **not** apply here. Put your trigger and popover from your library, and inside the popover render Velt's **primitive content items**, which carry the click-to-set behavior. Keep them inside the Velt dropdown container so they get the annotation context, and use `onChangeStatus` to sync your trigger label:
+
+```tsx
+// `statuses` is your status config: the same list you pass to the `customStatus` prop
+//   (see reference/component-config.md → "Custom data")
+<VeltCommentDialogStatusDropdown
+  annotationId={annotationId}
+  onChangeStatus={(e) => setMyLabel(e.status)}   // keep your UI-lib trigger in sync
+>
+  <VeltCommentDialogStatusDropdownTrigger>
+    <MyLibraryDropdownButton>{myLabel}</MyLibraryDropdownButton>   {/* YOUR shell */}
+  </VeltCommentDialogStatusDropdownTrigger>
+
+  <VeltCommentDialogStatusDropdownContent>
+    <MyLibraryMenu>                                                {/* YOUR popover */}
+      {statuses.map((s, i) => (
+        // Velt primitive item = carries the set-status behavior
+        <VeltCommentDialogStatusDropdownContentItem
+          key={s.id} annotationId={annotationId} statusObj={s} statusId={s.id} statusIndex={i}
+        >
+          <VeltCommentDialogStatusDropdownContentItemIcon />
+          <VeltCommentDialogStatusDropdownContentItemName />
+        </VeltCommentDialogStatusDropdownContentItem>
+      ))}
+    </MyLibraryMenu>
+  </VeltCommentDialogStatusDropdownContent>
+</VeltCommentDialogStatusDropdown>
+```
+
+To restyle the **item internals** (icon/name layout), register the item's wireframe (`VeltCommentDialogStatusDropdownContentWireframe.Item`). That is the "primitive items + wireframe to style the items" combo. The same shape works for `Priority` and for the `Options` action items.
+
+**Option C: fully headless dropdown (max control).** Render entirely your own dropdown and set the value with hooks: `useUpdateStatus()`, `useUpdatePriority()`, and the options actions (`useResolveCommentAnnotation`, `useDeleteComment`, `useAssignUser`, …). Read the current value from the annotation. No Velt dropdown component at all. (See [`Headless`](/ui-customization/headless).)
+
+<Tip>
+Rule of thumb: want Velt's behavior with your *looks* → Option A/B; want to own everything → Option C. All three keep Velt's data/sync intact.
+</Tip>
+
+## Checklist
+
+- [ ] Used real components/props (from [`Component catalog`](/ui-customization/reference/component-catalog) + [`Component config`](/ui-customization/reference/component-config)).
+- [ ] Features trimmed with **props**, not `display:none`.
+- [ ] `shadowDom={false}` if styling.
+- [ ] Your UI-library wrappers go *around* the primitive (not custom interactivity *inside* a wireframe).

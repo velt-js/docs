@@ -1,0 +1,85 @@
+---
+title: "Overview: How Velt customization works"
+sidebarTitle: "How it works"
+description: "Understand how Velt customization layers work together and when to use CSS, wireframes, primitives, or headless hooks."
+---
+
+Read this once. It gives you the mental model that makes everything else obvious.
+
+---
+
+## 1. What Velt is, in one sentence
+
+Velt is a set of **collaboration features** that you drop into your app: comments, a comments sidebar, notifications, reactions, presence, live cursors, huddles, and recordings. Velt handles the hard parts, including storing comments, real-time sync between users, mentions, permissions, and threading. You decide how it **looks**.
+
+## 2. The mental model: behavior vs. presentation
+
+> **Velt owns behavior + data + real-time sync. You own presentation.**
+
+- **Behavior / data / sync** (Velt's job): saving a comment, syncing it to other users live, resolving a thread, @mentions, reactions, who's online, unread counts. You never re-implement these.
+- **Presentation** (your job, to whatever degree you want): colors, spacing, fonts, layout, which pieces show, the surrounding HTML, icons.
+
+Customization is simply **choosing how much of the presentation you take over.** That's the only decision. The four "layers" below are four answers to it.
+
+## 3. The four layers
+
+Reach for them in this order: **CSS → Wireframes → Primitives → Headless**: escalating only when the cheaper layer can't express your design.
+
+```
+   less work / Velt does more                              more work / you do more
+   ───────────────────────────────────────────────────────────────────────────────▶
+        CSS            Wireframes            Primitives             Headless
+   (recolor it)    (your layout,         (you compose the        (you build the
+                    Velt wires the        building blocks:         entire UI from
+                    data & behavior)      loop, conditionals,      hooks)
+                                          props: + any UI lib)
+```
+
+> **Why wireframes are *less* effort than primitives:** with wireframes, Velt does the heavy lifting: it fetches the data, loops the threads/comments, and wires each slot's behavior; you just supply layout markup. With primitives, *you* write that React yourself: fetch annotations, `.map()` them, pass `annotation-id` into each dialog, get the comments array, loop it, pass each `comment` into a thread card, handle conditional show/hide. More work, but in exchange you get full control and your own UI library.
+
+| Layer | You provide | Velt provides | Use when |
+|---|---|---|---|
+| **CSS** | Colors, spacing, fonts (CSS variables + class overrides with `!important`) | The whole UI, structure, and behavior | The design is Velt's default look with different colors/spacing/typography. **Always available, layered on every other approach.** |
+| **Wireframes** | The **HTML layout** for each slot (header, thread card, composer…) | The behavior **and the data/looping** wired into each named slot you fill | The design changes the **structure/layout** of Velt's UI but the features stay the same, and you don't need your own interactive components inside it. **The default for structural customization.** |
+| **Primitives** | The composition yourself: fetch data, loop, conditionals, pass props; arrange the building-block components (and their sub-components) anywhere; optionally wrap in your UI library | Ready-made building-block components (`VeltCommentDialog`, `VeltComments`, and a sub-component for nearly every child) with default design + full behavior | You need **full control**, your **own UI component library**, your **own interactivity**, to place Velt pieces **anywhere** in your tree, or to customize a piece more deeply than its wireframe allows. |
+| **Headless** | **The entire UI** | Data + actions through React hooks (`useCommentAnnotations`, `useAddComment`, …) | Last resort: the design is so custom (or so tied to your own components, or on a surface Velt can't draw) that nothing above fits. |
+
+Detailed walkthroughs: [`CSS`](/ui-customization/styling) · [`Wireframes`](/ui-customization/layout) · [`Primitives`](/ui-customization/primitives) · [`Headless`](/ui-customization/headless).
+
+## 4. You can mix them: per feature
+
+The layers are **not** an app-wide setting. You choose **per feature/surface, and you can even combine them on the same surface:**
+
+- Wireframe the **comment dialog**, but use the **sidebar** as a plain primitive.
+- Drop in a `VeltCommentDialog` **primitive** *and* wireframe parts of that same dialog: totally fine.
+- Customize a **leaf** piece (a deepest component with no sub-slots) with **that leaf's wireframe**, while building the rest with primitives.
+- Use primitives everywhere, themed with **CSS**.
+- Wireframe the visible UI, and use a **headless hook** to show an unread-count badge in your own header.
+
+The key rule for mixing: **use one `<VeltWireframe>` registry in your app** (it can contain many feature wireframes). Multiple registries are technically possible but merge into one global map (first-with-content-wins), which is order-dependent and conflict-prone, so keep it to one. Full guidance: [`Combining approaches`](/ui-customization/combining-approaches).
+
+## 5. The one thing primitives can do that wireframes can't: live UI-library components
+
+This is the most important non-obvious fact in the whole guide.
+
+- **Primitives are real components.** `VeltCommentDialog` is a normal React component that renders a `<velt-…>` element. You can wrap it in a MUI `<Dialog>`, a shadcn `<Card>`, anything, and your library's components keep working normally next to it.
+- **Wireframes are cloned markup, not live components.** When you put HTML inside a wireframe slot, Velt **copies that markup** into its own render tree. Any interactivity you attached (a React `onClick`, `useState`, a stateful library component) **does not run** in the copy. Inside a wireframe, *behavior comes only from Velt's own slot components* (e.g. the resolve button, the composer input); your markup is just the visual shell, and CSS classes are fine.
+
+(See [`Edge cases and limitations`](/ui-customization/edge-cases-and-limitations) for why this happens.)
+
+**Consequence:** if your design relies on your own interactive component library *inside* the comment UI, that points you toward **primitives** or **headless**, not wireframes.
+
+**Also note: primitives give deep layout control too.** Velt ships a sub-component primitive for nearly every child (e.g. a header has sub-components you can rearrange to build a custom header layout). So "primitives = no layout control" is false: you can restructure as deeply as the component tree goes. The **one limit**: *leaf* primitives (the deepest pieces, with no children) can't be restructured as primitives: to customize a leaf, use **that leaf's wireframe** (you can do this even inside an otherwise-primitive build). Wireframes and primitives are complementary, not exclusive.
+
+## 6. Shadow DOM (why your CSS sometimes "doesn't work")
+
+By default, Velt can render its UI inside a **shadow DOM**: an isolated bubble that your global stylesheets cannot reach. This is great for not clashing with your app, but it means:
+
+- ✅ **CSS variables** (`--velt-*`) still pass through the shadow boundary: theming works.
+- ❌ **Plain CSS selectors** from your app (e.g. `.my-app velt-comment-dialog { … }`) **cannot** style inside the shadow DOM.
+
+**The rule:** **variable-only theming** (just overriding `--velt-*`) works **with or without** shadow DOM. But **selector-based CSS** (class/element selectors) and **styled wireframes** need **`shadowDom={false}`** to reach inside. When in doubt, or if any styling "does nothing": set `shadowDom={false}`. Details in [`Setup`](/ui-customization/setup) and [`CSS`](/ui-customization/styling).
+
+## 7. Where to go next
+
+Start with the **[`Decision tree`](/ui-customization/decision-tree)** to pick the right layer or layer mix for your specific design. This is the spine of the guide; start every new design there.

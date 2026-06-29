@@ -1,0 +1,45 @@
+---
+title: "Customization manifest"
+sidebarTitle: "Manifest"
+description: "Reference the customization manifest concepts for typed slots, required inputs, and generated structure."
+---
+
+<Note>
+This page documents the manifest concepts used throughout the UI customization workflow. Use it with the reference pages to map design elements to real Velt components, slots, props, variables, and CSS classes.
+</Note>
+
+The manifest is the structured map for *how a Velt component is customized*: design element → real component → typed slot → prop or variant → icon or text slot. When working from these docs, use the reference pages linked below and do not re-derive identifiers from prose.
+
+## What it carries (per component)
+
+- `rootWireframe` / `reactImport`: the wireframe to register (one `<VeltWireframe>` per app, R1).
+- `onComponent`: the host component the **host props** go on (e.g. `VeltComments`, `VeltCommentsSidebar`).
+- `provenance`: the reference source the entry is derived from. Keeping provenance visible makes structural guidance design-agnostic and traceable.
+- `hostProps[]`: a catalog shaped like `{ prop, producesStructure, designCue, required? }` with no pre-set `value`. These come first, but each is design-gated (R24): set a prop only when you recognize its `designCue` in the design. Structure that a justified prop produces, such as `collapsedComments` + `collapsedRepliesPreview` producing the `MoreReply` "Show N replies" control, must never be attempted in CSS. Set the prop.
+- `paddingResets[]`: known-wrapper starting hints for Velt-default wrappers (`velt-sidebar-container`, `app-comment-sidebar-list`, the page-mode-composer dialog, and similar) whose padding can compound with your `.hw-*` sections. The authoritative mechanism is live **layer reconciliation**: apply the design's box-painting to the box-matched *owner* once and reset only conflicting box-painting properties on co-box wrappers. Never reset functional CSS.
+- `layout`: per slot group, the structure: `rows` (which slots share a row, e.g. ThreadCard header = `[Avatar | Name·Time·Edited·Unread | actions]`), `stack` (vertical order, e.g. header → Message → Reply), `relations` (`name left-of time`, `message below header`, `actions top-right-of card`), and `states` (e.g. `actions: hover-reveal`). Use these relationships when composing and verifying layout.
+- `contract`: the **mount-map functional contract** (R25), derived from slots flagged `behavioral`: `parts[]` of `{ part, reactPath, selectorHint (the velt-* tag), requiredAncestorHint, singleton }`. Verify that each required Velt primitive still exists in the rendered DOM, inside its required ancestor, with the expected cardinality and no inert custom control replacing SDK behavior.
+- `slots[]`: each with:
+  - `reactPath`: the dotted accessor used in implementation code (e.g. `VeltCommentDialogWireframe.ThreadCard.Avatar`).
+  - `tag`: the registered `velt-*-wireframe` element (validated against the [770-slot appendix](/ui-customization/reference/wireframe-components); a tag not in the appendix doesn't exist: [source-of-truth invariant](/ui-customization/reference/source-of-truth-invariant)).
+  - `slotType`: `icon · text · container · action · input · menu-item`.
+  - **`role`**: the styling role (orthogonal to `slotType`): `container` (structural wrapper: never style as a surface) · `trigger` (the control that opens a popup: style as its own small element, e.g. a 24px icon) · `content` (the popup/menu surface: apply the floating chrome HERE) · `item` (a leaf). **Styling a menu's `container`/`trigger` instead of its `content` is the M2b bug** (the filter rendered as a 210px box). (R23)
+  - **`mustSupply`**: when `true`, the design's own content **must be supplied** into this slot (an icon's exported SVG, a label's exact text, explicit menu items). **Leaving a `mustSupply` slot empty renders Velt's default. That is a build error, not "close enough."** This is the rule that catches missed filter icons, filter labels, options menu items, and reply/resolve icons.
+  - `defaultContent`: `velt` (Velt renders something if you don't supply) vs `none`.
+  - `cssClasses[]`: the real classes to override (curated; Velt's class names drop the component prefix the tags carry, so confirm on the live node with `shadowDom={false}`).
+  - `mentionScope`: (message slots) the exact selector mention CSS must be scoped to (`.velt-thread-card--message .velt-mention`). **Never** a bare `.velt-mention`/`.velt-mention--name` that also tints the author name (M3). (R23)
+  - `dataField`: the data the slot reads (e.g. `Comment.from.name`), from [`Data models`](/ui-customization/reference/data-models).
+  - `slotProps`: input props the slot accepts (e.g. `Composer.ActionButton type=submit`), from the [slots-that-take-props table](/ui-customization/reference/wireframe-components).
+- `recognition[]`: design-intent cues → component, used during recognition.
+
+## How to keep it honest
+
+Treat the manifest as a structured companion to the reference pages, not a place to invent identifiers. Every slot, prop, class, hook, event, and data field must resolve back to its owning reference page. When an entry describes structure or behavior, verify it against the live rendered DOM before relying on it for a customization.
+
+Before shipping a customization, use the manifest concepts to confirm:
+
+- Every slot tag exists in [`Wireframe components`](/ui-customization/reference/wireframe-components).
+- Every prop or feature flag exists in [`Props`](/ui-customization/reference/props), [`Component config`](/ui-customization/reference/component-config), or [`Feature flags`](/ui-customization/reference/feature-flags).
+- Every class exists in [`CSS classes`](/ui-customization/reference/css-classes), then inspect where it lands in the live DOM.
+- Every `mustSupply` slot touched by the design has the design's own content.
+- Every behavioral part still mounts as the correct Velt primitive, in the correct ancestor, with no inert replacement control.

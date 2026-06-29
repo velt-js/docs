@@ -1,0 +1,196 @@
+---
+title: "Recorder, Video & Huddle"
+sidebarTitle: "Recorder & huddle"
+description: "Reference runtime behavior for recorder, video, and huddle components."
+---
+
+This file owns the layer above [`Props`](/ui-customization/reference/props) for the **async-media + live-collaboration** family: the recorder (`VeltRecorderControlPanel`, `VeltRecorderPlayer`, and the `VeltRecorderTool` / `VeltRecorderNotes` siblings), the media surfaces (`VeltVideoPlayer`, `VeltVideoEditor`), and the live surfaces (`VeltHuddle`, `VeltUserInviteTool`). For each component below you get **what every prop does at runtime, its default, and how it combines with the others**, plus the default behaviors you get with no prop at all. For the cross-component default table and prop-interaction matrix that spans the whole SDK, see [`Behaviors`](/ui-customization/reference/behaviors).
+
+These components share two recurring mechanics, documented once here:
+
+- **Boolean → string attribute conversion.** The React wrappers convert a boolean prop to the string `'true'` / `'false'` **only when the value is literally `true` or `false`** (`[true, false].includes(value) ? (value ? 'true' : 'false') : undefined`); any other value (including `undefined`) leaves the attribute **unset**, so the element keeps its own default. The underlying element setters then `JSON.parse` the string back to a boolean. Net effect: omitting a boolean prop = "use the element/service default", not "false".
+- **Feature-service backing.** Recorder and huddle boolean props don't hold local state: they flip a process-wide `BehaviorSubject` on a feature service (e.g. `enableRecordingCountdown()` / `disableRecordingCountdown()`). That subject carries the **real default**, and because it is shared, the **last component to set it wins** if you mount two control panels with different values. Those service defaults are the "Default" column below.
+
+---
+
+## Per-prop behavior (exhaustive)
+
+The exhaustive per-prop behavior for the async-media + live-collaboration family is organized **per component** below: each `## Velt…` subsection carries that component's full prop table (default + runtime behavior + interactions) and its own `### Default behaviors (no prop needed)` block (sibling tools are folded into their parent's subsection). Every prop in [`Props`](/ui-customization/reference/props) for these components is covered; see [Provable coverage](#provable-coverage).
+
+## VeltRecorderControlPanel
+
+The control panel is the **recording UI**: it drives device selection, the countdown, the live recording session, pause/resume, and the post-recording hand-off (preview, editor, transcription). Its layout is chosen by `mode`; every other prop toggles a recorder feature-service flag.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `mode` | `'floating'` | Layout of the panel. `'floating'` renders the expandable floating control panel; `'thread'` renders the inline/thread-attached layout used inside a comment thread. | Enum `RecorderLayoutMode` = `'floating'` \| `'thread'`. Passed straight through to the internal panel; affects positioning and which sub-controls show. Not a boolean: no string-conversion dance. |
+| `panelId` | (none) | Identifies this panel instance so a `VeltRecorderTool` (and the recorded-data callback) can target it. | Bind a tool to this panel by passing the same `panelId` on both. No validation if omitted: a single unnamed panel still works. |
+| `onRecordedData` | (no handler) | Fires when a recording **completes**, receiving the `RecordedData` payload (blob + metadata). | Wired as a custom DOM event listener; the callback ref is refreshed on every render so the latest closure is used. No callback → recording still completes, just silently. |
+| `recordingCountdown` | `true` | Shows the pre-recording countdown before capture starts. | Backed by `recordingCountdownEnabled$` (default **`true`**), so the countdown is **on out of the box**; pass `false` to suppress it. Shared service flag (last setter wins across panels). |
+| `recordingTranscription` | `true` | Enables speech-to-text transcription of the recording. | Backed by `recordingTranscriptionEnabled$` (default **`true`**) on the recorder-annotation service. Transcription is **on by default**. The player's `summary` uses the transcript; disabling transcription removes the source for the summary. |
+| `videoEditor` | `false` | Enables the post-recording video editor (trim / zoom / split) for recordings made from this panel. | Backed by `videoEditor$` (default **`false`**). Gate for `autoOpenVideoEditor`, `retakeOnVideoEditor`, and `videoEditorTimelinePreview`: those have no effect unless the editor is enabled. |
+| `settingsEmbedded` | `false` | Embeds the device/quality settings **inside** the panel instead of a separate modal. | Backed by `settingsEmbedded$` (default **`false`** → settings open as a modal). Pure layout choice. |
+| `autoOpenVideoEditor` | `false` | Opens the video editor automatically the moment recording stops. | Backed by `autoOpenVideoEditor$` (default **`false`**). Only meaningful when `videoEditor` is on; otherwise there is no editor to open. |
+| `playVideoInFullScreen` | (unset) | Forces preview playback to expand to full screen. | Backed by `playVideoInFullScreen$` whose default is **`undefined`** (not `false`): i.e. unmanaged, playback stays windowed unless you opt in. |
+| `retakeOnVideoEditor` | `false` | Adds a **Retake** button in the editor to discard the take and re-record. | Backed by `retakeOnVideoEditor$` (default **`false`**). Only renders when `videoEditor` is on. |
+| `pictureInPicture` | `false` | Enables a Picture-in-Picture floating window so the user can keep working while recording. | Backed by `pictureInPicture$` on the **PiP service** (default **`false`**), separate from the recorder service. Browser-gated (requires PiP support). |
+| `maxLength` | (no limit, `null`) | Caps recording duration in **seconds**; capture stops automatically at the limit. | Backed by `maxRecordingLength` (default **`null`** = unlimited). Parsed with `parseInt(value, 10)`; a value ≤ 0 is ignored, leaving it unlimited. |
+| `videoEditorTimelinePreview` | `false` | Shows thumbnail previews along the editor's timeline scrubber. | Backed by `videoEditorTimelinePreview$` (default **`false`**). Only visible when `videoEditor` is on. |
+
+### Default behaviors (no prop needed)
+
+- **Layout:** floating control panel (`mode` defaults to `'floating'`).
+- **Countdown + transcription on:** the pre-record countdown and speech-to-text transcription are **both enabled by default** (their service subjects default `true`). This is the one place the recorder defaults are "on, opt out" rather than "off, opt in".
+- **Editor off:** no video editor, no auto-open, no retake, no timeline preview, no PiP: all default `false`. Settings open as a modal (`settingsEmbedded` false).
+- **No duration cap:** recording continues until the user stops it (`maxRecordingLength` is `null`).
+- **No completion callback:** with no `onRecordedData`, the recording completes and is stored, but nothing is handed back to your code.
+
+---
+
+## VeltRecorderPlayer
+
+The player renders a **finished** recording (the one identified by `recorderId`): preview thumbnail, playback, transcription/summary, optional edit + delete. Several of its booleans share the same recorder feature-service flags as the control panel.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `recorderId` | (none) | The recording to display; the player resolves that annotation's media, transcript, and summary. | Effectively required: with no `recorderId` (and no scope) the player renders an empty container and logs that `recorderId` is required. Change it to swap recordings. |
+| `onDelete` | (no handler) | Fires when the user clicks the player's **delete** control; receives `{ id }` where `id` is the `recorderId`. | Wired as a DOM event listener (ref refreshed each render). The callback owns the actual deletion: without it the delete control fires the event but nothing is removed server-side. |
+| `showSummary` | `'true'` | **@deprecated alias feeding the summary gate**: kept for back-compat alongside `summary`. | The summary renders only when **both** `showSummary` **and** `summary` resolve truthy (`showSummary?.toLowerCase() === 'true' && summary?.toLowerCase() === 'true'`): an **AND**, not a last-writer alias. Setting `showSummary={false}` hides the summary even if `summary` is true. Prefer `summary`. |
+| `summary` | `'true'` | Shows the AI-generated recording summary (condensed transcript). | Defaults to `'true'`, so the summary shows out of the box, but only if the recording has a transcript (governed by `recordingTranscription` at record time). Gated by the AND with `showSummary` above. |
+| `shadowDom` | `true` | Style-isolates the player in shadow DOM. `false` exposes it to selector CSS. | Boolean→string converted by the wrapper. Default **`true`**: set `false` to style with plain CSS classes. |
+| `videoEditor` | (unset) | Enables the **Edit** affordance on the player. | Stored in a `signal<boolean \| undefined>(undefined)` on the player; when unset the player inherits the recorder-service `videoEditor$` state (default `false`). Edit is off unless turned on here or on the panel. |
+| `playVideoInFullScreen` | (unset) | Auto-fullscreen on play / preview-click. | Same `signal(undefined)` pattern: unmanaged by default, so playback is windowed. |
+| `retakeOnVideoEditor` | `false` | Adds the **Retake** button in the editor opened from this player. | Backed by the recorder-service `retakeOnVideoEditor$` (default `false`). Only meaningful when the editor (`videoEditor`) is enabled. |
+| `playbackOnPreviewClick` | `true` | Clicking the preview thumbnail starts playback inline. | Backed by `playbackOnPreviewClick$` (default **`true`**): preview is clickable-to-play out of the box; pass `false` for a static preview. |
+
+### Default behaviors (no prop needed)
+
+- **Needs a `recorderId`:** with none, the player is an empty shell and logs that the id is required.
+- **Summary shown:** both summary gates default `'true'`, so a summary renders: **provided the recording has a transcript** (which requires `recordingTranscription` to have been on at record time). No transcript → nothing to summarize.
+- **Shadow-DOM isolated** (`shadowDom` true) and **click-to-play preview on** (`playbackOnPreviewClick` true).
+- **Editor / retake / fullscreen off** unless enabled (the editor follows the shared recorder-service flag, default off).
+- **Delete control present but inert** until you supply `onDelete`.
+
+---
+
+### VeltRecorderTool & VeltRecorderNotes (siblings)
+
+- **`VeltRecorderTool`**: the button that *starts* a recording, bound to a panel via `panelId`. Its `recordingCountdown`, `retakeOnVideoEditor`, `pictureInPicture`, and `maxLength` flip the **same recorder/PiP service flags** documented above (same defaults). `shadowDom` defaults `true`; `darkMode` defaults off (the string `"false"` is treated as off). `variant` picks the named tool wireframe (`...-wireframe---<variant>`, falling back to base). `buttonLabel` sets the button text. **`type`** (`RecorderMode`, default **`'video'`**) selects the capture mode: `'audio'` / `'video'` / `'screen'` start that mode directly; `'all'` shows a dropdown of all three; a **comma-separated** string (e.g. `'audio, video'`) is split into a `types` array and rendered as a dropdown limited to those options (internally the type is set to `'all'`).
+- **`VeltRecorderNotes`**: a notes-oriented recorder surface; its `shadowDom`, `videoEditor`, `recordingCountdown`, `recordingTranscription`, `playVideoInFullScreen`, and `videoEditorTimelinePreview` props behave identically to the control-panel props of the same name (same shared service flags and defaults).
+
+---
+
+## VeltVideoPlayer
+
+A collaborative video player for an **arbitrary `src`** (not a Velt recording): playback controls plus an optional timestamped comment tool and an optional cross-collaborator playback sync. Comment markers render on the timeline (`VeltCommentPlayerTimeline`).
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `src` | (**required**) | The video URL; set directly on the underlying `<video>` element. | Required to play anything; with no `src` the controls render but no video loads. No URL validation. |
+| `darkMode` | `false` | Dark theme on the player **and** the comment container (it also calls `setCommentContainerDarkMode`). | The element treats attribute `''` or `'true'` as **on** and everything else as off, but the React wrapper only emits the attribute for literal `true`/`false`, so omitting it = light. Affects both player and comments. |
+| `sync` | (unset → off) | Synchronizes playback across collaborators: pause/play and seek are broadcast (via the realtime DB) so everyone's playhead moves together. | Default `undefined` (off). Sync fires on user interaction and on comment/reaction clicks (a `'pause'` then `'timeupdate'` broadcast), not frame-by-frame. Requires the realtime connection. |
+| `commentTool` | `true` | Shows the in-player comment button; clicking it enters add-comment mode (pauses the video) so the user can attach a comment at the current timestamp. | **On by default.** Comments anchor to timestamps and appear as pins on the timeline. While add-comment mode is active the control panel is hidden. Pass `false` to make the player view-only. |
+| `shadowDom` | `true` | Style-isolates the comment **timeline** sub-component in shadow DOM. | Boolean→string converted; the element `JSON.parse`s it and defaults `true` on parse failure. Scopes the timeline/tooltip styling, not the whole player chrome. |
+
+### Default behaviors (no prop needed)
+
+- **Plays the `src`** with full controls (play/pause, scrub, volume, speed, fullscreen) in **light** theme.
+- **Comment tool on:** users can drop timestamped comments by default; markers show on the timeline. Sync is **off**: playback is local to each viewer.
+- **Timeline shadow-DOM isolated** (`shadowDom` true).
+
+---
+
+## VeltVideoEditor
+
+A standalone/embedded editor for a recording supplied as a `blob` or `url` (or resolved from an annotation): trim, zoom (scale), split/cut, optional retake, then **Apply** to write the edit back.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `darkMode` | `false` | Dark theme for the editor UI (timeline, buttons, sliders). | The wrapper emits the attribute **only for literal `true`** (omits it for `false`/undefined), so the editor stays light unless you pass `true`. |
+| `variant` | (none → base wireframe) | Picks a named editor wireframe (`velt-video-editor-player-wireframe---<variant>`); if registered it replaces the default template, else the base template is used. | Same variant-as-scoping-key rule as other wireframe-backed components. |
+| `blob` | (none) | Supplies the source recording as a `Blob`; converted to an object URL (`URL.createObjectURL`) and used as the video source. | Assigned imperatively to the element (not as an attribute). **In standalone mode `blob` wins over `url`**: the preview binds `blobUrl` when present and only falls back to `url` when there is no `blobUrl`. |
+| `url` | (none) | Supplies the source recording as a URL string. | Used as the standalone source **only when no `blob`/`blobUrl` is set**. In embed mode the annotation's attachment URL is used instead (see `annotationId`). |
+| `annotationId` | (none) | Binds the editor to an existing annotation; switches the editor `type` to `'embed'` and edits that annotation's attached recording. | When set, the editor is `'embed'` (annotation-attached) rather than `'standalone'`. It resolves the recording from the annotation's attachment, so `blob`/`url` are not needed. |
+| `recorderId` | (none) | Binds the editor to a recorder instance; also drives `'embed'` mode and acts as the fallback id. | The internal player binds `annotationId || recorderId`, so `annotationId` takes precedence when both are set. Either one flips the editor to `'embed'`. Retake availability follows the recorder's retake state. |
+
+### Default behaviors (no prop needed)
+
+- **Needs a source:** a standalone editor renders nothing useful without `blob` or `url`; an embedded editor needs `annotationId`/`recorderId`.
+- **Mode:** `'standalone'` unless `annotationId`/`recorderId` is set (then `'embed'`).
+- **Editing tools:** trim and zoom (scale) are available, split/cut is enabled, **Apply** and **Delete** controls render. Default zoom factor is 1.5×, max 3×, with preset steps `[1, 1.25, 1.5, 1.75, 2, 2.5, 3]`. This reference documents the discrete tools, but not the exact default-active section composition in the empty toolbar; the section arrays start empty and are populated at runtime.
+- **Retake hidden** unless the bound recorder enables it (`showRetakeButton` defaults `false`).
+- **Light theme** and **base wireframe** (no `variant`).
+
+---
+
+## VeltHuddle
+
+The live audio/video huddle surface: renders participant streams and screen share, with optional in-huddle chat and follow ("flock") mode. Huddle booleans flip shared huddle-service flags.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `chat` | `true` | Enables the in-huddle messages panel so participants can send text during the call. | Backed by `chatEnabled$` (default **`true`**): chat is **on out of the box**; pass `false` to disable it. Boolean→string converted, `JSON.parse`d by the element. |
+| `flockModeOnAvatarClick` | `false` | When on, clicking another participant's avatar enters **flock mode** (follow that user's view/screen). | Backed by `flockModeOnAvatarClickEnabled$` (default **`false`**): off by default, clicking an avatar does nothing special until enabled. |
+| `serverFallback` | `true` | Falls back to a server-relayed connection when peer-to-peer fails. | Backed by `serverFallback$` (default **`true`**): fallback is **enabled by default**; pass `false` to force P2P-only. |
+
+### Default behaviors (no prop needed)
+
+- **Chat on, server fallback on, flock off**: note the asymmetry: `chat` and `serverFallback` default **`true`**, only `flockModeOnAvatarClick` defaults `false`. (This corrects the intuitive "all flags off" assumption.)
+- **No active media until joined:** the huddle renders participant slots, but audio/video transmission begins only after a user joins via the huddle tool. Screen share renders when active.
+- **Re-join on refresh:** the tool re-joins a prior session automatically if the user was in a huddle before reload.
+
+### VeltHuddleTool (sibling)
+
+The button that starts/joins a huddle. **`type`** (default **`'audio'`**; allowed `'audio'` \| `'video'` \| `'presentation'` \| `'all'`) sets what the *first* click starts: `'audio'` audio-only, `'video'` audio+video, `'presentation'` audio+screenshare, `'all'` everything; if a huddle is already running, clicking **joins the existing huddle with its type** instead. Screen-share modes require `navigator.mediaDevices.getDisplayMedia` support. **`darkMode`** (default off; `"false"` parses to off) toggles the dark theme by adding/removing the `dark` attribute.
+
+---
+
+## VeltUserInviteTool
+
+The button + dialog for inviting/sharing access to a document: an email autocomplete input, an optional role (access-control) dropdown, an optional list of people already on the document, and a copy-link affordance.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `type` | `'share'` | Selects the tool's mode and default presentation. `'share'` shows the share icon and a "Share project"-style dialog including the document users list; `'invite'` shows the invite icon and an invite-focused dialog. | Plain string, passed through (no boolean conversion). Drives both the button icon and the dialog defaults. |
+| `source` | (none) | Tags the invite action with a source identifier (analytics/metadata). | Passed into the dialog data; not rendered visibly. Purely informational. |
+| `title` | (none → dialog default) | Overrides the dialog title. | When omitted, the dialog falls back to its own default title (e.g. `'Share project'`): the default lives in the dialog, not the tool, so the tool prop being unset still yields a titled dialog. |
+| `placeholder` | (none → dialog default) | Overrides the email input placeholder. | When omitted, the dialog default `'Add email address'` is used. Shown inside the autocomplete panel. |
+| `inviteUrl` | (none → current page) | The URL shared by the copy-link action. | When omitted, the tool copies `window.location.href` (the current page). Pass to share a specific URL. |
+| `accessControlDropdown` | `true` | Shows the role-selection dropdown (e.g. viewer/commenter/editor) in the dialog. | Plain `@Input` defaulting **`true`**: visible by default. The wrapper passes the **raw boolean** (not stringified) for this prop; the element setter accepts both boolean and string, so either works. The deprecated `hideAccessControlDropdown` is OR-combined with `!accessControlDropdown` to decide hiding: i.e. the dropdown hides if **either** `hideAccessControlDropdown` is true **or** `accessControlDropdown` is false. |
+| `documentUserAccessList` | `true` | Shows the "people on this document" list (existing users + their roles) in the dialog. | Setter default **`true`**: list shows by default, but only when the document actually has users (`documentUserAccessList && documentUsers?.length`). Like `accessControlDropdown`, the wrapper passes a raw boolean; the setter parses both forms. |
+| `darkMode` | `false` | Dark theme for the button and dialog. | Boolean→string converted by the wrapper; `"false"` parses to off via the themed-component base (adds/removes the `dark` attribute). |
+
+### Default behaviors (no prop needed)
+
+- **`type` is `'share'`**: share icon, share-style dialog.
+- **Both dialog sections on:** the access-control dropdown **and** the document-user list both default `true`, so the dialog shows role selection and existing members (the member list still requires the document to have users).
+- **Dialog text defaults** come from the dialog component (`'Share project'` title, `'Add email address'` placeholder) when the props are omitted.
+- **Copy-link uses the current page** (`window.location.href`) when `inviteUrl` is unset.
+- **Light theme**, and the tool is **enabled** (`disabled` defaults `false`).
+
+---
+
+## Default behaviors (no prop needed)
+
+Each component's zero-prop baseline is documented in its `### Default behaviors (no prop needed)` block above. In brief: the **control panel** opens as a floating layout with the pre-record countdown and transcription **on** (the one "on, opt out" corner) and the editor/auto-open/retake/timeline-preview/PiP all off, no duration cap, no completion callback; the **player** needs a `recorderId`, shows the summary when a transcript exists, is click-to-play and shadow-DOM isolated, editor/retake/fullscreen off; **`VeltVideoPlayer`** plays its `src` with the comment tool on and sync off; **`VeltVideoEditor`** is `'standalone'` (needs `blob`/`url`) unless an `annotationId`/`recorderId` flips it to `'embed'`, light theme, retake hidden unless the recorder enables it; **`VeltHuddle`** defaults chat **on** and server-fallback **on** with flock off; **`VeltUserInviteTool`** defaults `type: 'share'` with both the access-control dropdown and document-user list on, copy-link using the current page.
+
+## Prop-interaction matrix
+
+No separate multi-prop matrix for this group: pairwise effects live in each prop's **Interactions & gotchas** column above. The cross-prop rules to restate: recorder/huddle boolean props flip **shared feature-service `BehaviorSubject`s**, so if two panels/tools set the same flag the **last setter wins**; `videoEditor` gates `autoOpenVideoEditor` / `retakeOnVideoEditor` / `videoEditorTimelinePreview` (they no-op without it); on the player, the summary renders only when **`showSummary` AND `summary`** are both truthy; `VeltRecorderTool`/`VeltRecorderNotes` share the same service flags (and defaults) as the control panel; and a recording's summary depends on `recordingTranscription` having been on at record time.
+
+## Positioning & composition
+
+These surfaces are **statically placed**: you mount the players, editor, huddle, and invite/recorder tools in your own layout and control their position. The two anchored notes: the recorder control panel's `mode: 'floating'` renders an **expandable floating control panel** (Velt-managed chrome, still mounted in your tree), and reactions/comments produced on a video timeline are anchored to **media-timeline position** rather than the page. See the anchored-vs-static classification in [`Component definitions`](/ui-customization/reference/component-definitions) and [`Behaviors` → Positioning ownership](/ui-customization/reference/behaviors#positioning-ownership-anchored-surfaces).
+
+## Provable coverage
+
+Counted against [`Props`](/ui-customization/reference/props) `### VeltRecorderControlPanel` / `### VeltRecorderPlayer` / `### VeltVideoPlayer` / `### VeltVideoEditor` / `### VeltHuddle` / `### VeltUserInviteTool`:
+
+- **VeltRecorderControlPanel: 13/13:** mode, panelId, onRecordedData, recordingCountdown, recordingTranscription, videoEditor, settingsEmbedded, autoOpenVideoEditor, playVideoInFullScreen, retakeOnVideoEditor, pictureInPicture, maxLength, videoEditorTimelinePreview. (props.md lists 13 rows; "~14" estimate included.)
+- **VeltRecorderPlayer: 9/9:** recorderId, onDelete, showSummary (deprecated, counted inline), summary, shadowDom, videoEditor, playVideoInFullScreen, retakeOnVideoEditor, playbackOnPreviewClick. (props.md lists 9 rows; "~10" estimate included.) Plus the `VeltRecorderTool` / `VeltRecorderNotes` sibling props from the props.md note, covered in the sibling subsection.
+- **VeltVideoPlayer: 5/5:** src, darkMode, sync, commentTool, shadowDom. (props.md lists 5 rows; "~6" estimate included.)
+- **VeltVideoEditor: 6/6:** darkMode, variant, blob, url, annotationId, recorderId. (props.md lists 6 rows; "~7" estimate included.)
+- **VeltHuddle: 3/3:** chat, flockModeOnAvatarClick, serverFallback. (props.md lists 3 rows; "~4" estimate included.) Plus `VeltHuddleTool` (`type`, `darkMode`) in the sibling subsection.
+- **VeltUserInviteTool: 8/8:** type, source, title, placeholder, inviteUrl, accessControlDropdown, documentUserAccessList, darkMode (the deprecated `hideAccessControlDropdown` is documented inline under `accessControlDropdown`). (props.md lists 8 rows; "~9" estimate included.)
+
+**Coverage note:** the exact set of `VeltVideoEditor` toolbar sections enabled in the *empty* default toolbar is not documented here; the section arrays initialize empty and are populated at runtime. The discrete tools: trim, zoom/scale, split, apply, delete: are covered.

@@ -1,0 +1,133 @@
+---
+title: "Pins, Bubbles & Tools"
+sidebarTitle: "Pins & tools"
+description: "Reference runtime behavior for comment pins, bubbles, and tool surfaces."
+---
+
+`VeltCommentPin`, `VeltCommentBubble`, and `VeltCommentTool` are the three **anchored / Velt-positioned** comment surfaces: they drop where the user clicks, attach to a target element, or sit inside Velt's own comment host, and **Velt owns their placement**. This file owns the layer above [`Props`](/ui-customization/reference/props) for these three: **what every prop does at runtime, its default, and how it combines with the others**, plus the default click/hover/drag/index behaviors you get with no prop at all.
+
+- **Who positions them:** see [`Behaviors` → Positioning ownership](/ui-customization/reference/behaviors#positioning-ownership-anchored-surfaces). Pins drop where clicked, the dialog anchors to its pin and re-anchors on resize, bubbles attach to their target element: all for free **as long as you stay in wireframes**. Drop to primitives/headless and you take over positioning.
+- **Anchored-vs-static classification:** see [`Component definitions`](/ui-customization/reference/component-definitions). Pins, the pin dialog, and bubbles are anchored; the sidebar, inline comments section, and notifications panel are statically placed.
+
+These three are siblings of the same comment-annotation model: a **tool** starts a comment, a **pin** marks where it landed, a **bubble** is the pin's alternate "chip on an element" rendering. They share the `context` / `contextOptions` / `locationId` / `documentId` / `folderId` scoping props with identical semantics, documented once here per component.
+
+---
+
+## Per-prop behavior (exhaustive)
+
+The exhaustive per-prop behavior for the three anchored comment surfaces is organized **per component** below: each `## Velt…` subsection carries that component's full prop table (default + runtime behavior + interactions) and its own `### Default behaviors (no prop needed)` block. Every prop in [`Props`](/ui-customization/reference/props) for these components is covered; see [Provable coverage](#provable-coverage).
+
+## VeltCommentPin
+
+The pin marks an existing comment annotation's anchor point and opens its dialog. In React, `VeltCommentPin` renders **one** pin for a known annotation (you pass `annotationId`); the auto-managed pins that `VeltComments` drops on click are the same underlying element driven by the host. Pin placement, drag, dialog open/close, and the index/number badge are **default behaviors** (global feature state), not per-instance props: see *Default behaviors* below.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `annotationId` | (none) | The annotation this pin represents. The pin reads that annotation's resolved anchor, comments, author, status, and unread state, and binds its dialog to it. | Required for a standalone `VeltCommentPin`; the host-managed pins set it internally. With no `annotationId` (and no other scope) the pin has no annotation to render. Changing it re-syncs the pin to the new annotation. |
+| `multiThreadAnnotationId` | (none) | Selects one thread **within** a multi-thread pin (several comment threads sharing one anchor). Scopes the dialog to that thread. | Only meaningful when the annotation is a multi-thread pin; ignored otherwise. Pairs with multi-thread dialog primitives. |
+| `variant` | (none → base wireframe) | Picks the named pin **wireframe variant** to render. Resolves the registered wireframe `velt-comment-pin-wireframe---<variant>`; if none is registered for that name, the pin falls back to the base wireframe. | The variant string is also the scoping key: a variant only renders content registered under that exact name. Use to render different pin looks in different contexts (see [`Behaviors` → Variant → context scoping](/ui-customization/reference/behaviors#variant--context-scoping)). |
+| `context` | (none) | Free-form key/value object attached to **new** comments created via this pin's flow, and used to scope which annotation the pin resolves. | Stringified to the element attribute internally; pass an object. Combines with `contextOptions` (resolution rules) and the `locationId`/`documentId`/`folderId` scope. Does **not** retro-tag existing comments. |
+| `contextOptions` | (none) | Resolution options governing how `context` is matched when locating/creating the annotation. | Only has effect alongside `context`. |
+| `locationId` | (none) | Scopes the pin to a specific Velt **location** (sub-page / tab / canvas). | Considered only when a `folderId` or `documentId` is also in play; a bare `locationId` does not narrow resolution on its own. |
+| `documentId` | (none) | Scopes the pin to a specific document. The client id you pass is converted to the internal server document id. | Falsy value clears it to `undefined` (not `null`) for hash parity with the tool/bubble. |
+| `folderId` | (none) | Scopes the pin to a folder; the server folder id is derived from it. | Same undefined-on-clear parity as `documentId`. |
+| `defaultCondition` | (unset → pin shows) | Render gate. `true` forces the pin to render; `false` hides it. Passed through as the `default-condition` attribute and consumed by Velt's conditional-rendering layer. | Tri-state: only literal `true`/`false` emit the attribute: any other value leaves it unset (default render). Use to conditionally suppress a pin without unmounting the component. |
+
+### Default behaviors (no prop needed)
+
+- **Pin placement (anchored):** the pin is positioned by the **host** at the annotation's resolved anchor: where the user clicked, or on the target element. The pin element itself takes no `x`/`y`/`position` input. Default pin marker size is 40px (34px when the comment was added on a different device type and the device indicator is on).
+- **Click opens the dialog:** pointer-up on the pin toggles selection. If the pin is **not** selected, the click selects it and opens its anchored dialog; if already selected, it toggles closed. This is `togglePinSelection`, emitted on pointer-up. (Pointer-up on the dialog itself also selects the pin if it wasn't already, so interacting with the dialog keeps it open.)
+- **Drag to reposition:** pins are **draggable by default** (`pinDrag` defaults `true` in global feature state). Dragging sets an `annotationDragging` state and, on drop, re-anchors the annotation. There is no per-pin prop to disable drag on `VeltCommentPin`; it is governed by the global comment feature config.
+- **Hover / bubble-on-pin:** `bubbleOnPin` and `bubbleOnPinHover` (global feature state, both default `false`) control whether a preview bubble shows on the pin permanently or on hover. Off by default: the bare pin shows the avatar marker only.
+- **Index / number badge:** `showCommentIndex` (global, default `false`) toggles a numeric index badge on pins (the `comment-pin-number` / `comment-pin-index` primitives). Off by default, so pins show the author avatar, not a number. Unread, private, ghost, and agent-comment states each swap in their own marker primitive (agent comments render a distinct blue lego-bot marker instead of an avatar).
+- **Shadow DOM:** the pin's own shadow-DOM isolation comes from global `pinShadowDOM` (default `false`), **not** from a per-pin prop: `VeltCommentPin` exposes no `shadowDom` prop. (Confirmed: the pin **marker** defaults `pinShadowDOM: false`, while the pin **dialog** defaults `dialogShadowDom: true`: the two surfaces isolate independently; see [`Behaviors`](/ui-customization/reference/behaviors).)
+
+---
+
+## VeltCommentBubble
+
+The bubble is a chip that attaches to a target element (or an annotation) and, on click, opens that annotation's comment dialog. It is the "comment count on a row/card" surface. Unlike the pin, the bubble **fetches its own annotation** from the scope you give it (`targetElementId` / `annotationId` / context+scope).
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `targetElementId` | (none) | The element id the bubble attaches to; the bubble resolves the annotation(s) bound to that element and anchors to it. | Triggers an annotation fetch on set/change. Primary way to place a bubble on a list row or card. |
+| `targetCommentElementId` | (none) | **Deprecated alias for `targetElementId`.** Setting it writes through to `targetElementId`. | Use `targetElementId`. Kept only for back-compat; identical behavior. |
+| `annotationId` | (none) | Binds the bubble to one specific annotation instead of resolving by element/scope. | Triggers a fetch on change. Takes precedence as a direct bind; combine with scope props only when you have no fixed id. |
+| `avatar` | `true` (shows) | Shows the commenter avatar on the bubble. `false` hides it. | Writes to the same `showAvatar` UI state as the deprecated `showAvatar` prop: last setter wins. |
+| `showAvatar` | `true` (shows) | **Deprecated alias for `avatar`.** | Use `avatar`. Both target one flag; passing conflicting values means the later-applied one wins. |
+| `commentCountType` | `'total'` | Which count the bubble renders: `'total'` = all comments on the annotation; `'unread'` = unread count only. | Enum-backed (`CommentCountType.TOTAL`/`UNREAD`). The count primitive branches on this value; with `'unread'` and nothing unread, the count reflects zero/none. |
+| `commentBubbleTargetPinHover` | `false` | When `true`, hovering the bubble highlights its target pin/element (adds a hover class on the linked target). | Off by default: hovering does nothing visible. Use to cross-highlight a bubble and its anchor in dense layouts. |
+| `openDialog` | `true` | Whether clicking the bubble opens the comment dialog. `true` → click toggles the anchored dialog open/closed. `false` → click does **not** open a dialog; instead it only emits the `commentBubbleClick` event. | The escape hatch for "bubble as a pure click target": set `openDialog={false}` and listen for the click event to drive your own UI. With `true`, click runs the full select/toggle flow (resets other selections, scrolls to drafts, toggles this annotation). |
+| `readOnly` | `false` | Renders the bubble's dialog view-only (no composing/editing). | OR-combined with the global `readOnly` feature state: if either is on, the bubble is read-only. |
+| `variant` | (none → base wireframe) | Picks the named bubble **wireframe variant** (`velt-comment-bubble-wireframe---<variant>`), else base. | Same variant-as-scoping-key rule as the pin. |
+| `darkMode` | `false` | Forces the dark theme on the bubble; sets a `dark` attribute on the host. | Passing `null`/`undefined` leaves the theme unmanaged (inherits ambient). String `"false"` is treated as off. |
+| `shadowDom` | `true` | Style-isolates the bubble in shadow DOM. `false` exposes it to selector CSS. | The component tracks whether `true` was **explicitly** passed (vs defaulting): relevant when a complete consumer wireframe is provided, which otherwise auto-wraps. Set `false` to style with plain CSS classes. |
+| `context` | (none) | Key/value object attached to **new** comments created through the bubble and used to scope annotation resolution. | Stringified internally; pass an object. Re-triggers the annotation fetch on change. Does not retro-tag existing comments. |
+| `contextOptions` | (none) | Resolution options for how `context` is matched. | Effective only with `context`. |
+| `locationId` | (none) | Scopes the bubble to a Velt location; re-triggers fetch. | Behaves with `folderId`/`documentId` as the resolution narrows. |
+| `documentId` | (none) | Scopes to a document (client id → server document id); re-triggers fetch. | Falsy clears to `undefined`. |
+| `folderId` | (none) | Scopes to a folder (server folder id derived); re-triggers fetch. | Falsy clears to `undefined`. |
+
+### Default behaviors (no prop needed)
+
+- **Anchored placement:** the bubble attaches to its `targetElementId` and is positioned by Velt relative to that element; you don't pass coordinates.
+- **Click → dialog (default on):** with default `openDialog={true}`, clicking the bubble selects the annotation and opens its dialog, resetting any other selected annotation first and scrolling drafts into view. Clicking again toggles it closed.
+- **Click event always fires:** the `commentBubbleClick` event is emitted on every click **regardless** of `openDialog`, so even `openDialog={false}` bubbles are usable as click targets.
+- **Count + avatar shown:** by default the bubble shows the author avatar and the **total** comment count, plus an unread indicator when there are unread comments.
+- **Shadow-DOM wrapped:** default `shadowDom={true}` isolates styles; if you register a full bubble wireframe and don't pass shadow DOM, the root still resolves its own wireframe so it doesn't auto-wrap unexpectedly.
+
+---
+
+## VeltCommentTool
+
+The tool is the button that **starts** a new comment. Clicking it either enters "click anywhere to place a pin" add-comment mode, attaches a comment directly to a target element (popover mode), or opens the sidebar's page-mode composer: depending on configuration. It carries no avatar/count; its job is to begin the flow.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `targetElementId` | (none) | When set, clicking the tool attaches the new comment **directly to that element** (in popover mode) instead of entering free placement mode. | Triggers an annotation-availability check. If the target already has a (visible) comment annotation, the tool hides itself (see default behaviors). |
+| `targetCommentElementId` | (none) | **Deprecated alias for `targetElementId`.** Writes through to it. | Use `targetElementId`. |
+| `onCommentModeChange` | (no handler) | Callback fired whenever add-comment mode toggles on/off; receives the boolean mode. | Fires on every transition (also when mode is toggled elsewhere, since it's driven by the shared add-comment-mode stream). Use to sync your own UI (e.g. button pressed state). |
+| `sourceId` | (none) | Identifier stamped on the comment when the tool attaches it to a target element. | Only passed through in the direct-attach (popover + target) path. |
+| `darkMode` | `false` | Forces the dark theme on the tool. | String `"false"` treated as off. |
+| `disabled` | `false` | Disables the tool. When `true`, clicking the tool does nothing (add-comment is blocked). | Combined with the **global** comment-tool-enabled state via AND: the tool is active only when not `disabled` **and** the global tool is enabled. Independent of IAM permission checks (below), which can also block the action. |
+| `variant` | (none → base wireframe) | Picks the named tool **wireframe variant** (`velt-comment-tool-wireframe---<variant>`), else base. | Same variant-as-scoping-key rule as pin/bubble. |
+| `shadowDom` | `true` | Style-isolates the tool in shadow DOM. `false` exposes it to selector CSS. | Tracks explicit-`true` like the bubble, so providing a full custom button slot doesn't get force-wrapped. |
+| `context` | (none) | Key/value object attached to the **new** comment the tool creates; in free placement mode it is set as the free-style comment context, in direct-attach mode it is passed to the attach call. | Stringified internally; pass an object. Re-checks annotation availability on change. |
+| `contextOptions` | (none) | Resolution options for `context`. | When `contextInPageModeComposer` is on, both `context` and `contextOptions` are **forced to undefined** for the availability subscription (the page-mode composer owns its own context). |
+| `locationId` | (none) | Scopes the new comment to a Velt location; used to resolve/attach. | Considered for availability only when a `folderId` or `documentId` is also set; supplied as a manual location when attaching directly. |
+| `documentId` | (none) | Scopes to a document (client id → server document id). | Falsy clears to `undefined` (hash parity with bubble). Becomes attach metadata in direct-attach mode. |
+| `folderId` | (none) | Scopes to a folder (server folder id derived). | Falsy clears to `undefined`. Becomes attach metadata in direct-attach mode. |
+| `contextInPageModeComposer` | `false` | When `true`, clicking the tool routes the `context` + `targetElementId` into the **sidebar page-mode composer** and opens the sidebar, instead of placing a pin or attaching inline. | Can also be turned on globally via API: the click honors either the prop **or** the global flag. While on, it suppresses context-scoping of the tool's own availability subscription (see `contextOptions`). Use to make a tool feed a sidebar composer rather than drop a pin. |
+
+### Default behaviors (no prop needed)
+
+- **Default button when no custom slot:** if you don't fill the tool's button slot, Velt renders its **default comment-tool button**. Provide your own element in the slot to replace it (the tool detects an empty slot and shows the default only then).
+- **Click → add-comment mode (default):** with no `targetElementId`/popover config, clicking the tool **enables add-comment mode**: the next click on the page drops a pin. Clicking the tool again while in add-comment mode **disables** it (toggle). The host adds a `comment-tool-active` class while mode is on.
+- **Direct attach in popover mode:** when popover mode is on **and** a `targetElementId`/`context`/scope is provided, the click attaches the comment straight to that element (carrying `sourceId` and folder/document/location metadata) rather than entering placement mode.
+- **Auto-hide when the target already has a comment:** in popover mode, the tool subscribes to annotation availability for its target; if a (visible, unresolved unless resolved-on-DOM is on) comment already exists there, `commentAnnotationAvailable` becomes true and the tool hides, so you don't stack a second tool over an existing comment.
+- **Permission & auth gates:** the click is a no-op (with a console note) for anonymous/read-only users, when the SDK isn't authenticated, when the plan is expired, or when the user lacks an ADMIN/COMMENTER role. These gates are in addition to the `disabled` prop and the global tool-enabled flag.
+- **Analytics:** every tool click emits a `COMMENT_TOOL_CLICKED` analytics event tagged `custom` or `default` depending on whether a custom button slot was supplied.
+
+---
+
+## Default behaviors (no prop needed)
+
+Each component's zero-prop baseline is documented in its `### Default behaviors (no prop needed)` block above. In brief: a **pin** is placed by the host at the annotation's resolved anchor (no `x`/`y` input), opens its dialog on click, is draggable by default (`pinDrag` global, `true`), shows the author avatar (no index/bubble unless the global flags are on), and isolates via global `pinShadowDOM` (default `false`); a **bubble** anchors to its `targetElementId`, opens the dialog on click (default `openDialog={true}`) while always emitting `commentBubbleClick`, and shows the avatar + total count, shadow-DOM wrapped; a **tool** renders Velt's default button (unless you fill its slot), enters add-comment mode on click (or direct-attaches in popover mode), auto-hides when its target already has a comment, and is gated by auth/permission checks plus the global tool-enabled flag.
+
+## Prop-interaction matrix
+
+No separate multi-prop matrix for this group: pairwise effects live in each prop's **Interactions & gotchas** column above. The recurring cross-prop notes: the scoping set (`context` + `contextOptions` + `locationId` + `documentId` + `folderId`) resolves together, and `locationId` only narrows when a `folderId`/`documentId` is also present; the deprecated aliases (`showAvatar`→`avatar`, `targetCommentElementId`→`targetElementId`) write the same flag as their replacement (last setter wins); `disabled` on the tool AND-combines with the global tool-enabled state; and `contextInPageModeComposer` forces the tool's own `context`/`contextOptions` to `undefined` for its availability subscription. Pin/bubble/dialog shadow-DOM isolation is covered in the [behaviors index](/ui-customization/reference/behaviors).
+
+## Positioning & composition
+
+All three surfaces are **anchored / Velt-positioned**: the pin drops where the user clicked (or on its target element), the bubble attaches to its `targetElementId`, and the tool/its resulting pin are placed by Velt's comment host: none take a coordinate input. You keep this anchoring **for free while you stay in wireframes**; dropping to primitives or headless means you take over positioning. See [`Behaviors` → Positioning ownership](/ui-customization/reference/behaviors#positioning-ownership-anchored-surfaces) and the anchored-vs-static classification in [`Component definitions`](/ui-customization/reference/component-definitions).
+
+## Provable coverage
+
+Counted against [`Props`](/ui-customization/reference/props) `### VeltCommentBubble` / `### VeltCommentPin` / `### VeltCommentTool`:
+
+- **VeltCommentBubble: 18/18:** targetCommentElementId, targetElementId, showAvatar, avatar, commentBubbleTargetPinHover, shadowDom, variant, darkMode, readOnly, commentCountType, context, contextOptions, locationId, documentId, folderId, annotationId, openDialog: plus the two deprecated aliases counted inline (showAvatar→avatar, targetCommentElementId→targetElementId). Every row in the props.md table is covered.
+- **VeltCommentPin: 9/9:** annotationId, multiThreadAnnotationId, variant, context, contextOptions, locationId, documentId, folderId, defaultCondition. (props.md lists 9 rows; "~10" estimate included.)
+- **VeltCommentTool: 14/14:** targetCommentElementId, targetElementId, onCommentModeChange, sourceId, darkMode, disabled, variant, shadowDom, context, contextOptions, locationId, documentId, folderId, contextInPageModeComposer. Every row covered.
+
+**Unconfirmed items (flagged in-line, not hedged elsewhere):** the precise split between pin-marker shadow-DOM isolation and dialog isolation under a master `shadowDom` flag for `VeltCommentPin` (the pin exposes no `shadowDom` prop; isolation is global `pinShadowDOM`, default `false`).

@@ -1,0 +1,51 @@
+---
+title: "Deterministic extraction: read the numbers, don't eyeball them"
+sidebarTitle: "Extraction"
+description: "Extract exact design measurements, icons, and layout data for deterministic Velt UI customization."
+---
+
+The fidelity-critical inputs (spacing, padding, sizing, radius, typography, colours, **and the design's own icon SVGs**) are a **data-extraction problem, not a judgment one**. Never approximate them from a screenshot. Produce a `designSpec` first, then apply those EXACT numbers and verify rendered output against them.
+
+<Note>
+Use the same output contract whether extraction is automated or manual: exact measurements, exported SVG assets, frame-relative boxes, and a per-state checklist.
+</Note>
+
+## Producing the `designSpec`
+
+- **REST path (preferred):** With a Figma token, fetch the node JSON from `api.figma.com` and emit `designSpec.json` plus exported icon SVGs under `assets/`.
+- **MCP fallback (no token):** Save Figma MCP outputs (`get_variable_defs`, and a node tree from `get_metadata`/`get_design_context`) to a dump and convert it into the **same** `designSpec` schema. This has lower fidelity because it is limited to what the MCP exposes; prefer REST when available.
+
+Each `designSpec` node carries `cssDecls`: CSS-ready, exact declarations: a `box` (`x/y/w/h`), and a **`frameId`** (the top-level block-frame it belongs to). Apply the `cssDecls` to the real classes from [`Manifest`](/ui-customization/reference/manifest); then diff rendered computed styles **and** layout boxes against them. **Boxes should be emitted `frame-relative`** (`boxSpace: "frame-relative"`): subtract **each frame's own origin** from its subtree, so `box.x/y` are relative to that frame's top-left and directly comparable to both `getBoundingClientRect − surface-root` measurements and the per-block frame PNG.
+- **Why per-frame (not one root origin):** a multi-state design is one **section** of many frames laid out across the canvas (e.g. node `1:3398` = 16 sidebar frames), and each frame is exported as its own PNG at `0,0`. Subtracting a single section origin left every node ~1500px off, so `visual-diff --mask-text-from` mislocated every mask and the visual gate went blind (passing wrong icons / structure / spacing as "matched"). Per-frame normalization fixes that. The spec also lists `frames: [{id,name,type}]`.
+- **Per-block consumption:** when you extract a section once and diff one block, filter to the block's frame id so only that block's (already frame-relative) nodes are used. Omit this filtering only when the spec is a single-frame extraction.
+
+## The mapping rules (auto-layout → CSS, from FigmaToCode)
+
+- `layoutMode` `HORIZONTAL`/`VERTICAL` → `display:flex` + `flex-direction:row|column`.
+- `primaryAxisAlignItems` → `justify-content` (`MIN`→flex-start, `CENTER`→center, `MAX`→flex-end, `SPACE_BETWEEN`→space-between).
+- `counterAxisAlignItems` → `align-items` (`MIN`/`CENTER`/`MAX`/`BASELINE`).
+- `itemSpacing` → `gap`: **suppressed when `SPACE_BETWEEN`** (the browser distributes the space; an explicit gap would be wrong).
+- `paddingT/R/B/L` → `padding`, collapsed to the concise form (`14px 16px`).
+- **Sizing is axis-dependent: the rule most converters get wrong (and we did):** for a child of an auto-layout parent, `FILL` on the parent's **primary** axis → `flex:1 1 0`; `FILL` on the **counter** axis → `align-self:stretch`; `HUG` → emit nothing (content-driven); `FIXED` → literal `px`. Getting this wrong is what squeezed the dialog.
+- `cornerRadius` → `border-radius`; `strokes`+`strokeWeight` → `border`; first solid `fills` → `background` (or `color` on a `TEXT` node); `style` → `font-family/size/weight/line-height/letter-spacing`.
+
+## Icons: export the design's real SVGs (R17) + assign them to slots
+
+Flag **icon-candidate** nodes (vectors, or small ≤64px vector-only subtrees), export each as an SVG (id-suffixed filename so generic names like "Icon"/"Vector" don't collide), and **assign each to a slot** using the manifest's `iconHint`, in **confidence layers** (stop at the first that matches; never guess):
+
+1. **`nearText` (reliable):** the icon's adjacent label: a menu row is `[icon, "Edit"]`, the reply affordance is `[icon, "Reply"]`. Auto-assign (de-duped: one SVG → one slot). Output: `designSpec.iconAssignments[reactPath] = { file, by, glyph }`.
+2. **name / component-signal (S3):** an icon-only control is frequently a **named Figma icon component** (an `iconButton`/`Icon` instance) or a node named for its glyph (`filterIcon`, `more`, `checkCircle`). The resolver matches the slot's `glyph` (+ synonyms: `filter-lines`→filter/funnel, `kebab`→more/ellipsis/dots, `check-circle`→check/resolve/tick, …) against the icon's own name + ancestry, preferring a single name hit or a single named component. **This is the layer that fixes the M2a filter + kebab misses** (named components with no adjacent label).
+3. **`ancestryKeyword` (weak):** only accepted when it resolves to **exactly one** free icon; a broad keyword (e.g. "comment") matches many → left unassigned, never guessed.
+4. **`unassignedIcons` → render-and-recognize:** anything still unmatched is reported here with `{ slot, hint:{glyph}, renderRecognize:true, candidates:[{file,name,isComponent,box}] }`: a **shortlist of the free exported SVGs** (name-hits first, else the icon components). Rasterize each candidate SVG, identify the glyph visually by opening the `assets/*.svg` file, then wire the one matching the `glyph` into the slot. Explicit recognition: never a Velt default, never hand-drawn, never a blind guess.
+
+**Distinct slots need distinct glyphs. Never reuse one icon for another slot.** In particular, **resolve ≠ unresolve**: the `ResolveButton` is a **check-circle**; the **`UnresolveButton`** is a **counter-clockwise reopen/undo arrow** (synonyms: reopen / undo / restore / rotate-ccw / refresh) and it appears **only in the resolved-state frame** as an icon-only control. Resolve it via render-and-recognize like any icon-only control (layers 2-4); do **NOT** fill `UnresolveButton` with the resolve check, because that conflation is a recurring miss. Same rule for any visually-similar pair (filter vs sort, edit vs copy): a `mustSupply` slot gets the glyph for *that* slot, never the nearest already-resolved one.
+
+**Wire the assigned + recognized SVGs into the `mustSupply` icon slots** as a small `icons/` file of React SVG components. Never leave a Velt default icon and never hand-draw one.
+
+## Token handling
+
+The REST path needs a Figma personal-access token; it is **optional** (no token → MCP fallback, never a halt). Resolution: `FIGMA_TOKEN` env var first, then the OS secure store: **never the target repo's `.env`**.
+- Check token presence without printing the value.
+- Read tokens from **STDIN** or the OS secure store, never argv/history.
+- Remove stored tokens when the extraction workflow is done.
+The token is sent only to `api.figma.com` over HTTPS, never logged in full, never written to a tracked file. A read-only / file-content-scoped PAT is recommended.

@@ -1,0 +1,168 @@
+---
+title: "Rules (must follow)"
+sidebarTitle: "Rules"
+description: "Review the non-negotiable implementation rules for safe, supported Velt UI customization."
+---
+
+These are **non-negotiable**. Each rule names the failure it prevents. Treat them as hard constraints and re-check them before shipping.
+
+---
+
+## R0: No hacky fixes. Ever. (the prime directive)
+
+**Never implement a hacky, patchy, or hidden workaround to force something a layer doesn't support.** If a design goal isn't achievable cleanly with wireframes or primitives (within the supported APIs, slots, props, variables, classes, and hooks in this guide), **do not fake it**: no brittle DOM scraping, no `setTimeout`/`MutationObserver` to mutate Velt's internals, no fragile DOM surgery, no copy-pasted internal markup, no "it works for now" shims.
+
+- Implementation must be **clean, correct, and idiomatic**: the same quality you'd ship to production. **No compromise on code quality** for the sake of "getting it to look right."
+- If the cleanest path is a different layer, **switch layers** (escalate per the [decision tree](/ui-customization/decision-tree)) rather than hacking the current one.
+- The "inspect → find class → `!important` override" workflow is **not** a hack: it's the supported way to restyle (R9b). A hack is something that depends on Velt's *unsupported internals* or *timing* and will break on the next render or SDK update.
+- **If a goal is genuinely unachievable cleanly (a real blocker), stop and leave a clear code comment** stating what was wanted, why it can't be done cleanly with the available APIs, and what was done instead, or that it's intentionally left out. Surface the blocker; never bury it under a fragile fix.
+
+```tsx
+// BLOCKER: design wants X on the comment dialog, but no slot/prop/variable supports it
+// (see reference/). Implementing this cleanly isn't possible today.
+// Left as default rather than hacking Velt's internals. Revisit if the SDK adds support.
+```
+
+A patchy fix that "looks right" today is worse than an honest gap: it breaks silently, misleads the next person, and violates every other rule here. When in doubt, choose the clean partial result + a comment over a complete hacky one.
+
+**When you think a goal is impossible, don't guess: run the flow.** [`SDK gaps and blockers`](/ui-customization/sdk-gaps-and-blockers) walks you through ruling out the fixable causes (shadow DOM, specificity, wrong layer, off-by-default feature, custom data) and, only if none apply, recording it as a real SDK gap (the code comment above + a structured gap entry). That is the supported way to honor R0.
+
+---
+
+## Structural
+
+**R1: Use exactly one `<VeltWireframe>` in the whole app.**
+This is a strong operational rule, not a runtime-enforced singleton. Each `<VeltWireframe>` registers its children into **one global template map**, merged with **first-with-content-wins** semantics, so multiple registries are technically possible but become **order-dependent and conflict-prone** (whichever registers a given slot first wins; later ones are silently ignored). Keep a single registry in `VeltCustomization.tsx`, rendered once near the root, and you avoid the whole class of "why did my wireframe not apply?" bugs.
+
+**R2: Mount the live feature component, not just the wireframe.**
+A `Velt…Wireframe` only *registers* a template. The UI appears only when the real component (`VeltComments`, `VeltCommentsSidebar`, `VeltCommentDialog`, …) is also mounted. Wireframe but no mounted feature ⇒ nothing renders.
+
+**R3: Choose the cheapest layer per piece; mixing on one surface is allowed.**
+Reach in order **CSS → Wireframes → Primitives → Headless**, per feature *and* per piece. You **may** combine layers on the same surface (e.g. a `VeltCommentDialog` primitive + a wireframe for one leaf piece). That is supported and sometimes necessary because leaf primitives have no sub-components, so their wireframe is the only way to restructure them. The rule is *don't pick a more expensive layer than the design needs*, not "one approach per surface." See [`Combining approaches`](/ui-customization/combining-approaches).
+
+---
+
+## Interactivity
+
+**R4: Never put interactive React inside wireframe markup.**
+No `onClick`, `useState`, hooks, or stateful UI-library components inside a wireframe slot: they're **cloned to inert DOM and silently do nothing**. Interactivity must come from `Velt…Wireframe.X` slot components; your markup is the visual shell only. If you need custom interactivity, use [primitives](/ui-customization/primitives) or go [headless](/ui-customization/headless). (Proof: [`Edge cases and limitations`](/ui-customization/edge-cases-and-limitations).)
+
+**R5: Wrap UI-library components *around* primitives, not *inside* wireframes.**
+`<MuiCard><VeltCommentDialog/></MuiCard>` ✅. A live MUI button inside a wireframe slot ❌ (behavior stripped). See the UI-library table in [`Decision tree`](/ui-customization/decision-tree).
+
+---
+
+## Styling
+
+**R6: Selector CSS needs shadow DOM off *or* `injectCustomCss`.**
+Variable-only theming (overriding `--velt-*`) works through the shadow DOM and needs nothing. But **class/element selectors and wireframe styles can't reach inside** it, so either set `shadowDom={false}` on those components, **or** keep shadow DOM on and inject your styles into the shadow root via `client.injectCustomCss({ type, value })`. Doing neither looks like "my CSS does nothing." Don't do both for the same surface.
+
+**R7: Don't `display:none` to remove features.**
+Toggle features with **props** on the primitive (`reactions={false}`, `status={false}`, …) or omit the slot in a wireframe. Hiding with CSS leaves dead behavior and breaks on layout changes.
+
+**R8: Put all Velt CSS in one stylesheet.**
+Don't scatter `--velt-*` overrides across components. One `styles.css` (or `velt.css`) keeps theming coherent and dark-mode correct.
+
+**R9: Dark values go under `:root[data-velt-theme="dark"]`.**
+Don't hard-code colors that ignore mode: it breaks dark mode.
+
+**R9b: Override Velt's class-based CSS with `!important`.**
+Velt injects styles at runtime with high specificity. Class/element overrides (not `--velt-*` variables) **must** use `!important` to take effect: this is expected, not a hack. Workflow: inspect the element → find its `velt-*` class → override with `!important`. See [`CSS`](/ui-customization/styling) and [`CSS classes`](/ui-customization/reference/css-classes).
+
+---
+
+## Identifiers
+
+**R10: Never invent: verify instead.**
+CSS variables, CSS classes, wireframe slots, `{…}` variables, component props, hook names, **data fields, prop behaviors, and component intent** must come from the reference pages:
+- CSS vars → [`CSS variables`](/ui-customization/reference/css-variables)
+- CSS classes → [`CSS classes`](/ui-customization/reference/css-classes)
+- Wireframe components & slots (+ slot props) → [`Wireframe components`](/ui-customization/reference/wireframe-components)
+- `{…}` variables → [`Wireframe tokens`](/ui-customization/conditional-templates) (syntax) + [`Wireframe variables`](/ui-customization/template-variables) (catalog)
+- Component / layout props → [`Component config`](/ui-customization/reference/component-config) · prop **behavior & interactions** → [`Behaviors`](/ui-customization/reference/behaviors)
+- Hooks → [`Hooks`](/ui-customization/reference/hooks) · **data fields / events / custom-data storage** → [`Data models`](/ui-customization/reference/data-models)
+- What a component is **for** (right/wrong tool) → [`Component definitions`](/ui-customization/reference/component-definitions)
+
+If a name isn't there, it doesn't exist (a wrong `{…}` resolves to `undefined`; a wrong prop/hook is a no-op or error). To confirm a class on a specific rendered element, inspect it in DevTools (`shadowDom={false}`).
+
+**The guide is the first source of truth, but its *silence* is not a verdict.** If the guide doesn't cover something or you're uncertain, **don't guess, don't hedge, and don't declare it impossible**. Verify against ground truth in this order: official Velt docs, the live SDK's actual behavior and types, then an empirical test in the running app. Then state the verified fact with certainty. Inventing a name and treating "not in the guide" as "not possible" are the two opposite failures this rule prevents.
+
+---
+
+## Architecture & code quality
+
+**R11: Keep Velt code under `components/velt/`, customization under `components/velt/ui-customization/`.**
+App UI stays separate from Velt UI. One file per customized surface (`VeltCommentDialogWf.tsx`, `VeltCommentSidebarWf.tsx`, …). See [`Setup`](/ui-customization/setup).
+
+**R12: Cheapest viable layer per feature (CSS → Wireframes → Primitives → Headless).**
+Run the [decision tree](/ui-customization/decision-tree) per feature. **Wireframes are the default for structural customization** (Velt does the data/looping for you: less work than primitives). Use primitives only when you need full control / your own UI library / your own interactivity / a leaf override; headless only as a last resort. Don't go primitives for layout a wireframe slot already exposes, or headless for what a wireframe can do: over-building is a maintenance liability.
+
+**R13: Headless objects must match `@veltdev/types`.**
+When you hand-build a `Comment`/`CommentAnnotation`, fill every field the action requires. Missing fields are the most common headless failure.
+
+**R14: `min-height: 0` on scrollable flex parents.**
+A flex column that should scroll needs `min-height: 0` (and `flex: 1 1 auto`) or it collapses/overflows. Common in wireframe sidebars/panels.
+
+**R15: Verify after each surface.**
+Don't customize five surfaces half-way. Finish one, confirm it renders and behaves (compare against Velt's default by temporarily removing your customization), then move on. Use the step-ordered flow in [`Verifying a customization`](/ui-customization/verifying-a-customization): drive the surface's states, confirm Velt's behavior is intact, run the static rules scan, then reach a verdict.
+
+**R16: One component at a time. Never all at once.**
+Customize **step by step, a single component per step**: register one wireframe (or compose one primitive), get it rendering correctly, verify it, *then* start the next. Do **not** write a big batch of wireframes/primitives across many surfaces in one pass and debug them together: when something doesn't render you won't know which piece broke, and wireframe gotchas (wrong nesting, container slots dropping children, shadow-DOM) compound. Build → verify → next. (This pairs with R15.)
+
+**R17: Icons/assets come from the design, never hand-drawn.**
+If the design has an icon, glyph, or illustration, **use the design's own exported asset** (the SVG from Figma). Do **not** approximate it with hand-written CSS shapes, Unicode glyphs, or a different icon from the app: a CSS-drawn arrow that "looks close" is not a match and is a defect. Extract the asset during recognition and reference it; only fall back to an existing app icon when the design genuinely reuses that exact one.
+
+**R18: Touch only the Velt customization; never change default project behavior.**
+Confine changes to `components/velt/ui-customization/` and its assets. **Do not** fix the host app's own (non-Velt) UI even if it diverges from the design, and **do not** alter any default project behavior, config, or files outside the customization. If a host change is genuinely *required* for the customization to work (e.g. a mount point, a prop on the host component), apply it **temporarily**, verify it works, **then revert it**, and **report it to the user** as a required manual change ("add X to get this running"). Never bake it into the project silently. *(The one standing exception: mounting `<VeltCustomization/>` once plus the host props your implementation map requires (R21) are the integration itself. Apply them and report them; don't revert them.)*
+
+**R19: Supply every `mustSupply` slot; never leave a Velt default.**
+For every slot the manifest ([`Manifest`](/ui-customization/reference/manifest)) marks `mustSupply` that the design touches, supply the design's own content: the exported SVG icon (R17), the exact label text, the explicit menu items. **Leaving a `mustSupply` slot to render Velt's default is a defect, not "close enough."** This is the exact class of miss that affects filter icons, options-menu items, reply/resolve icons, and empty placeholders. An icon slot must contain the design's SVG, verified by identity.
+
+**R20: Measure the WHOLE surface, don't eyeball or sample; "looks close" is a FAIL.**
+A surface is verified by **whole-surface measurement**, not by sampling a few selectors. Per state, all three checks must be clean: **style** (rendered computed style vs the `designSpec`'s exact numbers: colour CIEDE2000 ΔE < 2, lengths ±1px, keywords exact), **layout** (each element's surface-relative box, sibling gaps, relations like name-left-of-time / message-below-header / actions-top-right, plus missing/extra elements), and a **visual side-by-side gate** (any nameable difference is a FAIL). The checklist is derived from every mapped element, with no hand-picking. **There is no aggregate score** to average a miss away. Numbers come from the `designSpec`, never approximated from a screenshot. Collect evidence first, then decide whether the surface is matched.
+
+**R21: Props-first: structure a prop produces is never built in CSS.**
+Set every host prop or feature flag that your implementation map lists as `producesStructure` (e.g. `collapsedComments`+`collapsedRepliesPreview` → the `MoreReply` control, `defaultMinimalFilter`, `sortBy/Order`, placeholders, `shadowDom:false`) **before** writing any CSS. Only set props that a design cue justifies (R24). Reaching for CSS to fake structure a prop already produces is a defect: climb the feasibility ladder (default → prop/config → wireframe → primitive → headless) in order.
+
+**R22: Layer reconciliation: one rect in Figma = N layers in the DOM. Paint once on the box-matched owner; neutralize co-box wrappers.**
+A Figma node is one rectangle; the DOM renders it as a nested stack (host > div > div > your element), any layer of which may paint box-properties. The **box is the disambiguator**: the layer whose box matches the design node is the visual node, or *owner*. Reconcile **per property** by inspecting the live DOM:
+- **Compounding:** two layers paint the *same* property, such as an owner and wrapper both adding padding. Keep the load-bearing one and reset the duplicates (`padding:0` and similar, with `!important`).
+- **Cooperating:** a wrapper solely paints a property the design wants, or a layer has `border-radius` plus `overflow:hidden` for a rounded clip. Keep it and route the design value there. Do **not** flatten it onto the owner, because that breaks the clip or fill.
+- **Never** touch functional CSS (`flex`/`overflow`/`position`/`display`), which carries Velt's layout/behavior (R7).
+
+The manifest's `paddingResets` is just a known-wrapper starting hint. Derive inner spacing from the **designSpec gaps**, never stacked padding.
+
+**R23: Style the box-matched owner / the precise slot role; never a wrapper.**
+Every manifest slot declares a `role` (`container` = structural wrapper, `trigger` = the control that opens a popup, `content` = the popup surface, `item` = a leaf). Style the **`content`** slot for a menu or popup, **never** its `container` or `trigger`. The dropdown container wraps the trigger, not the popup, so styling it creates the wrong box. Compare the styled element's live box to the design node's box. Likewise scope every override to its exact target: mention CSS goes on the message's `mentionScope` (`.velt-thread-card--message .velt-mention`) only. A bare `.velt-mention` or `.velt-mention--name` over-matches and tints the author name.
+
+**R24: No feature/prop whose UI the design doesn't show.**
+A host prop is set **only** when a recognized design element or feature justifies it. The manifest `hostProps` are a catalog with a `designCue`, not pre-set values. Setting a feature flag with no design basis is a defect because it can add unwanted UI. Record the design evidence for each host prop you set.
+
+**R25: Mount-map integrity: behavior rides on structure, and visual fidelity never excuses a broken mount map.**
+A customization can be pixel-perfect and behaviorally dead. Because Velt routes behavior through its own slot components, "does it still work" is a **structural** invariant: for every behavioral part in the manifest's `contract.parts`, the customized tree must still contain that **Velt primitive**, **inside its required ancestor** (the context the runtime binds through, such as `ThreadCard` in `Body→Threads`), **exactly once** where it's a `singleton`, with **no phantom interactive** (a custom `<button>` or `<div onClick>` the SDK doesn't own, inert per R4). Inspect the post-reconciliation DOM and treat any violation (`MISSING`, `CONTAINMENT`, `CARDINALITY`, or `PHANTOM_INTERACTIVE`) as a **boolean hard FAIL**, never an aggregate-scored item. ΔE 0 with a broken mount map does not pass.
+
+---
+
+**R26: Termination is mechanical: a sample is INCOMPLETE, never a pass.**
+The checklist covers every distinct styled appearance, every `mustSupply` slot, every mount-map part, and every required state. A report that covers fewer elements than the checklist, skips a required state, or omits visual evidence is **INCOMPLETE, not PASS**. `PASS` requires 100% coverage and all dispositions, states, and artifacts clean. Use the complete checklist as the review standard. "Looks matched" or "the ones I measured pass" cannot end the loop.
+
+## Quick gate before shipping
+
+- [ ] **No hacky/patchy fixes**: clean code only; unresolvable blockers are commented, not faked (R0).
+- [ ] One `<VeltWireframe>`; live features mounted (R1, R2).
+- [ ] No interactive React inside wireframes (R4).
+- [ ] `shadowDom={false}` where styled; no `display:none` feature-hiding (R6, R7).
+- [ ] One stylesheet; dark values scoped (R8, R9).
+- [ ] Every identifier/behavior/data fact verified against [`reference/`](/ui-customization/reference/component-catalog); unknowns verified against ground truth, never guessed (R10).
+- [ ] Folder structure matches the reference (R11).
+- [ ] Each surface uses the cheapest viable layer (R12).
+- [ ] Icons/assets use the design's exported SVGs, not hand-drawn shapes (R17).
+- [ ] Only the Velt customization changed; required host changes (mount + Connect-Map props) applied + reported (R18).
+- [ ] Every `mustSupply` slot the design touches is supplied with the design's content: no Velt defaults left (R19).
+- [ ] Verified by **whole-surface measurement** (style + layout + visual gate) vs the `designSpec`, covering every mapped element, no aggregate; "looks close"/sampling rejected; termination is a separate review step (R20).
+- [ ] Host props that produce structure set **before** CSS; no CSS faking prop-produced structure (R21).
+- [ ] One gutter: Velt-default wrapper padding zeroed (`paddingResets`); inner spacing from designSpec gaps, not stacked padding (R22).
+- [ ] Popups/menus styled on their `content` slot, never the container/trigger; mention CSS scoped to the message only (R23).
+- [ ] No feature/prop whose UI the design doesn't show; every host prop justified by a design cue (R24).
+- [ ] Mount-map intact: every behavioral `contract.part` mounts as its Velt primitive, contained, singleton-correct, no phantom interactive; a violation is a hard FAIL regardless of pixels (R25).
+- [ ] Termination is mechanical: 100% of the checklist is covered (no sampling), the visual artifact exists per state, and the complete review returns PASS (INCOMPLETE != done) (R26).

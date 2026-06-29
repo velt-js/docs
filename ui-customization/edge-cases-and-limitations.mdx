@@ -1,0 +1,92 @@
+---
+title: "Edge cases & limitations"
+sidebarTitle: "Edge cases"
+description: "Understand known edge cases and limits across Velt customization layers."
+---
+
+What each layer **can't** do, the gotchas that waste hours, and the proof behind the wireframe interactivity rule.
+
+---
+
+## The big one: wireframes don't run your interactivity (with proof)
+
+**Limitation:** any React `onClick`, `useState`, hook, or stateful UI-library component placed **inside a wireframe slot does not run.** Behavior inside a wireframe comes only from Velt's `Velt…Wireframe.X` slot components.
+
+**Why:** when Velt renders a wireframe, it reduces your slot markup to an **HTML string (`innerHTML`)**: serializing to a string strips every React event listener, hook, and piece of state. Velt then re-scans the cloned markup and re-instantiates **only** its own `velt-*` slot components. Your non-`velt-*` markup survives as inert DOM; your handlers do not.
+
+**Proof (verified live):** a probe `<button onClick={…}>` placed in a wireframe slot rendered as **two** DOM nodes: the hidden React original (`display:none`, has React props, its handler fired) and the **visible cloned copy** injected into the live dialog (no React props, handler did **not** fire). The visible node: the one users click: has no working handler.
+
+**What survives the clone:** static elements, CSS `className`/inline styles, `velt-if`/`velt-class`/`velt-data` tokens, and `Velt…Wireframe.X` slots. **What dies:** `onClick`, `useState`, hooks, component-library interactivity.
+
+**Consequences / what to do:**
+- Need a working built-in action? Use the **slot** (`.ResolveButton`, `.Options.Content.Delete`, `.Composer.ActionButton`).
+- Need a **custom** action from wireframe UI? Use `VeltButtonWireframe` + `useVeltEventCallback("veltButtonClick")` (see [`Patterns and tips`](/ui-customization/patterns-and-tips)).
+- Need genuinely custom interactive components inside the UI? That's the signal for **[headless](/ui-customization/headless)** or **[primitives](/ui-customization/primitives)**.
+
+This is also exactly why the two differ on UI libraries: **primitives preserve a UI-library component's live behavior (state, handlers); wireframes keep only its static components and classes** (the cloned copy renders the markup + CSS but loses behavior). Library components for *looks* can sit inside a wireframe; library components that need to *do* something must be used with primitives or headless.
+
+---
+
+## Shadow DOM
+
+- **Limitation:** external/global CSS selectors **cannot** style inside Velt's shadow DOM. Only CSS variables cross the boundary.
+- **Fix:** `shadowDom={false}` on the components you style (R6).
+- **Gotcha:** with shadow DOM on, theming via `--velt-*` still works, so it *looks* like only some CSS is ignored: leading to confusion. Decide up front: customizing visuals ⇒ shadow DOM off.
+
+## CSS
+
+- **Can't restructure.** CSS recolors/respaces; it cannot reorder, add, or remove parts. Reaching for `display:none` to remove a feature is a smell: use a prop or wireframe.
+- **Class names aren't a stable API.** Velt's internal class names can change between versions; prefer `--velt-*` variables. Use class selectors only for gaps, and expect to re-check them on upgrade.
+
+## Primitives
+
+- **More effort than wireframes.** *You* write the composition Velt would otherwise do: fetch annotations, loop, pass `annotationId`/`comment`, handle conditionals. Layout control is **high** (compose sub-component primitives), but it's manual work; if a wireframe slot already expresses the layout, that's less effort.
+- **Leaf pieces can't be restructured as primitives.** The deepest pieces have no sub-components. To restructure a leaf, use **that leaf's wireframe** (works even inside an otherwise-primitive build).
+
+## Wireframes
+
+- **List/repeater slots ignore custom layout.** Some slots (the comments list, presence avatar list, reactions-panel items, activity-log list, …) keep rendering Velt's own loop: wrapping them in your own grid/flex or reordering does nothing. Customize the repeated **item** wireframe instead, not the list container. (See [list/repeater slots](/ui-customization/layout#7b-listrepeater-slots--custom-layout-is-ignored-the-replacetemplate-false-case).)
+- **Default styling isn't fully stripped.** A wireframe replaces a slot's content, but Velt's surrounding default styles (borders, padding, backgrounds, fixed widths, popover chrome) remain. Inspect → find the `velt-*` class → override with `!important`.
+- **Scroll/height needs the whole flex chain.** Velt's internal container elements sit between your layout and the scrollable list; if any of them lacks `min-height:0`/`flex:1`/`height:100%`, the list won't take available height and scrolling breaks. You must inspect and force the chain through Velt's internal elements (often with `!important`).
+
+## Positioning
+
+- **Absolutely-positioned pieces need a positioned ancestor.** Some Velt UI (dialog/pin/overlays, reaction pins) uses `position: absolute`. In a primitive or wireframe mount it can land in the wrong place unless the parent you mount it in has `position: relative`.
+- **Can't change behavior or data shape.** Slots give you *Velt's* behavior, not custom behavior. If you wish a slot did something different, you've outgrown wireframes.
+- **Variable availability differs per slot.** `{comment}`/`{commentIndex}` exist only inside thread-card descendants; `{notification}` only in the notifications panel; `{focusedAnnotation}` in the sidebar. A token used in the wrong slot resolves to `undefined`. (See [`Wireframe tokens`](/ui-customization/conditional-templates).)
+- **`velt-class` needs the class defined in *your* CSS.** The token toggles a class name; you still have to style that class.
+- **One registry only.** Two `<VeltWireframe>` roots conflict (R1).
+- **Limited/no slots for some features.** Arrows and Tags have limited or no wireframe slots: customize them with CSS + props instead.
+
+## Headless
+
+- **You own everything.** Thread layout, replies, composer (mentions/attachments/reactions), filtering, empty/loading states, a11y, dark mode: all yours to build and maintain.
+- **Upgrade burden.** New Velt UI features won't appear automatically; you re-implement them.
+- **Object completeness.** Hand-built `Comment`/`CommentAnnotation` objects must include every field the mutation needs (R13): missing fields is the #1 headless bug.
+
+## SSR / hydration (Next.js and friends)
+
+- Velt and its custom elements are **client-side**. Mark customization components and any hook-using component `'use client'`.
+- Gate custom UI on `useVeltInitState()` so you don't render against an uninitialized client.
+- Don't rely on Velt UI during SSR: it materializes after hydration + init.
+
+## Real-time / multi-user
+
+- `useCommentAnnotations()` (and friends) are **reactive**: they update when other users change data. Don't cache/snapshot the array and render stale; render the hook's current value.
+
+---
+
+## Quick "why isn't it working?" table
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| My CSS does nothing | Shadow DOM on | `shadowDom={false}` (R6) |
+| Button in my wireframe doesn't click | Interactivity stripped by cloning | Use a Velt slot or `veltButtonClick` (R4) |
+| `velt-data` shows blank | Wrong/undefined variable or wrong slot | Check name + slot context ([tokens](/ui-customization/conditional-templates)) |
+| Wireframe renders nothing | Feature component not mounted | Mount `VeltComments`/sidebar too (R2) |
+| Sidebar/list won't scroll / take height | Flex/height chain broken (incl. Velt's internal elements) | Force `min-height:0`/`flex:1`/`height:100%` through the chain, inspect Velt internals (R14) |
+| Default styling still showing after wireframing | Wireframe replaces content, not surrounding default styles | Inspect → `velt-*` class → override with `!important` (R9b) |
+| Dialog/pin lands in wrong place (top-left) | Absolutely-positioned Velt UI, no positioned ancestor | Give the mount parent `position: relative` |
+| Custom dropdown items don't set status/priority | Used non-Velt items / missing annotation context | Use Velt primitive `…DropdownContentItem` (or `useUpdateStatus`) with `annotationId` ([primitives](/ui-customization/primitives)) |
+| Dark mode colors wrong | Hard-coded colors | Use `--velt-dark-mode-*` under `[data-velt-theme="dark"]` (R9) |
+| Two wireframes fighting | Two `<VeltWireframe>` roots | Use exactly one (R1) |

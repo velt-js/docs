@@ -3,14 +3,14 @@ title: "Create API Key"
 api: "POST https://api.velt.dev/v2/workspace/apikey/create"
 ---
 
-Use this API to create a new API key for a workspace.
+Use this API to create a new API key for a workspace. Both **`testing`** and **`production`** API keys are supported.
 
 <Info>
 This endpoint uses **workspace-level auth**: pass `x-velt-workspace-id` and `x-velt-workspace-auth-token` (from the Create Workspace response) as headers.
 </Info>
 
 <Note>
-This API currently supports creating **`testing`** API keys only.
+Creating a **`production`** API key is gated. The workspace must be explicitly enabled for self‑serve production key creation and must already be on a paid plan (own at least one billing‑minted production key). See [Production API Keys](#production-api-keys) below. `testing` keys have no such gates.
 </Note>
 
 # Endpoint
@@ -34,10 +34,16 @@ This API currently supports creating **`testing`** API keys only.
 <ParamField body="data" type="object" required>
   <Expandable title="properties">
     <ParamField body="ownerEmail" type="string" required>
-      Email address of the API key owner.
+      Email address of the API key owner. Must be a valid email.
     </ParamField>
     <ParamField body="type" type="string" required>
-      API key type. Currently only `"testing"` is supported.
+      API key type. Accepted values: `"testing"` or `"production"`.
+    </ParamField>
+    <ParamField body="persistenceDBRegion" type="string">
+      **Production keys only.** Firestore + Cloud Storage data‑residency region (data at rest). Accepts any supported region from [Supported Regions](/security/supported-regions), plus the two multi‑region selectors `nam5` (North America) and `eur3` (Europe). Cloud Storage maps `nam5` → `US` and `eur3` → `EU`; all other (regional) values pass through unchanged. Defaults to `nam5` when omitted. Ignored for `testing` keys. See [Region &amp; Data Residency](#region-and-data-residency).
+    </ParamField>
+    <ParamField body="realtimeDBRegion" type="string">
+      **Production keys only.** Realtime Database region. Accepted values: `us-central1`, `europe-west1`, `asia-southeast1` (Realtime Database is not offered in other locations). When omitted, defaults to the supported region nearest to `persistenceDBRegion` (`us-central1` for the Americas, `europe-west1` for EU / Middle East / Africa, `asia-southeast1` for Asia / Australia). Ignored for `testing` keys. See [Region &amp; Data Residency](#region-and-data-residency).
     </ParamField>
     <ParamField body="createAuthToken" type="boolean">
       Whether to create an auth token along with the API key. Recommended: `true`.
@@ -56,6 +62,21 @@ This API currently supports creating **`testing`** API keys only.
     </ParamField>
     <ParamField body="useWebhookService" type="boolean">
       Whether to enable the webhook service for this API key.
+    </ParamField>
+    <ParamField body="useNotificationService" type="boolean">
+      Whether to enable the in‑app notification service for this API key.
+    </ParamField>
+    <ParamField body="setDefaultNotificationTriggers" type="boolean">
+      Seed the default notification triggers when enabling the notification service.
+    </ParamField>
+    <ParamField body="setDefaultEmailTriggers" type="boolean">
+      Seed the default email triggers when enabling the email service.
+    </ParamField>
+    <ParamField body="requireAutoOrgUser" type="boolean">
+      Require auto‑creation of the organization user.
+    </ParamField>
+    <ParamField body="enablePrivateComments" type="boolean">
+      Initial value for the workspace‑scoped private comments feature flag. Defaults to `false` when omitted.
     </ParamField>
     <ParamField body="emailServiceConfig" type="object">
       Configuration object for the email service. See [Update Email Config](/api-reference/rest-apis/v2/workspace/emailconfig-update) for the full schema.
@@ -97,13 +118,91 @@ This API currently supports creating **`testing`** API keys only.
   </Expandable>
 </ParamField>
 
+<Note>
+`planInfo` is **not** a request field. Plans are owned by Velt and are set via billing. Any caller‑supplied `planInfo` is ignored. For `production` keys, the plan is derived server‑side from the workspace's existing production keys.
+</Note>
+
+# Production API Keys
+
+Creating a `production` API key enforces three gates, in order. The billing‑minted first production key (created automatically when the workspace upgrades to a paid plan) is exempt from these gates.
+
+<Steps>
+  <Step title="Creation enabled">
+    The workspace must be explicitly allowed to self‑serve create production keys (`allowProductionApiKeyCreation` is enabled on the workspace by Velt). Otherwise the request fails with `PERMISSION_DENIED`.
+  </Step>
+  <Step title="Workspace upgraded">
+    The workspace must already own at least one production key (minted by billing on plan purchase). Otherwise the request fails with `FAILED_PRECONDITION`.
+  </Step>
+  <Step title="Within key limit">
+    A workspace may have at most **3** production keys in total (including the billing‑minted key). This limit can be raised per‑workspace by Velt. Otherwise the request fails with `RESOURCE_EXHAUSTED`.
+  </Step>
+</Steps>
+
+The plan (`planInfo`) for the new production key is copied server‑side from the workspace's existing production keys, so all production keys in a workspace stay on the same plan.
+
+<Info>
+To enable production API key creation, or to raise the production key limit for your workspace, contact Velt.
+</Info>
+
+# Region and Data Residency
+
+For `production` keys you can control where your data physically resides. Region selection provisions dedicated Firestore, Realtime Database, and Cloud Storage for the key.
+
+- **`persistenceDBRegion`** — controls Firestore + Cloud Storage location (data at rest). Accepts any [supported region](/security/supported-regions) plus the `nam5` (North America) and `eur3` (Europe) multi‑region selectors. Defaults to `nam5`.
+- **`realtimeDBRegion`** — controls the Realtime Database location. Realtime Database is only available in `us-central1`, `europe-west1`, and `asia-southeast1`. Defaults to the supported region nearest to `persistenceDBRegion`.
+
+<Note>
+Because Realtime Database is only offered in three regions, a persistence region without a nearby Realtime Database region (for example the `australia-*` regions) should be paired with the nearest supported `realtimeDBRegion` — typically `asia-southeast1`.
+</Note>
+
+Both region fields are **only used for `production` keys** and are ignored for `testing` keys. An explicitly supplied unsupported value — **including an empty string `""`** — is rejected with `INVALID_ARGUMENT`. Only an omitted field falls back to the default.
+
+#### Example region pairings
+
+| Data residency | `persistenceDBRegion` | `realtimeDBRegion` |
+|----------------|-----------------------|--------------------|
+| North America (default) | `nam5` | `us-central1` |
+| Europe | `eur3` | `europe-west1` |
+| Asia (Singapore) | `asia-southeast1` | `asia-southeast1` |
+| Australia | `australia-southeast1` | `asia-southeast1` |
+
 # Example Request
+
+#### Testing key
 
 ```JSON
 {
   "data": {
     "ownerEmail": "owner@example.com",
     "type": "testing",
+    "createAuthToken": true
+  }
+}
+```
+
+#### Production key (default North America region)
+
+```JSON
+{
+  "data": {
+    "ownerEmail": "owner@example.com",
+    "type": "production",
+    "apiKeyName": "Production Key",
+    "createAuthToken": true
+  }
+}
+```
+
+#### Production key with region selection (Europe)
+
+```JSON
+{
+  "data": {
+    "ownerEmail": "owner@example.com",
+    "type": "production",
+    "apiKeyName": "EU Production Key",
+    "persistenceDBRegion": "eur3",
+    "realtimeDBRegion": "europe-west1",
     "createAuthToken": true
   }
 }
@@ -135,6 +234,15 @@ This API currently supports creating **`testing`** API keys only.
   }
 }
 ```
+
+# Errors
+
+| Status | When |
+|--------|------|
+| `INVALID_ARGUMENT` | Missing/invalid `ownerEmail` or `type`, or an unsupported `persistenceDBRegion` / `realtimeDBRegion` (including an explicit empty string). |
+| `PERMISSION_DENIED` | Invalid workspace credentials, or the workspace is not allowed to create production API keys. |
+| `FAILED_PRECONDITION` | Creating a production key but the workspace has not been upgraded to a paid plan. |
+| `RESOURCE_EXHAUSTED` | The workspace has reached its maximum number of production API keys. |
 
 <ResponseExample>
 ```js

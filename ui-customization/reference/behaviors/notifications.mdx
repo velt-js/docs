@@ -1,0 +1,107 @@
+---
+title: "Notifications"
+sidebarTitle: "Notifications"
+description: "Reference runtime behavior for Velt notification components and props."
+---
+
+Runtime behavior of every prop on the two notification entry points. [`Props`](/ui-customization/reference/props) gives each prop's **name, type, and default**; this file gives what each prop **does at runtime**, its **default** when omitted, and how it **interacts** with related props. See the [behaviors index](/ui-customization/reference/behaviors) for the cross-component prop matrix and the anchored-vs-static positioning model.
+
+Two components are covered:
+
+- **`VeltNotificationsPanel`**: the full notification list, rendered **statically** where you place it (it is *not* a Velt-anchored overlay; you control its position in your layout). It owns the tab bar (For You / Documents / All / People), the notification list with paging, a read-all action, and an optional settings view. Use it when you want notifications permanently visible in your own layout (e.g. a dashboard column).
+- **`VeltNotificationsTool`**: a bell/launcher button that shows an unread badge and **opens a panel on click**. The opened panel is the same notification UI as `VeltNotificationsPanel`. The tool owns the unread-count read path and the panel's open mode (`popover` vs `sidebar`); panel-affecting props are mostly forwarded to the panel it opens. Use it when notifications should live behind a single bell icon.
+
+Both resolve `darkMode` through the shared v2 themed base, render their default markup unless a matching **wireframe `variant`** is registered, and read/write all feature toggles (`settings`, `selfNotifications`, `readNotificationsOnForYouTab`, `enableCrossOrganization`, `enableSettingsAtOrganizationLevel`, `maxDays`) through the **shared notification service**, so these flags are effectively global: setting one on either component changes the data stream for both. Per-instance state (`tabConfig`, `pageSize`, `panelOpenMode`, `settingsLayout`, `variant`, `shadowDom`) lives on the component's own config signal.
+
+> The React wrappers serialize props to attributes: booleans only emit `'true'`/`'false'` when explicitly `true`/`false` (an omitted boolean emits **nothing**, so the web-component default applies); `pageSize`/`maxDays` only emit when `> 0`; `tabConfig` is JSON-stringified; `enableCrossOrganization` is stringified when an object. This is why "unset" and "explicit `false`" can differ.
+
+---
+
+## Per-prop behavior (exhaustive)
+
+The exhaustive per-prop behavior for both notification entry points is organized **per component** below: each `## Velt…` subsection carries that component's full prop table (default + runtime behavior + interactions) plus its own no-prop baseline (the **Default behaviors (… no prop needed)** block). Every prop in [`Props`](/ui-customization/reference/props) for these components is covered; see [Provable coverage](#provable-coverage).
+
+## VeltNotificationsPanel
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `darkMode` | `false` | Applies the dark theme to the panel surface. Synced from the themed base into `uiState.darkMode`; children inherit it. | Resolved through the shared theme base; can be inherited from global theme when unset. An omitted boolean is not forced to `false` at the attribute level (wrapper emits nothing), so global theme can still apply. |
+| `onNotificationClick` | None | Callback fired when a notification row is clicked. Receives the clicked `Notification` object (the wrapper passes `event.detail`). Fires **after** the SDK's own click handling (mark-as-read + navigation). | Distinct from the `<VeltNotificationDocument>`/data-layer hooks: this is a UI-row click only. The internal handler still runs even if you omit the callback. |
+| `shadowDom` | `true` | Renders the panel inside a **shadow root** for style isolation. Stored in the panel's local UI state. | Set `false` to style with normal page CSS selectors. The component separately tracks whether the attribute was set explicitly (`isExplicitShadowDom`), so an unset value is treated as the default-on, not as `false`. |
+| `variant` | `undefined` (default markup) | Selects the **wireframe variant** for the panel shell: the SDK subscribes to `velt-notifications-panel-wireframe---<variant>`. If a wireframe with that name is registered, it replaces the default markup; otherwise default renders. | Unmatched variant name silently falls back to default. Scopes only the panel shell, not the child primitives. |
+| `tabConfig` | `{}` (all four tabs on) | Configures the four tabs (`forYou` / `documents` / `all` / `people`), each `{ name?, enable? }`. `name` relabels the tab; `enable: false` removes it. Writing it re-runs `checkAndSetDefaultTab` and recomputes `tabCount`. | A tab is **enabled unless** its entry sets `enable: false`, so omitting a tab key, or omitting `tabConfig` entirely, leaves it **on**. If the default `forYou` tab is disabled, the selected tab falls back to `documents`, then `all` (never auto-selects `people`). |
+| `readNotificationsOnForYouTab` | `false` | When on, simply **viewing** the For You tab marks its notifications read (no click needed). Toggles the shared `readNotificationsOnForYouTab$` service flag. | **Global via the service**: setting it on the panel or the tool affects both. Off by default: For You notifications stay unread until clicked or read-all. |
+| `panelOpenMode` | `'popover'` | Stored in `uiState.panelOpenMode`. Values: `'popover'` \| `'sidebar'`. In `'sidebar'` mode the data layer keeps **all** fetched notifications in session (not just unread/seen ones), so the list is stable as a persistent column; `'popover'` keeps the leaner open-on-demand set. | For a statically-placed panel this mainly affects which notifications are retained in the session list. The tool's own `panelOpenMode` governs how the *tool* presents its panel; on the standalone panel it is a data-retention switch. |
+| `settings` | `false` (`settingsEnabled: false`) | Shows the settings UI affordance (the settings button/view that lets users mute notification categories). Toggles the shared `enableSettings()` service flag. | **Global via the service.** When on, the panel's settings button opens the settings accordion/list; the `settingsLayout` prop chooses its presentation. |
+| `selfNotifications` | `false` | When on, the current user's **own** actions generate notifications for them (normally self-authored events are excluded). Toggles the shared `selfNotifications$` flag (default `false`). | **Global via the service**: affects the data stream feeding both components and the unread count. |
+| `pageSize` | `5` | Number of notifications shown per tab page; "Load more"/paging fetches in increments of this size. Only **positive** numbers are accepted (non-numeric/≤0 ignored, default kept). | Stored in `uiState.pageSize`. Per-instance (not a service flag). The bottom-sheet variant can override it via injected data. |
+| `settingsLayout` | `'accordion'` | How the settings UI presents. Values: `'accordion'` (expandable rows) \| `'dropdown'` (per-category dropdowns). Stored in `uiState.settingsLayout`. | Only meaningful when `settings` is on. Per-instance. |
+| `enableSettingsAtOrganizationLevel` | off | Scopes settings changes to the **organization** (org-wide notification preferences) instead of per-user. Toggles `enableSettingsConfigByOrganization()`. | **Global via the service.** Pairs with `settings`; only affects where the chosen preferences are stored/applied. |
+| `defaultCondition` | `true` | Visibility gate from the v2 themed base (`input(true)`). When `false`, the component does not render. | Accepts boolean or stringified boolean. Use it to conditionally mount the panel declaratively without unmounting in your own framework. |
+| `enableCrossOrganization` | off | Includes notifications from **other organizations** the user belongs to. Accepts `true` (enable with defaults), a string, or a `CrossOrganizationConfig` object. An object with `enabled: false` **disables**; any other object enables with that config; a plain truthy value enables with defaults. | **Global via the service.** Arrays are treated as "object" by `typeof` but are excluded from the config branch, so a malformed array binding falls through to the plain-enable path rather than being read as config (this reference documents the fallback behavior, not the implementation intent). |
+
+**Default behaviors (VeltNotificationsPanel, no prop needed):**
+
+- **Statically placed:** the panel renders inline where you mount it; it is **not** Velt-anchored/positioned. There is no built-in open/close: it is always visible (the Escape-key handler exists for the tool-opened/bottom-sheet case).
+- **Tabs:** all four tabs (For You, Documents, All, People) are **on** by default; `tabCount` starts at 3 and is recomputed when `tabConfig` is set. The initially selected tab is **For You**; if For You is disabled, selection falls back to Documents, then All.
+- **Read-all:** the read-all action marks **unread** notifications as read **scoped to the active tab**: on the For You tab it marks the for-you unread set; on any other tab it marks the full unread set. (Logged-out/no-org users go through the views service by id.)
+- **Settings:** off (`settingsEnabled: false`); when enabled it defaults to the `'accordion'` layout and includes a mute-all toggle plus per-category options.
+- **Self notifications:** off. **Cross-organization:** off. **Read-on-view (For You):** off.
+- **Paging:** `pageSize` 5 per tab. **Theme:** light (`darkMode: false`). **Shadow DOM:** on. **Settings org-level:** off.
+
+---
+
+## VeltNotificationsTool
+
+The tool is a launcher button: it tracks the unread count, renders a bell + badge, and opens the notification panel on click. Props that affect the *panel it opens* (`tabConfig`, `settings`, `selfNotifications`, `readNotificationsOnForYouTab`, `settingsLayout`, `enableSettingsAtOrganizationLevel`, `enableCrossOrganization`, `pageSize`) drive the **same shared notification service / panel** as `VeltNotificationsPanel`, so their semantics match the table above; the rows below focus on the tool-specific behavior and the few props unique to the tool.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `darkMode` | `false` | Applies the dark theme to the tool button **and** the panel it opens. Synced into `uiState.darkMode` and inherited by children. | Same theme base as the panel. |
+| `onNotificationClick` | None | Callback fired when a notification row in the **opened panel** is clicked; receives the `Notification` (wrapper passes `event.detail`). | The tool re-emits the panel's click as its own `onNotificationClick` event. Internal click handling (read/navigate) still runs. |
+| `shadowDom` | `true` | Shadow-DOM isolation for the **tool button** itself. Stored in `uiState.shadowDom`. | Separate from `panelShadowDom`. Set `false` to style the bell/badge with page CSS. |
+| `panelShadowDom` | `true` | Shadow-DOM isolation for the **panel opened by the tool**. Stored in `uiState.panelShadowDom`. | Distinct from `shadowDom`. You can isolate the button but expose the panel (or vice versa). |
+| `variant` | `undefined` (default markup) | Wireframe variant for the **tool button**: subscribes to `velt-notifications-tool-wireframe---<variant>`. Matched wireframe replaces the default button markup. | Unmatched name falls back to default. Separate from `panelVariant`. |
+| `tabConfig` | `{}` (all tabs on) | Tab configuration for the opened panel; same shape/semantics as the panel (`forYou`/`documents`/`all`/`people`, each `{ name?, enable? }`). Stored on the tool's `data.tabConfig`. | Same enable-unless-`false` rule and same For You→Documents→All fallback as the panel. |
+| `panelOpenMode` | `'popover'` | How the tool **presents** its panel on click. Values: `'popover'` (floating overlay anchored to the button via CDK overlay positions) \| `'sidebar'` (slide-in side panel). | This is the tool's display switch (unlike the standalone panel, where `panelOpenMode` is mainly a data-retention switch). On phones a bottom-sheet path may be used (the exact breakpoint is not documented here). |
+| `panelVariant` | `undefined` (default markup) | Wireframe variant for the **panel the tool opens** (the panel shell), as opposed to `variant` which themes the button. | Lets you customize the opened panel without affecting the bell button. Unmatched name falls back to default. |
+| `maxDays` | `15` | Maximum **age in days** of notifications to fetch/show; older notifications are excluded from the list and the count window. Calls `setMaxDays(days)`. | **Global via the service.** If `≤ 0` (or unset path), the service floors it to **15**. Affects the data window for both components. |
+| `readNotificationsOnForYouTab` | `false` | Viewing the For You tab marks its notifications read. Same shared `readNotificationsOnForYouTab$` flag as the panel. | **Global via the service.** |
+| `settings` | off | Shows the settings UI in the opened panel. Same shared `enableSettings()` flag. | **Global via the service.** Pairs with `settingsLayout` / `enableSettingsAtOrganizationLevel`. |
+| `selfNotifications` | `false` | Include the user's own actions as notifications. Same shared `selfNotifications$` flag. | **Global via the service.** |
+| `considerAllNotifications` | `false` | Controls **which set feeds the unread badge count**: when `false` the badge counts unread **For You** notifications (`getNotificationsForYou$`); when `true` it counts unread across **all** notifications (`getNotifications$`). Stored in the tool's global `featureState.considerAllNotifications`. | Tool-only prop. Does not change the panel list contents: only the count semantics on the badge. Default behavior is "unread For You count." |
+| `pageSize` | `5` | Notifications per page in the opened panel. Only positive numbers accepted. | Per-instance; forwarded into the panel session config. |
+| `settingsLayout` | `'accordion'` | Settings UI layout in the opened panel: `'accordion'` \| `'dropdown'`. Stored in `uiState.settingsLayout`. | Only meaningful with `settings` on. |
+| `enableSettingsAtOrganizationLevel` | off | Org-level settings scope. Same `enableSettingsConfigByOrganization()` flag as the panel. | **Global via the service.** |
+| `defaultCondition` | `true` | Visibility gate (v2 themed base). `false` → tool does not render. | Accepts boolean or stringified boolean. |
+| `enableCrossOrganization` | off | Cross-org notifications; same `true`/string/`CrossOrganizationConfig` handling as the panel (object `enabled: false` disables). | **Global via the service.** Same array-falls-through-to-plain-enable note as the panel; this reference documents the fallback behavior, not implementation intent. |
+
+**Default behaviors (VeltNotificationsTool, no prop needed):**
+
+- **Launcher button:** renders a default bell with an unread badge; clicking toggles the panel open/closed (`notificationsPanelVisible`). Closing is debounced through a 0ms timeout and clears any pending close on re-open. Escape closes the open panel.
+- **Open mode:** `'popover'`: the panel opens as a CDK-overlay popover anchored to the button.
+- **Unread count source:** `considerAllNotifications: false`, so the badge shows the count of **unread For You** notifications. Set `considerAllNotifications: true` to count all unread.
+- **Data window:** `maxDays` 15 (older notifications excluded). **Tabs:** all four on; initial tab For You with the same disabled-tab fallback.
+- **Settings:** off (accordion when enabled). **Self notifications / cross-org / read-on-view / org-level settings:** off.
+- **Theme:** light. **Shadow DOM:** both the button (`shadowDom`) and opened panel (`panelShadowDom`) isolated by default. **Paging:** `pageSize` 5.
+
+---
+
+## Default behaviors (no prop needed)
+
+Each component's zero-prop baseline is documented in its **Default behaviors (… no prop needed)** block above. In brief: the panel is statically placed and always visible with all four tabs on (initial tab For You), paging at 5, light theme, shadow DOM on, settings/self-notifications/cross-org/read-on-view off; the tool renders a bell + unread badge that opens a `'popover'` panel on click, counts unread For You by default (`considerAllNotifications: false`), windows data to `maxDays` 15, and isolates both button and opened panel in shadow DOM.
+
+## Prop-interaction matrix
+
+There is no separate multi-prop matrix for this group: pairwise effects are documented in each prop's **Interactions & gotchas** column above. The one cross-cutting rule to note: the feature toggles (`settings`, `selfNotifications`, `readNotificationsOnForYouTab`, `enableCrossOrganization`, `enableSettingsAtOrganizationLevel`, `maxDays`) are read/written through the **shared notification service**, so setting any of them on either component changes the data stream for **both** (they are effectively global); per-instance props (`tabConfig`, `pageSize`, `panelOpenMode`, `settingsLayout`, `variant`, `shadowDom`/`panelShadowDom`) stay scoped to the component they are set on.
+
+## Positioning & composition
+
+Both surfaces are **statically placed**: you mount them in your own layout and control their position. `VeltNotificationsPanel` is not Velt-anchored; it has no built-in open/close and is always visible where you place it. `VeltNotificationsTool` is a statically-placed button whose opened panel is presented as a `'popover'` (a CDK overlay anchored to the button) or a slide-in `'sidebar'` per `panelOpenMode`: the button is where you put it; only the popover positions relative to it. See the anchored-vs-static classification in [`Component definitions`](/ui-customization/reference/component-definitions) and [`Behaviors` → Positioning ownership](/ui-customization/reference/behaviors#positioning-ownership-anchored-surfaces).
+
+## Provable coverage
+
+- **`VeltNotificationsPanel`:** 14 / 14 props covered (`darkMode`, `onNotificationClick`, `shadowDom`, `variant`, `tabConfig`, `readNotificationsOnForYouTab`, `panelOpenMode`, `settings`, `selfNotifications`, `pageSize`, `settingsLayout`, `enableSettingsAtOrganizationLevel`, `defaultCondition`, `enableCrossOrganization`).
+- **`VeltNotificationsTool`:** 19 / 19 props covered (`darkMode`, `onNotificationClick`, `shadowDom`, `panelShadowDom`, `variant`, `tabConfig`, `panelOpenMode`, `panelVariant`, `maxDays`, `readNotificationsOnForYouTab`, `settings`, `selfNotifications`, `considerAllNotifications`, `pageSize`, `settingsLayout`, `enableSettingsAtOrganizationLevel`, `defaultCondition`, `enableCrossOrganization`).
+
+Coverage notes: the phone bottom-sheet breakpoint for `panelOpenMode` is not documented here; the array-binding fall-through on `enableCrossOrganization` is documented as behavior, not implementation intent. Every other behavior is covered in this reference.

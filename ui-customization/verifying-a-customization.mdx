@@ -1,0 +1,127 @@
+---
+title: "Verifying a customization: the definition of \"done\""
+sidebarTitle: "Verification"
+description: "Verify each customized Velt surface against design, behavior, accessibility, and implementation rules."
+---
+
+A customization is **done** when three things are true, in this order: it **matches the design**, Velt's **behavior is still intact**, and the code is **rule-compliant**. This page is the step-ordered flow for confirming all three on **one surface**: the executable companion to R15 (verify after each surface) and R16 (one surface at a time).
+
+<Warning>
+**Golden rule of verification: measure the whole surface, don't eyeball or sample, and name every difference.** Fidelity is a whole-surface measurement problem. Check **three** things per state and require all of them to be clean: rendered computed styles vs. the `designSpec`, surface-relative layout boxes and relationships, and a visual side-by-side where any nameable difference is a fail. The checklist is auto-derived from every mapped element; there is no aggregate score, and "looks close" is a fail.
+
+Collect evidence first, then decide the verdict. A build step or runtime check should not declare a surface matched without the full design, behavior, and rules evidence.
+</Warning>
+
+<Note>
+Use the same standard whether verification is automated or manual: cover every mapped element, every required state, and every behavior contract before marking the surface done.
+</Note>
+
+Run this flow **per surface**, finish it, then move to the next surface. Don't batch (R16).
+
+---
+
+## What you need first (preconditions)
+
+You can't verify what isn't rendering. Before anything else:
+
+1. **Velt is initialized.** The app boots, the user is identified, documents are set, and the **default** version of this surface renders. Gate logic on `useVeltInitState()` if needed. (See [`Debugging`](/ui-customization/debugging#first-always).)
+2. **The surface has data.** Create a comment / open a thread / trigger a notification through the app's own UI so the surface has something to show. If you genuinely can't seed data, verify the **empty / loading** state only and record that limitation in the report.
+3. **You have the design reference** for this surface (the Figma frame / screenshot) and know which **states** it specifies.
+
+If the app won't build or run, the visual and behavior checks can't be performed. The surface is **BLOCKED**: it is neither a pass nor a fail, and the design match is simply *unverified*. You can still run the static rules scan (step 4) on the produced code. Do not fake a pass.
+
+---
+
+## The flow
+
+### Step 1: Drive every state the design specifies
+
+For each visual goal, render the surface in each **state** the design covers and capture it. The states that matter per surface are in the [matrix below](#per-surface-state--behavior-matrix). Common ones:
+
+- **default**, **hover**, **selected/focused**
+- **empty**, **loading / skeleton**, **filtered-to-zero**
+- **unread**, **resolved** (and `OPEN` / `IN_PROGRESS` / `RESOLVED` if the design themes by status)
+- **long content** (truncation), **private** (if shown)
+
+Capture each state as evidence. A visual goal with states `["default","resolved"]` is only checkable once you've driven both.
+
+### Step 2: Whole-surface measured check + visual gate (match the design)
+
+For each state, do all four: this is the gate:
+
+1. **Consume or assemble the complete checklist (R26: do not hand-pick samples).** Build the checklist from **every distinct styled appearance in the design** (deduped by its declarations: the teal mention, the placeholder, each filter row), **every `mustSupply` slot**, **every mount-map part**, and **every required state**. Resolve each element's live selector by inspection: use the manifest `cssClasses` for measured leaves and inspect to the leaf for the rest. Add **relations + gaps** from the manifest `layout`. Produce a disposition for **every** checklist element plus the per-state visual artifact. A report that samples fewer elements than the checklist is **INCOMPLETE, not PASS**, so the loop cannot end on it.
+2. **Gross-mismatch pre-check first:** compare total content height / element count / surface extents vs the designSpec. Grossly off ⇒ FAIL immediately (don't let per-element props "pass" on a broken surface).
+3. **Measure live browser output**: read each **live** node's `getComputedStyle` plus surface-relative `getBoundingClientRect` (never the 0-size `*-wireframe` template) and produce a delta table with a verdict covering **style** (Delta E below 2, ±1px, keywords exact) and **layout** (box ±2-3px, gaps, relations, missing or extra elements).
+4. **Visual side-by-side: a GATE:** capture the full-surface screenshot beside the Figma frame and **name every visible difference** (density/spacing, name placement, filter as a box vs icon, hover actions revealed, unwanted banner). **Any nameable difference ⇒ FAIL**, then find the property/relation you didn't measure and add it. A clean table with an obviously-wrong screenshot is still a FAIL.
+
+**Hard gates:** any console error / unbuilt page / mapped element with `width===0` ⇒ `BLOCKED`/`FAIL`. Every `mustSupply` slot must be **present and carry the design's content**: an icon slot must contain the design's exported SVG (compare identity), not a Velt default or hand-drawn glyph (R17 FAIL). A popup must be styled on its `content` slot, never its container/trigger (R23). Horizontal padding must not compound across nested wrappers (R22). No feature/prop whose UI the design doesn't show (R24). **Colours still must trace to a `--velt-*` token / documented class** (an accidentally-matching hard-coded colour breaks in dark mode: fail it even if ΔE passes).
+
+The delta table's failing rows + the named visual differences ARE the feedback. Mark the goal **met** only when, for every state, the gross check is clean, the style + layout tables are empty, and the visual side-by-side has no nameable difference; otherwise **not met**, listing each diff.
+
+### Step 3: Behavior check (Velt still works)
+
+Customizing presentation must **never** break Velt's behavior: you never disabled it, so it must still work (R0, R7). Perform the surface's real actions (in the [matrix](#per-surface-state--behavior-matrix)) and confirm each still functions: place a pin, open a dialog, reply, change status, filter, sidebar sync; open a notifications panel, switch tab, mark read, click through. If an action is dead, something was hidden with CSS instead of a prop (R7), interactivity was put in wireframe markup (R4), or a slot was dropped: fix it; it is not a "design gap."
+
+### Step 4: Rules-compliance scan (static, on the produced code)
+
+Walk the **Quick gate** in [`Rules`](/ui-customization/rules) against what you wrote. The checks that catch the most:
+
+- **R0**: no hacks: no `setTimeout` / `MutationObserver` on Velt internals, no scraped internal markup, no timing/DOM shims.
+- **R1 / R2**: exactly one `<VeltWireframe>`; the live feature component is mounted.
+- **R4 / R5**: no `onClick` / `useState` / hooks inside wireframe markup; UI-library components wrap *around* primitives, not *inside* wireframes.
+- **R6 / R7 / R8 / R9**: selector CSS only with shadow off or `injectCustomCss`; no `display:none` to remove features; one stylesheet; dark values scoped to `:root[data-velt-theme="dark"]`.
+- **R10**: every identifier (slot, prop, variable, class, hook, API) verified against [`reference/`](/ui-customization/reference/component-catalog). If it isn't there, it doesn't exist.
+- **R11 / R16**: files under `components/velt/ui-customization/`; only this one surface touched this step.
+- **Verified gotchas**: `ThreadCard` nested in `Body → Threads`; container slots declare their full child tree; correct shadow root-vs-nested handling; pin index/number filled via `velt-data`; `VeltCommentDialog`, never the deprecated `VeltCommentThread`. (All in [`Wireframe components`](/ui-customization/reference/wireframe-components).)
+
+A rule violation is a **fail**, even if the surface looks right: a patchy fix that "looks right" today breaks silently tomorrow (R0).
+
+### Step 5: Verdict
+
+| Verdict | When | Then |
+|---|---|---|
+| **PASS** | Every visual + behavior goal **met**, rules scan clean. | Surface done. Move to the next (R16). |
+| **PARTIAL** | All *unmet* goals are genuine SDK gaps (no clean supported path), and everything achievable is met + clean. | Accept the best clean partial. Record each gap per [`SDK gaps and blockers`](/ui-customization/sdk-gaps-and-blockers). Move on. |
+| **FAIL** | ≥1 goal unmet or a rule violated, and it's **fixable**. | Return to the build with specific feedback; re-run this flow. |
+| **BLOCKED** | App won't build/run, or the surface can't be reached → design match unverified. | Static rules scan only; the design match is not verified (the tool decides what to deliver/report). |
+
+<Warning>
+A goal is only allowed to be **PARTIAL** (not FAIL) once you've confirmed there is no clean supported path for it. Run the [blocked / gap flow](/ui-customization/sdk-gaps-and-blockers) before downgrading a fail to a gap. Never convert a fixable miss into a "gap" to escape the loop.
+</Warning>
+
+---
+
+## Per-surface state & behavior matrix
+
+The concrete "what to drive" for each v1 surface. Drive the **states** for the visual check (step 1-2); perform the **behaviors** for step 3. Verify only the states the design actually specifies, but never skip the behavior column.
+
+### Comments
+
+| Surface | States to drive | Behaviors to confirm |
+|---|---|---|
+| **Comment pin** (`VeltCommentPin`) | default, by-status (`OPEN`/`IN_PROGRESS`/`RESOLVED`), unread, selected; index/number shown for normal comments (none in page-mode) | click → opens dialog; recolors on status change; index via `velt-data` renders |
+| **Comment bubble** (`VeltCommentBubble`) | default, with count, unread, on-pin-hover (if enabled) | hover/click behavior; count updates as comments are added |
+| **Comment dialog** (`VeltCommentDialog`) | default, empty thread, resolved, long content; `variant="dialog"` and `variant="sidebar"` if both used | reply, change status (resolve/unresolve), reactions, composer submit; opens from pin |
+| **Comments sidebar V1** (`VeltCommentsSidebar`) | default list, empty, loading, filtered-to-zero | search, filter panel (apply/reset), select a thread → syncs to its pin/dialog |
+| **Comments sidebar V2** (`VeltCommentsSidebarV2`) | list, group headers expanded/collapsed, empty-placeholder, filtered-to-zero | search, filters/miniFilters, grouping, select row → sync |
+| **Sidebar button** (`VeltSidebarButton`) | default, with unread count | click → opens/closes sidebar; count updates |
+| **Comment tool** (`VeltCommentTool`) | default, active | activates comment-placement mode |
+| **Inline / text / multi-thread** | section list, empty, composer position, filter/sort states | add comment, reply, filter, sort |
+
+### Notifications
+
+| Surface | States to drive | Behaviors to confirm |
+|---|---|---|
+| **Notifications panel** (`VeltNotificationsPanel`) | each enabled tab (`forYou`/`documents`/`all`/`people`), empty per tab, unread, settings view | switch tab, mark read, click-through to source, open settings |
+| **Notifications tool / bell** (`VeltNotificationsTool`) | default, with unread count | click → opens panel (`panelOpenMode`); count updates |
+| **Notifications history** (`VeltNotificationsHistoryPanel`) | embedded list, empty | scroll/read history |
+
+<Tip>
+Also run the cross-cutting checks for any surface with custom markup: dark mode on/off, RTL, mobile width, keyboard navigation with visible focus, and working scroll behavior (R14). Full checklist: [`Cross-cutting concerns`](/ui-customization/localisation) section Testing. Those checks are part of "matches the design," not an afterthought.
+</Tip>
+
+---
+
+## After an SDK upgrade
+
+Re-run the **visual + rules** checks. Variable-based theming (`--velt-*`) is upgrade-safe; **class/selector overrides and wireframe slot names** are the most drift-prone pieces, so re-verify them first ([`Cross-cutting concerns`](/ui-customization/localisation)).

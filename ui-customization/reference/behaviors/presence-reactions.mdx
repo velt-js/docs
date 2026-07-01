@@ -1,0 +1,126 @@
+---
+title: "Presence, Cursors & Reactions"
+sidebarTitle: "Presence & reactions"
+description: "Reference runtime behavior for presence, cursor, and reaction components."
+---
+
+`VeltPresence`, `VeltCursor`, and `VeltReactionTool` are the three real-time-collaboration surfaces. This file owns the layer above [`Props`](/ui-customization/reference/props) for them: **what every prop does at runtime, its default, the state it drives, and how props combine**: plus the default behaviors you get with no prop at all (presence avatar list + self, live cursor follow, reaction-tool emoji set).
+
+Read this alongside [`Component definitions`](/ui-customization/reference/component-definitions) (anchored-vs-static classification) and [`Data models`](/ui-customization/reference/data-models) (the `PresenceUser` / `CursorUser` entities these surfaces read).
+
+- **Who positions them (the key gotcha):** `VeltPresence` is **statically placed**: it renders an avatar row exactly where you mount it in your DOM, like any normal React element; you control its position with your own CSS. **`VeltCursor` is anchored / Velt-positioned**: you mount it once (typically near the app root) and Velt paints every remote user's cursor as a fixed-position overlay that **lives on the page**, following each user's real pointer in viewport coordinates. You do **not** position individual cursors; Velt owns their placement. See [`Behaviors` → Positioning ownership](/ui-customization/reference/behaviors#positioning-ownership-anchored-surfaces) and [`Component definitions`](/ui-customization/reference/component-definitions) for the anchored-vs-static axis. `VeltReactionTool` is a **statically-placed** trigger button (you place it), but the reactions it can produce on a video timeline are themselves anchored to media position.
+- **One mount each:** `VeltCursor` guards against duplicate subscriptions: only the **first** `velt-cursor` element in the DOM actually subscribes to the live-cursor stream and renders; additional instances are inert. Mount it once.
+
+---
+
+## Per-prop behavior (exhaustive)
+
+The exhaustive per-prop behavior for the three real-time surfaces is organized **per component** below: each `## Velt…` subsection carries that component's full prop table (default + runtime behavior + interactions) and its own `### Default behaviors (no prop needed)` block. Every prop in [`Props`](/ui-customization/reference/props) for these components is covered (plus the source-only props noted inline); see [Provable coverage](#provable-coverage).
+
+## `VeltPresence`
+
+A statically-placed avatar row showing who is currently online on the same document/location. It subscribes to online users for the current document, filters them by location (if scoped), and renders avatars with a hover tooltip. Confirmed against the presence component.
+
+| Prop · Default · Behavior · Interactions & gotchas |
+|---|
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `maxUsers` | `5` | Caps how many avatars render before the row collapses into an overflow "+N" count. Non-numeric values are rejected (logged) and the default holds. | Independent of `self`; the current user (when included) counts toward the cap. Setting a value other than `5` is tracked in analytics. |
+| `inactivityTime` | `5` (component literal); the presence service's own baseline is **5 minutes** | Milliseconds of no user activity before the user is flipped to the **inactive/idle** presence state (drives the tooltip's "active vs away" display and away-minutes). Passing the prop calls the service setter with your raw value, which debounces idle detection by that many **milliseconds**, so pass a real millisecond value (e.g. `300000` for 5 min), not `5`. Non-numeric values are rejected. | Must be **less than** `offlineInactivityTime`: see that row. Feeds the `calculateUserAwayTime` shown in the tooltip. |
+| `offlineInactivityTime` | `10` (component literal); service baseline **after** inactivity | Milliseconds of inactivity before the user is flipped from inactive to **offline** (removed from the live list). | **Hard constraint:** a value **less than `inactivityTime` is rejected** (logged) and ignored: offline must come after idle. Set both in milliseconds and keep `offlineInactivityTime ≥ inactivityTime`. |
+| `documentParams` | None | Listed in [`Props`](/ui-customization/reference/props) as a scoping input, but it is **not** a runtime `@Input` on the presence component (not documented as a live presence prop). Scope presence with `location` / `locationId` instead, or set the document via the provider/`useSetDocument`. Treat `documentParams` on `VeltPresence` as a no-op for filtering. | Use `location`/`locationId` (below) for sub-document scoping. |
+| `location` | (unscoped → all users on the document) | A location **object** that scopes the avatar list to users present at that location. The object is JSON-parsed (if passed as a string) and converted to a server location id; the list is then filtered to users whose `locationId` matches. | Mutually exclusive in effect with `locationId`: if `locationId` is set it wins (it is checked first). With neither set, **all** online users on the document render. |
+| `locationId` | (unscoped) | A location **id string** that scopes the avatar list to users whose `location.id` equals it. | Checked **before** `location`: if both are passed, `locationId` takes precedence. |
+| `onPresenceUserChange` | None | Callback fired with the current **filtered** presence-user array every time the (filtered) list changes: on initial load and on every add/remove/scope change. | Receives the post-filter list (respects `location`/`locationId`), not the raw document list. Use this, not `onUsersChanged`. |
+| `onUsersChanged` | None | **Deprecated** alias of `onPresenceUserChange`; fires with the same filtered array at the same time. | Kept for back-compat: migrate to `onPresenceUserChange`. Both fire together. |
+| `flockMode` | `false` | Enables **flock (follow) mode**: when on, clicking another user's presence avatar makes the local user **follow** that user as the flock leader (their navigation/scroll is mirrored). Turning it on registers the navigate emitter; turning it off disables following. String `"true"`/`"false"` are JSON-parsed. | Works **with `onPresenceUserClick`**: a click both emits that event **and**, if flock mode is on and the clicked user isn't you, sets them as flock leader. `onNavigate` only fires while flock mode is active. |
+| `defaultFlockNavigation` | (navigation enabled by default) | Controls whether following a leader also **navigates** the follower (route/URL changes), as opposed to only mirroring viewport. Passing `true` enables navigation on follow; the value is inverted internally to drive the underlying "disable navigation" flag. | Replacement for `disableFlockNavigation`. Only meaningful when `flockMode` is on. |
+| `disableFlockNavigation` | None | **Deprecated** inverse of `defaultFlockNavigation`: passing `true` **disables** flock navigation. Internally both set the same flag (this one un-inverted, `defaultFlockNavigation` inverted). | Migrate to `defaultFlockNavigation`. Don't pass both: they write the same underlying flag and the last one wins. |
+| `self` | `true` (current user **is** included) | Whether the current user appears in the presence list. `true` → your own avatar shows in the row; `false` → you are excluded and only others show. String values are JSON-parsed. | Default-on is a common surprise: out of the box you see yourself. Set `self={false}` for the "others online" pattern. Interacts with `maxUsers` (you count toward the cap when included). |
+| `shadowDom` | `true` | Wraps the rendered avatar row in shadow DOM for style isolation. Set `false` to style it with ordinary selector CSS. | Same semantics as the shadow-DOM flags elsewhere: see [`Behaviors` → `shadowDom`](/ui-customization/reference/behaviors#shadowdom-vs-dialogshadowdom-and-the-per-surface-flags). When `true`, target [`CSS variables`](/ui-customization/reference/css-variables) tokens rather than deep selectors. |
+| `onNavigate` | None | Callback fired during flock navigation with `{ path, url, baseUrl }` so you can drive your own router (SPA navigation) instead of a hard page load. | Only fires while `flockMode` is enabled and the follower is being navigated. Pair with a custom router push in frameworks that don't do full reloads. |
+| `onPresenceUserClick` | None | Callback fired with the clicked `PresenceUser` whenever a presence avatar is clicked. | Always fires on click. **Additionally**, if `flockMode` is on and the clicked user isn't the current user, the click also makes that user the flock leader (you start following them). |
+| `variant` | None | Selects a named **wireframe variant** of the presence layout when you've registered one (e.g. an `<VeltPresenceWireframe variant="...">`). With no matching wireframe, the default avatar-list layout renders. | This is the hook into the wireframe approach: see [`Wireframes`](/ui-customization/layout). Not a styling shortcut; it swaps the whole layout template. |
+
+### Default behaviors (no prop needed)
+
+- **Avatar row of online users.** Out of the box `VeltPresence` renders a horizontal list of avatars for everyone online on the current document, capped at **5** (`maxUsers`), with a **"+N" overflow count** beyond that. Each avatar has a **hover tooltip** showing the user's name and active/away status.
+- **You are included.** `self` defaults to **`true`**, so your own avatar is in the row by default.
+- **All users, unless scoped.** With no `location`/`locationId`, every online user on the document shows; set either to scope to a sub-region.
+- **Idle then offline.** Users transition online → inactive (after `inactivityTime`) → offline (after `offlineInactivityTime`), driving the tooltip's away-time. The component literals are `5` / `10`; the presence service's real baselines are minute-scale, and the prop values you pass are interpreted as **milliseconds**.
+- **No flock by default.** `flockMode` is off; clicking an avatar only emits `onPresenceUserClick` and shows the tooltip: it does not start following anyone until you enable flock mode.
+- **Style-isolated.** `shadowDom` defaults `true`.
+
+---
+
+## `VeltCursor`
+
+An **anchored / Velt-positioned** surface: mount it once and Velt overlays every other online user's live cursor on the page, tracking each user's real pointer position. The local user's own pointer position is read from window pointer-move events (offset by 2px). Confirmed against the cursor component.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `avatarMode` | `false` | When `false`, each remote cursor renders as a labeled **pointer/arrow with the user's name**. When `true`, the cursor is rendered with the user's **avatar** attached instead. | Cosmetic per-cursor mode. Does not change which cursors show or where they're positioned (Velt always owns position). |
+| `inactivityTime` | `5` (component literal); cursor service baseline **2 minutes** | Milliseconds a remote user's cursor stays visible after their last movement; once the time-since-last-update exceeds this, the cursor is **hidden/flushed** from the page. Passing the prop sets the service value to your raw number. Non-numeric values are rejected. | Pass a real millisecond value (the service baseline is `2*60*1000`). Lower it for snappier disappearance of idle cursors; raise it to keep stale cursors visible longer. |
+| `allowedElementIds` | `[]` (no restriction → cursors render anywhere on the page) | A **JSON-stringified array** of element ids that constrains where cursors are shown: cursors only paint while the pointer is over one of those elements. Empty/unset means the whole page. | **Gotcha:** must be a **stringified** array (`JSON.stringify([...])`), not a raw array: the setter `JSON.parse`s strings. Passing a real array works too, but the documented contract is stringified. Use this to confine cursors to a canvas/whiteboard region. |
+| `onCursorUserChange` | None | Callback fired with the current array of live `CursorUser`s every time the live-cursor list changes (join/leave/move-batch). | Fires from the single subscribing (first) cursor instance. Use this, not `onCursorUsersChanged`. |
+| `onCursorUsersChanged` | None | **Deprecated** alias of `onCursorUserChange`; fires with the same array at the same time. | Migrate to `onCursorUserChange`. Both fire together. |
+
+### Default behaviors (no prop needed)
+
+- **Live remote cursors follow real pointers.** With just `<VeltCursor />` mounted, every other online user's cursor appears as a named pointer that moves in real time, positioned in viewport coordinates (Velt owns placement: you don't set per-cursor positions). The local user's position is sampled from window pointer-move (offset −2px / −2px).
+- **Name labels, not avatars.** `avatarMode` is `false` by default → cursors show the user's **name**, not their avatar.
+- **Mount-once / first-instance-wins.** Only the first `velt-cursor` element subscribes and renders; duplicate mounts are inert (prevents double subscriptions). Mount one near the app root.
+- **Idle cursors flush.** A cursor that stops updating past `inactivityTime` is hidden (service baseline 2 minutes).
+- **Whole-page by default.** `allowedElementIds` empty → cursors render anywhere; set it to confine them.
+- **Always shadow-DOM isolated.** The cursor component renders with shadow-DOM encapsulation **always on** (it is not a toggleable prop here, unlike presence): style it via the cursor CSS variables, not deep selectors. There is no `shadowDom` prop on `VeltCursor`; this reference documents no master flag that affects it.
+
+---
+
+## `VeltReactionTool`
+
+A statically-placed **trigger button** that opens an emoji/reaction picker panel. Documented props in [`Props`](/ui-customization/reference/props) are `videoPlayerId` and `onReactionToolClick`; the component also accepts several additional inputs/outputs present in source (noted below and marked where not listed in Props). Confirmed against the reaction-tool component.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `videoPlayerId` | None | Binds the tool to a specific `<video>` element by id. When set, picking an emoji **adds a reaction at the current media position** (and **pauses** the video if it's playing) instead of merely emitting the selection. When unset, picking an emoji only emits `emojiSelected`: the host decides what to do with it. | This is the switch between "video-reaction recorder" (id set → it writes a reaction annotation at the timeline position) and "pure picker" (no id → emit-only). Pairs with `VeltCommentPlayerTimeline`, which renders the resulting reaction markers. |
+| `onReactionToolClick` | None | Callback fired when the tool's trigger button is **clicked/opened** (the picker tooltip becomes visible). | Fires on open only. For the actual emoji choice use `emojiSelected`; for open/close state use `reactionToolOpen`. |
+| `emojiSelected` | None | *(present in source; not listed in Props)* Output emitting the selected emoji **key** (e.g. `THUMBS_UP`) when the user picks one. The picker then closes. | The primary "which reaction" signal. When `videoPlayerId` is set, selection **also** writes a reaction; when unset, this event is the only effect. |
+| `reactionToolOpen` | None | *(present in source; not listed in Props)* Output emitting `true` when the picker opens and `false` when it closes; also toggles `reaction-tool-active` / `velt-reaction-tool-open` host classes. | Use for driving open/closed styling or analytics. The host classes give you a CSS hook for the open state. |
+| `excludeReactionIds` | `[]` | *(present in source; not listed in Props)* Array of emoji keys to **omit** from the picker. Empty → all default emojis show. | Filters the default set (see below). It removes by key: to *add* custom reactions, use the SDK-level `customReactions`/`ReactionMap` config, not this prop. |
+| `isInlineSectionMode` | `false` | *(present in source; not listed in Props)* Renders the tool in the compact inline-reactions-section layout (used inside `VeltInlineReactionsSection`) vs the standalone button. | Internal-layout switch; not typically set directly when using the standalone `VeltReactionTool`. |
+| `noPadding` | `false` | *(present in source; not listed in Props)* Removes the button's surrounding padding for tight embeds. | Pure layout. |
+| `shadowDom` | `true` | *(present in source; not listed in Props for this component)* Wraps the tool in shadow DOM. The component also reads the explicit `shadow-dom` HTML attribute to decide whether to honor a registered wireframe's encapsulation. | Same shadow-DOM semantics as elsewhere; set `false` to style with selector CSS. |
+| `variant` | None | *(present in source)* Selects a named wireframe variant of the reaction tool (`velt-reaction-tool-wireframe---<variant>`). With no matching wireframe, the default button renders. | Hook into [`Wireframes`](/ui-customization/layout); swaps the layout template, not just styling. |
+
+### Default behaviors (no prop needed)
+
+- **A button that opens an emoji panel.** Out of the box the tool renders an "Add reaction" trigger (role=`button`, `aria-haspopup`); clicking it opens a positioned overlay panel of emojis.
+- **The default emoji set.** With no customization the picker shows Velt's built-in SVG emoji set: confirmed keys: **`RAISED_HANDS`, `THUMBS_DOWN`, `THUMBS_UP`, `HEART_FACE`, `TEARS_OF_JOY`, `EYES`, `FIRE`**. The rendered ordering follows the emoji-map iteration order; this reference does not guarantee it as a stable display order.
+- **Emit-only unless bound to video.** With no `videoPlayerId`, selecting an emoji just fires `emojiSelected` and closes the panel: nothing is persisted; the host wires up the effect. Bind `videoPlayerId` to make selection write a reaction at the current media position (and pause playback).
+- **Custom emoji set is an SDK-level concern.** The picker's contents come from the emoji service, which is overridden via the app-level `customReactions` / `ReactionMap` configuration (see [`Component config`](/ui-customization/reference/component-config)), **not** via a prop on this component. `excludeReactionIds` only *subtracts* from whatever set is active.
+- **Style-isolated.** `shadowDom` defaults `true`.
+
+---
+
+## Default behaviors (no prop needed)
+
+Each component's zero-prop baseline is documented in its `### Default behaviors (no prop needed)` block above. In brief: **`VeltPresence`** renders a horizontal avatar row of everyone online on the document (cap `maxUsers` 5, "+N" overflow, hover tooltips), includes the current user (`self` true), shows all users unless scoped by `location`/`locationId`, transitions online → inactive → offline, runs no flock by default, and is shadow-DOM isolated; **`VeltCursor`** paints every other online user's live cursor as a name-labeled pointer in viewport coordinates (Velt owns placement), only the first mounted instance subscribes, idle cursors flush after the inactivity window, and it is always shadow-DOM isolated; **`VeltReactionTool`** renders an "Add reaction" button that opens Velt's default emoji set, emits `emojiSelected` only (no persistence) unless bound to a `videoPlayerId`, and is shadow-DOM isolated.
+
+## Prop-interaction matrix
+
+No separate multi-prop matrix for this group: pairwise effects live in each prop's **Interactions & gotchas** column above. The interactions worth restating: on `VeltPresence`, `offlineInactivityTime` must be **≥ `inactivityTime`** (a smaller value is rejected), `locationId` takes precedence over `location`, `flockMode` gates `onNavigate`/`defaultFlockNavigation` and pairs with `onPresenceUserClick` (a click sets the flock leader only when flock mode is on), and the current user counts toward `maxUsers` when `self` is on; the deprecated callbacks (`onUsersChanged`→`onPresenceUserChange`, `onCursorUsersChanged`→`onCursorUserChange`, `disableFlockNavigation`→`defaultFlockNavigation`) fire/write alongside their replacements. On `VeltReactionTool`, `videoPlayerId` switches selection from emit-only to writing a media-anchored reaction, and `excludeReactionIds` only subtracts from the active set (`customReactions` is the SDK-level way to add).
+
+## Positioning & composition
+
+Mixed: **`VeltPresence`** and **`VeltReactionTool`** are **statically placed**: they render where you mount them and you control position with your own CSS (the video reactions a reaction tool can produce are themselves anchored to media-timeline position). **`VeltCursor`** is **anchored / Velt-positioned**: mount it once near the app root and Velt paints each remote cursor as a fixed-position overlay tracking that user's real pointer; you do not position individual cursors. See [`Behaviors` → Positioning ownership](/ui-customization/reference/behaviors#positioning-ownership-anchored-surfaces) and the anchored-vs-static classification in [`Component definitions`](/ui-customization/reference/component-definitions).
+
+## Provable coverage
+
+| Component | Props page entries | Documented here | Notes |
+|---|---|---|---|
+| `VeltPresence` | 16 | 16 (+`variant`) | All 16 Props rows covered (`maxUsers`, `inactivityTime`, `offlineInactivityTime`, `documentParams`, `location`, `locationId`, `onUsersChanged`, `onPresenceUserChange`, `flockMode`, `disableFlockNavigation`, `defaultFlockNavigation`, `self`, `shadowDom`, `onNavigate`, `onPresenceUserClick`). That is 15 listed rows plus the section's `IVeltPresenceProps`; `variant` added from verified metadata. `documentParams` documented as a non-`@Input` no-op on this component. |
+| `VeltCursor` | 5 | 5 | All 5 covered (`avatarMode`, `inactivityTime`, `allowedElementIds`, `onCursorUsersChanged`, `onCursorUserChange`). Shadow-DOM is always-on (no prop). |
+| `VeltReactionTool` | 2 | 2 (+7 source props) | Both Props rows (`videoPlayerId`, `onReactionToolClick`) covered; 7 additional source inputs/outputs documented and marked *(not listed in Props)*: `emojiSelected`, `reactionToolOpen`, `excludeReactionIds`, `isInlineSectionMode`, `noPadding`, `shadowDom`, `variant`. |
+
+**Coverage notes:** `documentParams` is not documented as a live presence input; no master `shadowDom` flag is documented for `VeltCursor`; the default emoji display order is not guaranteed as stable. Everything else is stated as covered behavior.

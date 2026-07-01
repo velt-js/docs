@@ -1,0 +1,238 @@
+---
+title: "Patterns & tips"
+sidebarTitle: "Patterns & tips"
+description: "Use proven recipes for Velt styling, wireframes, primitives, mixed approaches, and custom actions."
+---
+
+Reusable recipes, **grouped by the approach they belong to**: jump to the bucket for the layer you're using:
+
+- [General workflow](#general-workflow-any-approach): applies to any approach
+- [CSS-specific](#css-specific): pure styling tricks
+- [Wireframe-specific](#wireframe-specific): slot + token tricks
+- [Primitives-specific](#primitives-specific): composition tricks
+- [Mixed](#mixed-more-than-one-layer-together): recipes that combine layers
+
+All class-based CSS uses `!important` (R9b: Velt's runtime styles are high-specificity).
+
+---
+
+## General workflow (any approach)
+
+**Progressive escalation.** Start at the cheapest layer; escalate only when blocked: CSS → Wireframes → Primitives → Headless. Never start at headless "to be safe": it's the most expensive. See [`Decision tree`](/ui-customization/decision-tree).
+
+**Per-feature layering.** Decide approach **per surface**; theme everything with one CSS file. Typical healthy mix: wireframe the dialog, primitive sidebar, headless badge in your header, CSS on top. See [`Combining approaches`](/ui-customization/combining-approaches).
+
+**Gate rendering on init.** Velt is client-side: don't render custom UI against an uninitialized client:
+```tsx
+const ready = useVeltInitState();
+if (!ready) return <MySkeleton/>;
+```
+
+**Compare against default.** When something looks wrong, temporarily remove your customization to see Velt's default: it isolates "my styling" from "Velt behavior."
+
+**One feature at a time.** Finish + verify a surface before starting the next.
+
+**Look up every name.** CSS var / class / slot / `{…}` / prop / hook → it's in [`reference/`](/ui-customization/reference/component-catalog) or it doesn't exist. The reference map: [`Wireframe components`](/ui-customization/reference/wireframe-components) (slots), [`Wireframe variables`](/ui-customization/template-variables) (tokens), [`CSS classes`](/ui-customization/reference/css-classes) (stateful classes), [`Component config`](/ui-customization/reference/component-config) (props).
+
+**`'use client'`** (Next.js): customization components and anything using hooks must be client components.
+
+---
+
+## CSS-specific
+
+**Theme-token layer.** Define your brand once as your own variables, then map them onto `--velt-*`:
+```css
+:root {
+  --brand-accent: #FF6B35;
+  --velt-light-mode-accent: var(--brand-accent);
+  --velt-light-mode-accent-hover: color-mix(in srgb, var(--brand-accent) 85%, black);
+}
+```
+One place to change your brand; Velt + your app stay in sync.
+
+**Reveal actions only on hover.** Hide the kebab/options/reaction icons; show on hover. Velt already wires this on `.velt-thread-card--container:hover`; you can also force it with `.velt-thread-card--show-actions`.
+```css
+.hw-comment-actions { opacity: 0; transition: opacity .12s ease; }
+.hw-comment:hover .hw-comment-actions,
+.hw-comment-actions:focus-within { opacity: 1; }
+```
+
+**Reaction tool when empty vs reaction panel when populated.** The pin carries `velt-reaction-pin--no-reactions` only when count is 0. Use it (and `:has(app-reaction-pin)`) to swap/position the reaction UI by count.
+```css
+.velt-thread-card--reactions:not(:has(app-reaction-pin)) { display: none !important; }
+```
+
+**Style the unread dot.**
+```css
+.velt-thread-card--name--unread {
+  width:6px !important; height:6px !important; border-radius:50% !important;
+  background: var(--brand) !important; margin-left:0 !important;
+}
+```
+
+**Style resolved threads** (no `--resolved` class: detect the unresolve button):
+```css
+.velt-comment-dialog--sidebar-mode:has(velt-comment-dialog-unresolve-button-internal .icon)
+  .velt-thread-card--message { color: var(--muted) !important; }
+```
+
+**Hide a container when its data slot is empty.**
+```css
+.context-row:has(app-data:empty) { display:none !important; }
+app-if:empty { display:none !important; }   /* unwrap empty conditionals */
+```
+
+**Resize the default avatar.**
+```css
+snippyly-user-avatar {
+  --legacy-velt-user-avatar-height:20px !important;
+  --legacy-velt-user-avatar-width:20px !important;
+}
+```
+
+**Neutralize an SDK popover so your menu takes over.**
+```css
+velt-comment-dialog-options-dropdown-content-internal,
+div:has(> velt-comment-dialog-options-dropdown-content-internal) {
+  background:transparent !important; box-shadow:none !important;
+  border:none !important; padding:0 !important; width:max-content !important;
+}
+```
+
+**Indent threaded replies.**
+```css
+app-comment-dialog-threads > :not(:first-child) { padding-left: 26px; }
+```
+
+---
+
+## Wireframe-specific
+
+**Reuse one wireframe template across surfaces.** Define a wireframe template once (e.g. your own `DialogWireframe` component) and register it inside your single `<VeltWireframe>`; every place that renders that component picks it up. One source of truth for a surface's look.
+
+**Conditional UI with `velt-if`.** Branch on live state: empty states, role-gated bits, root-vs-reply:
+```tsx
+<VeltIf condition="{noCommentsFound}"><EmptyA/></VeltIf>
+<VeltIf condition="!{noCommentsFound}"><EmptyB/></VeltIf>
+<VeltIf condition="{commentIndex} === 0"><RootOnlyBadge/></VeltIf>
+```
+
+**Show live data with `velt-data`.** Render context/metadata Velt owns:
+```tsx
+<span>Assigned to <VeltData field="annotation.assignedTo.name" /></span>
+<span><VeltData field="annotation.context.questionTitle" /></span>
+```
+
+**Conditional empty state.** Different copy for "no comments yet" vs "filtered to zero":
+```tsx
+<VeltCommentsSidebarWireframe.EmptyPlaceholder>
+  <VeltIf condition="{noCommentsFound}"><h3>Be the first to comment</h3></VeltIf>
+  <VeltIf condition="!{noCommentsFound}"><h3>No comments match your filters</h3></VeltIf>
+</VeltCommentsSidebarWireframe.EmptyPlaceholder>
+```
+
+**Count badge only when there are comments.**
+```tsx
+<VeltIf condition="{commentAnnotation.comments.length} > 0"><Count/><Icon/></VeltIf>
+<VeltIf condition="{commentAnnotation.comments.length} === 0"><Icon/></VeltIf>
+```
+
+**Custom skeleton/loading.** Fill the `.Skeleton` slot with your own loading cards so the loading state matches your design.
+
+### Bridge a wireframe button to your app logic (the `onClick` escape hatch)
+
+You can't use `onClick` inside a wireframe (R4). For a *custom* action, use **`VeltButtonWireframe`** + the **`veltButtonClick`** event:
+```tsx
+// In the wireframe: give the Velt button an id (your markup goes inside it)
+<VeltButtonWireframe id="export-thread" type="button">
+  <span className="my-icon-btn"><ExportIcon /> Export</span>
+</VeltButtonWireframe>
+
+// In your app: useVeltEventCallback returns the latest click event (a value, not an observable)
+const evt = useVeltEventCallback("veltButtonClick");
+useEffect(() => {
+  if (evt?.buttonContext?.clickedButtonId === "export-thread") {
+    exportThread(evt);   // evt also carries commentAnnotation / comment / index
+  }
+}, [evt]);
+```
+`VeltButtonWireframe` takes `id` + `type` (`"button"`, or `"single-select"` with a `group`). For Velt's *built-in* actions (resolve, delete, submit) use the dedicated slot, not this.
+
+### Reset a VeltButtonWireframe after app logic runs
+
+Use `resetVeltButtonState()` when your app handles a `veltButtonClick` and needs to return the button to its idle state. This is most useful for custom action buttons that show a selected, loading, or submitted state while your app logic runs.
+
+```tsx
+const evt = useVeltEventCallback("veltButtonClick");
+
+useEffect(() => {
+  if (evt?.buttonContext?.clickedButtonId !== "export-thread") return;
+
+  void exportThread(evt).finally(() => {
+    client.resetVeltButtonState({ id: "export-thread" });
+  });
+}, [client, evt]);
+```
+
+See [`resetVeltButtonState()`](/api-reference/sdk/api/api-methods#resetveltbuttonstate) for the API shape.
+
+**Custom accept/reject (or any custom action) buttons in a thread card.** Same mechanism:
+```tsx
+<VeltButtonWireframe type="button" id="accept-button"><CheckIcon/></VeltButtonWireframe>
+<VeltButtonWireframe type="button" id="reject-button"><XIcon/></VeltButtonWireframe>
+```
+
+**Customize a list row, not the list.** List/repeater slots ignore custom layout: restructure the repeated **item** wireframe instead. See [list/repeater slots](/ui-customization/layout#7b-listrepeater-slots--custom-layout-is-ignored-the-replacetemplate-false-case).
+
+**Scope deliberately.** Nest a child wireframe inside its parent to scope it to that parent's render; place it at the `<VeltWireframe>` root to apply globally. See [wireframe scoping](/ui-customization/layout#3b-scoping--global-vs-scoped-wireframes-important).
+
+---
+
+## Primitives-specific
+
+**Trim, don't hide.** Turn features off with props (`reactions={false}`, `attachments={false}`) rather than `display:none`. Cleaner DOM, no dead behavior.
+
+**Compose sub-components for custom layout.** There's a sub-component primitive for nearly every child: rebuild a header/thread-card by arranging its sub-components, instead of accepting the default layout. (Restructure a *leaf* via that leaf's wireframe.)
+
+**Wrap in your UI library.** Primitives are real React components, so your library's components (and their interactivity) work normally around them: `<MuiCard><VeltCommentDialog/></MuiCard>`.
+
+---
+
+## Mixed (more than one layer together)
+
+**Custom dropdown: your UI library + Velt primitive items + wireframe-styled items.** Build the header dropdown (status / priority / options) from *your* UI-library shell, Velt **primitive** dropdown items (which carry the set behavior), and a **wireframe** to style the item internals, or go fully headless with `useUpdateStatus()` / `useUpdatePriority()`. Full worked example with the exact component names: [`Primitives`](/ui-customization/primitives) → "custom dialog header with a custom dropdown."
+
+**Custom sidebar filters (V2): add your own filters + restyle the filter dropdown/panel.** Configure which filters show (and add `type:'custom'` filters with your own options) via the `filters` prop; pick the layout with `filterPanelLayout` / `filterOptionLayout`; and fully restructure the filter dropdown/panel via the `FilterContainer` / `FilterDropdown` / `FilterButton` wireframe slots: Velt keeps the filtering logic. Full details: [`Component config`](/ui-customization/reference/component-config) → "Sidebar filters."
+
+**Collapsed→expanded composer** (wireframe layout + CSS state class). Render a collapsed input and an expanded one in the composer slot; let Velt's state classes switch them:
+```css
+.velt-composer-open .composer-collapsed { display:none !important; }
+.velt-composer-open .composer-expanded  { display:flex !important; }
+```
+(`velt-composer-open` / `velt-comment-dialog--no-comments` / `velt-composer-edit-mode` are the switches.)
+
+**Make the sidebar/list take available height and scroll** (wireframe/primitive layout + CSS over Velt's internals: *the tricky one*). Velt's **own internal container elements** keep their default styles and sit *between* your layout and the scrollable list. If any link in that flex chain lacks `min-height:0` / `flex:1` / `height:100%`, the list grows past the panel and **scrolling silently breaks**. Inspect the Velt internal element and force the chain (usually `!important`):
+```css
+.my-panel { display:flex; flex-direction:column; height:100%; min-height:0; }
+/* Velt's internal panel element: the hidden link you find by inspecting */
+.my-panel > app-comment-sidebar-panel { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
+.my-list-body { flex:1; min-height:0; overflow-y:auto; }
+/* sometimes Velt's own list viewport needs forcing too: */
+velt-comments-sidebar /* …inspect for the exact internal el… */ { height:100% !important; min-height:0 !important; overflow-y:auto !important; }
+```
+Rule: **`min-height:0` (+ `flex:1` / `height:100%`) must hold on *every* element from your wrapper down to the scroll container: including Velt's internal ones.** One missing link kills the scroll. Re-test that scrolling actually works.
+
+**Remove leftover default styling a wireframe didn't replace** (wireframe + CSS `!important`). Wireframing a slot doesn't strip *all* of Velt's surrounding default styles: borders, padding, backgrounds, fixed widths, popover chrome often remain. Inspect → find the `velt-*` class → override:
+```css
+.velt-status-dropdown--content {
+  border:none !important; background:transparent !important;
+  box-shadow:none !important; padding:0 !important;
+}
+```
+Treat "inspect → find class → override" as part of every wireframe pass, not a failure.
+
+**Wrap absolutely-positioned pieces in a `position: relative` container** (primitive/wireframe mount + CSS). Some Velt pieces (dialog/pin/overlays, reaction pins) render with `position: absolute`. If a mounted primitive or wireframe appears in the wrong place (top-left, escaping its box), give its **parent `position: relative`** so the absolute child anchors to it:
+```css
+.my-comment-dialog-host { position: relative; }
+```
+The most common "why is my dialog/pin floating in the wrong spot?" fix.

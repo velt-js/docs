@@ -1,0 +1,195 @@
+---
+title: "Behaviors & composition"
+sidebarTitle: "Behaviors"
+description: "Reference default behaviors, prop interactions, and positioning ownership across Velt components."
+---
+
+<Note>
+**Source of truth: exhaustive for what it covers.** Generated from Velt customization metadata. **If a name isn't on this page, it doesn't exist**: don't use it (a missing identifier resolves to `undefined` / renders nothing). Never invent or guess a name; use only identifiers that appear verbatim here or that you verified against ground truth and added here. *Scope: exhaustive for comments + notifications + core; other features summarized.*
+</Note>
+
+[`Props`](/ui-customization/reference/props) lists the **names, types, and defaults** of every prop. This file owns the layer above that: **what each behavior-bearing prop actually does, how props combine, what the SDK does with no prop at all, the dialog state machine, which variant scopes which context, and who owns positioning.** When a requirement reads "make the dialog show the first reply and the last reply" or "open the composer collapsed," this is the file that says whether a prop achieves it and exactly what renders.
+
+Read this alongside [`Component config`](/ui-customization/reference/component-config) (the layout/mode prop reference) and [`Feature flags`](/ui-customization/reference/feature-flags) (what's on vs off by default). For the approaches a behavior can't reach, see [`wireframes`](/ui-customization/layout), [`primitives`](/ui-customization/primitives), and [`headless`](/ui-customization/headless).
+
+---
+
+## Per-component behavior: every prop (exhaustive)
+
+The cross-cutting behaviors below (state machine, variant scoping, positioning, the headline interaction matrices) live in this file. The **complete, per-prop behavior of every component**: each prop's runtime effect + default + interactions: is split per component. These files cover **every prop in [`Props`](/ui-customization/reference/props), plus source-only props/events that the Props page omits** (so they are a superset, not strictly 1:1). On any default/behavior conflict, these files win (they are source-derived):
+
+| Component group | File | Covers |
+|---|---|---|
+| `VeltComments` (core) | [`Comments core behaviors`](/ui-customization/reference/behaviors/comments-core) | all ~129 `<VeltComments>` props |
+| Comments sidebar | [`Sidebar behaviors`](/ui-customization/reference/behaviors/sidebar) | `VeltCommentsSidebar` (V1), `VeltCommentsSidebarV2`, `VeltSidebarButton` |
+| Dialog & inline | [`Dialog and inline behaviors`](/ui-customization/reference/behaviors/dialog) | `VeltCommentDialog`, `VeltMultiThreadCommentDialog`, `VeltCommentText`, `VeltInlineCommentsSection`, `VeltInlineReactionsSection` |
+| Pins, bubbles, tools | [`Pins, bubbles, and tools behaviors`](/ui-customization/reference/behaviors/pins-tools) | `VeltCommentPin`, `VeltCommentBubble`, `VeltCommentTool` |
+| Notifications | [`Notification behaviors`](/ui-customization/reference/behaviors/notifications) | `VeltNotificationsPanel`, `VeltNotificationsTool` |
+| Presence, cursors, reactions | [`Presence, cursors, and reactions behaviors`](/ui-customization/reference/behaviors/presence-reactions) | `VeltPresence`, `VeltCursor`, `VeltReactionTool` |
+| Recorder, video, huddle | [`Recorder, video, and huddle behaviors`](/ui-customization/reference/behaviors/recorder-huddle) | `VeltRecorderControlPanel`, `VeltRecorderPlayer`, `VeltVideoPlayer`, `VeltVideoEditor`, `VeltHuddle`, `VeltUserInviteTool` |
+
+Event behavior (when each fires + payload + gotcha) is in [`Events`](/ui-customization/reference/events); data fields in [`Data models`](/ui-customization/reference/data-models).
+
+---
+
+## Default behaviors (no prop needed)
+
+These are the SDK's out-of-the-box behaviors. You do **not** pass a prop to get them: they are the baseline a prop modifies. Verified against the comment-dialog component state.
+
+| Behavior | Default state | How to change it |
+|---|---|---|
+| **Composer is hidden until the dialog is selected** | When a pin dialog is unselected and the annotation already has comments, the composer does **not** render. Selecting the pin reveals it. A thread with **no** comments yet always shows the composer; that's the new-comment case. | This is governed by selection + `expandOnSelection`; there is no "always show composer" prop on the pin dialog. `persistentCommentMode` / a standalone `VeltCommentComposer` give an always-present composer. |
+| **Composer opens collapsed, expands on interaction** | `composerMode: 'default'` → the composer renders **collapsed** (single-line, submit button inline) and switches to the **open** state (full actions: attachments, mentions, recording, assign) when the user focuses/clicks it. | Set `composerMode="expanded"` to render it open (full actions) immediately. |
+| **Dialog is collapsed (preview), not expanded** | A pin dialog shows the **first comment only** until selected. `showAllComments` defaults to `true`, so once selected the dialog shows **all** comments. | `collapsedComments` keeps it collapsed even when selected; `collapsedRepliesPreview` shows the first+last teaser before selection; `fullExpanded` forces full expansion. See the matrix below. |
+| **Dialog body is scrollable** | The thread list is a scroll container; when a new comment is added it auto-scrolls to the bottom. | No prop disables scroll; restructure with a [thread-card wireframe](/ui-customization/layout) if needed. |
+| **Selecting a pin expands the dialog** | Clicking a pin sets the dialog to *selected*, which (with default `expandOnSelection: true`) reveals all comments **and** the composer. | `expandOnSelection={false}` (sidebar context) lets a thread be selected **without** expanding: it stays a first+last preview and the composer stays hidden. |
+| **Sidebar filter is restored from saved state** | The sidebar reads its last-used filters/group-by from the session (per-browser-session storage) on open and re-applies them. This **overrides** `defaultMinimalFilter`. | To make `defaultMinimalFilter` deterministic, the session has no saved filter (first session): otherwise the saved value wins. |
+| **`@`-mentions are on; reactions, attachments, status, resolve are on** | `userMentions`, `reactions`, `attachments`, `status`, `resolveButton`, `seenByUsers` all default **on**. `priority`, `visibilityOptions`, `screenshot` default **off**. | See [`Feature flags`](/ui-customization/reference/feature-flags) for the full on/off table. |
+| **Enter inserts a newline; Cmd/Ctrl+Enter submits** | `enterKeyToSubmit` defaults **off** on `VeltComments` (the public prop), so Enter is a newline. | `enterKeyToSubmit={true}` makes Enter submit. |
+| **Dialog and pin are wrapped in shadow DOM** | `dialogShadowDom` / `pinShadowDom` default `true`: each surface is style-isolated. | Set the per-surface flag (or master `shadowDom`) to `false` to style with selector CSS. See the shadow-DOM rows below. |
+
+---
+
+## Prop-interaction matrix
+
+For each behavior-bearing prop: what it does, its default, and how it combines with related props.
+
+### `collapsedComments` × `collapsedRepliesPreview` (the exact rendered reply structure)
+
+These two props control which thread cards render. They are the most misunderstood pair, so here is the **exact** rendered structure, confirmed against the threads-rendering logic.
+
+The thread renderer decides per-comment-index whether the card shows, using three signals: **is the dialog selected**, **`showAllComments`** (default `true`), and **`collapsedRepliesPreview`**. The rule:
+
+- **Dialog selected + `showAllComments` true (the default):** every comment renders. Full thread.
+- **Dialog selected + `showAllComments` false (this is what `collapsedComments` produces):** only the **first** comment (`index 0`) and the **last** comment (`index length-1`) render. The hidden middle is replaced by a single **"N more replies"** divider (the `velt-comment-dialog-more-reply` element) between them.
+- **Dialog NOT selected + `collapsedRepliesPreview` true:** the same **first + "N more replies" + last** teaser renders *before* selection, so clicking "more replies" expands the thread in one step.
+- **Dialog NOT selected + no preview (default):** only the **first** comment renders.
+
+So the **exact collapsed structure** is:
+
+```
+┌─────────────────────────────┐
+│  first comment   (index 0)  │
+│  ── N more replies ──        │   ← the more-reply divider fills the gap
+│  last comment  (index n-1)  │
+└─────────────────────────────┘
+```
+
+| Prop | Default | Alone, it does… |
+|---|---|---|
+| `collapsedComments` | `false` | Sets `showAllComments` false, so even a **selected** dialog renders only **first + "N more replies" + last** instead of every comment. |
+| `collapsedRepliesPreview` | `false` | Surfaces that same **first + last** teaser in the **unselected/preview** state (default unselected shows only the first comment). Expansion to all comments happens once the dialog is selected. |
+
+**Critical absence: first + second + last is NOT achievable with props.** The collapsed view is strictly `index === 0 || index === length - 1`. There is no prop to show "first reply, second reply, and last reply," nor "first N replies." If a requirement needs a different collapse pattern (first three, first + newest two, etc.), props cannot do it: climb to a [thread-card / threads wireframe](/ui-customization/layout) and render the cards yourself, or build the list with [primitives](/ui-customization/primitives). `maxReplyAvatars` (default `3`) only caps **avatars** on the reply row, not which comment cards render: do not confuse it with reply count.
+
+### `sortBy` × `sortOrder`
+
+`sortBy` picks the field (`'createdAt'` | `'lastUpdated'`); `sortOrder` picks the direction (`'asc'` | `'desc'`). They are applied **together** as one ordering of the comment list inside the dialog and the inline section. On the inline section, the older `sortData` (`'asc'|'desc'|'none'`) is deprecated in favor of this pair: pass `sortBy` + `sortOrder` instead. With neither set, comments render in their natural (creation) order. They affect ordering only; they do not hide/collapse cards (that's the section above).
+
+### `visibilityOptions` (requires `isPrivateCommentsEnabled`)
+
+`visibilityOptions` (default `false`) shows the per-comment visibility picker (public / private / team). It is **gated**: the visibility banner only renders when the SDK's private-comments capability (`isPrivateCommentsEnabled`) is also on. Turning on `visibilityOptions` without private comments enabled at the SDK/config level shows nothing. `privateCommentMode` is the related mode flag for making comments private by default. Treat `visibilityOptions` as the **UI affordance** and the private-comments capability as the **prerequisite**.
+
+### `shadowDom` vs `dialogShadowDom` (and the per-surface flags)
+
+`shadowDom` is the **master** wrap for `VeltComments`; the per-surface flags (`dialogShadowDom`, `pinShadowDom`, `textCommentToolShadowDom`, …) default `true` and isolate each surface independently. Combination rule: to style a specific surface with your own selector CSS you must turn off the **shadow DOM that wraps it**: e.g. `dialogShadowDom={false}` to reach dialog internals, `pinShadowDom={false}` to reach the pin. Setting master `shadowDom={false}` drops isolation everywhere (the broad "I want to style with CSS" switch: rule R6). A per-surface `true` keeps that one surface isolated even if you've set others off. See [`CSS classes`](/ui-customization/reference/css-classes) for what becomes selectable once isolation is off.
+
+### `defaultMinimalFilter` (overridden by saved state)
+
+`defaultMinimalFilter` sets the sidebar's initial quick-filter (`'all'` | `'unread'` | `'resolved'` | `'open'` | `'assignedToMe'` | … | `null`). **Saved session state wins:** the sidebar restores the user's last-used filters from session storage on open, so `defaultMinimalFilter` only takes effect when there is no saved filter for that session. It is a *first-run default*, not a forced value. To force a filter on every open regardless of history, set values programmatically (`setCommentSidebarFilters`, see [`Component config`](/ui-customization/reference/component-config)) rather than relying on this prop.
+
+### `embedMode` / `pageMode` (sidebar)
+
+- **`embedMode`** renders the sidebar **inline inside your layout** instead of as a docked overlay. Note the **type differs by version**: `boolean` on `VeltCommentsSidebar` (V1), `string` on `VeltCommentsSidebarV2`: match the type to your component. It composes with `position` (which side, when not embedded) and `floatingMode` (float vs dock); embedding makes `position`/`floatingMode` moot because you own the placement.
+- **`pageMode`** switches to **page-level comments**: no pins on the DOM, and the composer lives at the sidebar level (use `pageModePlaceholder` for its placeholder and `pageModeComposerVariant` to wireframe it). This is the "comment on the whole page/doc" model, as opposed to the default anchored-pin model. `pageMode` and pin-based commenting are mutually exclusive surfaces.
+
+### `fullExpanded` vs default
+
+`fullExpanded` (default `false`) forces threads to render **fully expanded**: every comment, message text not truncated. It is the opposite end from `collapsedComments`. Precedence: `fullExpanded` expands the thread; `collapsedComments` collapses it: don't set both. With neither, the dialog uses the default (first-only until selected, all on select). `messageTruncation` (+ `messageTruncationLines`, default `4`) is a separate axis: it truncates **long single messages** with show-more/less, independent of how many cards show.
+
+### `commentPlaceholder` vs `replyPlaceholder` priority
+
+The composer's placeholder resolves in this exact order (verified):
+
+1. **Generic `placeholder`** (input, then config-level): **overrides everything** if set.
+2. Otherwise selected by thread state: **no comments yet → `commentPlaceholder`**; **thread already has comments → `replyPlaceholder`** (a reply is being written).
+3. Falls through to a built-in default that varies with `userMentions`: with mentions on, "Comment or add others with @" / "Reply or add others with @"; with mentions off, "Write a comment..." / "Write a reply...".
+
+So `commentPlaceholder` and `replyPlaceholder` never both apply to one composer at one time: the thread's comment count decides which is live. Edit mode uses its own chain (`editPlaceholder` → `editCommentPlaceholder` / `editReplyPlaceholder`, again with generic `placeholder` on top).
+
+---
+
+## Dialog state machine
+
+The pin dialog moves through these states. Both the **dialog selection** state and the **composer open** state are tracked **per dialog instance** (so the sidebar list, a focused thread, and a floating pin dialog for the same annotation don't leak state into each other).
+
+**Dialog selection:**
+
+```
+unselected ──(click pin / select)──▶ selected ──(expandOnSelection: true, default)──▶ expanded
+   │                                     │
+   │ shows: first comment only           │ shows: composer + all comments
+   │ (or first+last if                   │ (or first+last if collapsedComments)
+   │  collapsedRepliesPreview)           │
+   ◀──(deselect / close / Esc)───────────┘
+```
+
+- **unselected → selected:** clicking the pin (or `dialogOnHover` / `dialogOnTargetElementClick`, per props). Resets the reply-expanded teaser flag so re-opening shows the teaser again.
+- **selected → expanded:** automatic when `expandOnSelection` is true (the default). When `expandOnSelection={false}` (a sidebar option), selection does **not** expand: the dialog stays a first+last preview and the composer stays hidden: selection-without-expansion.
+- **any → unselected:** deselect, close, or `forceCloseAllOnEsc` (Esc closes all open dialogs when that prop is on).
+
+**Composer open state** (independent, per instance):
+
+```
+collapsed ──(focus / click composer)──▶ open ──(start recording)──▶ recording ──(stop)──▶ open
+   ▲                                       │
+   └──────────(submit / clear)─────────────┘
+```
+
+- **collapsed → open:** focusing/clicking the composer. With `composerMode: 'default'` (default) the composer starts **collapsed**; with `composerMode: 'expanded'` it starts **open** and never collapses.
+- **open → recording:** a recorder config is active for this instance (audio/video/screen). Recording state takes precedence over open in the rendered UI.
+- **open → collapsed:** on submit or programmatic clear (text, attachments, recordings, tagged users all reset).
+
+---
+
+## Variant → context scoping
+
+The same comment dialog renders in **multiple contexts**, and each context has its **own** `variant` prop so you can wireframe one without touching the others. This is the key to "I want the sidebar-opened dialog to look different from the floating pin dialog."
+
+| Context | Variant prop | What it scopes |
+|---|---|---|
+| **Floating pin dialog** (the default: clicking a pin on the page) | `variant` on `VeltComments` / the default dialog | The free-positioned dialog anchored to a pin. No prop ⇒ this is the default surface. |
+| **Sidebar-opened dialog** (a thread expanded from the sidebar list) | `dialogVariant` (on the sidebar / sidebar button) | The dialog rendered **inside the sidebar** when a comment row is opened. |
+| **Focused thread** (a single thread opened in focus mode) | `focusedThreadDialogVariant` (on the sidebar) | The focused-thread dialog (paired with `focusedThreadMode` / `openAnnotationInFocusMode`). |
+| **Page-mode composer** (the sidebar-level composer in `pageMode`) | `pageModeComposerVariant` (on the sidebar / sidebar button) | The composer shown when `pageMode` is on. |
+| **Inline section dialog** (a dialog inside `VeltInlineCommentsSection`) | `dialogVariant` / `composerVariant` (on the inline section) | The dialog/composer inside an inline comments section. |
+
+**Customize one context without affecting the others:** register a named [wireframe variant](/ui-customization/layout) (`<VeltCommentDialogWireframe variant="myDialog">…`) and point only the relevant variant prop at it. Setting `dialogVariant="sidebarDialog"` changes the sidebar-opened dialog while the floating pin dialog keeps the default look (and vice versa). If you set the base `variant` on `VeltComments`, you change the **floating pin** dialog only: the sidebar/focused/page contexts keep their defaults unless you also set their variant props. This is why "the dialog changed in the sidebar but not on pins" (or the reverse) is almost always a case of setting the wrong variant prop for the context.
+
+---
+
+## Positioning ownership (anchored surfaces)
+
+**Verified fact:** the **host** (`VeltComments`) owns pin placement and the dialog's **overlay anchoring**. The comment-dialog component does **not** take a position or coordinate input and does **not** place itself: it only **emits an `updateOverlayPosition` output** (an `@Output`, no payload) to *request* that the host re-anchor the overlay when the dialog's size changes (composer expands, recording starts, pin selection changes). The host listens and repositions. There is no `position`/`x`/`y`/`target-coordinate` input on the dialog; `targetElementId` names an anchor element id, not a coordinate, and the actual placement math lives in the host.
+
+**Consequence: what each approach forfeits:**
+
+| Approach | Positioning |
+|---|---|
+| **Wireframes** (fill slots inside Velt's components) | You keep Velt's anchoring **for free**. The pin still drops where the user clicks, the dialog still anchors to the pin and re-positions on resize: you only restyle/restructure the contents. This is the reason to stay in wireframes when the layout is anchored. |
+| **Primitives** (compose `Velt*` primitive elements yourself) | You own the **container**. The primitives render comment data, but placing your custom dialog *at the pin* is your responsibility: Velt's overlay anchoring is tied to its own dialog host, not to an arbitrary primitive tree. |
+| **Headless** (hooks + your own DOM) | You own **everything**: pin position, dialog position, re-anchor on resize. Nothing positions for you. |
+
+**Unsupported by this reference:** the public API surface documented here does not expose enough to anchor a *custom* (primitive/headless) dialog at a Velt pin: i.e. to read the pin's resolved screen coordinates and subscribe to re-anchor requests for your own element. Do **not** claim a custom dialog can be pinned to Velt's pin position; if a requirement needs that, flag it as not verified rather than promising it.
+
+**Surface classification** (use this when routing a requirement: see [`Decision tree`](/ui-customization/decision-tree)):
+
+| Anchored / Velt-positioned | Statically placed (you position the container) |
+|---|---|
+| Pin comment **dialog** (anchors to its pin) | **Sidebar** (docks left/right, or `embedMode` inline) |
+| **Pins** (drop where clicked / on target element) | **Inline comments section** (sits where you mount it) |
+| **Bubbles** (attach to target element) | **Notifications panel** (popover or docked, where you mount it) |
+| **Cursors** (track live pointer positions) | |
+| **Minimap** (corner placement via `minimapPosition`) | |
+
+Anchored surfaces are why wireframes are the cheapest customization for the dialog/pin/bubble: you inherit Velt's positioning. The moment you drop to primitives or headless for an anchored surface, **you take over positioning**: budget for it.

@@ -1,0 +1,220 @@
+---
+title: "<VeltComments>"
+sidebarTitle: "Comments core"
+description: "Reference runtime behavior for VeltComments props, defaults, and interactions."
+---
+
+What every `<VeltComments>` prop **actually does at runtime**, its default behavior, and how it combines with related props. [`Props`](/ui-customization/reference/props) gives the name/type/default; this file gives the behavior. See the [behaviors index](/ui-customization/reference/behaviors) for the cross-component state machines, positioning ownership, and the `collapsedComments × collapsedRepliesPreview` / composer matrices (referenced below, not duplicated). Field-level data shapes live in [`Data models`](/ui-customization/reference/data-models).
+
+Every prop maps to a feature-service flag. Booleans coerce strings: `"true"`/`"false"` are JSON-parsed, an omitted prop never runs the setter (so the **service default** stands), and an empty-string boolean (`darkMode` with no value) counts as `true`. Array/object props are JSON-parsed if passed as a string. A malformed value is swallowed silently because the setter catches parse failures: the flag keeps its prior value rather than throwing.
+
+---
+
+## Per-prop behavior (exhaustive)
+
+`<VeltComments>` is a single host component with ~122 active props. Its exhaustive per-prop behavior is grouped by prop family below: **Core feature toggles**, **Mentions / autocomplete**, **Layout / interaction modes**, **Placeholders**, **Shadow DOM & dark mode**, and **Callbacks**: followed by the **deprecated aliases**. Each row states the prop's default, its runtime effect, and how it interacts with related props. The zero-prop baseline is summarized in [Default behaviors (no prop needed)](#default-behaviors-no-prop-needed); every prop in [`Props`](/ui-customization/reference/props) Part 1 is covered (see [Coverage](#coverage)).
+
+## Core feature toggles
+
+| Prop | Default | Behavior (runtime) | Interactions & gotchas |
+|---|---|---|---|
+| `reactions` | `true` | Toggles emoji-reaction affordance on comments (`enableReactions`/`disableReactions`). | Independent of `customReactions`: disabling hides reactions entirely regardless of any custom set. |
+| `attachments` | `true` | `enableAttachment(bool)`: shows/hides the attach-file affordance in the composer and attachment rendering on comments. | `allowedFileTypes` filters *what* may attach; `attachmentDownload` / `attachmentNameInMessage` only matter when this is on. |
+| `attachmentDownload` | `true` | Shows the download button on rendered attachments. | No effect if `attachments={false}`. |
+| `attachmentNameInMessage` | `false` | Renders the attachment filename inline in the message body rather than only as a thumbnail/chip. | Pairs with `attachments`; cosmetic, does not change storage. |
+| `allowedFileTypes` | `[]` (all) | `setAllowedFileTypes(array)`: whitelist of MIME/extension strings the file picker and drop accept. Empty array means all types allowed. | JSON-parsed if a string. Restricts only attachments, not recordings/screenshots. |
+| `customReactions` | None | `setCustomReactions(ReactionMap)`: replaces the default emoji set with your map. | Shape in [`Component config`](/ui-customization/reference/component-config). Requires `reactions` on. |
+| `recordings` | `'audio,video,screen'` | **CSV string, not boolean.** `setAllowedRecordings([...])` after splitting on `,` and trimming. Each token enables that recorder type in the composer. `"none"` disables all recording. | Passing a boolean does nothing useful: it must be a string. `recordingTranscription`/`recordingCountdown` refine recordings once enabled. |
+| `recordingTranscription` | `true` | Routed to the **recorder** service (`enableRecordingTranscription`/`disable`): produces transcript/summary for recordings. | Supersedes deprecated `recordingSummary`. No effect if `recordings="none"`. |
+| `recordingCountdown` | (off) | `enableRecordingCountdown`/`disable`: shows a 3-2-1 countdown before capture starts. | Only relevant when a recorder type is enabled. |
+| `screenshot` | `false` | `enableScreenshot`/`disable`: adds a capture-screenshot affordance in the composer. | Independent of recordings. |
+| `status` | `true` | `setEnableStatus(bool)`: shows the status field/dropdown on comments. | `customStatus` defines the option set; `resolveButton` is a separate one-click resolve, not the status field. `resolveStatusAccessAdminOnly` gates resolve, not status. |
+| `customStatus` | None | `setCustomStatuses(array)`: replaces default statuses. Each entry has `type:'default'\|'ongoing'\|'terminal'`; a `terminal` status marks the thread resolved/closed. | Use this for workflow states only: **not** arbitrary tags (use `customCategory` for categories). Requires `status` on. |
+| `priority` | `false` | `setEnablePriority(bool)`: shows the priority field. | `customPriority` defines options; field is hidden unless this is on. |
+| `customPriority` | None | `customFilterService.setCustomPriorityFilters(array)`: replaces priority options. | Stored via the **custom-filter** service (so it also feeds sidebar priority filters). Requires `priority` on to surface in the composer. |
+| `customCategory` | None | `customFilterService.setCustomCategories(array)`: defines selectable comment categories. | The correct tool for arbitrary tagging/grouping; pairs with `autoCategorize` and sidebar category filters. |
+| `autoCategorize` | `false` | `setEnableAutoCategorize(bool)`: server/AI auto-assigns a category to new comments. | Needs `customCategory` defined to have categories to assign. |
+| `resolveButton` | `true` | `setEnableResolve(bool)`: shows the one-click resolve toggle on a thread. | Separate from `status`. `resolveStatusAccessAdminOnly` restricts *who* can press it. |
+| `resolveStatusAccessAdminOnly` | `false` | `enableResolveStatusAccessAdminOnly`/`disable`: only admins may resolve/unresolve. | Non-admins still see the button but cannot toggle. No effect if `resolveButton={false}`. |
+| `visibilityOptions` | `false` | `setEnableVisibilityOptions(bool)`: per-comment private/team visibility picker in the composer. | Distinct from `privateCommentMode` (which forces all comments private). |
+| `seenByUsers` | `true` | `enableSeenByUsers`/`disable`: renders "seen by" avatars on comments. | Reads read-receipt data; no effect on whether reads are tracked. |
+| `deviceInfo` | `false` | `showScreenSizeInfo(bool)`: captures and displays device + screen-size metadata on comments. | Feeds `deviceIndicatorOnCommentPins`; the badge needs this data captured. |
+| `deviceIndicatorOnCommentPins` | `false` | `enableDeviceIndicatorOnCommentPins`/`disable`: device-type badge on each pin. | Meaningful only when `deviceInfo` is capturing device data. |
+| `commentIndex` | `false` | `showCommentIndex(bool)`: numeric index label (1, 2, 3…) on pins for sequential reference. | Pure labeling; independent of sort order. |
+| `replyAvatars` | `false` | `enableReplyAvatars`/`disable`: shows reply-author avatars on the collapsed thread card. | `maxReplyAvatars` caps the count; no effect if off. |
+| `maxReplyAvatars` | `3` | `setMaxReplyAvatars(n)`: max avatars before a "+N" overflow chip. | `parseInt` from string. Only applies when `replyAvatars` on. |
+| `sidebarButtonOnCommentDialog` | `false` | `enableSidebarButtonOnCommentDialog`/`disable`: adds an "open sidebar" button inside the dialog. | Click fires `onSidebarButtonOnCommentDialogClick`; you wire the open yourself. |
+| `ghostComments` | `false` | `enableGhostComments`/`disable`: keeps showing comments whose target DOM node was removed (orphaned annotations). | `ghostCommentsIndicator` controls the accompanying message; ghost comments are otherwise hidden by default. |
+| `ghostCommentsIndicator` | `true` | `enableGhostCommentsMessage`/`disable`: the indicator/message shown for ghost comments. | Only visible when `ghostComments` is on. |
+| `minimap` | `false` | `enableMinimap`/`disable`: renders a comments minimap overlay marking pin positions. | `minimapPosition` sets the corner; the standalone `<VeltCommentsMinimap>` is the alternative. |
+| `minimapPosition` | None | Writes `minimapPosition` into the component config signal + analytics config: corner placement of the minimap. | Only effective with `minimap` on. |
+| `hotkey` | `false` | `enableHotkey`/`disable`: keyboard shortcut to enter add-comment mode. | Complements `commentTool`; either can trigger comment mode. |
+| `bubbleOnPin` | `false` | `enableBubbleOnPin`/`disable`: shows a persistent comment-preview bubble attached to the pin. | `bubbleOnPinHover` is the hover-only variant; this is always-on preview. |
+| `bubbleOnPinHover` | `false` | `enableBubbleOnPinHover`/`disable` (feature-state default `false`): preview bubble appears on pin hover. | Off by default: the bare pin shows no hover preview. With `dialogOnHover` (default `true`) the dialog still opens on hover; enable `bubbleOnPinHover` to add a preview bubble. |
+| `pinDrag` | `true` | `enablePinDrag`/`disable`: allows dragging a pin to reposition its annotation anchor. | Repositioning rewrites the annotation location. Disable to lock pins in place. |
+| `pinCursorImage` | `''` | `setPinCursorImage(url \|\| '')`: custom cursor image while placing a comment. | Empty string restores the default crosshair cursor. |
+| `commentPinHighlighter` | None | `enableCommentPinHighlighter`/`disable`: highlights the target element when its pin is active/selected. | Visual association aid; no data effect. |
+| `formatOptions` | `false` | `enableFormatOptions`/`disable`: rich-text formatting toolbar (bold/italic/lists) in the composer. | Stored content gains formatting markup. |
+| `deleteOnBackspace` | `true` | `enableDeleteOnBackspace`/`disable`: Backspace on a selected comment/attachment deletes it. | Disable to prevent accidental deletes. Interacts with `deleteReplyConfirmation` (confirmation still applies). |
+| `enterKeyToSubmit` | `false` | `enableEnterKeyToSubmit`/`disable`: Enter submits instead of inserting a newline. | When off, Cmd/Ctrl+Enter submits and Enter is a newline. |
+| `forceCloseAllOnEsc` | `false` | `enableForceCloseAllOnEsc`/`disable`: pressing Esc closes **all** open dialogs at once. | When off, Esc closes only the focused dialog. |
+| `scrollToComment` | `true` | `enableScrollToComment`/`disable`: auto-scrolls the viewport/thread to a selected or deep-linked comment. | Drives the `?commentId=` deep-link focus behavior; disabling leaves position unchanged on select. |
+| `commentTool` | `true` | `enableCommentTool`/`disable`: the floating add-comment button. | Disabling removes the built-in entry point; pins/dialogs still render for existing comments. |
+| `deleteReplyConfirmation` | `false` | `enableDeleteReplyConfirmation`/`disable`: shows a confirm step before deleting a reply. | Applies to replies; first-comment deletion is governed by `deleteThreadWithFirstComment`. |
+| `deleteThreadWithFirstComment` | `true` | `enableDeleteThreadWithFirstComment`/`disable`: deleting the first comment deletes the whole thread. | When off, deleting the first comment promotes the next reply to lead instead of destroying the thread. |
+| `draftMode` | `true` | `enableDraftMode`/`disable`: unsent composer text is persisted as a draft and restored when the composer reopens. | Drafts are per-annotation/composer; disabling discards text on close. |
+| `collapsedComments` | `false` | `enableCollapsedComments`/`disable`: keeps the thread collapsed (first + last only, "N more replies" divider between) even when selected. | Full interaction matrix with `collapsedRepliesPreview` and `showAllComments` in [behaviors index](/ui-customization/reference/behaviors). |
+| `collapsedRepliesPreview` | `false` | Renders the first + "N more replies" + last teaser **before** selection. | See the exact rendered-structure matrix in [behaviors index](/ui-customization/reference/behaviors). |
+| `fullExpanded` | `false` | `enableFullExpanded`/`disable`: forces threads fully expanded (all comments, no collapse) regardless of selection. | Overrides the default first-comment preview; opposite of `collapsedComments`. |
+| `shortUserName` | `true` | `enableShortUserName`/`disable`: displays shortened/first-name user labels. | Cosmetic; full names still in data. |
+| `svgAsImg` | `false` | `enableSvgAsImg`/`disable`: renders SVG content as `<img>` tags instead of inline SVG. | Sandboxing/styling workaround for hostile SVG. |
+| `readOnly` | `false` | `enableReadOnly`/`disable`: disables add/edit/delete; comments become view-only. | Affects the whole surface. Per-surface `readOnly` exists on dialog/sidebar/section too. |
+| `linkCallback` | `false` | `enableLinkCallback`/`disable`: link clicks in comment text route through a callback instead of navigating. | You handle navigation yourself (e.g. SPA routing). |
+
+---
+
+## Mentions / autocomplete
+
+| Prop | Default | Behavior (runtime) | Interactions & gotchas |
+|---|---|---|---|
+| `userMentions` | `true` | `enableUserMentions`/`disable`: `@`-mention autocomplete in the composer. | Source of mention data is the contact list unless `customAutocompleteSearch` is on. |
+| `customAutocompleteSearch` | `false` | `enableCustomAutocompleteSearch`/`disable`: mention search delegates to your data source instead of the SDK contact list. | Supply data via `ContactElement`/`AutocompleteElement`. Without those, the list will be empty. |
+| `paginatedContactList` | `false` | `enablePaginatedContactList`/`disable`: fetches the contact list in pages for large directories. | Pairs with `autoCompleteScrollConfig` for scroll-triggered fetch. |
+| `expandMentionGroups` | `false` | `enableExpandMentionGroups`/`disable`: a group mention expands into its individual members. | When off, the group is mentioned as a single entity. |
+| `showMentionGroupsFirst` | `false` | `enableShowMentionGroupsFirst`/`disable`: orders groups above individuals in the dropdown. | Ordering only; `showMentionGroupsOnly` hides individuals entirely. |
+| `showMentionGroupsOnly` | `false` | `enableShowMentionGroupsOnly`/`disable`: dropdown lists only groups, no individuals. | Overrides the practical effect of `showMentionGroupsFirst`. |
+| `atHereEnabled` | None | `contactService.enableAtHere`/`disable`: enables the `@here` broadcast mention. | `atHereLabel`/`atHereDescription` customize its row. |
+| `atHereLabel` | None | `contactService.setAtHereLabel(str)`: label text for the `@here` entry (only set when truthy). | Effective only with `atHereEnabled`. |
+| `atHereDescription` | None | `contactService.setAtHereDescription(str)`: description/subtext for the `@here` entry (only when truthy). | Pairs with `atHereLabel`. |
+| `customListDataOnAnnotation` | None | `createCustomListDataOnAnnotation(data)`: injects a custom dropdown dataset scoped to the annotation level. | `CustomAnnotationDropdownData` shape; for per-annotation pickers. |
+| `customListDataOnComment` | None | `autocompleteService.create(data)`: registers a custom autocomplete dataset at the comment level. | `AutocompleteData` shape; independent of `customAutocompleteSearch` (this seeds a named list, that swaps the mention backend). |
+| `assignToType` | `'dropdown'` | `setAssignToType({type})`: assignee picker UI style (`'dropdown'` vs `'checkbox'`). | Cosmetic picker change; assignment data identical. |
+| `autoCompleteScrollConfig` | (service) | `setAutoCompleteScrollConfig(obj)`: scroll/virtualization config for autocomplete lists. | Most useful with `paginatedContactList`. |
+| `anonymousEmail` | `true` | `enableAnonymousEmail`/`disable`: allows mentioning/inviting by raw email for users not in the contact list. | Per-surface overrides exist on dialog/section. |
+
+---
+
+## Layout / interaction modes
+
+| Prop | Default | Behavior (runtime) | Interactions & gotchas |
+|---|---|---|---|
+| `textMode` | `true` | `enableTextComments`/`disable`: text/inline-selection commenting (highlight text → comment). | Independent of pin commenting; both can be on. |
+| `inlineCommentMode` | `false` | `enableInlineCommentMode`/`disable`: renders comments inline in document flow rather than as floating dialogs. | Distinct from `<VeltInlineCommentsSection>` (a separate placed surface). |
+| `popoverMode` | `false` | `enablePopoverMode`/`disable`: dialog renders as a popover anchored to the pin. | `popoverTriangleComponent` adds the caret; `floatingCommentDialog` is the broader free-position mode. |
+| `popoverTriangleComponent` | `true` | `enablePopoverTriangleComponent`/`disable`: the popover caret/triangle pointer. | Only visible in `popoverMode`. |
+| `floatingCommentDialog` | `true` | `disableFloatingComments(!value)`: when true the dialog floats (Velt-anchored near pin); false places it inline/in-flow. | Inverted setter. With `popoverMode`, popover positioning takes over. |
+| `dialogOnHover` | `true` | `setEnableDialogOnHover(bool)` (service default `true`): open dialog on pin hover. | With `dialogOnTargetElementClick` off, only the pin (not the underlying element) opens the dialog. |
+| `dialogOnTargetElementClick` | `false` | `setEnableDialogOnTargetElementClick(bool)` (service default `false`): clicking the annotated element opens its dialog. | Lets users open a thread by clicking the content, not just the pin. |
+| `inboxMode` | `false` | `enableInboxMode`/`disable`: inbox-style flat listing of comments rather than anchored pins. | Changes the container's render branch; pairs with sidebar/inbox surfaces. |
+| `moderatorMode` | `false` | `setModeratorMode(bool)`: grants moderator capabilities (manage others' comments). | Capability gate, server-enforced; UI exposes moderator actions. |
+| `streamMode` | `false` | `setStreamMode(bool)`: stream-style continuous comment view. | Requires `streamViewContainerId` to target the stream container. |
+| `streamViewContainerId` | None | Plain string input: id of the element that hosts the stream view. | Only meaningful with `streamMode`. |
+| `suggestionMode` | `false` | `setSuggestionMode(bool)`: comments become edit-proposals (accept/reject suggestions). | Fires `onCommentAccept`/`onCommentReject` on resolution. |
+| `mobileMode` | `true` | `setMobileMode(bool)`: mobile-optimized layout (bottom-sheet dialogs, touch sizing). | On by default: SDK adapts to viewport; force off for desktop-only embeds. |
+| `privateCommentMode` | `false` | `enablePrivateCommentMode`/`disable`: all new comments default to private. | Broader than `visibilityOptions` (which offers a per-comment choice). |
+| `persistentCommentMode` | `false` | `enablePersistentCommentMode`/`disable`: an always-present, persistent composer (does not collapse/hide). | This is the "always show composer" mechanism the pin dialog lacks. `persistentCommentShadowDom` isolates it. |
+| `composerMode` | `'default'` | `setComposerMode(value)`: `'default'` opens collapsed (expands on focus); `'expanded'` renders full actions immediately. | See the composer matrix in [behaviors index](/ui-customization/reference/behaviors). |
+| `multiThread` | `false` | `enableMultiThread`/`disable`: multiple independent threads per single location/pin. | Supersedes deprecated `multiThreadMode` (identical handler). |
+| `groupMatchedComments` | `false` | `enableGroupMatchedComments`/`disable`: groups comments that target the same element into one cluster. | Supersedes deprecated `groupMultipleMatch` (identical handler). |
+| `commentsOnDom` | `true` | `showCommentsOnDom`/`hideCommentsOnDom`: anchor pins to DOM elements. | Off → no DOM pins; comments still reachable via sidebar/inbox. `resolvedCommentsOnDom`/`filterCommentsOnDom` refine which DOM pins show. |
+| `resolvedCommentsOnDom` | `false` | `showResolvedCommentsOnDom`/`hide`: also render resolved comments as DOM pins. | When off, resolving a comment removes its DOM pin. Needs `commentsOnDom` on. |
+| `filterCommentsOnDom` | `false` | `enableFilterCommentsOnDom`/`disable`: applies active sidebar filters to which DOM pins render. | Lets filters drive the on-canvas pin set, not just the list. |
+| `areaComment` | `true` | `enableAreaComment`/`disable`: drag-a-box region comments (annotate an area, not a point). | On by default; disable for point-only pins. |
+| `unreadIndicatorMode` | `'minimal'` | `setUnreadIndicatorMode(value)`: `'minimal'` (dot) vs `'verbose'` (count/label) unread styling. | Cosmetic; both read the same unread state. |
+| `allowedElementIds` | `[]` | `setAllowedElementIds(array)`: restricts pin placement to elements with these ids. | JSON-parsed if string. Combined with the className/querySelector lists as an allow-set. |
+| `allowedElementClassNames` | `[]` | `setAllowedElementClassNames(array)`: restricts placement to elements with these classes. | Same allow-set; `commentToNearestAllowedElement` controls snap behavior. |
+| `allowedElementQuerySelectors` | `[]` | `setAllowedElementQuerySelectors(array)`: restricts placement to elements matching these selectors. | Most flexible of the three allow-lists. |
+| `commentToNearestAllowedElement` | `false` | `enableCommentToNearestAllowedElement`/`disable`: clicks outside an allowed element snap to the nearest allowed one. | Only meaningful when an allow-list is set; otherwise no constraint to snap to. |
+| `changeDetectionInCommentMode` | `false` | `enableChangeDetectionInCommentMode`/`disable`: keeps Angular change detection running while in comment mode. | Default off pauses CD during comment mode for performance; enable if your page mutates pin targets live (used in the comment-mode add path). |
+| `signInButton` | `false` | `enableSignInButton(bool)`: shows a sign-in button for gated/anonymous commenting. | Click fires `onSignIn`. Pairs with gated-commenting flows. |
+| `upgradeButton` | `false` | `enableUpgradeButton(bool)`: shows an upgrade button when a paid feature is gated. | Click fires `onUpgrade`. |
+
+---
+
+## Placeholders
+
+| Prop | Default | Behavior (runtime) | Interactions & gotchas |
+|---|---|---|---|
+| `commentPlaceholder` | None | `setCommentplaceholder(str)`: placeholder text for a new top-level comment composer. | Falls back to SDK default string when unset. |
+| `replyPlaceholder` | None | `setReplyplaceholder(str)`: placeholder for the reply composer. | Independent of `commentPlaceholder`. |
+| `editPlaceholder` | None | `setEditplaceholder(str)`: generic edit-mode placeholder. | `editCommentPlaceholder`/`editReplyPlaceholder` are the more specific overrides. |
+| `editCommentPlaceholder` | None | `setEditcommentplaceholder(str)`: placeholder when editing a comment specifically. | More specific than `editPlaceholder`. |
+| `editReplyPlaceholder` | None | `setEditreplyplaceholder(str)`: placeholder when editing a reply. | More specific than `editPlaceholder`. |
+
+---
+
+## Shadow DOM & dark mode
+
+| Prop | Default | Behavior (runtime) | Interactions & gotchas |
+|---|---|---|---|
+| `shadowDom` | None | Master setter: writes `shadowDOM`/`persistentCommentShadowDOM`/`isExplicitShadowDom` into config, then enables/disables **all four** per-surface shadow roots (dialog, pin, text-comment-tool, text-comment-toolbar) and sets the dialog-shadow-explicit flag. | **Set `false` to style with selector CSS (R6).** Marks shadow DOM as explicit, so it wins over per-surface defaults. |
+| `pinShadowDom` | `false` | `enablePinShadowDOM`/`disable`: shadow-isolates the pin surface only. | **The pin is the exception: its shadow default is `false`** while dialog/text-tool/toolbar default `true`. Overridden if master `shadowDom` is set explicitly. |
+| `dialogShadowDom` | `true` | `enableDialogShadowDOM`/`disable`: shadow-isolates the dialog only. | Overridden by explicit master `shadowDom`. |
+| `textCommentToolShadowDom` | `true` | `enableTextCommentToolShadowDOM`/`disable`: isolates the text-comment tool. | Toggled en masse by master `shadowDom`. |
+| `textCommentToolbarShadowDom` | `true` | `enableTextCommentToolbarShadowDOM`/`disable`: isolates the text-comment toolbar. | Toggled en masse by master `shadowDom`. |
+| `persistentCommentShadowDom` | None | Writes `persistentCommentShadowDOM` into config + analytics: isolates the persistent composer. | Set to `true` by master `shadowDom`; only relevant with `persistentCommentMode`. |
+| `darkMode` | `false` | `setCommentContainerDarkMode(value === '' \|\| value === 'true')`: master dark theme for the comments container (empty-string attribute counts as true). | Per-surface dark-mode props below inherit from this unless explicitly set. |
+| `dialogDarkMode` | None | Dialog-level dark mode override. There is no dedicated container setter; the dialog surface reads container dark mode or its own `darkMode` prop on `<VeltCommentDialog>`. | Prefer setting `darkMode` on the container, or `darkMode` directly on `<VeltCommentDialog>`. |
+| `pinDarkMode` | `null` (inherit) | `enablePinDarkMode`/`disable`: dark theme for the pin surface. | Inherits master `darkMode` when unset. |
+| `textCommentToolDarkMode` | `null` (inherit) | `enableTextCommentToolDarkMode`/`disable`: dark theme for the text-comment tool. | Inherits master `darkMode` when unset. |
+| `textCommentToolbarDarkMode` | `null` (inherit) | `enableTextCommentToolbarDarkMode`/`disable`: dark theme for the text-comment toolbar. | Inherits master `darkMode` when unset. |
+
+---
+
+## Callbacks
+
+`<VeltComments>` exposes these as `@Output` event emitters. Pass a handler function; it fires on the named action.
+
+| Prop | Fires on | Behavior & gotchas |
+|---|---|---|
+| `onSignIn` | Sign-in button click | Only fires when `signInButton` is enabled. You perform the actual auth. |
+| `onUpgrade` | Upgrade button click | Only fires when `upgradeButton` is enabled. |
+| `onCommentAdd` | A comment is added | **Legacy**: wired via `setCommentAddedEmitter`. Prefer the event hook `useAddCommentAnnotation`; see [`Events`](/ui-customization/reference/events). |
+| `onCommentUpdate` | A comment is updated | **Legacy**: prefer the update event hooks. |
+| `onCommentAccept` | A suggestion is accepted | Only meaningful with `suggestionMode`. |
+| `onCommentReject` | A suggestion is rejected | Only meaningful with `suggestionMode`. |
+| `onCopyLink` | A comment link is copied | Emits the copied link string. |
+| `onCustomPinInject` | The SDK needs a custom pin element injected | Lets you supply a custom pin DOM element per annotation. |
+| `onSidebarButtonOnCommentDialogClick` | In-dialog sidebar button click | Pairs with `sidebarButtonOnCommentDialog`; you open the sidebar in the handler. |
+| `onCommentSelectionChange` | The selected comment changes | Emits `CommentSelectionChangeData` (which annotation/comment is now selected). |
+
+---
+
+## Deprecated aliases (handled, but don't use)
+
+These still resolve to a working setter but are superseded:
+
+| Prop | Routes to | Replacement |
+|---|---|---|
+| `recordingSummary` | `enableRecordingSummary`/`disable` | `recordingTranscription` |
+| `multiThreadMode` | `enableMultiThread`/`disable` (identical to `multiThread`) | `multiThread` |
+| `groupMultipleMatch` | `enableGroupMatchedComments`/`disable` (identical to `groupMatchedComments`) | `groupMatchedComments` |
+
+---
+
+## Default behaviors (no prop needed)
+
+The baseline `<VeltComments>` renders with: verified against the comments-container component and comment feature service:
+
+| Behavior | Default state | How to change |
+|---|---|---|
+| **Floating comment tool button** | `commentTool` defaults **on**: a floating add-comment button mounts so users can enter comment mode and drop pins. | `commentTool={false}` removes it; drive comment mode yourself via the comment API / a `<VeltCommentTool>`. |
+| **Pins on DOM, dialog on click** | `commentsOnDom` defaults **on**: each annotation renders an anchored pin on its target element. Clicking a pin selects it and opens its dialog. | `commentsOnDom={false}` stops DOM pins (sidebar/inbox surfaces still list comments). |
+| **Open dialog on pin hover** | `dialogOnHover` defaults **on** (service `BehaviorSubject(true)`): hovering a pin opens its dialog without a click. | `dialogOnHover={false}` requires a click. `dialogOnTargetElementClick` defaults **off**, so clicking the underlying element does *not* open a dialog unless enabled. |
+| **Dialog floats, free-positioned** | `floatingCommentDialog` defaults **on**: the dialog is Velt-positioned (anchored) near its pin rather than inline. | `floatingCommentDialog={false}` calls `disableFloatingComments(true)`, switching to inline/anchored-in-flow placement. |
+| **Composer collapses, dialog previews first comment** | Composer opens collapsed (`composerMode: 'default'`); an unselected pin dialog shows only the first comment; selecting expands to all. | See the composer + collapse matrices in [behaviors index](/ui-customization/reference/behaviors). |
+| **Shadow DOM wrapped** | `dialogShadowDom`/`pinShadowDom`/`textCommentToolShadowDom`/`textCommentToolbarShadowDom` default **on**; the container `shadowDOM` signal defaults `true`. | Set master `shadowDom={false}` (or a per-surface flag) to style with selector CSS. |
+| **`@`-mentions, reactions, attachments, status, resolve, seen-by ON; priority, visibility, screenshot OFF** | The on/off baseline. | See [`Feature flags`](/ui-customization/reference/feature-flags). |
+| **Enter = newline; Cmd/Ctrl+Enter = submit** | `enterKeyToSubmit` defaults **off**. | `enterKeyToSubmit={true}` makes Enter submit. |
+
+## Prop-interaction matrix
+
+The pairwise interactions for each prop are documented in the **Interactions & gotchas** column of the tables above. The headline multi-prop matrices that span `<VeltComments>`: `collapsedComments × collapsedRepliesPreview` (the exact rendered reply structure), the composer collapsed/open lifecycle, `sortBy × sortOrder`, `shadowDom` vs the per-surface shadow flags, `visibilityOptions` requiring the private-comments capability, the `commentPlaceholder` vs `replyPlaceholder` priority chain, and `fullExpanded` vs `collapsedComments` precedence: live in the [behaviors index](/ui-customization/reference/behaviors#prop-interaction-matrix) and are linked from the rows above rather than duplicated here.
+
+## Positioning & composition
+
+`<VeltComments>` is the **host that owns positioning** for the anchored comment surfaces: it places pins where the user clicks, anchors each pin dialog to its pin, and re-anchors on resize (`floatingCommentDialog` true by default). The comment dialog itself takes no coordinate input: it only requests re-anchoring. You keep this anchoring for free in wireframes; primitives/headless take over positioning. The statically-placed comment surfaces (sidebar, inline section, notifications panel) are positioned by your own layout. See [`Behaviors` → Positioning ownership](/ui-customization/reference/behaviors#positioning-ownership-anchored-surfaces) and the anchored-vs-static classification in [`Component definitions`](/ui-customization/reference/component-definitions).
+
+## Coverage
+
+This file documents **all 122 distinct active props** of `<VeltComments>` listed in [`Props`](/ui-customization/reference/props) Part 1: every prop across Core feature toggles (52), Mentions/autocomplete (14), Layout/interaction modes including `streamViewContainerId` (30), Placeholders (5), Shadow DOM & dark mode (11), and Callbacks (10): plus the **3 deprecated aliases** (`recordingSummary`, `multiThreadMode`, `groupMultipleMatch`) that props.md's Part 1 lists, for 125 entries total against props.md's stated 129 (the remaining 4 are duplicate-row count artifacts in props.md: the combined `atHereLabel`/`atHereDescription`, `allowedElement*` triple, per-surface dark-mode triple, and per-surface shadow rows: each is documented individually above). **No prop is skipped.** Only `dialogDarkMode` has limited runtime coverage: it has no dedicated container setter, so its effect is described as inherited/forwarded rather than invented.

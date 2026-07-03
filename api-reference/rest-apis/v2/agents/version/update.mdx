@@ -1,0 +1,171 @@
+---
+title: "Update Agent Version"
+api: "POST https://api.velt.dev/v2/agents/version/update"
+---
+
+Use this API to update behavioral/version fields. This **creates a new version N+1** in the versions subcollection and bumps the `version` pointer on the root document. Only supported for custom agents.
+
+In-flight executions stay pinned to whatever version they started on, so updating a version never disturbs a running execution.
+
+The schema uses `.passthrough()`, so additional behavioral fields are forwarded to the service layer. Server-managed fields (`managedBy`, `metadata.type`, `metadata.category`, `metadata.internal`, `metadata.apiKey`) are rejected — see [Create Agent → Server-managed fields](/api-reference/rest-apis/v2/agents/create#server-managed-fields).
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/version/update`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="agentId" type="string" required>
+      Custom agent ID.
+    </ParamField>
+
+    <ParamField body="rawInstructions" type="string">
+      Original user-provided instructions.
+    </ParamField>
+
+    <ParamField body="instructions" type="string">
+      Processed/enhanced instructions.
+    </ParamField>
+
+    <ParamField body="phaseTimeoutMs" type="number">
+      Per-phase timeout in ms (positive integer).
+    </ParamField>
+
+    <ParamField body="contextGathering" type="object">
+      Context gathering config. Same shape as [Create Agent](/api-reference/rest-apis/v2/agents/create#context-gathering-strategies).
+    </ParamField>
+
+    <ParamField body="execution" type="object">
+      Execution config, including `executionStrategy`, the strict `knowledge` (Memory-RAG) block, and `mcpServers` for the `"mcp-tools"` strategy. Same shape as [Create Agent](/api-reference/rest-apis/v2/agents/create#mcp-servers-mcp-tools-strategy). Rotating an MCP/REST auth secret is done by sending the new plaintext value here; omitting it keeps the stored secret.
+    </ParamField>
+
+    <ParamField body="response" type="object">
+      Response formatting config. Same shape as [Create Agent](/api-reference/rest-apis/v2/agents/create).
+    </ParamField>
+
+    <ParamField body="postProcess" type="object">
+      Post-processing pipeline config. Same shape as [Create Agent](/api-reference/rest-apis/v2/agents/create).
+    </ParamField>
+
+    <ParamField body="input" type="object">
+      Input declaration config. Same shape as [Create Agent](/api-reference/rest-apis/v2/agents/create).
+    </ParamField>
+
+    <ParamField body="scope" type="object">
+      Scope and targeting config. Same shape as [Create Agent](/api-reference/rest-apis/v2/agents/create).
+    </ParamField>
+
+    <ParamField body="setup" type="object">
+      Setup assistant metadata. Same shape as [Create Agent](/api-reference/rest-apis/v2/agents/create).
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## **Example Requests**
+
+#### 1. Update instructions and post-processing
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456",
+    "instructions": "Check headings use 'Inter' font. Verify #1A73E8 on all CTAs and links.",
+    "postProcess": {
+      "guardrails": { "enabled": true },
+      "matchAndMerge": { "enabled": true }
+    }
+  }
+}
+```
+
+#### 2. Update context gathering strategies
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456",
+    "contextGathering": {
+      "strategies": ["web-page-text", "web-page-html", "web-page-screenshot"]
+    }
+  }
+}
+```
+
+#### 3. Enable cross-page via scope
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456",
+    "scope": {
+      "crossPage": {
+        "enabled": true,
+        "targetProperty": "brandConsistency",
+        "pageDiscovery": "manual",
+        "pages": ["https://example.com", "https://example.com/about"]
+      }
+    }
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Agent version created successfully",
+    "data": {
+      "version": 4
+    }
+  }
+}
+```
+
+| Field          | Type   | Description                         |
+| -------------- | ------ | ----------------------------------- |
+| `data.version` | number | New version number after the update |
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+**Errors:** `INVALID_ARGUMENT` (Zod validation failure or a server-managed field) / `NOT_FOUND` (agent does not exist).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Agent version created successfully",
+    "data": {
+      "version": 4
+    }
+  }
+}
+```
+</ResponseExample>

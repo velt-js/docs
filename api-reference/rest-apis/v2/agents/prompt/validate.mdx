@@ -1,0 +1,148 @@
+---
+title: "Validate Prompt"
+api: "POST https://api.velt.dev/v2/agents/prompt/validate"
+---
+
+Use this API to expand a simple instruction into a structured QA task — with an analysis prompt, tool requirements, response descriptions, and demo examples. This is the transformation step that turns a one-line instruction into a comprehensive QA task definition you can ship as an agent.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/prompt/validate`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="prompt" type="string" required>
+      Min 1 char. The user's simple instruction to expand.
+    </ParamField>
+
+    <ParamField body="provider" type="string">
+      LLM provider override: `"gemini"` or `"claude"`.
+    </ParamField>
+
+    <ParamField body="userContextFields" type="object[]">
+      Optional declared user-context fields. Each entry: `{ id, title, type, example?, defaultValue? }`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## **Example Requests**
+
+#### 1. Broken links
+
+```JSON
+{
+  "data": {
+    "prompt": "Make sure there are no broken links on the page"
+  }
+}
+```
+
+#### 2. Accessibility check
+
+```JSON
+{
+  "data": {
+    "prompt": "Check all images have alt text and all form inputs have labels"
+  }
+}
+```
+
+# Response
+
+The `validationResult` object maps to the `PromptValidatorResult` interface.
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Prompt validated successfully",
+    "data": {
+      "validationResult": {
+        "analysis_prompt": "## Objective\nIdentify all broken or non-functional hyperlinks on the page\n\n## Scope\nAll anchor elements (<a href>) and embedded resource URLs\n\n## Detection Logic\nHTTP HEAD/GET validation of link targets, checking for non-2xx status codes\n\n## Output Format\nList of broken links with source element, target URL, and HTTP status",
+        "requires_tool": "TOOL_TEXT_EXTRACTOR",
+        "response_descriptions": {
+          "title": "Brief description of the broken link",
+          "severity": "critical for 5xx errors, high for 4xx, medium for timeouts, low for redirects",
+          "targetText": "The anchor text of the broken link",
+          "suggestion": "The correct URL or action to fix the broken link",
+          "issueType": "broken-link"
+        },
+        "demos": {
+          "detection_dimensions": ["Link targets", "HTTP status codes", "Redirect chains"],
+          "cases": [
+            {
+              "id": "demo-1",
+              "title": "Broken link to documentation",
+              "tier": "obvious_match",
+              "dimension_tested": "HTTP status codes: 404",
+              "html": "<a href=\"https://docs.example.com/api\">API Reference</a>",
+              "expected": "detected",
+              "reason": "Link returns 404 Not Found"
+            }
+          ]
+        },
+        "suggested_required_inputs": []
+      }
+    }
+  }
+}
+```
+
+**Response fields (`PromptValidatorResult`):**
+
+| Field                       | Type     | Description                                                                                |
+| --------------------------- | -------- | ------------------------------------------------------------------------------------------ |
+| `analysis_prompt`           | string   | Markdown-formatted QA analysis prompt (objective, scope, detection logic, output format).  |
+| `requires_tool`             | string   | `"TOOL_TEXT_EXTRACTOR"` or `"NONE"`.                                                        |
+| `response_descriptions`     | object   | Per-field descriptions for AI response shaping.                                            |
+| `demos`                     | object   | Demo test cases with detection dimensions and tiered cases.                                |
+| `suggested_required_inputs` | object[] | Runtime-dependent fields the user must provide at execution time.                          |
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+**Errors:** `INVALID_ARGUMENT` (missing or empty `prompt`).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Prompt validated successfully",
+    "data": {
+      "validationResult": {
+        "analysis_prompt": "## Objective\n...",
+        "requires_tool": "NONE",
+        "response_descriptions": {},
+        "demos": {},
+        "suggested_required_inputs": []
+      }
+    }
+  }
+}
+```
+</ResponseExample>

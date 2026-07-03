@@ -1,0 +1,206 @@
+---
+title: "Agents"
+sidebarTitle: "Overview"
+description: "Run AI agents that analyze web pages, surface findings, and create comment annotations — without writing the analysis pipeline yourself."
+---
+
+## What are Agents?
+
+Agents are AI-driven QA tools that analyze a web page (or set of pages) and surface findings as comment annotations. You configure what an agent looks for; the platform handles context gathering, LLM invocation, post-processing, deduplication, and annotation creation.
+
+Build any check you want — brand consistency, accessibility, SEO, broken links, spelling, custom domain rules — by writing a prompt and selecting a few configuration options. No need to run your own browser pool, prompt your own model, or wire up annotation creation.
+
+You define an **agent configuration** once, then call **Run Execution** with a URL. Results are persisted as a versioned execution document plus per-URL findings, and annotations are automatically posted to the document via the Comments API.
+
+## What you get
+
+- **Built-in and custom agents.** Use ready-made agents (spell-check, grammar-check, broken-links, PII detection, profanity, sensitive-data, Lighthouse, accessibility, OG-image, and more — see [Built-in agents](#built-in-agents)) or define your own custom agents from a prompt.
+
+- **Pluggable context gathering.** Stack one or more strategies — page text, screenshots, HTML, CSS, links, accessibility tree, computed styles, robots.txt, sitemap, Lighthouse, and live REST API data — and the engine extracts everything.
+
+- **Live REST API context.** The `rest-api` strategy fetches your own endpoints (CRM, inventory, feature flags, user profiles) at execution time and injects the responses into the prompt. Auth secrets are encrypted at rest and redacted on read.
+
+- **MCP tool use.** The `mcp-tools` execution strategy connects to remote [MCP (Model Context Protocol)](https://modelcontextprotocol.io) servers, exposes their tools to the model, and runs a multi-turn tool loop — e.g. verifying on-page code snippets live against a documentation MCP. Provider-agnostic (Claude + Gemini); server auth secrets are encrypted at rest and redacted on read.
+
+- **Versioned configurations.** Every behavioral edit creates a new version. In-flight executions stay pinned to the version they started on. One-click restore rolls back the most recent change.
+
+- **Async execution with polling.** `Run Execution` returns an `executionId` immediately and dispatches a Cloud Task. Poll `Get Execution` until `status !== "running"`.
+
+- **Cross-page execution.** Set `crossPageExecute: true` and the engine crawls the seed URL, processes up to `maxUrlsToProcess` pages, and aggregates findings across the site.
+
+- **Device emulation.** Set `deviceType: "mobile"` or `"desktop"` per execution to control the Puppeteer viewport/user-agent used for context gathering and pin resolution.
+
+- **Re-run deduplication.** Re-running an agent against the same document does not pile up duplicate annotations. The active `deletePreviousSuggestions` post-processor clears the prior run's suggestions for each URL before writing the new ones. (The legacy `matchAndMerge` processor is deprecated and ignored.)
+
+- **Token usage analytics.** Per-agent, per-model, per-month token consumption tracked automatically in Firestore and exposed via the Analytics endpoint.
+
+- **Agent groups.** Organize related agents into named groups (e.g. "Brand QA") and filter list responses by group.
+
+## Use cases
+
+<CardGroup cols={2}>
+  <Card title="Brand consistency" icon="palette">
+    A custom agent verifies brand colors, typography, and logo placement across your marketing pages. Re-run on every deploy.
+  </Card>
+
+  <Card title="Pre-launch QA" icon="rocket">
+    Spell-check, broken-links, and accessibility agents run before a release. Findings appear as comment annotations on the staging document.
+  </Card>
+
+  <Card title="Content moderation" icon="shield-halved">
+    PII detection and profanity filter agents flag sensitive content on user-generated pages. Pair with Approval Engine for human review.
+  </Card>
+
+  <Card title="Cross-page audit" icon="sitemap">
+    Run a brand consistency agent in `crossPageExecute: true` mode against a marketing site. The crawler discovers internal links, then the agent checks each one.
+  </Card>
+
+  <Card title="Data-enriched checks" icon="database">
+    Use the `rest-api` context strategy to pull live business data into the prompt — e.g. validate that on-page pricing matches your billing API.
+  </Card>
+
+  <Card title="Workflow integration" icon="diagram-project">
+    Trigger an agent execution from an Approval Engine workflow node. The engine handles parking the workflow on the agent's findings.
+  </Card>
+</CardGroup>
+
+## How it works
+
+1. **Define the agent.** Call [Create Agent](/api-reference/rest-apis/v2/agents/create) with a name, instructions, and a configuration block (context gathering strategies, execution strategy, post-processing options). The engine creates version 1 in the agent's versions subcollection.
+2. **Run an execution.** Call [Run Execution](/api-reference/rest-apis/v2/agents/execution/run) with `agentId` and `url`. The engine creates an execution document, dispatches a Cloud Task, and returns an `executionId`.
+3. **The pipeline runs.** Context gathering → LLM execution → post-processing (guardrails, match-and-merge, annotation creation, analytics) → response shaping. Every phase is bounded by a per-phase timeout.
+4. **Poll for results.** Call [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) until `status !== "running"`. Set `includeResults: true` to fetch per-URL findings.
+5. **Findings appear as annotations.** When `postProcess.annotations.enabled` is true (default), each finding becomes a comment annotation on the document referenced by `organizationId` / `documentId`.
+
+## Mental model
+
+### Agent
+
+An **agent** is a reusable QA configuration. Each agent has an identity (`name`, `description`, `enabled`) plus a behavioral configuration (instructions, context gathering, execution, post-processing). Identity edits update the root document; behavioral edits create a new version.
+
+### Execution
+
+An **execution** is one run of an agent against a seed URL. It pins the agent's `version` at dispatch time, so in-flight runs are immune to mid-run config changes.
+
+**Lifecycle:**
+
+```
+running → passed | failed | partial | error | skipped
+```
+
+### Finding
+
+A **finding** is one issue the agent surfaced on one URL. Findings carry severity, category, target text, suggestion, HTML selector, and confidence. Findings below the guardrails confidence floor are suppressed unless explicitly disabled.
+
+### Pipeline phases
+
+Each agent run executes sequential phases:
+
+| Phase               | What happens                                                                     |
+| ------------------- | -------------------------------------------------------------------------------- |
+| `validate`          | Zod check on payload + input requirements + variable keys                        |
+| `extract`           | All configured context gathering strategies run                                  |
+| `execute`           | LLM call (or registered service); results normalized to a finding array          |
+| `postProcess`       | Guardrails → match-and-merge → annotation creation → analytics                   |
+| `structureResponse` | Final response assembly with optional response adapter                           |
+
+## Execution statuses
+
+| Status      | Meaning                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------- |
+| `running`   | Execution is in progress                                                                    |
+| `passed`    | Completed successfully — all URLs processed cleanly, **no findings**                         |
+| `failed`    | Completed with **findings** — all URLs processed cleanly                                     |
+| `partial`   | Mixed outcome — at least one URL succeeded and at least one URL failed ("passed with some failures") |
+| `error`     | Every processed URL failed, or a fatal crawl/dispatch failure — nothing usable produced      |
+| `skipped`   | Execution was skipped (e.g. a precondition was not met)                                      |
+
+**Terminal status precedence:** `error` > `partial` > `failed` > `passed`. A run that produced findings but had a single failing page surfaces as `partial` (not `error`). For `partial`/`error`, per-page failure detail is in `resultsSummary.urlsErrored` and `resultsSummary.erroredUrls`.
+
+## Built-in agents
+
+| Agent ID                | Description                                    | Internal |
+| ----------------------- | ---------------------------------------------- | -------- |
+| `spell-check`           | Spelling and typo detection                    | no       |
+| `grammar-check`         | Grammar checking                               | no       |
+| `broken-links`          | Broken link validation                         | no       |
+| `pii-detection`         | PII (personal info) detection                  | no       |
+| `profanity-filter`      | Profanity detection                            | no       |
+| `sensitive-data`        | Sensitive data detection                       | no       |
+| `lighthouse`            | Google Lighthouse performance/SEO/a11y audit   | no       |
+| `accessibility-checker` | Accessibility (WCAG) audit                     | no       |
+| `og-image-checker`      | Open Graph image validation                    | no       |
+| `lorem-ipsum`           | Placeholder / lorem-ipsum text detection       | no       |
+| `screenshot`            | Page screenshot capture                        | yes      |
+| `crawler`               | Site crawling                                  | yes      |
+| `docs-code-comparison`  | Verifies code snippets against a docs MCP server (`mcp-tools`) | yes      |
+
+Internal agents (`metadata.internal: true`) power the execution pipeline and are excluded from list responses. They can still be fetched individually by id.
+
+## Context gathering strategies
+
+Stack one or more strategies in the order you want them to run.
+
+| Strategy                 | What it returns                                                        |
+| ------------------------ | ---------------------------------------------------------------------- |
+| `web-page-text`          | Visible text extracted via Puppeteer                                   |
+| `web-page-screenshot`    | Full-page screenshot as image (multimodal input)                       |
+| `web-page-html`          | Cleaned HTML content                                                   |
+| `web-page-css`           | Cleaned CSS content from stylesheets                                   |
+| `web-page-links`         | All hyperlinks on the page, classified internal/external              |
+| `web-page-accessibility` | Accessibility issues (Pa11y / HTML_CodeSniffer)                        |
+| `computed-styles`        | Browser-resolved computed CSS for specific selectors                   |
+| `robots-txt`             | Fetched `robots.txt`                                                    |
+| `sitemap-data`           | Discovered and parsed XML sitemaps                                     |
+| `lighthouse`             | Google Lighthouse audit (performance / a11y / best-practices / SEO)    |
+| `rest-api`               | Customer-configured REST endpoints fetched at runtime (SSRF-guarded, encrypted auth) — injected via `{{restApiData}}` |
+| `none`                   | No context gathering (for service-only or text-only agents)            |
+
+Per-strategy overrides are supplied under `contextGathering.strategyOptions["<strategy>"]`. See [Create Agent](/api-reference/rest-apis/v2/agents/create) for the `rest-api` endpoint configuration schema.
+
+## Execution strategies
+
+| Strategy          | Purpose                                                          |
+| ----------------- | ---------------------------------------------------------------- |
+| `ai`              | LLM-driven analysis (default)                                    |
+| `service`         | Delegate to a registered built-in service (`serviceId` required) |
+| `service+ai`      | Service context gathering + AI analysis (`serviceId` required)   |
+| `stagehand-agent` | Autonomous browser agent via Stagehand AI                        |
+| `mcp-tools`       | Model-driven tool loop against remote MCP server(s) (`instructions` + `execution.mcpServers` required) |
+
+## Knowledge (Memory-RAG)
+
+Agents can pull workspace knowledge from Velt Memory into the prompt via `execution.knowledge`:
+
+| Field           | Type    | Range | Description                                                             |
+| --------------- | ------- | ----- | ----------------------------------------------------------------------- |
+| `useMemory`     | boolean |       | When `true`, retrieves knowledge/patterns/activities from Memory and injects them as `{{memoryContext}}` |
+| `maxChunks`     | number  | 1–20  | Max knowledge chunks to retrieve                                        |
+| `maxPatterns`   | number  | 1–20  | Max learned patterns to retrieve                                        |
+| `maxActivities` | number  | 1–20  | Max recent activities to retrieve                                       |
+
+<Note>
+  The `knowledge` block is strictly validated — only the four fields above are accepted. The legacy `sourceIds` field has been removed, and `maxChunks` is now capped at 20 (previously 50). Knowledge retrieval never fails an execution: if Memory is unavailable, the run continues in a degraded mode without knowledge context.
+</Note>
+
+## Scope
+
+| Field            | Bound to                                                   |
+| ---------------- | ---------------------------------------------------------- |
+| `apiKey`         | Workspace-wide (default; agents are per-workspace)         |
+| `organizationId` | Annotations created on the named organization              |
+| `documentId`     | Annotations created on the named document                  |
+
+`organizationId` and `documentId` on Run Execution control where annotations land. They are not required for the agent to execute.
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card title="Setup" icon="gear" href="/ai/agents/setup">
+    Create an agent, run it against a URL, and read the findings end-to-end.
+  </Card>
+
+  <Card title="API Reference" icon="code" href="/api-reference/rest-apis/v2/agents/create">
+    All endpoints organized into Agents, Execution, Versioning, Prompt Tools, Analytics, and Groups.
+  </Card>
+</CardGroup>

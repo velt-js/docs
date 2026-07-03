@@ -1,0 +1,126 @@
+---
+title: "Resolve Config"
+api: "POST https://api.velt.dev/v2/agents/config/resolve"
+---
+
+Use this API to resolve optimal extraction strategies and execution strategy for an agent based on its instructions. The engine analyzes the (optional `rawInstructions` plus the processed `instructions`) and returns:
+
+- A recommended set of `contextGathering.strategies`
+- A recommended `executionStrategy` (`ai`, `service`, `service+ai`, or `stagehand-agent`)
+- Reasoning for each recommendation
+
+Use this as a starting point when creating a new agent — the response can be passed straight into [Create Agent](/api-reference/rest-apis/v2/agents/create) under the `contextGathering` and `execution` blocks.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/config/resolve`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="instructions" type="string" required>
+      Min 1 char. The processed/enhanced agent instructions.
+    </ParamField>
+
+    <ParamField body="rawInstructions" type="string">
+      Verbatim user prompt. When provided, the resolver also uses it to detect navigation/interaction intent (e.g. "click the menu, then check…") and may recommend `stagehand-agent` execution.
+    </ParamField>
+
+    <ParamField body="provider" type="string">
+      LLM provider override: `"gemini"` or `"claude"`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## **Example Requests**
+
+#### 1. Resolve a static analysis agent
+
+```JSON
+{
+  "data": {
+    "instructions": "Verify all CTAs use the primary brand color #1A73E8 and the heading font 'Inter'."
+  }
+}
+```
+
+#### 2. Resolve an interactive agent
+
+```JSON
+{
+  "data": {
+    "rawInstructions": "Open the navigation menu, click 'Pricing', and check that the page title contains 'Pricing'.",
+    "instructions": "Open the navigation menu, click the Pricing link, and verify the resulting page title contains 'Pricing'."
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Config resolved successfully",
+    "data": {
+      "resolvedConfig": {
+        "extraction_strategies": ["web-page-text", "web-page-screenshot", "web-page-html"],
+        "execution_strategy": "ai",
+        "reasoning": "The instructions describe a static visual + textual check (brand colors and fonts). Screenshots support color verification; HTML supports font detection. AI execution is sufficient — no service delegation needed."
+      }
+    }
+  }
+}
+```
+
+| Field                                          | Type     | Description                                                              |
+| ---------------------------------------------- | -------- | ------------------------------------------------------------------------ |
+| `data.resolvedConfig.extraction_strategies`    | string[] | Recommended `contextGathering.strategies` values.                         |
+| `data.resolvedConfig.execution_strategy`       | string   | Recommended `execution.executionStrategy` value.                          |
+| `data.resolvedConfig.reasoning`                | string   | Explanation for the recommendations.                                     |
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+**Errors:** `INVALID_ARGUMENT` (missing or empty `instructions`).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Config resolved successfully",
+    "data": {
+      "resolvedConfig": {
+        "extraction_strategies": ["web-page-text"],
+        "execution_strategy": "ai",
+        "reasoning": "..."
+      }
+    }
+  }
+}
+```
+</ResponseExample>

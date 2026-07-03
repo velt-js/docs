@@ -1,0 +1,116 @@
+---
+title: "Add Agents to Group"
+api: "POST https://api.velt.dev/v2/agents/groups/add-agents"
+---
+
+Use this API to add one or more agents to an existing group.
+
+<Note>
+  This operation is **idempotent** — re-adding an agent that is already a member is a silent success (no duplicate is appended, no error is thrown). Membership is deduped and appended atomically inside a Firestore transaction using `arrayUnion`.
+</Note>
+
+All provided ids must reference existing agents. Custom-agent ids are validated in a single batched read; built-in agent ids (e.g. `spell-check`) are accepted without a lookup. The final membership size is capped at 100 (`MAX_AGENTS_PER_GROUP`), enforced atomically to avoid race conditions.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/groups/add-agents`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="groupId" type="string" required>
+      Min 1 char. Agent group id.
+    </ParamField>
+
+    <ParamField body="agentIds" type="string[]" required>
+      Non-empty array of agent ids to add. Each id must be min 1 char. Deduped server-side. Max 100 members total.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## **Example Requests**
+
+```JSON
+{
+  "data": {
+    "groupId": "grp_9f3ac2",
+    "agentIds": ["xyz789ghi012", "grammar-check"]
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Agents added to group successfully",
+    "data": {
+      "group": {
+        "id": "grp_9f3ac2",
+        "name": "Brand QA",
+        "agentIds": ["abc123def456", "spell-check", "xyz789ghi012", "grammar-check"],
+        "metadata": { "apiKey": "ak_xxx" },
+        "createdAt": 1711900000000,
+        "updatedAt": 1711950000000
+      }
+    }
+  }
+}
+```
+
+Returns the updated group document.
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "RESOURCE_EXHAUSTED"
+  }
+}
+```
+
+**Errors:**
+
+- `NOT_FOUND` — the group does not exist, or one of the provided `agentIds` does not exist.
+- `RESOURCE_EXHAUSTED` — the resulting group size would exceed `MAX_AGENTS_PER_GROUP` (100).
+- `INVALID_ARGUMENT` — empty `agentIds` array or empty id values.
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Agents added to group successfully",
+    "data": {
+      "group": {
+        "id": "grp_9f3ac2",
+        "name": "Brand QA",
+        "agentIds": ["abc123def456", "xyz789ghi012"],
+        "metadata": { "apiKey": "ak_xxx" },
+        "createdAt": 1711900000000,
+        "updatedAt": 1711950000000
+      }
+    }
+  }
+}
+```
+</ResponseExample>

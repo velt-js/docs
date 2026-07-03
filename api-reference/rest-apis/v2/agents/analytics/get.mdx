@@ -1,0 +1,189 @@
+---
+title: "Get Agent Analytics"
+api: "POST https://api.velt.dev/v2/agents/analytics/get"
+---
+
+Use this API to fetch AI token usage analytics and execution counts. Data is aggregated from per-workspace Firestore usage documents. Filter by `agentId`, `year`, `month`, and/or `model`.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/analytics/get`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="agentId" type="string">
+      Min 1 char. Agent ID. Omit for aggregate analytics across all agents.
+    </ParamField>
+
+    <ParamField body="year" type="string">
+      4-digit year string (regex `^\d{4}$`), e.g. `"2026"`.
+    </ParamField>
+
+    <ParamField body="month" type="string">
+      Two-digit month `"01"`–`"12"` (regex `^(0[1-9]|1[0-2])$`).
+    </ParamField>
+
+    <ParamField body="model" type="string">
+      Filter by model (e.g. `"gemini-3-flash-preview"`).
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## **Example Requests**
+
+#### 1. Aggregate analytics (all agents)
+
+```JSON
+{
+  "data": {}
+}
+```
+
+#### 2. Single agent analytics
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456"
+  }
+}
+```
+
+#### 3. Filtered by year and month
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456",
+    "year": "2026",
+    "month": "03"
+  }
+}
+```
+
+#### 4. Filtered by model
+
+```JSON
+{
+  "data": {
+    "model": "gemini-3-flash-preview"
+  }
+}
+```
+
+# Response
+
+The `analytics` object maps to the `AgentAnalyticsResponse` interface. Model keys are sanitised as `provider_model` (e.g. `"claude_claude-sonnet-4-6"`).
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Analytics fetched successfully",
+    "data": {
+      "analytics": {
+        "tokenUsage": {
+          "allTime": {
+            "requestCount": 1250,
+            "promptTokens": 2500000,
+            "completionTokens": 750000,
+            "thoughtsTokens": 50000,
+            "totalTokens": 3300000
+          },
+          "yearly": {
+            "2026": {
+              "claude_claude-sonnet-4-6": { "requestCount": 350, "promptTokens": 700000, "completionTokens": 210000, "thoughtsTokens": 20000, "totalTokens": 930000 },
+              "gemini_gemini-3-flash-preview": { "requestCount": 500, "promptTokens": 1000000, "completionTokens": 300000, "thoughtsTokens": 10000, "totalTokens": 1310000 }
+            }
+          },
+          "monthly": {
+            "03": {
+              "claude_claude-sonnet-4-6": { "requestCount": 120, "promptTokens": 240000, "completionTokens": 72000, "thoughtsTokens": 5000, "totalTokens": 317000 }
+            }
+          },
+          "byModel": {
+            "claude_claude-sonnet-4-6": { "requestCount": 500, "promptTokens": 1000000, "completionTokens": 300000, "thoughtsTokens": 50000, "totalTokens": 1350000 },
+            "gemini_gemini-3-flash-preview": { "requestCount": 750, "promptTokens": 1500000, "completionTokens": 450000, "thoughtsTokens": 0, "totalTokens": 1950000 }
+          }
+        },
+        "executionCounts": {
+          "abc123def456": { "executionCount": 45, "lastExecutedAt": 1711900000000 },
+          "spell-check": { "executionCount": 142, "lastExecutedAt": 1711900000000 }
+        }
+      }
+    }
+  }
+}
+```
+
+**`TokenUsageSummary` fields (repeated in every breakdown):**
+
+| Field              | Type   | Description                                             |
+| ------------------ | ------ | ------------------------------------------------------- |
+| `requestCount`     | number | Total number of LLM API requests.                       |
+| `promptTokens`     | number | Total input tokens consumed.                            |
+| `completionTokens` | number | Total output tokens generated.                          |
+| `thoughtsTokens`   | number | Thinking/reasoning tokens (model-dependent; 0 for Gemini). |
+| `totalTokens`      | number | Total tokens consumed.                                  |
+
+**`tokenUsage` breakdown keys:**
+
+| Key       | Type                                                | Description                                             |
+| --------- | --------------------------------------------------- | ------------------------------------------------------- |
+| `allTime` | `TokenUsageSummary`                                 | Aggregate across all time.                              |
+| `yearly`  | `Record<year, Record<model, TokenUsageSummary>>`    | Keyed by year string, then by sanitised model key.      |
+| `monthly` | `Record<month, Record<model, TokenUsageSummary>>`   | Keyed by month (`"01"`–`"12"`), then by sanitised model key. |
+| `byModel` | `Record<model, TokenUsageSummary>`                  | Cross-year aggregate keyed by sanitised model.          |
+
+**`executionCounts` map:**
+
+| Field            | Type           | Description                                 |
+| ---------------- | -------------- | ------------------------------------------- |
+| `executionCount` | number         | Total executions for this agent.            |
+| `lastExecutedAt` | number \| null | Epoch ms of last execution. Null if never.  |
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+**Errors:** `INVALID_ARGUMENT` (invalid `year` or `month` format).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Analytics fetched successfully",
+    "data": {
+      "analytics": {
+        "tokenUsage": { "allTime": { "requestCount": 0, "promptTokens": 0, "completionTokens": 0, "thoughtsTokens": 0, "totalTokens": 0 } },
+        "executionCounts": {}
+      }
+    }
+  }
+}
+```
+</ResponseExample>

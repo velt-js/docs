@@ -1,0 +1,153 @@
+---
+title: "Count Executions"
+api: "POST https://api.velt.dev/v2/agents/execution/count"
+---
+
+Use this API to get a workspace-wide aggregate count of executions, optionally filtered by `agentIds` and/or `status`. Designed for poll-based "N running" counters — poll periodically with an array of agent IDs and get back a `{ counts: { [agentId]: number } }` map.
+
+Read-only. Never enqueues a Cloud Task.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/execution/count`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="agentIds" type="string | string[]">
+      A single agent ID or an array of `1..200` agent IDs. A single string is normalised to a 1-element array. When provided, the response is a per-agent `counts` map. When omitted, the response is a single workspace-wide `total`.
+    </ParamField>
+
+    <ParamField body="status" type="string">
+      Narrow the count to one execution status: `"running"`, `"passed"`, `"failed"`, `"partial"`, `"error"`, or `"skipped"`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+The schema uses `.strict()` — unknown top-level fields are rejected.
+
+## **Example Requests**
+
+#### 1. Count running executions for a set of agents
+
+```JSON
+{
+  "data": {
+    "agentIds": ["agent_brand_check", "spell-check", "broken-links"],
+    "status": "running"
+  }
+}
+```
+
+#### 2. Count all executions of a single agent
+
+```JSON
+{
+  "data": {
+    "agentIds": "agent_brand_check"
+  }
+}
+```
+
+#### 3. Workspace-wide total (no filter)
+
+```JSON
+{
+  "data": {}
+}
+```
+
+#### 4. Workspace-wide total, filtered by status
+
+```JSON
+{
+  "data": {
+    "status": "running"
+  }
+}
+```
+
+# Response
+
+The response shape depends on whether `agentIds` was provided. `counts` and `total` are mutually exclusive — exactly one is present.
+
+#### Success Response (`agentIds` provided → `counts` map)
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Agent execution count fetched successfully",
+    "data": {
+      "counts": {
+        "agent_brand_check": 2,
+        "spell-check": 0,
+        "broken-links": 1
+      }
+    }
+  }
+}
+```
+
+<Note>
+  **Partial-failure contract:** if a per-agent count fails, the response is still `200 success` and that agent's value is the integer sentinel `-1` (not `null`, not omitted). The map stays a uniform `Record<string, number>`, so clients never need to parse JSON `null`. Unknown agent IDs simply return `0`.
+</Note>
+
+#### Success Response (`agentIds` omitted → `total`)
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Agent execution count fetched successfully",
+    "data": {
+      "total": 128
+    }
+  }
+}
+```
+
+| Field         | Type                     | Description                                                                        |
+| ------------- | ------------------------ | ---------------------------------------------------------------------------------- |
+| `data.counts` | object                   | Present when `agentIds` was provided. One key per unique agent ID (deduped). Failed counts → `-1`. |
+| `data.total`  | number                   | Present when `agentIds` was omitted. Single workspace-wide count, optionally narrowed by `status`. |
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+**Errors:** `INVALID_ARGUMENT` (empty `agentIds` array, `agentIds` exceeding 200 elements, invalid `status`, or an unknown top-level field) / `NOT_FOUND` (workspace store database could not be resolved).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Agent execution count fetched successfully",
+    "data": {
+      "counts": { "agent_brand_check": 2 }
+    }
+  }
+}
+```
+</ResponseExample>

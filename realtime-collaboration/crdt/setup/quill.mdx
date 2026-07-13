@@ -1,0 +1,558 @@
+---
+title: Quill React
+description: Setup Multiplayer Editing for Quill Editor in React.
+---
+
+Enable real-time collaborative rich-text editing with Quill 2. The collaboration engine binds Quill Delta operations to a shared `Y.Text` using [y-quill](https://github.com/yjs/y-quill), [Yjs](https://docs.yjs.dev/), and Velt SDK.
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- React (v18 or higher)
+- Quill 2
+- A Velt account with an API key ([sign up](https://console.velt.dev/))
+- Optional: TypeScript for type safety
+
+## Setup
+
+### Step 1: Install Dependencies
+
+```bash
+npm install @veltdev/quill-crdt-react @veltdev/quill-crdt @veltdev/react @veltdev/types react react-dom quill quill-cursors
+```
+
+The wrapper supports Quill 2 and uses `quill-cursors` for remote selections. It is tested with `quill@2.0.3` and `quill-cursors@4.3.0`. The base package owns the `y-quill`, Yjs, awareness, and undo binding.
+
+
+### Step 2: Load Quill Styles
+
+Import the stylesheet matching your theme:
+
+```tsx
+import 'quill/dist/quill.snow.css';
+```
+
+Do not hide `.ql-cursor` or `.ql-cursor-selection` in application CSS.
+
+
+### Step 3: Setup Velt
+
+Initialize Velt with production authentication by following the [Velt Setup Docs](/get-started/quickstart), then set a stable document ID:
+
+```tsx
+import { useSetDocument } from '@veltdev/react';
+
+useSetDocument('shared-quill-doc', { documentName: 'Shared Quill Document' });
+```
+
+The wrapper does not authenticate or identify users. Complete your Velt authentication flow before `useCollaboration()` or `QuillCrdtEditor` initializes; collaboration waits until an authenticated Velt user exists.
+
+
+### Step 4: Initialize Collaborative Editor
+
+<Tabs>
+<Tab title="React Component">
+
+`QuillCrdtEditor` dynamically loads Quill in the browser, registers `quill-cursors`, creates the editor, and manages collaboration:
+
+```tsx
+import { QuillCrdtEditor } from '@veltdev/quill-crdt-react';
+import 'quill/dist/quill.snow.css';
+
+function CollaborativeEditor() {
+  return (
+    <QuillCrdtEditor
+      documentId="shared-quill-doc"
+      theme="snow"
+      className="editor-content"
+      initialContent="Hello Quill"
+      cursorData={{ name: 'Ada', color: '#0f766e' }}
+      onError={(error) => console.error('Collaboration error:', error)}
+    />
+  );
+}
+```
+
+Inline `modules` and `formats` values are compared by content so equivalent values do not recreate the editor.
+
+</Tab>
+<Tab title="React Hook">
+
+Register `quill-cursors` before constructing a custom Quill instance:
+
+```tsx
+import { useEffect, useRef } from 'react';
+import Quill from 'quill';
+import QuillCursors from 'quill-cursors';
+import { useCollaboration } from '@veltdev/quill-crdt-react';
+
+Quill.register('modules/cursors', QuillCursors);
+
+function CustomEditor() {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const collaboration = useCollaboration({ editorId: 'shared-quill-doc' });
+
+  useEffect(() => {
+    if (!hostRef.current) return;
+    const editor = new Quill(hostRef.current, {
+      theme: 'snow',
+      modules: {
+        cursors: { transformOnTextChange: true },
+        history: { userOnly: true },
+      },
+    });
+    collaboration.editorRef(editor);
+    return () => collaboration.editorRef(null);
+  }, [collaboration.editorRef]);
+
+  return <div ref={hostRef} />;
+}
+```
+
+Without `quill-cursors`, document sync still works but remote cursor labels are not rendered.
+
+</Tab>
+<Tab title="Provider API">
+
+```tsx
+import {
+  QuillCrdtProvider,
+  useCollaborationContext,
+} from '@veltdev/quill-crdt-react';
+
+function Toolbar() {
+  const collaboration = useCollaborationContext();
+  if (!collaboration) return null;
+  return <button onClick={() => collaboration.saveVersion('Checkpoint')}>Save</button>;
+}
+
+<QuillCrdtProvider
+  config={{ editorId: 'shared-quill-doc', initializeWithoutEditor: true }}
+>
+  <Toolbar />
+</QuillCrdtProvider>
+```
+
+`CollaborationProvider` is an alias. `useCollaborationContext()` returns `null` outside a provider.
+
+</Tab>
+<Tab title="Imperative API">
+
+```tsx
+import { createCollaboration } from '@veltdev/quill-crdt';
+
+const manager = await createCollaboration({
+  editorId: 'shared-quill-doc',
+  veltClient: client,
+  editor,
+  initialContent: 'Hello Quill',
+  cursorData: { name: 'Ada', color: '#0f766e' },
+});
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 5: Configure Modules and Formats
+
+```tsx
+<QuillCrdtEditor
+  documentId="shared-quill-doc"
+  modules={{
+    toolbar: [
+      [{ header: [1, 2, false] }],
+      ['bold', 'italic', 'underline'],
+      [{ list: 'ordered' }, { list: 'bullet' }],
+      ['link', 'clean'],
+    ],
+    cursors: { transformOnTextChange: true },
+    history: { userOnly: true },
+  }}
+  formats={['header', 'bold', 'italic', 'underline', 'list', 'link']}
+/>
+```
+
+The drop-in component enables cursors, user-only local history, and no toolbar by default. Supplied module options override those defaults.
+
+
+### Step 6: Status Monitoring (Optional)
+
+```tsx
+const { manager, status, synced, isLoading, error, stats } = collaboration;
+
+useEffect(() => {
+  if (!manager) return;
+  const offStatus = manager.onStatusChange(console.log);
+  const offSynced = manager.onSynced(console.log);
+  return () => {
+    offStatus();
+    offSynced();
+  };
+}, [manager]);
+```
+
+`stats` reports editor, Store, and binding availability, shared text length, Delta operation count, and remote selection count.
+
+
+### Step 7: Version Management (Optional)
+
+```tsx
+const versionId = await collaboration.saveVersion('Reviewed draft');
+const version = await collaboration.getVersionById(versionId);
+await collaboration.refreshVersions();
+await collaboration.restoreVersion(versionId);
+```
+
+Restoring a version replaces the shared Delta state for every collaborator.
+
+
+### Step 8: Initial Content and Force Reset (Optional)
+
+`initialContent` accepts plain text or Quill Delta operations:
+
+```tsx
+<QuillCrdtEditor
+  documentId="shared-quill-doc"
+  initialContent={{
+    ops: [
+      { insert: 'Collaborative Quill document', attributes: { bold: true } },
+      { insert: '\n' },
+    ],
+  }}
+/>
+```
+
+Seed content is applied only when the shared document is new. For a deliberate reset:
+
+```tsx
+await collaboration.forceReset({ ops: [{ insert: 'Reset document\n' }] });
+```
+
+<Warning>`forceResetInitialContent` and `forceReset()` replace shared rich-text content for all collaborators.</Warning>
+
+
+### Step 9: Work with Text and Delta Content
+
+```tsx
+const text = collaboration.getValue();
+const delta = collaboration.getContents();
+
+collaboration.setValue('Plain text replacement', 'toolbar');
+collaboration.setContents({ ops: [{ insert: 'Rich text\n', attributes: { bold: true } }] });
+collaboration.updateContents({ ops: [{ retain: 4 }, { insert: ' collaborative' }] });
+```
+
+Use focused helpers for CRDT-safe changes:
+
+```tsx
+collaboration.insertText(0, 'Hello ', { bold: true });
+collaboration.deleteText(0, 6);
+collaboration.insertEmbed(0, 'image', imageUrl, { width: '320px' });
+collaboration.formatText(0, 5, { italic: true });
+const format = collaboration.getFormat(0, 5);
+```
+
+
+### Step 10: Persistent Highlights
+
+Highlights are Quill Delta attributes and therefore persist as document content:
+
+```tsx
+collaboration.highlightRange(0, 12, '#fef08a');
+collaboration.clearHighlight(0, 12);
+```
+
+This differs from remote selection colors, which are temporary awareness state.
+
+
+### Step 11: Configure Remote Cursors (Optional)
+
+The `y-quill` binding and `quill-cursors` module render remote cursors automatically. The hook also exposes awareness state:
+
+```tsx
+const { remoteSelections } = collaboration;
+collaboration.publishCurrentSelection();
+collaboration.setLocalSelection({ index: 10, length: 4 });
+```
+
+Each remote entry includes user metadata, selection index and length, and a derived cursor/selection kind.
+
+
+### Step 12: Configure Undo and Redo
+
+```tsx
+collaboration.undo();
+collaboration.redo();
+```
+
+These methods use the base Yjs `UndoManager` and undo local CRDT transactions without removing peer changes. `undoCaptureTimeout` controls transaction grouping.
+
+<Warning>Use one visible undo policy. If you keep Quill's local history shortcuts, ensure they do not conflict with UI controls backed by the Yjs UndoManager.</Warning>
+
+
+### Step 13: CRDT Event Subscription (Optional)
+
+```tsx
+const subscription = client.getCrdtElement().on('updateData').subscribe((event) => {
+  if (event) console.log('CRDT update:', event);
+});
+
+subscription?.unsubscribe?.();
+```
+
+
+### Step 14: Custom Encryption (Optional)
+
+```tsx
+const encryptionProvider = {
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+};
+
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  authProvider={authProvider}
+  encryptionProvider={encryptionProvider}
+>
+  ...
+</VeltProvider>
+```
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+
+
+### Step 15: Error Handling (Optional)
+
+```tsx
+const collaboration = useCollaboration({
+  editorId: 'shared-quill-doc',
+  editor,
+  onError: (error) => console.error('Quill collaboration:', error),
+});
+
+if (collaboration.error) return <div>{collaboration.error.message}</div>;
+```
+
+
+### Step 16: Access Yjs Internals (Advanced)
+
+```tsx
+const { primitives } = collaboration;
+
+const store = primitives?.store;
+const doc = primitives?.doc;
+const ytext = primitives?.ytext;
+const provider = primitives?.provider;
+const awareness = primitives?.awareness;
+const undoManager = primitives?.undoManager;
+const binding = primitives?.binding;
+```
+
+
+### Step 17: Attach, Detach, and Cleanup
+
+```tsx
+const collaboration = useCollaboration({
+  editorId: 'shared-quill-doc',
+  initializeWithoutEditor: true,
+});
+
+collaboration.attachEditor(editor);
+collaboration.detachEditor();
+```
+
+The hook cleans up automatically and handles React StrictMode and unmount-during-initialization races. The component clears the Quill host it created. Use `destroy()` only for early collaboration teardown.
+
+
+### Step 18: Client-only Rendering
+
+Quill depends on browser APIs. The drop-in component imports Quill inside an effect, but its containing route should still be a client component in SSR frameworks.
+
+```tsx
+'use client';
+
+import { QuillCrdtEditor } from '@veltdev/quill-crdt-react';
+```
+
+
+## Notes
+
+- **Rich-text data model**: Quill Delta operations are stored as attributes and embeds on a shared `Y.Text`.
+- **Binding ownership**: `y-quill` inside the base package is the only editor binding.
+- **Cursor module**: Custom editors must register `quill-cursors` before construction.
+- **Persistent versus transient highlights**: Delta background attributes persist; awareness selections do not.
+- **Undo policy**: Prefer the Yjs UndoManager for collaborative history.
+- **Client-only**: Construct Quill only in the browser.
+- **Unique editorId**: Collaborators must share the same Velt document and editor ID.
+- **Production authentication**: Use a server-backed Velt `authProvider`; never expose privileged server tokens in browser code.
+
+
+## Testing and Debugging
+
+**To test collaboration:**
+1. Open the same Velt document and Quill `editorId` as two different users.
+2. Edit text, formatting, lists, links, embeds, and highlights concurrently.
+3. Verify remote cursor labels, Yjs undo/redo, versions, reconnection, and persistence.
+4. Test with the production `modules` and `formats` allowlist.
+
+**Common issues:**
+- Cursors do not render: Register `quill-cursors` before creating a custom editor and keep cursor CSS visible.
+- Formatting disappears: Include the format in the Quill `formats` allowlist.
+- Editor remains loading: Confirm Velt auth and the Quill instance, or use `initializeWithoutEditor`.
+- Duplicate editor under StrictMode: Use the drop-in component or create custom Quill only inside a cleaned-up effect.
+- Duplicate Yjs warning: Deduplicate the base package, `yjs`, and `y-quill`.
+
+<Tip>
+Use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setup/core#veltcrdtstoremap) to inspect shared Delta state and provider status.
+</Tip>
+
+
+## Complete Example
+
+```tsx Complete App.tsx expandable lines
+import { useMemo } from 'react';
+import { VeltProvider, useCurrentUser, useSetDocument } from '@veltdev/react';
+import {
+  QuillCrdtEditor,
+  type UseCollaborationReturn,
+} from '@veltdev/quill-crdt-react';
+import 'quill/dist/quill.snow.css';
+
+const DOCUMENT_ID = 'shared-quill-doc';
+const USER = {
+  userId: 'ada',
+  organizationId: 'my-org-id',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+};
+
+function CollaborativeEditor() {
+  const user = useCurrentUser();
+  useSetDocument(DOCUMENT_ID, { documentName: 'Shared Quill Document' });
+
+  return (
+    <main>
+      <QuillCrdtEditor
+        documentId={DOCUMENT_ID}
+        theme="snow"
+        className="editor-content"
+        initialContent={{
+          ops: [
+            { insert: 'Collaborative Quill document', attributes: { bold: true } },
+            { insert: '\n' },
+          ],
+        }}
+        cursorData={{ name: user?.name, email: user?.email, color: '#0f766e' }}
+        modules={{
+          toolbar: [['bold', 'italic', 'underline'], [{ list: 'bullet' }]],
+          cursors: { transformOnTextChange: true },
+          history: { userOnly: true },
+        }}
+        onStatusChange={(status) => console.log('Status:', status)}
+        onError={console.error}
+      >
+        {(collaboration: UseCollaborationReturn) => (
+          <nav>
+            <button onClick={() => collaboration.undo()}>Undo</button>
+            <button onClick={() => collaboration.redo()}>Redo</button>
+            <button onClick={() => collaboration.saveVersion('Checkpoint')}>
+              Save version
+            </button>
+            <span>{collaboration.synced ? 'Synced' : collaboration.status}</span>
+          </nav>
+        )}
+      </QuillCrdtEditor>
+    </main>
+  );
+}
+
+export default function App() {
+  const authProvider = useMemo(() => ({
+    user: USER,
+    retryConfig: { retryCount: 3, retryDelay: 1000 },
+    generateToken: async () => {
+      const response = await fetch('/api/velt/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(USER),
+      });
+      const { token } = await response.json();
+      return token;
+    },
+  }), []);
+
+  return (
+    <VeltProvider apiKey="YOUR_VELT_API_KEY" authProvider={authProvider}>
+      <CollaborativeEditor />
+    </VeltProvider>
+  );
+}
+```
+
+```css Complete styles.css expandable lines
+.editor-content {
+  min-height: 320px;
+}
+```
+
+
+## How It Works
+
+1. The wrapper waits for Velt, an authenticated user, an editor ID, and Quill when required.
+2. The base manager creates a Velt text Store, shared `Y.Text`, awareness, and Yjs UndoManager.
+3. `y-quill` maps Quill Delta changes to Yjs text and formatting attributes.
+4. Remote Yjs transactions update Quill through the same binding.
+5. `quill-cursors` renders awareness selections and labels.
+6. Versions save and restore the complete Yjs rich-text state.
+
+
+## APIs
+
+### React: QuillCrdtEditor
+
+| Prop group | Important props |
+|---|---|
+| Collaboration | `editorId`, `documentId`, `initialContent`, `forceResetInitialContent`, `cursorData`, `debounceMs`, `undoCaptureTimeout`, `enabled` |
+| Quill | `theme`, `placeholder`, `modules`, `formats`, `bounds`, `readOnly` |
+| Host | `id`, `className`, `style`, `containerProps` |
+| Lifecycle | `onStatusChange`, `onManagerReady`, `onEditorReady`, `onLoad`, `onError` |
+| UI | `children` render function |
+
+
+### React: useCollaboration()
+
+| Return group | Fields and methods |
+|---|---|
+| Lifecycle | `editorRef()`, `manager`, `editor`, `primitives`, `isLoading`, `synced`, `isSynced`, `status`, `error`, `destroy()` |
+| Reactive data | `value`, `versions`, `remoteSelections`, `stats`, `refreshSnapshots()` |
+| Editor attachment | `attachEditor()`, `detachEditor()` |
+| Text and Delta | `getValue()`, `setValue()`, `getContents()`, `setContents()`, `updateContents()`, `flushEditorToStore()`, `forceReset()` |
+| Editing | `insertText()`, `deleteText()`, `insertEmbed()`, `formatText()`, `getFormat()`, `highlightRange()`, `clearHighlight()` |
+| Awareness and history | `publishCurrentSelection()`, `setLocalSelection()`, `undo()`, `redo()` |
+| Versions | `saveVersion()`, `getVersions()`, `getVersionById()`, `refreshVersions()`, `restoreVersion()`, `setStateFromVersion()` |
+
+`clearUndoHistory()` is a manager-only method available through `collaboration.manager`; it is not part of `UseCollaborationReturn`.
+
+
+### CollaborationManager Methods
+
+| Method group | Methods |
+|---|---|
+| Lifecycle | `initialize()`, `destroy()`, `attachEditor()`, `detachEditor()` |
+| Text and Delta | `getValue()`, `getContents()`, `setValue()`, `setContents()`, `updateContents()`, `flushEditorToStore()`, `forceReset()` |
+| Editing | `insertText()`, `deleteText()`, `insertEmbed()`, `formatText()`, `getFormat()`, `highlightRange()`, `clearHighlight()` |
+| Awareness | `setLocalSelection()`, `publishCurrentSelection()`, `getRemoteSelections()`, `onRemoteSelectionsChange()` |
+| History | `getUndoManager()`, `undo()`, `redo()`, `clearUndoHistory()` |
+| Status | `initialized`, `synced`, `status`, `onStatusChange()`, `onSynced()`, `getStats()` |
+| Versions | `saveVersion()`, `getVersions()`, `getVersionById()`, `restoreVersion()`, `setStateFromVersion()` |
+| Internals | `getCollaborationPrimitives()`, `getStore()`, `getDoc()`, `getYText()`, `getProvider()`, `getAwareness()` |
+
+
+### Exported Types
+
+- `UseCollaborationConfig`, `UseCollaborationReturn`, `QuillCrdtEditorProps`, `QuillCrdtProviderProps`
+- `QuillEditorLike`, `QuillDelta`, `QuillRange`, `QuillCursorData`, `RemoteSelection`
+- `QuillModules`, `QuillFormats`, `QuillCursorsModule`, `BindEditorOptions`
+- `CollaborationPrimitives`, `CollaborationStats`, `SyncStatus`, `Unsubscribe`, `Version`

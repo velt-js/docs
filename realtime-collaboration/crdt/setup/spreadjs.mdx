@@ -1,0 +1,509 @@
+---
+title: SpreadJS React
+description: Setup Multiplayer Collaboration for SpreadJS Workbooks in React.
+---
+
+Enable real-time collaborative workbook editing with SpreadJS. The collaboration engine serializes workbook state into a Velt CRDT Store backed by [Yjs](https://docs.yjs.dev/).
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- React (v18 or higher)
+- A Mescius SpreadJS license for production use, as required by Mescius
+- A Velt account with an API key ([sign up](https://console.velt.dev/))
+- Optional: TypeScript for type safety
+
+## Setup
+
+### Step 1: Install Dependencies
+
+```bash
+npm install @veltdev/spreadjs-crdt-react @veltdev/spreadjs-crdt @veltdev/react @veltdev/types @mescius/spread-sheets react react-dom
+```
+
+Import the SpreadJS stylesheet in your application entry point:
+
+```tsx
+import '@mescius/spread-sheets/styles/gc.spread.sheets.css';
+```
+
+
+### Step 2: Setup Velt
+
+Initialize the Velt client and production authentication by following the [Velt Setup Docs](/get-started/quickstart). Scope all collaborators to the same stable Velt document.
+
+```tsx
+import { useSetDocument } from '@veltdev/react';
+
+useSetDocument('forecast-2026', { documentName: 'Forecast 2026' });
+```
+
+
+### Step 3: Initialize Collaborative Workbook
+
+<Tabs>
+<Tab title="React Component">
+
+`SpreadJSCrdtWorkbook` creates one workbook per mount and connects it to the CRDT manager:
+
+```tsx
+import { SpreadJSCrdtWorkbook } from '@veltdev/spreadjs-crdt-react';
+import type { SpreadWorkbook } from '@veltdev/spreadjs-crdt-react';
+
+function ForecastWorkbook() {
+  return (
+    <SpreadJSCrdtWorkbook
+      documentId="forecast-2026"
+      licenseKey="YOUR_SPREADJS_LICENSE_KEY"
+      className="spread-host"
+      workbookOptions={{ sheetCount: 2, tabEditable: true }}
+      prepareInitialContent={(workbook: SpreadWorkbook) => {
+        const sheet = workbook.getActiveSheet?.();
+        sheet?.setValue?.(0, 0, 'Revenue forecast');
+        return workbook.toJSON?.({ includeBindingSource: true }) ?? null;
+      }}
+      serializationOptions={{ includeBindingSource: true }}
+      debounceMs={120}
+      onError={(error) => console.error('Collaboration error:', error)}
+    />
+  );
+}
+```
+
+The wrapper's `licenseKey` prop is optional. When provided, the wrapper applies it before creating the workbook. You can omit the prop if your application configures the license elsewhere, but Mescius licensing requirements still apply to production deployments.
+
+Give the workbook host an explicit height:
+
+```css
+.spread-host {
+  width: 100%;
+  height: 640px;
+  min-height: 480px;
+}
+```
+
+</Tab>
+<Tab title="React Hook">
+
+Use `useCollaboration()` when your application creates the workbook:
+
+```tsx
+import GC from '@mescius/spread-sheets';
+import { useEffect, useRef, useState } from 'react';
+import { useCollaboration } from '@veltdev/spreadjs-crdt-react';
+import type { SpreadWorkbook } from '@veltdev/spreadjs-crdt-react';
+
+function HookWorkbook() {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [workbook, setWorkbook] = useState<SpreadWorkbook | null>(null);
+
+  useEffect(() => {
+    if (!hostRef.current) return;
+    GC.Spread.Sheets.LicenseKey = 'YOUR_SPREADJS_LICENSE_KEY';
+    const created = new GC.Spread.Sheets.Workbook(hostRef.current, { sheetCount: 2 });
+    setWorkbook(created);
+    return () => created.destroy();
+  }, []);
+
+  const collaboration = useCollaboration({
+    editorId: 'forecast-2026',
+    workbook,
+    events: GC.Spread.Sheets.Events,
+    serializationOptions: { includeBindingSource: true },
+    debounceMs: 120,
+  });
+
+  return (
+    <>
+      <span>{collaboration.status}</span>
+      <div ref={hostRef} className="spread-host" data-spreadjs-host />
+    </>
+  );
+}
+```
+
+Add `data-spreadjs-host` to an application-owned host; the drop-in component adds this marker automatically. Only identity-bearing inputs (`veltClient`, `editorId`, `workbook`, and `initializeWithoutWorkbook`) reinitialize the manager. Options objects and callbacks are captured at initialization and do not require memoization.
+
+</Tab>
+<Tab title="Provider API">
+
+```tsx
+import {
+  SpreadJSCrdtProvider,
+  useCollaborationContext,
+} from '@veltdev/spreadjs-crdt-react';
+
+function Toolbar() {
+  const collaboration = useCollaborationContext();
+  return (
+    <button onClick={() => collaboration?.saveVersion('Checkpoint')}>
+      Save version
+    </button>
+  );
+}
+
+<SpreadJSCrdtProvider config={{ editorId: 'forecast-2026', workbook }}>
+  <Toolbar />
+</SpreadJSCrdtProvider>
+```
+
+`useCollaborationContext()` returns `null` outside the provider instead of throwing.
+
+</Tab>
+<Tab title="Imperative API">
+
+```tsx
+import { createCollaboration } from '@veltdev/spreadjs-crdt-react';
+
+const manager = await createCollaboration({
+  editorId: 'forecast-2026',
+  veltClient: client,
+  workbook,
+  events: GC.Spread.Sheets.Events,
+  serializationOptions: { includeBindingSource: true },
+});
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 4: Attach a Workbook Later (Optional)
+
+Initialize the manager before route data or a workbook exists:
+
+```tsx
+const collaboration = useCollaboration({
+  editorId: 'forecast-2026',
+  initializeWithoutWorkbook: true,
+});
+
+useEffect(() => {
+  if (!workbook) return;
+  collaboration.attachWorkbook(workbook, {
+    events: GC.Spread.Sheets.Events,
+    applyRemoteState: true,
+  });
+  return () => collaboration.detachWorkbook();
+}, [workbook]);
+```
+
+
+### Step 5: Status Monitoring (Optional)
+
+```tsx
+const { manager, status, synced, isLoading, error, stats } = collaboration;
+
+useEffect(() => {
+  if (!manager) return;
+  const offStatus = manager.onStatusChange(console.log);
+  const offSynced = manager.onSynced(console.log);
+  return () => {
+    offStatus();
+    offSynced();
+  };
+}, [manager]);
+```
+
+`stats` reports initialization, connection state, workbook attachment, Store availability, remote selection count, and the last flush reason.
+
+
+### Step 6: Version Management (Optional)
+
+```tsx
+const versionId = await collaboration.saveVersion('Before Q3 changes');
+const versions = await collaboration.refreshVersions();
+await collaboration.restoreVersion(versionId);
+```
+
+The manager serializes the current workbook before saving. Restoring a version applies the shared workbook JSON to all attached clients.
+
+
+### Step 7: Initial Content and Force Reset (Optional)
+
+`initialContent` accepts raw SpreadJS workbook JSON or a `WorkbookState` object:
+
+```tsx
+<SpreadJSCrdtWorkbook
+  documentId="forecast-2026"
+  initialContent={{
+    sheets: {
+      Sheet1: {
+        data: { dataTable: { 0: { 0: { value: 'Forecast' } } } },
+      },
+    },
+  }}
+/>
+```
+
+Use the explicit reset method for reset controls:
+
+```tsx
+await collaboration.forceReset(resetWorkbookJson);
+```
+
+<Warning>`forceResetInitialContent` and `forceReset()` replace the complete shared workbook snapshot, including existing user changes.</Warning>
+
+
+### Step 8: Cell, Sheet, and Formatting Helpers
+
+```tsx
+collaboration.setCellValue(0, 0, 'Pipeline');
+const value = collaboration.getCellValue<string>(0, 0);
+collaboration.addSheet();
+collaboration.highlightSelection('#fff3a3');
+collaboration.clearSelectionHighlight();
+await collaboration.flushWorkbookToStore('toolbar-action', true);
+```
+
+The helpers call SpreadJS and then synchronize the resulting serialized workbook. Use normal SpreadJS APIs for operations not covered by these conveniences.
+
+
+### Step 9: Configure Remote Selections (Optional)
+
+```tsx
+collaboration.publishCurrentSelection();
+const remoteSelections = collaboration.remoteSelections;
+collaboration.renderRemoteSelections();
+```
+
+The manager publishes sheet name, ranges, active cell, and user metadata through Yjs awareness. Selection state is transient and is not stored in workbook versions.
+
+Call `clearRemoteSelectionOverlays()` on the manager when replacing the workbook host or implementing custom overlay cleanup.
+
+
+### Step 10: CRDT Event Subscription (Optional)
+
+```tsx
+const subscription = client.getCrdtElement().on('updateData').subscribe((event) => {
+  if (event) console.log('CRDT update:', event);
+});
+
+// Cleanup
+subscription?.unsubscribe?.();
+```
+
+
+### Step 11: Custom Encryption (Optional)
+
+```tsx
+const encryptionProvider = {
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+};
+
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  authProvider={authProvider}
+  encryptionProvider={encryptionProvider}
+>
+  ...
+</VeltProvider>
+```
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+
+
+### Step 12: Error Handling (Optional)
+
+```tsx
+const collaboration = useCollaboration({
+  editorId: 'forecast-2026',
+  workbook,
+  onError: (error) => console.error('SpreadJS collaboration:', error),
+});
+
+if (collaboration.error) return <div>{collaboration.error.message}</div>;
+```
+
+
+### Step 13: Access Yjs Internals (Advanced)
+
+```tsx
+const doc = collaboration.manager?.getDoc();
+const map = collaboration.manager?.getMap();
+const store = collaboration.manager?.getStore();
+const provider = collaboration.manager?.getProvider();
+const awareness = collaboration.manager?.getAwareness();
+const workbookState = collaboration.manager?.getWorkbookState();
+```
+
+
+### Step 14: Cleanup
+
+The hook destroys the manager automatically. `SpreadJSCrdtWorkbook` also destroys the workbook it creates. When using the hook, your application remains responsible for destroying its workbook.
+
+
+## Notes
+
+- **Snapshot model**: SpreadJS workbook JSON is synchronized as a structured snapshot, not as independent CRDT cells.
+- **Debounced serialization**: Local workbook events are batched before `toJSON()` and Store writes; the default is 120 ms.
+- **Serialization parity**: Use compatible `serializationOptions` and `deserializationOptions` across clients.
+- **Workbook ownership**: The component creates and destroys a workbook; the hook accepts an application-owned workbook.
+- **Awareness**: Cell selections are transient presence state and do not appear in saved versions.
+- **Unique editorId**: Collaborators must share the same Velt document and editor ID.
+- **Production authentication**: Use a server-backed Velt `authProvider`; never expose privileged server tokens in browser code.
+
+
+## Testing and Debugging
+
+**To test collaboration:**
+1. Open the same Velt document and SpreadJS `editorId` as two different users.
+2. Change cell values, formulas, formatting, sheet names, and selections.
+3. Verify remote workbook state, awareness overlays, version restore, and persistence after reload.
+4. Test large workbooks with the intended serialization options and debounce interval.
+
+**Common issues:**
+- Blank workbook host: Give the host an explicit height and verify the SpreadJS license.
+- Workbook remains loading: Confirm Velt auth is ready and the workbook is attached, or use `initializeWithoutWorkbook`.
+- Changes are missing: Pass `GC.Spread.Sheets.Events` and compatible serialization options.
+- Repeated full resets: Disable `forceResetInitialContent` during normal loads.
+- Overlay drift: Clear and rerender remote selections after sheet or viewport changes.
+
+<Tip>
+Use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setup/core#veltcrdtstoremap) to inspect serialized workbook state and provider status.
+</Tip>
+
+
+## Complete Example
+
+```tsx Complete App.tsx expandable lines
+import { useMemo, useState } from 'react';
+import '@mescius/spread-sheets/styles/gc.spread.sheets.css';
+import { VeltProvider, useSetDocument } from '@veltdev/react';
+import {
+  SpreadJSCrdtWorkbook,
+  type SpreadWorkbook,
+  type SpreadJSCollaborationManager,
+} from '@veltdev/spreadjs-crdt-react';
+
+const DOCUMENT_ID = 'forecast-2026';
+const USER = {
+  userId: 'ada',
+  organizationId: 'my-org-id',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+};
+
+function ForecastWorkbook() {
+  const [manager, setManager] = useState<SpreadJSCollaborationManager | null>(null);
+  const [versionName, setVersionName] = useState('');
+
+  useSetDocument(DOCUMENT_ID, { documentName: 'Forecast 2026' });
+
+  const saveVersion = async () => {
+    if (!manager || !versionName.trim()) return;
+    await manager.saveVersion(versionName.trim());
+    setVersionName('');
+  };
+
+  return (
+    <main>
+      <input value={versionName} onChange={(event) => setVersionName(event.target.value)} />
+      <button onClick={saveVersion}>Save version</button>
+      <SpreadJSCrdtWorkbook
+        documentId={DOCUMENT_ID}
+        licenseKey="YOUR_SPREADJS_LICENSE_KEY"
+        className="spread-host"
+        workbookOptions={{ sheetCount: 2, tabEditable: true }}
+        prepareInitialContent={(workbook: SpreadWorkbook) => {
+          const sheet = workbook.getActiveSheet?.();
+          sheet?.setValue?.(0, 0, 'Forecast');
+          sheet?.setValue?.(0, 1, 'Q1');
+          return workbook.toJSON?.({ includeBindingSource: true }) ?? null;
+        }}
+        serializationOptions={{ includeBindingSource: true }}
+        onManagerReady={setManager}
+        onStatusChange={(status) => console.log('Status:', status)}
+        onError={console.error}
+      />
+    </main>
+  );
+}
+
+export default function App() {
+  const authProvider = useMemo(() => ({
+    user: USER,
+    retryConfig: { retryCount: 3, retryDelay: 1000 },
+    generateToken: async () => {
+      const response = await fetch('/api/velt/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(USER),
+      });
+      const { token } = await response.json();
+      return token;
+    },
+  }), []);
+
+  return (
+    <VeltProvider apiKey="YOUR_VELT_API_KEY" authProvider={authProvider}>
+      <ForecastWorkbook />
+    </VeltProvider>
+  );
+}
+```
+
+```css Complete styles.css expandable lines
+.spread-host {
+  width: 100%;
+  height: 640px;
+  min-height: 480px;
+}
+```
+
+
+## How It Works
+
+1. The wrapper waits for Velt, an authenticated user, an editor ID, and a workbook when required.
+2. The manager serializes SpreadJS through `workbook.toJSON()` into a versioned `WorkbookState`.
+3. Local workbook events schedule a debounced Store write.
+4. Remote Store state is applied through `workbook.fromJSON()` with painting and events suspended.
+5. Awareness carries sheet ranges and active-cell metadata for remote overlays.
+6. Versions contain the complete serialized workbook state.
+
+
+## APIs
+
+### React: SpreadJSCrdtWorkbook
+
+| Prop | Description |
+|---|---|
+| `editorId` / `documentId` | Stable shared workbook ID. |
+| `licenseKey` | Optional SpreadJS license key applied before workbook construction. |
+| `workbookOptions` | Options for `new Workbook()`. |
+| `initialContent` / `prepareInitialContent` | First-load workbook state. |
+| `serializationOptions` / `deserializationOptions` | SpreadJS JSON options. |
+| `debounceMs` | Workbook flush debounce. |
+| `userColor` | Local awareness color. |
+| `onWorkbookReady`, `onManagerReady`, `onStatusChange`, `onError` | Lifecycle callbacks. |
+| `children` | Render function receiving hook state. |
+
+
+### React: useCollaboration()
+
+The hook returns manager, workbook, lifecycle state, versions, remote selections, statistics, attachment helpers, reset/flush helpers, cell/sheet helpers, selection helpers, and `destroy()`.
+
+
+### CollaborationManager Methods
+
+| Method group | Methods |
+|---|---|
+| Lifecycle | `initialize()`, `destroy()`, `attachWorkbook()`, `detachWorkbook()` |
+| Status | `initialized`, `synced`, `status`, `onStatusChange()`, `onSynced()` |
+| Workbook state | `getWorkbook()`, `getWorkbookState()`, `getWorkbookJson()`, `flushWorkbookToStore()`, `forceReset()` |
+| Cells and sheets | `setCellValue()`, `getCellValue()`, `addSheet()`, `highlightSelection()`, `clearSelectionHighlight()` |
+| Awareness | `publishCurrentSelection()`, `setLocalSelection()`, `getCurrentSelection()`, `getRemoteSelections()`, `renderRemoteSelections()`, `clearRemoteSelectionOverlays()` |
+| Versions | `saveVersion()`, `getVersions()`, `restoreVersion()`, `setStateFromVersion()` |
+| Internals | `getDoc()`, `getMap()`, `getProvider()`, `getAwareness()`, `getStore()`, `getStats()` |
+
+
+### Exported Types and Helpers
+
+- `UseCollaborationConfig` / `UseSpreadJSCrdtConfig`, `UseCollaborationReturn` / `SpreadJSCrdtHookResult`
+- `SpreadJSCrdtWorkbookProps`, `SpreadJSCrdtProviderProps`, `SpreadJSCollaborationManager`
+- `SpreadWorkbook`, `SpreadWorksheet`, `WorkbookJson`, `WorkbookState`, `WorkbookStore`
+- `AwarenessSelection`, `RemoteSelection`, `SpreadRange`, `CollaborationStats`
+- `cloneJson()`, `stableStringify()`, `createWorkbookState()`, `createSelectionState()`
+- `isWorkbookState()`, `hasWorkbookJson()`, `normalizeRanges()`

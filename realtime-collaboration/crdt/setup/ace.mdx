@@ -1,0 +1,488 @@
+---
+title: Ace React
+description: Setup Multiplayer Editing for Ace Editor in React.
+---
+
+Enable real-time collaborative editing on Ace Editors. The collaboration engine binds Ace changes to a shared `Y.Text` using [Yjs](https://docs.yjs.dev/) and Velt SDK.
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- React (v18 or higher)
+- A Velt account with an API key ([sign up](https://console.velt.dev/))
+- Optional: TypeScript for type safety
+
+## Setup
+
+### Step 1: Install Dependencies
+
+```bash
+npm install @veltdev/ace-crdt-react @veltdev/ace-crdt react-ace ace-builds @veltdev/react @veltdev/types
+```
+
+Keep one copy of React and Yjs in the application bundle. Import additional Ace modes and themes required by your application.
+
+
+### Step 2: Setup Velt
+
+Initialize Velt with production authentication by following the [Velt Setup Docs](/get-started/quickstart), then set a stable document ID:
+
+```tsx
+import { useSetDocument } from '@veltdev/react';
+
+useSetDocument('shared-code-file', { documentName: 'Shared Ace File' });
+```
+
+
+### Step 3: Initialize Collaborative Editor
+
+<Tabs>
+<Tab title="React Component">
+
+`AceCrdtEditor` creates the `react-ace` editor, captures its instance, and manages collaboration lifecycle:
+
+```tsx
+import { AceCrdtEditor } from '@veltdev/ace-crdt-react';
+
+function CollaborativeEditor() {
+  return (
+    <div style={{ height: 480 }}>
+      <AceCrdtEditor
+        documentId="shared-code-file"
+        mode="javascript"
+        theme="textmate"
+        initialContent="console.log('hello');"
+        cursorData={{ name: 'Ada', color: '#0f766e' }}
+        onError={(error) => console.error('Collaboration error:', error)}
+      />
+    </div>
+  );
+}
+```
+
+The component imports JavaScript mode and the TextMate theme by default. It forwards normal React Ace props except `value`, `defaultValue`, and React Ace's inherited `onLoad`, which the wrapper intercepts to attach the editor. `AceCrdtEditor` exposes its own `onLoad` callback with the same editor instance, alongside `onEditorReady`.
+
+</Tab>
+<Tab title="React Hook">
+
+Use `useCollaboration()` when your application creates Ace:
+
+```tsx
+import { useCollaboration } from '@veltdev/ace-crdt-react';
+
+const collaboration = useCollaboration({
+  editorId: 'shared-code-file',
+  editor,
+  initialContent: '// Start writing here\n',
+  cursorData: { name: 'Ada', color: '#0f766e' },
+  onError: (error) => console.error('Collaboration error:', error),
+});
+```
+
+Pass the instance through `editor` or `editorRef(editor)`. The hook waits for Ace unless `initializeWithoutEditor` is enabled.
+
+</Tab>
+<Tab title="Provider API">
+
+```tsx
+import { AceCrdtProvider } from '@veltdev/ace-crdt-react';
+
+<AceCrdtProvider config={{ editorId: 'shared-code-file', editor }}>
+  {(collaboration) => (
+    <button onClick={() => collaboration.saveVersion('Checkpoint')}>
+      Save version
+    </button>
+  )}
+</AceCrdtProvider>
+```
+
+`CollaborationProvider` is an alias of `AceCrdtProvider`. `CollaborationContext` exposes the same value for advanced consumers.
+
+</Tab>
+<Tab title="Imperative API">
+
+```tsx
+import { createCollaboration } from '@veltdev/ace-crdt';
+
+const manager = await createCollaboration({
+  editorId: 'shared-code-file',
+  veltClient: client,
+  editor,
+  initialContent: '// Start writing here\n',
+  cursorData: { name: 'Ada', color: '#0f766e' },
+});
+```
+
+</Tab>
+</Tabs>
+
+<Warning>Do not pass `value` or `defaultValue` to `AceCrdtEditor`. The shared `Y.Text` is the content source of truth.</Warning>
+
+
+### Step 4: Load Modes and Themes
+
+The wrapper includes JavaScript and TextMate. Import other modes and themes before using them:
+
+```tsx
+import 'ace-builds/src-noconflict/mode-typescript';
+import 'ace-builds/src-noconflict/theme-github_dark';
+
+<AceCrdtEditor
+  documentId="shared-code-file"
+  mode="typescript"
+  theme="github_dark"
+/>
+```
+
+
+### Step 5: Configure Remote Cursors
+
+Pass local identity and provide an Ace Range factory for selection markers:
+
+```tsx
+import ace from 'ace-builds/src-noconflict/ace';
+
+const Range = ace.require('ace/range').Range;
+
+<AceCrdtEditor
+  documentId="shared-code-file"
+  cursorData={{
+    name: currentUser.name,
+    email: currentUser.email,
+    color: '#0f766e',
+    colorLight: '#0f766e33',
+  }}
+  rangeFactory={(start, end) => (
+    new Range(start.row, start.column, end.row, end.column)
+  )}
+/>
+```
+
+Publish and render awareness selections manually when using custom Ace integration:
+
+```tsx
+collaboration.publishCurrentSelection('selection');
+collaboration.addHighlight({
+  start: { row: 0, column: 0 },
+  end: { row: 0, column: 10 },
+}, '#fef08a');
+collaboration.renderRemoteSelections();
+```
+
+Remote selections are transient presence state. They are not part of the shared text or saved versions.
+
+
+### Step 6: Status Monitoring (Optional)
+
+```tsx
+const { manager, status, synced, isLoading, error, stats } = collaboration;
+
+useEffect(() => {
+  if (!manager) return;
+  const offStatus = manager.onStatusChange(console.log);
+  const offSynced = manager.onSynced(console.log);
+  return () => {
+    offStatus();
+    offSynced();
+  };
+}, [manager]);
+```
+
+`stats` reports text length, attachment and Store state, remote selection count, and the most recent flush reason.
+
+
+### Step 7: Version Management (Optional)
+
+```tsx
+const versionId = await collaboration.saveVersion('Before refactor');
+const version = await collaboration.getVersionById(versionId);
+await collaboration.refreshVersions();
+await collaboration.restoreVersion(versionId);
+```
+
+Version metadata is separate from the shared text. Refresh it after another collaborator saves or restores a version.
+
+
+### Step 8: Initial Content and Force Reset (Optional)
+
+Initial content is plain text and is applied once to a new shared `Y.Text`:
+
+```tsx
+<AceCrdtEditor
+  documentId="shared-code-file"
+  initialContent={[
+    'function add(a, b) {',
+    '  return a + b;',
+    '}',
+  ].join('\n')}
+/>
+```
+
+For a deliberate reset:
+
+```tsx
+await collaboration.forceReset('// Reset file\n');
+```
+
+<Warning>Force reset replaces the shared file for every collaborator.</Warning>
+
+
+### Step 9: Text Helpers
+
+```tsx
+const current = collaboration.getValue();
+collaboration.setValue('const answer = 42;', 'toolbar-set');
+collaboration.insertText(' // note');
+collaboration.flushEditorToStore('manual-save');
+```
+
+`insertText()` accepts an optional character index; when omitted, the manager uses the current Ace cursor when available.
+
+
+### Step 10: Configure Undo and Redo
+
+```tsx
+collaboration.undo();
+collaboration.redo();
+```
+
+These helpers use the Yjs `UndoManager` and flush the resolved text back through the Ace binding.
+
+<Warning>Choose one user-facing history policy. Mixing Ace's local undo stack with Yjs undo controls can produce confusing results.</Warning>
+
+
+### Step 11: CRDT Event Subscription (Optional)
+
+```tsx
+const subscription = client.getCrdtElement().on('updateData').subscribe((event) => {
+  if (event) console.log('CRDT update:', event);
+});
+
+subscription?.unsubscribe?.();
+```
+
+
+### Step 12: Custom Encryption (Optional)
+
+```tsx
+const encryptionProvider = {
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+};
+
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  authProvider={authProvider}
+  encryptionProvider={encryptionProvider}
+>
+  ...
+</VeltProvider>
+```
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+
+
+### Step 13: Error Handling (Optional)
+
+```tsx
+const collaboration = useCollaboration({
+  editorId: 'shared-code-file',
+  editor,
+  onError: (error) => console.error('Ace collaboration:', error),
+});
+
+if (collaboration.error) return <div>{collaboration.error.message}</div>;
+```
+
+
+### Step 14: Access Yjs Internals (Advanced)
+
+```tsx
+const { primitives } = collaboration;
+
+const ytext = primitives?.ytext;
+const awareness = primitives?.awareness;
+const undoManager = primitives?.undoManager;
+const doc = primitives?.doc;
+const provider = primitives?.provider;
+const store = collaboration.manager?.getStore();
+```
+
+
+### Step 15: Attach, Detach, and Cleanup
+
+```tsx
+const collaboration = useCollaboration({
+  editorId: 'shared-code-file',
+  initializeWithoutEditor: true,
+});
+
+collaboration.attachEditor(editor, { rangeFactory });
+collaboration.detachEditor();
+```
+
+The hook destroys its manager automatically and is safe under React StrictMode. The application remains responsible for destroying an editor it created. Use `destroy()` only for early collaboration teardown.
+
+
+## Notes
+
+- **Plain-text data model**: Ace content is stored in `Y.Text`; modes and themes are local presentation settings.
+- **CRDT-owned value**: Do not control the editor with React `value` or `defaultValue` props.
+- **Range factory**: Provide Ace's `Range` constructor adapter when rendering remote markers.
+- **Undo policy**: Prefer Yjs undo/redo for collaborative changes.
+- **Unique editorId**: Collaborators must share the same Velt document and editor ID.
+- **Stable editor**: Create Ace once and detach it before replacement or destruction.
+- **Production authentication**: Use a server-backed Velt `authProvider`; never expose privileged server tokens in browser code.
+
+
+## Testing and Debugging
+
+**To test collaboration:**
+1. Open the same Velt document and Ace `editorId` as two different users.
+2. Type and delete concurrently at different positions.
+3. Verify cursor markers, Yjs undo/redo, versions, reconnect behavior, and persistence.
+4. Repeat with your production mode, theme, and worker configuration.
+
+**Common issues:**
+- Mode or theme not found: Import its `ace-builds/src-noconflict` module before rendering.
+- Text does not sync: Remove `value`/`defaultValue` and confirm both clients use the same IDs.
+- Markers do not appear: Supply `cursorData`, a `rangeFactory`, and visible marker CSS.
+- Duplicate Yjs warning: Deduplicate Yjs and linked base packages.
+- Editor remains loading: Confirm Velt auth and the Ace instance, or use `initializeWithoutEditor`.
+
+<Tip>
+Use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setup/core#veltcrdtstoremap) to inspect shared text and provider status.
+</Tip>
+
+
+## Complete Example
+
+```tsx Complete App.tsx expandable lines
+import { useMemo, useState } from 'react';
+import ace from 'ace-builds/src-noconflict/ace';
+import 'ace-builds/src-noconflict/mode-typescript';
+import 'ace-builds/src-noconflict/theme-textmate';
+import { VeltProvider, useCurrentUser, useSetDocument } from '@veltdev/react';
+import {
+  AceCrdtEditor,
+  type CollaborationManager,
+} from '@veltdev/ace-crdt-react';
+
+const DOCUMENT_ID = 'shared-code-file';
+const USER = {
+  userId: 'ada',
+  organizationId: 'my-org-id',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+};
+const Range = ace.require('ace/range').Range;
+
+function CollaborativeEditor() {
+  const user = useCurrentUser();
+  const [manager, setManager] = useState<CollaborationManager | null>(null);
+  const [versionName, setVersionName] = useState('');
+
+  useSetDocument(DOCUMENT_ID, { documentName: 'Shared Ace File' });
+
+  const saveVersion = async () => {
+    if (!manager || !versionName.trim()) return;
+    await manager.saveVersion(versionName.trim());
+    setVersionName('');
+  };
+
+  return (
+    <main>
+      <input value={versionName} onChange={(event) => setVersionName(event.target.value)} />
+      <button onClick={saveVersion}>Save version</button>
+      <div style={{ height: 520 }}>
+        <AceCrdtEditor
+          documentId={DOCUMENT_ID}
+          mode="typescript"
+          theme="textmate"
+          initialContent={'export const greeting = "Hello";\n'}
+          cursorData={{ name: user?.name, email: user?.email, color: '#0f766e' }}
+          rangeFactory={(start, end) => (
+            new Range(start.row, start.column, end.row, end.column)
+          )}
+          onManagerReady={setManager}
+          onStatusChange={(status) => console.log('Status:', status)}
+          onError={console.error}
+        />
+      </div>
+    </main>
+  );
+}
+
+export default function App() {
+  const authProvider = useMemo(() => ({
+    user: USER,
+    retryConfig: { retryCount: 3, retryDelay: 1000 },
+    generateToken: async () => {
+      const response = await fetch('/api/velt/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(USER),
+      });
+      const { token } = await response.json();
+      return token;
+    },
+  }), []);
+
+  return (
+    <VeltProvider apiKey="YOUR_VELT_API_KEY" authProvider={authProvider}>
+      <CollaborativeEditor />
+    </VeltProvider>
+  );
+}
+```
+
+
+## How It Works
+
+1. The wrapper waits for Velt, an authenticated user, an editor ID, and Ace when required.
+2. The base manager creates a Velt text Store and shared `Y.Text`.
+3. Ace deltas are converted to character indexes and applied as Yjs insert/delete transactions.
+4. Remote Yjs updates are applied to the Ace session without replacing the collaborative source of truth.
+5. Awareness carries row/column cursor, selection, and highlight ranges.
+6. Versions save and restore the complete shared text state.
+
+
+## APIs
+
+### React: AceCrdtEditor
+
+| Prop group | Important props |
+|---|---|
+| Collaboration | `editorId`, `documentId`, `initialContent`, `forceResetInitialContent`, `cursorData`, `rangeFactory`, `debounceMs`, `enabled` |
+| Ace | `mode`, `theme`, `name`, `width`, `height`, `setOptions` and other React Ace props |
+| Lifecycle | `onLoad`, `onEditorReady`, `onManagerReady`, `onStatusChange`, `onError` |
+| UI | `children` render function |
+
+The wrapper handles React Ace's inherited `onLoad` first, then calls the `AceCrdtEditor` `onEditorReady` and `onLoad` callbacks with the captured editor.
+
+
+### React: useCollaboration()
+
+The hook returns editor and manager state, Yjs primitives, text methods, selection methods, Yjs undo/redo, version APIs, statistics, attachment methods, and `destroy()`. Its reactive `value` field contains the current shared plain text. The `editor`, `remoteSelections`, and `stats` fields are also reactive snapshots; call `refreshSnapshots()` after direct manager operations that bypass the hook helpers.
+
+
+### CollaborationManager Methods
+
+| Method group | Methods |
+|---|---|
+| Lifecycle | `initialize()`, `destroy()`, `attachEditor()`, `detachEditor()` |
+| Text | `getValue()`, `setValue()`, `insertText()`, `flushEditorToStore()`, `forceReset()` |
+| Awareness | `setLocalSelection()`, `publishCurrentSelection()`, `addHighlight()`, `getRemoteSelections()`, `renderRemoteSelections()`, `clearRemoteMarkers()` |
+| Status | `initialized`, `synced`, `status`, `onStatusChange()`, `onSynced()`, `getStats()` |
+| Versions | `saveVersion()`, `getVersions()`, `getVersionById()`, `restoreVersion()`, `setStateFromVersion()` |
+| Internals | `getCollaborationPrimitives()`, `getDoc()`, `getYText()`, `getProvider()`, `getAwareness()`, `getUndoManager()`, `getEditor()`, `getStore()` |
+
+
+### Exported Types and Helpers
+
+- `UseCollaborationConfig`, `UseCollaborationReturn`, `AceCrdtEditorProps`, `AceCrdtProviderProps`
+- `AceEditorLike`, `AcePosition`, `AceSelectionRange`, `AceDelta`, `AceRangeFactory`
+- `AceCursorData`, `AceAwarenessSelection`, `RemoteSelection`, `CollaborationPrimitives`, `CollaborationStats`
+- `SyncStatus`, `Unsubscribe`, `Version`
+- `normalizeText()`, `positionToIndex()`, `indexToPosition()`, `rangeToOffsets()`, `offsetsToRange()`

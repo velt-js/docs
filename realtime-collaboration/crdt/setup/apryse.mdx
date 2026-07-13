@@ -1,0 +1,543 @@
+---
+title: Apryse React
+description: Setup Multiplayer Collaboration for Apryse WebViewer in React.
+---
+
+Enable real-time collaborative annotations, XFDF state, selections, and cursors in Apryse WebViewer. The collaboration engine is built on top of [Yjs](https://docs.yjs.dev/) and Velt SDK.
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- React (v18 or higher)
+- An Apryse WebViewer license and deployed WebViewer assets
+- A Velt account with an API key ([sign up](https://console.velt.dev/))
+- Optional: TypeScript for type safety
+
+## Setup
+
+### Step 1: Install Dependencies
+
+```bash
+npm install @veltdev/apryse-crdt-react @veltdev/apryse-crdt @veltdev/react @veltdev/types @pdftron/webviewer
+```
+
+The React package provides lifecycle hooks and provider components. The base package owns annotation records, XFDF import/export, the Velt CRDT Store, awareness, and version management.
+
+
+### Step 2: Setup Velt
+
+Initialize the Velt client and production authentication by following the [Velt Setup Docs](/get-started/quickstart). Set a stable Velt document before initializing Apryse collaboration.
+
+```tsx
+import { useSetDocument } from '@veltdev/react';
+
+function DocumentScope({ documentId }: { documentId: string }) {
+  useSetDocument(documentId, { documentName: 'Contract review' });
+  return <CollaborativeApryse documentId={documentId} />;
+}
+```
+
+
+### Step 3: Load Apryse WebViewer
+
+Deploy Apryse's WebViewer library assets and create the viewer once in an effect:
+
+```tsx
+import WebViewer from '@pdftron/webviewer';
+import { useEffect, useRef, useState } from 'react';
+import type { ApryseWebViewerInstanceLike } from '@veltdev/apryse-crdt-react';
+
+const hostRef = useRef<HTMLDivElement | null>(null);
+const [instance, setInstance] = useState<ApryseWebViewerInstanceLike | null>(null);
+
+useEffect(() => {
+  if (!hostRef.current) return;
+  let active = true;
+  let viewer: ApryseWebViewerInstanceLike | null = null;
+
+  void WebViewer({
+    path: '/webviewer/lib',
+    licenseKey: 'YOUR_APRYSE_LICENSE_KEY',
+    initialDoc: '/documents/contract.pdf',
+  }, hostRef.current).then((nextInstance) => {
+    if (!active) return;
+    viewer = nextInstance;
+    setInstance(nextInstance);
+  });
+
+  return () => {
+    active = false;
+    setInstance(null);
+    viewer?.UI?.dispose?.();
+  };
+}, []);
+```
+
+Keep the instance stable for the lifetime of the viewer. The application owns WebViewer creation and disposal.
+
+
+### Step 4: Initialize Collaboration
+
+<Tabs>
+<Tab title="React Hook">
+
+`useApryseCrdt()` is the primary integration. `useCollaboration()` and `useApryseCollaboration()` are aliases.
+
+```tsx
+import { useApryseCrdt } from '@veltdev/apryse-crdt-react';
+
+const collaboration = useApryseCrdt({
+  editorId: 'contract-123',
+  instance,
+  initialXfdf: '<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots /></xfdf>',
+  cursorData: { name: 'Ada Lovelace', color: '#2563eb' },
+  debounceMs: 125,
+  onError: (error) => console.error('Collaboration error:', error),
+});
+
+return (
+  <section>
+    <span>{collaboration.isLoading ? 'loading' : collaboration.status}</span>
+    <div ref={hostRef} className="apryse-host" />
+  </section>
+);
+```
+
+The hook waits for Velt initialization, an authenticated user, a stable `editorId`, and an Apryse instance.
+
+</Tab>
+<Tab title="Provider API">
+
+Use `ApryseCrdtProvider` to share one hook result across a component tree:
+
+```tsx
+import { ApryseCrdtProvider } from '@veltdev/apryse-crdt-react';
+
+<ApryseCrdtProvider
+  editorId="contract-123"
+  instance={instance}
+  onManagerReady={(manager) => console.log(manager.getMap())}
+>
+  {(collaboration) => (
+    <span>{collaboration.isSynced ? 'Synced' : collaboration.status}</span>
+  )}
+</ApryseCrdtProvider>
+```
+
+`ApryseCrdtViewer` and `ApryseCollaborationProvider` are aliases of this provider. They do not create or render Apryse WebViewer.
+
+</Tab>
+<Tab title="Imperative API">
+
+```tsx
+import { createCollaboration } from '@veltdev/apryse-crdt';
+
+const manager = await createCollaboration({
+  editorId: 'contract-123',
+  veltClient: client,
+  instance,
+  initialXfdf,
+  cursorData: { name: 'Ada', color: '#2563eb' },
+});
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 5: Synchronize Annotations and XFDF
+
+Apryse annotation changes are captured automatically. Use XFDF helpers for imports, exports, and explicit snapshots:
+
+```tsx
+const currentXfdf = await collaboration.exportXfdf();
+await collaboration.setXfdf(importedXfdf);
+await collaboration.importXfdf(importedXfdf); // Alias of setXfdf
+await collaboration.flushAnnotationsToShared();
+```
+
+`sharedState` contains the normalized annotation records currently stored in the CRDT map. Deleted annotations remain represented as tombstone records so concurrent changes merge consistently.
+
+<Note>Apryse collaboration synchronizes annotations and XFDF state. The underlying PDF file remains an Apryse document input and is not uploaded through this CRDT adapter.</Note>
+
+
+### Step 6: Status Monitoring (Optional)
+
+```tsx
+const { manager, status, isSynced, error } = collaboration;
+
+useEffect(() => {
+  if (!manager) return;
+
+  const offStatus = manager.onStatusChange(console.log);
+  const offSynced = manager.onSynced(console.log);
+
+  return () => {
+    offStatus();
+    offSynced();
+  };
+}, [manager]);
+```
+
+The provider also supports `onStatusChange`, `onSyncedChange`, `onAnnotationsChange`, and `onUpdateData` callbacks.
+
+
+### Step 7: Version Management (Optional)
+
+```tsx
+const {
+  versions,
+  saveVersion,
+  restoreVersion,
+  refreshVersions,
+} = collaboration;
+
+const versionId = await saveVersion('Legal review complete');
+await refreshVersions();
+await restoreVersion(versionId);
+```
+
+Restoring a version updates the shared annotation map and reapplies the resulting XFDF to Apryse for every collaborator.
+
+
+### Step 8: Force Reset Initial Content (Optional)
+
+`initialContent` and `initialXfdf` accept XFDF for a brand-new shared annotation document:
+
+```tsx
+useApryseCrdt({
+  editorId: 'contract-123',
+  instance,
+  initialXfdf,
+  forceResetInitialContent: true,
+});
+```
+
+<Warning>`forceResetInitialContent` replaces the existing shared annotation state. Enable it only for deliberate reset or fixture workflows.</Warning>
+
+
+### Step 9: Publish Remote Cursors (Optional)
+
+Apryse page coordinates are awareness state rather than persisted annotations. Publish them from your viewer interaction layer:
+
+```tsx
+collaboration.updateCursor({
+  pageNumber: 1,
+  x: 240,
+  y: 360,
+  selectionText: 'Payment terms',
+  selection: { x: 220, y: 345, width: 180, height: 24 },
+});
+
+// When the pointer leaves the document
+collaboration.clearCursor();
+```
+
+Render custom cursor overlays from the reactive `remoteCursors` array:
+
+```tsx
+{collaboration.remoteCursors.map((cursor) => (
+  <div key={cursor.clientId} style={{ color: cursor.color }}>
+    {cursor.name} · page {cursor.pageNumber}
+  </div>
+))}
+```
+
+Your Apryse integration is responsible for converting screen coordinates into page coordinates and positioning the overlay in the current viewport.
+
+
+### Step 10: CRDT Event Subscription (Optional)
+
+Subscribe through the manager for normalized Apryse update events:
+
+```tsx
+useEffect(() => {
+  if (!collaboration.manager) return;
+  return collaboration.manager.onUpdateData((event) => {
+    console.log('Apryse CRDT update:', event);
+  });
+}, [collaboration.manager]);
+```
+
+For application-wide Velt CRDT events:
+
+```tsx
+const subscription = client.getCrdtElement().on('updateData').subscribe((event) => {
+  if (event) console.log('CRDT update:', event);
+});
+
+// Cleanup
+subscription?.unsubscribe?.();
+```
+
+
+### Step 11: Custom Encryption (Optional)
+
+```tsx
+const encryptionProvider = {
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+};
+
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  authProvider={authProvider}
+  encryptionProvider={encryptionProvider}
+>
+  ...
+</VeltProvider>
+```
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+
+
+### Step 12: Error Handling (Optional)
+
+```tsx
+const collaboration = useApryseCrdt({
+  editorId: 'contract-123',
+  instance,
+  onError: (error) => console.error('Apryse collaboration:', error),
+});
+
+if (collaboration.error) {
+  return <div>Error: {collaboration.error.message}</div>;
+}
+```
+
+Public wrapper and manager methods catch integration errors and return safe fallback values.
+
+
+### Step 13: Access Yjs Internals (Advanced)
+
+```tsx
+const { primitives } = collaboration;
+
+const viewer = primitives?.instance;
+const annotationManager = primitives?.annotationManager;
+const documentViewer = primitives?.documentViewer;
+const doc = primitives?.doc;
+const map = primitives?.map;
+const annotationsMap = primitives?.annotationsMap;
+const xmlFragment = primitives?.xmlFragment;
+const provider = primitives?.provider;
+const awareness = primitives?.awareness;
+const store = primitives?.store;
+```
+
+
+### Step 14: Cleanup
+
+The hook and provider destroy the collaboration manager automatically. Call `destroy()` only for early teardown. Your application must dispose the Apryse WebViewer instance separately.
+
+
+## Notes
+
+- **Annotation scope**: The adapter synchronizes annotation/XFDF state, not PDF file bytes.
+- **Stable instance**: Create WebViewer once per mount and pass the same instance to the hook.
+- **Data model**: Individual annotation records live in a Yjs map, with XFDF snapshots used for Apryse import/export.
+- **Cursor ownership**: The adapter publishes cursor awareness, while the application maps Apryse page coordinates to overlay DOM.
+- **Unique editorId**: Collaborators must share the same Velt document context and `editorId`.
+- **Initial XFDF**: Seed data is applied once unless force reset is explicitly enabled.
+- **Production authentication**: Use `VeltProvider` with a server-backed `authProvider`; never expose privileged server tokens in browser code.
+
+
+## Testing and Debugging
+
+**To test collaboration:**
+1. Open the same PDF, Velt document, and Apryse `editorId` as two different users.
+2. Add, modify, and delete annotations in both clients.
+3. Verify XFDF imports, remote cursor awareness, version restore, and persistence after reload.
+4. Test concurrent changes to separate annotations and to the same annotation.
+
+**Common issues:**
+- Viewer not loading: Confirm `/webviewer/lib` contains the deployed Apryse assets and the license is valid.
+- Manager remains loading: Confirm Velt is initialized, a user is authenticated, and `instance` is non-null.
+- Annotations do not sync: Confirm both clients use the same Velt document and `editorId`.
+- Cursor position is incorrect: Convert pointer and selection positions to Apryse page coordinates before calling `updateCursor()`.
+- Existing annotations reset: Disable `forceResetInitialContent` during normal loads.
+
+<Tip>
+Use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setup/core#veltcrdtstoremap) to inspect annotation records and provider state.
+</Tip>
+
+
+## Complete Example
+
+```tsx Complete App.tsx expandable lines
+import { useEffect, useMemo, useRef, useState } from 'react';
+import WebViewer from '@pdftron/webviewer';
+import {
+  VeltProvider,
+  useCurrentUser,
+  useSetDocument,
+} from '@veltdev/react';
+import {
+  useApryseCrdt,
+  type ApryseWebViewerInstanceLike,
+} from '@veltdev/apryse-crdt-react';
+
+const DOCUMENT_ID = 'apryse-contract-123';
+const USER = {
+  userId: 'ada',
+  organizationId: 'my-org-id',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+};
+
+function ApryseDocument() {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const user = useCurrentUser();
+  const [instance, setInstance] = useState<ApryseWebViewerInstanceLike | null>(null);
+  const [versionName, setVersionName] = useState('');
+
+  useSetDocument(DOCUMENT_ID, { documentName: 'Contract review' });
+
+  useEffect(() => {
+    if (!hostRef.current) return;
+    let active = true;
+    let viewer: ApryseWebViewerInstanceLike | null = null;
+
+    void WebViewer({
+      path: '/webviewer/lib',
+      licenseKey: 'YOUR_APRYSE_LICENSE_KEY',
+      initialDoc: '/documents/contract.pdf',
+    }, hostRef.current).then((nextInstance) => {
+      if (!active) return;
+      viewer = nextInstance;
+      setInstance(nextInstance);
+    });
+
+    return () => {
+      active = false;
+      setInstance(null);
+      viewer?.UI?.dispose?.();
+    };
+  }, []);
+
+  const collaboration = useApryseCrdt({
+    editorId: DOCUMENT_ID,
+    instance,
+    initialXfdf: '<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots /></xfdf>',
+    cursorData: { name: user?.name, color: '#2563eb' },
+    onError: console.error,
+  });
+
+  const saveVersion = async () => {
+    if (!versionName.trim()) return;
+    await collaboration.saveVersion(versionName.trim());
+    setVersionName('');
+  };
+
+  return (
+    <main>
+      <p>Status: {collaboration.status} | Synced: {collaboration.isSynced ? 'Yes' : 'No'}</p>
+      <input value={versionName} onChange={(event) => setVersionName(event.target.value)} />
+      <button onClick={saveVersion}>Save version</button>
+      <div ref={hostRef} className="apryse-host" />
+    </main>
+  );
+}
+
+export default function App() {
+  const authProvider = useMemo(() => ({
+    user: USER,
+    retryConfig: { retryCount: 3, retryDelay: 1000 },
+    generateToken: async () => {
+      const response = await fetch('/api/velt/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(USER),
+      });
+      const { token } = await response.json();
+      return token;
+    },
+  }), []);
+
+  return (
+    <VeltProvider apiKey="YOUR_VELT_API_KEY" authProvider={authProvider}>
+      <ApryseDocument />
+    </VeltProvider>
+  );
+}
+```
+
+```css Complete styles.css expandable lines
+.apryse-host {
+  width: 100%;
+  height: 720px;
+  min-height: 520px;
+}
+```
+
+
+## How It Works
+
+1. Set the Velt document context before rendering the viewer. The hook initializes after Velt is ready, a user is authenticated, and the Apryse instance is available.
+2. The base manager stores normalized annotation records in a Velt-backed Yjs map.
+3. Apryse `annotationChanged` events update individual CRDT records, including deletion tombstones.
+4. Remote map changes are rebuilt as XFDF and imported into the viewer.
+5. Awareness carries transient page coordinates, selections, and cursor identity.
+6. Versions save and restore the complete shared annotation state.
+
+
+## APIs
+
+### React: useApryseCrdt()
+
+| Config | Type | Description |
+|---|---|---|
+| `editorId` | `string` | Stable collaborative annotation ID. |
+| `instance` | `ApryseWebViewerInstanceLike \| null` | Existing WebViewer instance. |
+| `veltClient` | `Velt` | Optional context override. |
+| `initialContent` / `initialXfdf` | `string` | First-load XFDF seed. |
+| `cursorData` | `ApryseCursorData` | Cursor label and colors. |
+| `debounceMs` | `number` | Full-XFDF snapshot debounce. |
+| `forceResetInitialContent` | `boolean` | Replaces shared annotations on initialization. |
+| `enabled` | `boolean` | Delays or disables manager creation. |
+| `onError` | `(error: Error) => void` | Receives non-fatal errors. |
+
+| Return | Description |
+|---|---|
+| `instanceRef()` / `setInstance()` | Captures a viewer created later. |
+| `manager`, `primitives`, `sharedState` | Manager and shared state access. |
+| `status`, `synced`, `isSynced`, `isLoading`, `error` | Reactive lifecycle state. |
+| `versions`, `saveVersion()`, `restoreVersion()`, `refreshVersions()` | Version management. |
+| `remoteCursors`, `updateCursor()`, `clearCursor()` | Awareness cursor APIs. |
+| `exportXfdf()`, `setXfdf()`, `importXfdf()` | XFDF APIs. |
+| `flushAnnotationsToShared()` | Writes a full annotation snapshot. |
+| `destroy()` | Ends collaboration early. |
+
+
+### React: ApryseCrdtProvider
+
+Accepts the hook configuration plus callbacks for manager readiness, status, sync, cursors, annotations, update events, and versions. Children can be a React node or render function.
+
+
+### CollaborationManager Methods
+
+| Method or property | Description |
+|---|---|
+| `initialize()` / `destroy()` | Starts or destroys collaboration. |
+| `initialized`, `synced`, `status` | Manager state. |
+| `getDoc()`, `getMap()`, `getAnnotationsMap()`, `getXmlFragment()` | Yjs data access. |
+| `getProvider()`, `getAwareness()`, `getStore()` | Provider and Store access. |
+| `getSharedState()` | Reads normalized annotation records. |
+| `exportXfdf()`, `setXfdf()`, `importXfdf()` | Reads or replaces XFDF. |
+| `flushAnnotationsToShared()` | Captures current Apryse annotations. |
+| `updateCursor()`, `clearCursor()`, `getRemoteCursors()` | Awareness cursor methods. |
+| `onAnnotationsChange()`, `onRemoteCursorsChange()`, `onUpdateData()` | Data subscriptions. |
+| `onStatusChange()`, `onSynced()`, `onVersionsInvalidated()` | Lifecycle subscriptions. |
+| `saveVersion()`, `getVersions()`, `restoreVersion()` | Version methods. |
+| `setStateFromVersion()` | Applies a supplied version object. |
+
+
+### Exported Types and Helpers
+
+- `UseApryseCrdtConfig`, `ApryseCrdtHookResult`, `ApryseCrdtProviderProps`
+- `ApryseWebViewerInstanceLike`, `ApryseAnnotationManagerLike`, `ApryseDocumentViewerLike`
+- `ApryseAnnotationRecord`, `ApryseSharedState`, `ApryseCursorData`, `ApryseCursorState`, `ApryseRemoteCursor`
+- `CrdtUpdateDataEvent`, `SyncStatus`, `Unsubscribe`, `Version`
+- `normalizeXfdf()`, `buildXfdf()`, `createAnnotationRecord()`, `recordsFromState()`
+- `getAnnotationId()`, `hasSharedAnnotations()`, `SNAPSHOT_RECORD_ID`

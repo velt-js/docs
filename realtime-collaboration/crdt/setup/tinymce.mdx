@@ -1,0 +1,652 @@
+---
+title: TinyMCE Editor
+description: Setup Multiplayer Editing for TinyMCE Editor.
+---
+
+Enable real-time collaborative editing on TinyMCE Editors. The collaboration editing engine is built on top of [Yjs](https://docs.yjs.dev/) and Velt SDK.
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- React (v18 or higher)
+- A Velt account with an API key ([sign up](https://console.velt.dev/))
+- Optional: TypeScript for type safety
+
+## Setup
+
+### Step 1: Install Dependencies
+
+Install the React wrapper, framework-agnostic adapter, Velt SDK, and TinyMCE packages:
+
+```bash
+npm install @veltdev/tinymce-crdt-react @veltdev/tinymce-crdt @veltdev/react @veltdev/types @tinymce/tinymce-react tinymce
+```
+
+The React package provides the drop-in component and hook. The base `@veltdev/tinymce-crdt` package provides the imperative manager and content helpers.
+
+
+### Step 2: Setup Velt
+
+Initialize the Velt client by following the [Velt Setup Docs](/get-started/quickstart). This is required for the collaboration engine to work.
+
+
+### Step 3: Load TinyMCE
+
+You can load TinyMCE from your own bundle or from Tiny Cloud.
+
+<Tabs>
+<Tab title="Self-hosted">
+
+Import TinyMCE, the theme, model, icons, plugins, and skin styles before rendering the editor:
+
+```tsx
+import 'tinymce/tinymce';
+import 'tinymce/icons/default';
+import 'tinymce/themes/silver';
+import 'tinymce/models/dom';
+import 'tinymce/plugins/autolink';
+import 'tinymce/plugins/link';
+import 'tinymce/plugins/lists';
+import 'tinymce/skins/ui/oxide/skin.min.css';
+```
+
+Set `licenseKey="gpl"` on the editor when using TinyMCE under the GPL license.
+
+The default TinyMCE iframe mode uses its own content stylesheet. For self-hosted inline mode, also bundle the inline content styles and tell TinyMCE not to load skin files by URL:
+
+```tsx
+import 'tinymce/skins/ui/oxide/content.inline.min.css';
+
+<TinyMceCrdtEditor
+  licenseKey="gpl"
+  init={{
+    inline: true,
+    skin: false,
+    content_css: false,
+  }}
+/>
+```
+
+</Tab>
+<Tab title="Tiny Cloud">
+
+Pass your Tiny Cloud API key to the editor:
+
+```tsx
+import { TinyMceCrdtEditor } from '@veltdev/tinymce-crdt-react';
+
+<TinyMceCrdtEditor
+  apiKey="YOUR_TINYMCE_API_KEY"
+  editorId="my-tinymce-editor"
+  initialContent="<p>Start writing here...</p>"
+/>
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 4: Initialize Collaborative Editor
+
+- Pass an `editorId` to uniquely identify the shared editor.
+- Use `initialContent` only as the seed for a brand-new shared document.
+- Do not pass `value`, `initialValue`, or `onEditorChange`; the CRDT manager owns TinyMCE content.
+
+<Tabs>
+<Tab title="React Component">
+
+`TinyMceCrdtEditor` is the simplest integration. It captures TinyMCE's editor instance, waits for Velt and the current user, initializes collaboration, and cleans up automatically.
+
+```tsx
+import { TinyMceCrdtEditor } from '@veltdev/tinymce-crdt-react';
+
+function CollaborativeEditor() {
+  return (
+    <TinyMceCrdtEditor
+      editorId="my-tinymce-editor"
+      initialContent="<p>Start writing here...</p>"
+      licenseKey="gpl"
+      init={{
+        height: 500,
+        menubar: false,
+        plugins: 'autolink link lists',
+        toolbar: 'undo redo | blocks | bold italic | bullist numlist | link',
+      }}
+      cursorData={{ name: 'Ada', color: '#2563eb' }}
+      onError={(error) => console.error('Collaboration error:', error)}
+    />
+  );
+}
+```
+
+The component forwards normal `@tinymce/tinymce-react` props except `value`, `initialValue`, `onEditorChange`, and `onInit`, which are owned by the collaboration layer.
+
+</Tab>
+<Tab title="React Hook">
+
+Use `useCollaboration()` when you need to render TinyMCE yourself.
+
+```tsx
+import { Editor } from '@tinymce/tinymce-react';
+import { useCollaboration } from '@veltdev/tinymce-crdt-react';
+
+function CollaborativeEditor() {
+  const {
+    editorRef,
+    manager,
+    isLoading,
+    isSynced,
+    status,
+    error,
+  } = useCollaboration({
+    editorId: 'my-tinymce-editor',
+    initialContent: '<p>Start writing here...</p>',
+    onError: (err) => console.error('Collaboration error:', err),
+  });
+
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <div>
+      <div>Status: {isLoading ? 'loading' : status} | Synced: {isSynced ? 'Yes' : 'No'}</div>
+      <Editor
+        licenseKey="gpl"
+        onInit={(_event, editor) => editorRef(editor)}
+        init={{ height: 500, plugins: 'autolink link lists' }}
+      />
+    </div>
+  );
+}
+```
+
+<Warning>Keep TinyMCE uncontrolled. Do not add `value`, `initialValue`, or `onEditorChange` when using the hook.</Warning>
+
+</Tab>
+<Tab title="Imperative API">
+
+Use `createCollaboration()` when you own the editor lifecycle outside React.
+
+```tsx
+import { createCollaboration } from '@veltdev/tinymce-crdt';
+
+const manager = await createCollaboration({
+  editorId: 'my-tinymce-editor',
+  veltClient: client,
+  editor,
+  initialContent: '<p>Start writing here...</p>',
+  onError: (error) => console.error('Collaboration error:', error),
+});
+
+// During teardown
+manager.destroy();
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 5: Status Monitoring (Optional)
+
+The hook returns reactive `status`, `isSynced`, and `error` state. The component exposes equivalent callbacks, and the manager supports event subscriptions.
+
+```tsx
+<TinyMceCrdtEditor
+  editorId="my-tinymce-editor"
+  onStatusChange={(status) => console.log('Status:', status)}
+  onManagerReady={(manager) => {
+    const offSynced = manager.onSynced((synced) => console.log('Synced:', synced));
+    // Save offSynced and call it when this surrounding integration is disposed.
+  }}
+/>
+```
+
+With the hook:
+
+```tsx
+useEffect(() => {
+  if (!manager) return;
+
+  const offStatus = manager.onStatusChange(console.log);
+  const offSynced = manager.onSynced(console.log);
+
+  return () => {
+    offStatus();
+    offSynced();
+  };
+}, [manager]);
+```
+
+<Note>Local editing remains available while the provider reconnects. Use status for UI feedback rather than as a typing lock.</Note>
+
+
+### Step 6: Version Management (Optional)
+
+Save, list, and restore named CRDT snapshots with the hook or manager:
+
+```tsx
+const {
+  versions,
+  saveVersion,
+  restoreVersion,
+  refreshVersions,
+} = useCollaboration({ editorId: 'my-tinymce-editor' });
+
+const versionId = await saveVersion('Before major edit');
+const latestVersions = await refreshVersions();
+await restoreVersion(versionId);
+```
+
+Restoring a version replaces the shared state for every collaborator. Version metadata is not itself synchronized through the editor document, so refresh it after another user saves or restores a version.
+
+
+### Step 7: Force Reset Initial Content (Optional)
+
+`initialContent` is HTML and is applied once when the shared document is empty:
+
+```tsx
+<TinyMceCrdtEditor
+  editorId="my-tinymce-editor"
+  initialContent="<h2>Project brief</h2><p>Start collaborating...</p>"
+/>
+```
+
+Set `forceResetInitialContent` only for an explicit reset workflow:
+
+```tsx
+<TinyMceCrdtEditor
+  editorId="my-tinymce-editor"
+  initialContent="<p>Reset content</p>"
+  forceResetInitialContent
+/>
+```
+
+<Warning>`forceResetInitialContent` replaces the existing shared HTML and clears current user edits.</Warning>
+
+
+### Step 8: Configure Remote Cursors (Optional)
+
+The adapter publishes the local selection through Yjs awareness and renders remote caret and selection overlays automatically.
+
+```tsx
+<TinyMceCrdtEditor
+  editorId="my-tinymce-editor"
+  cursorData={{
+    name: currentUser.name,
+    color: currentUser.color,
+    colorLight: `${currentUser.color}33`,
+  }}
+/>
+```
+
+Render overlays into a specific element with `cursorsContainer`, or set it to `null` to keep awareness active without injected cursor DOM:
+
+```tsx
+const cursorLayer = document.getElementById('cursor-layer');
+
+<TinyMceCrdtEditor
+  editorId="my-tinymce-editor"
+  cursorsContainer={cursorLayer}
+/>
+```
+
+Subscribe to normalized remote cursor data for custom UI:
+
+```tsx
+useEffect(() => {
+  if (!manager) return;
+  return manager.onRemoteCursorsChange((cursors) => {
+    console.log(cursors);
+  });
+}, [manager]);
+```
+
+
+### Step 9: CRDT Event Subscription (Optional)
+
+Listen for real-time CRDT data events using `getCrdtElement().on()` from the Velt client.
+
+```tsx
+import { useEffect } from 'react';
+import { useVeltClient } from '@veltdev/react';
+
+const { client } = useVeltClient();
+
+useEffect(() => {
+  if (!client) return;
+
+  const subscription = client.getCrdtElement().on('updateData').subscribe((event) => {
+    if (event) console.log('CRDT update:', event);
+  });
+
+  return () => subscription?.unsubscribe?.();
+}, [client]);
+```
+
+
+### Step 10: Custom Encryption (Optional)
+
+Encrypt CRDT data before it is stored in Velt by registering a custom encryption provider. For CRDT methods, input data is of type `Uint8Array | number[]`.
+
+```tsx
+const encryptionProvider = {
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+};
+
+<VeltProvider apiKey="YOUR_API_KEY" encryptionProvider={encryptionProvider}>
+  ...
+</VeltProvider>
+```
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+ · [EncryptConfig](/api-reference/sdk/models/data-models#encryptconfig)
+ · [DecryptConfig](/api-reference/sdk/models/data-models#decryptconfig)
+
+
+### Step 11: Error Handling (Optional)
+
+Pass `onError` to receive non-fatal initialization, sync, recovery, and content errors:
+
+```tsx
+const collab = useCollaboration({
+  editorId: 'my-tinymce-editor',
+  onError: (error) => console.error('Collaboration error:', error),
+});
+
+if (collab.error) return <div>Error: {collab.error.message}</div>;
+```
+
+Manager getters and version methods return safe fallback values when data is unavailable.
+
+
+### Step 12: Access Yjs Internals (Advanced)
+
+Use the manager only when you need lower-level integration points:
+
+```tsx
+const doc = manager.getDoc();
+const xmlFragment = manager.getXmlFragment();
+const provider = manager.getProvider();
+const providerAdapter = manager.getProviderAdapter();
+const awareness = manager.getAwareness();
+const undoManager = manager.getUndoManager();
+const store = manager.getStore();
+const editor = manager.getEditor();
+```
+
+You can also read or replace the canonical shared HTML:
+
+```tsx
+const html = manager.getHtml();
+manager.setHtml('<p>Replacement content</p>');
+```
+
+
+### Step 13: Cleanup
+
+The React component and hook destroy the collaboration manager automatically. The hook also returns `destroy()` for early teardown.
+
+When using the imperative API, call `manager.destroy()`. Calling it more than once is safe. If you created TinyMCE yourself, destroy the editor separately because the collaboration manager does not own it.
+
+
+## Notes
+
+- **Uncontrolled editor**: The CRDT manager is the only owner of TinyMCE content; do not pass controlled content props.
+- **Unique editorId**: Collaborators must share the same Velt document context and `editorId`.
+- **HTML data model**: The adapter stores normalized HTML in a Yjs XML fragment and preserves the local selection while applying remote HTML.
+- **Debounced writes**: Local editor changes are serialized after `debounceMs` (125 ms by default).
+- **Remote cursors**: Cursor overlays work with iframe and inline TinyMCE modes; set `cursorsContainer={null}` for custom rendering.
+- **Initial content**: Seed content is applied once unless `forceResetInitialContent` is enabled.
+- **Production authentication**: Use Velt's recommended server-backed authentication flow; never expose privileged server tokens in browser code.
+
+
+## Testing and Debugging
+
+**To test collaboration:**
+1. Log in as two unique users in separate browser profiles.
+2. Open the same Velt document and TinyMCE `editorId` in both.
+3. Type and format content in one window and verify it appears in the other.
+4. Verify remote caret labels, selections, version restore, and persistence after reload.
+
+**Common issues:**
+- Editor not syncing: Confirm the user is identified, the Velt document is set, and both clients use the same `editorId`.
+- Editor remains blank: Confirm all required self-hosted TinyMCE imports are loaded, or provide a Tiny Cloud API key.
+- Local content is overwritten: Remove TinyMCE `value`, `initialValue`, and `onEditorChange` props.
+- Cursors not appearing: Confirm both users are active and `cursorsContainer` was not set to `null`.
+- Existing content resets: Do not enable `forceResetInitialContent` during normal loads.
+
+<Tip>
+Enable browser console warnings for detailed diagnostics. You can also use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setup/core#veltcrdtstoremap) to inspect CRDT stores in real time.
+</Tip>
+
+
+## Complete Example
+
+```tsx Complete App.tsx expandable lines
+import { useState } from 'react';
+import { TinyMceCrdtEditor } from '@veltdev/tinymce-crdt-react';
+import {
+  VeltProvider,
+  useCurrentUser,
+  useSetDocument,
+  useVeltClient,
+} from '@veltdev/react';
+import 'tinymce/tinymce';
+import 'tinymce/icons/default';
+import 'tinymce/themes/silver';
+import 'tinymce/models/dom';
+import 'tinymce/plugins/autolink';
+import 'tinymce/plugins/link';
+import 'tinymce/plugins/lists';
+import 'tinymce/skins/ui/oxide/skin.min.css';
+
+const DOCUMENT_ID = 'tinymce-crdt-demo-doc-1';
+
+const USERS = {
+  ada: {
+    userId: 'ada',
+    name: 'Ada Lovelace',
+    email: 'ada@example.com',
+    organizationId: 'my-org-id',
+    color: '#2563eb',
+  },
+  grace: {
+    userId: 'grace',
+    name: 'Grace Hopper',
+    email: 'grace@example.com',
+    organizationId: 'my-org-id',
+    color: '#0f766e',
+  },
+};
+
+function Header() {
+  const { client } = useVeltClient();
+  const user = useCurrentUser();
+
+  if (user) {
+    return (
+      <header>
+        <span>Welcome, {user.name}</span>
+        <button onClick={() => client?.signOutUser()}>Logout</button>
+      </header>
+    );
+  }
+
+  return (
+    <header>
+      {Object.values(USERS).map((candidate) => (
+        <button key={candidate.userId} onClick={() => client?.identify(candidate)}>
+          Login as {candidate.name}
+        </button>
+      ))}
+    </header>
+  );
+}
+
+function CollaborativeEditor() {
+  const user = useCurrentUser();
+  const [status, setStatus] = useState('connecting');
+  const [manager, setManager] = useState<any>(null);
+  const [versionName, setVersionName] = useState('');
+
+  useSetDocument(DOCUMENT_ID, { documentName: 'TinyMCE CRDT Demo' });
+
+  if (!user) return <p>Choose a user to begin.</p>;
+
+  const saveVersion = async () => {
+    if (!versionName.trim() || !manager) return;
+    await manager.saveVersion(versionName.trim());
+    setVersionName('');
+  };
+
+  return (
+    <main>
+      <p>Status: {status}</p>
+      <div>
+        <input
+          value={versionName}
+          onChange={(event) => setVersionName(event.target.value)}
+          placeholder="Version name"
+        />
+        <button onClick={saveVersion}>Save version</button>
+      </div>
+      <TinyMceCrdtEditor
+        key={user.userId}
+        editorId="main-editor"
+        licenseKey="gpl"
+        initialContent="<h2>Shared document</h2><p>Start collaborating...</p>"
+        cursorData={{ name: user.name, color: user.color }}
+        onStatusChange={setStatus}
+        onManagerReady={setManager}
+        onError={(error) => console.error(error)}
+        init={{
+          height: 500,
+          menubar: false,
+          plugins: 'autolink link lists',
+          toolbar: 'undo redo | blocks | bold italic | bullist numlist | link',
+        }}
+      />
+    </main>
+  );
+}
+
+export default function App() {
+  return (
+    <VeltProvider apiKey="YOUR_VELT_API_KEY">
+      <Header />
+      <CollaborativeEditor />
+    </VeltProvider>
+  );
+}
+```
+
+
+## How It Works
+
+1. Set the Velt document context before rendering the editor. The wrapper initializes after Velt is ready, a user is authenticated, and the TinyMCE instance is available.
+2. The manager opens a Velt CRDT store keyed by `editorId` and stores normalized HTML in a Yjs XML fragment.
+3. Local TinyMCE changes are debounced and written to the shared document.
+4. Remote document changes update TinyMCE while preserving the local bookmark or DOM selection.
+5. Yjs awareness carries user identity and selection data for remote cursor overlays.
+6. Velt persists CRDT updates and named versions.
+
+
+## APIs
+
+### React: TinyMceCrdtEditor
+
+| Prop | Type | Required | Description |
+|---|---|---|---|
+| `editorId` | `string` | No* | Unique key for the shared editor. |
+| `documentId` | `string` | No* | Used as `editorId` when `editorId` is omitted. |
+| `veltClient` | `Velt` | No | Overrides the client from `VeltProvider`. |
+| `initialContent` | `string` | No | Initial HTML for a brand-new document. |
+| `forceResetInitialContent` | `boolean` | No | Replaces shared HTML during initialization. |
+| `cursorData` | `TinyMCECursorData` | No | Local cursor name and colors. |
+| `cursorsContainer` | `HTMLElement \| null` | No | Cursor overlay container; `null` disables overlay DOM. |
+| `debounceMs` | `number` | No | Editor-to-CRDT write debounce; default is 125 ms. |
+| `onError` | `(error: Error) => void` | No | Receives collaboration errors. |
+| `onStatusChange` | `(status: SyncStatus) => void` | No | Receives connection status changes. |
+| `onManagerReady` | `(manager) => void` | No | Receives the initialized manager. |
+| `onEditorReady` | `(editor) => void` | No | Receives the TinyMCE instance. |
+
+*Provide either `editorId` or `documentId`. Other supported TinyMCE React props are passed through, excluding the CRDT-owned content and initialization props.
+
+
+### React: useCollaboration()
+
+The hook accepts the base `CollaborationConfig` without `editor` and with an optional `veltClient`.
+
+| Return | Type | Description |
+|---|---|---|
+| `editorRef` | `(editor \| null) => void` | Receives the TinyMCE instance from `onInit`. |
+| `manager` | `CollaborationManager \| null` | Underlying collaboration manager. |
+| `isLoading` | `boolean` | `true` until initialization completes. |
+| `synced` / `isSynced` | `boolean` | Initial backend sync state. |
+| `status` | `SyncStatus` | Current connection status. |
+| `error` | `Error \| null` | Latest collaboration error. |
+| `versions` | `Version[]` | Saved version metadata. |
+| `saveVersion(name)` | `Promise<string>` | Saves a version and returns its ID. |
+| `restoreVersion(id)` | `Promise<boolean>` | Restores a version. |
+| `refreshVersions()` | `Promise<Version[]>` | Reloads version metadata. |
+| `destroy()` | `void` | Destroys collaboration early. |
+
+
+### Imperative: createCollaboration()
+
+```tsx
+const manager = await createCollaboration({
+  editorId,
+  veltClient,
+  editor,
+  initialContent,
+  cursorData,
+  cursorsContainer,
+  debounceMs,
+  forceResetInitialContent,
+  onError,
+});
+```
+
+
+### CollaborationManager Methods
+
+| Method or property | Description |
+|---|---|
+| `initialize()` | Initializes the store, binding, and cursor awareness. |
+| `destroy()` | Detaches listeners and destroys collaboration resources. |
+| `initialized` | Whether initialization completed. |
+| `synced` | Whether initial backend sync completed. |
+| `status` | Current connection status. |
+| `onStatusChange(callback)` | Subscribes to connection status. |
+| `onSynced(callback)` | Subscribes to sync state. |
+| `getHtml()` | Reads normalized shared HTML. |
+| `setHtml(html)` | Replaces shared HTML. |
+| `getRemoteCursors()` | Reads normalized remote cursor data. |
+| `onRemoteCursorsChange(callback)` | Subscribes to remote cursor data. |
+| `saveVersion(name)` | Saves a named version. |
+| `getVersions()` | Lists version metadata. |
+| `restoreVersion(id)` | Restores a version by ID. |
+| `setStateFromVersion(version)` | Applies a supplied `Version` object. |
+| `getDoc()` | Returns the `Y.Doc`. |
+| `getXmlFragment()` | Returns the shared `Y.XmlFragment`. |
+| `getProvider()` | Returns the Velt sync provider. |
+| `getProviderAdapter()` | Returns the Yjs-compatible provider adapter. |
+| `getAwareness()` | Returns Yjs awareness. |
+| `getUndoManager()` | Returns the shared `Y.UndoManager`. |
+| `getStore()` | Returns the Velt CRDT store. |
+| `getEditor()` | Returns the captured TinyMCE editor. |
+
+
+### Exported Types and Helpers
+
+- `CollaborationConfig`
+- `UseCollaborationConfig` / `UseTinyMceCrdtConfig`
+- `UseCollaborationReturn` / `TinyMceCrdtHookResult`
+- `TinyMceCrdtEditorProps`
+- `TinyMCEEditorLike`
+- `TinyMCECursorData`, `TinyMCECursorRect`, `TinyMCECursorSelection`, `TinyMCERemoteCursor`
+- `SyncStatus`, `Unsubscribe`, `Version`
+- `normalizeHtml()`, `readHtmlFromXmlFragment()`, `writeHtmlToXmlFragment()`
+- `hasSharedHtml()`, `applyInitialContent()`

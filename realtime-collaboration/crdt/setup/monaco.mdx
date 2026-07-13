@@ -1,0 +1,643 @@
+---
+title: Monaco Editor
+description: Setup Multiplayer Editing for Monaco Editor.
+---
+
+Enable real-time collaborative editing on Monaco Editors. The collaboration editing engine is built on top of [Yjs](https://docs.yjs.dev/), [y-monaco](https://github.com/yjs/y-monaco), and Velt SDK.
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- React (v18 or higher)
+- A Velt account with an API key ([sign up](https://console.velt.dev/))
+- Optional: TypeScript for type safety
+
+## Setup
+
+### Step 1: Install Dependencies
+
+```bash
+npm install @veltdev/monaco-crdt-react @veltdev/monaco-crdt @veltdev/react @veltdev/types @monaco-editor/react monaco-editor y-monaco yjs
+```
+
+Ensure your application resolves one copy of `yjs`, `y-protocols`, and `monaco-editor`. For Vite projects, deduplicate them explicitly:
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  resolve: {
+    dedupe: ['yjs', 'y-protocols', 'monaco-editor'],
+  },
+});
+```
+
+
+### Step 2: Setup Velt
+
+Initialize the Velt client by following the [Velt Setup Docs](/get-started/quickstart). This is required for the collaboration engine to work.
+
+After authentication, set a stable document array before rendering the editor. Keep the hook unconditional and gate its value so you do not break React's hook ordering:
+
+```tsx
+import { useEffect } from 'react';
+import { useCurrentUser, useSetDocuments } from '@veltdev/react';
+
+const DOCUMENT_ID = 'code-file-123';
+
+function AppContent() {
+  const user = useCurrentUser();
+  const { setDocuments } = useSetDocuments();
+
+  useEffect(() => {
+    if (!user) return;
+    setDocuments([{
+      id: DOCUMENT_ID,
+      metadata: { documentName: 'Code File 123' },
+    }]);
+  }, [user, setDocuments]);
+
+  return user ? <CollaborativeEditor /> : <p>Sign in to begin.</p>;
+}
+```
+
+
+### Step 3: Initialize Collaborative Editor
+
+- Pass an `editorId` to uniquely identify the shared Monaco model.
+- Do not pass `value` or `defaultValue`; the CRDT-backed Monaco model owns text.
+- Pass `initialContent` as plain text for a brand-new shared document.
+
+<Tabs>
+<Tab title="React Component">
+
+`MonacoCrdtEditor` is the simplest integration. It creates Monaco, binds its model to `Y.Text`, and manages collaboration cleanup.
+
+```tsx
+import { MonacoCrdtEditor } from '@veltdev/monaco-crdt-react';
+
+function CollaborativeEditor() {
+  return (
+    <MonacoCrdtEditor
+      editorId="my-monaco-editor"
+      language="typescript"
+      theme="vs-dark"
+      height="500px"
+      initialContent={'export const greeting = "Hello";\n'}
+      cursorData={{ name: 'Ada', color: '#2563eb' }}
+      options={{ minimap: { enabled: false }, wordWrap: 'on' }}
+      onError={(error) => console.error('Collaboration error:', error)}
+    />
+  );
+}
+```
+
+Normal `@monaco-editor/react` props are passed through. The wrapper owns `value`, `defaultValue`, and the internal mount handler, but still calls your `onMount` callback after capturing the editor.
+
+</Tab>
+<Tab title="React Hook">
+
+Use `useCollaboration()` with a custom Monaco setup:
+
+```tsx
+import Editor from '@monaco-editor/react';
+import { useCollaboration } from '@veltdev/monaco-crdt-react';
+
+function CollaborativeEditor() {
+  const {
+    editorRef,
+    primitives,
+    manager,
+    isLoading,
+    isSynced,
+    status,
+    error,
+  } = useCollaboration({
+    editorId: 'my-monaco-editor',
+    initialContent: '// Start writing here\n',
+    onError: (err) => console.error('Collaboration error:', err),
+  });
+
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <div>
+      <div>Status: {isLoading ? 'loading' : status} | Synced: {isSynced ? 'Yes' : 'No'}</div>
+      <Editor
+        height="500px"
+        language="typescript"
+        onMount={(editor) => editorRef(editor)}
+      />
+    </div>
+  );
+}
+```
+
+</Tab>
+<Tab title="Imperative API">
+
+```tsx
+import { createCollaboration } from '@veltdev/monaco-crdt';
+
+const manager = await createCollaboration({
+  editorId: 'my-monaco-editor',
+  veltClient: client,
+  editor,
+  initialContent: '// Start writing here\n',
+  onError: (error) => console.error('Collaboration error:', error),
+});
+```
+
+Passing `editor` binds it during initialization. Use `manager.bindEditor(nextEditor)` only when attaching or replacing an editor after the manager has already been created.
+
+</Tab>
+</Tabs>
+
+<Warning>Do not provide Monaco `value` or `defaultValue`. The shared `Y.Text` is the source of truth, and a second content owner can overwrite remote changes.</Warning>
+
+
+### Step 4: Status Monitoring (Optional)
+
+Use the hook's reactive state, component callbacks, or manager subscriptions:
+
+```tsx
+useEffect(() => {
+  if (!manager) return;
+
+  const offStatus = manager.onStatusChange((nextStatus) => {
+    console.log('Status:', nextStatus);
+  });
+  const offSynced = manager.onSynced((synced) => {
+    console.log('Synced:', synced);
+  });
+
+  return () => {
+    offStatus();
+    offSynced();
+  };
+}, [manager]);
+```
+
+<Note>Local Monaco edits continue while disconnected and synchronize when the provider reconnects.</Note>
+
+
+### Step 5: Version Management (Optional)
+
+```tsx
+const {
+  versions,
+  saveVersion,
+  restoreVersion,
+  refreshVersions,
+} = useCollaboration({ editorId: 'my-monaco-editor' });
+
+const versionId = await saveVersion('Working parser');
+await refreshVersions();
+await restoreVersion(versionId);
+await refreshVersions();
+```
+
+Restoring a version changes the shared `Y.Text` for all collaborators. Refresh the version list after each save or restore. For multi-tab interfaces, also refresh on window focus or visibility changes. If peers need immediate metadata updates, broadcast a small awareness event and refresh when they receive it.
+
+
+### Step 6: Force Reset Initial Content (Optional)
+
+`initialContent` is inserted only when the shared text is new and empty:
+
+```tsx
+<MonacoCrdtEditor
+  editorId="my-monaco-editor"
+  initialContent={'function main() {\n  return true;\n}\n'}
+/>
+```
+
+For an explicit reset workflow:
+
+```tsx
+<MonacoCrdtEditor
+  editorId="my-monaco-editor"
+  initialContent=""
+  forceResetInitialContent
+/>
+```
+
+<Warning>`forceResetInitialContent` clears the existing shared text. Do not enable it during normal page loads.</Warning>
+
+
+### Step 7: Style Remote Cursors
+
+`y-monaco` adds remote selection decorations to Monaco. Add base styles:
+
+```css
+.yRemoteSelection {
+  background-color: rgba(37, 99, 235, 0.2);
+  opacity: 1;
+}
+
+.yRemoteSelectionHead {
+  border-left: 2px solid #2563eb;
+  min-height: 1.2em;
+}
+```
+
+These fallback styles keep remote selections and carets visible. To apply each collaborator's awareness color and add name labels, create client-specific rules from awareness state:
+
+```tsx
+useEffect(() => {
+  if (!manager) return;
+
+  const awareness = manager.getAwareness();
+  const doc = manager.getDoc();
+  if (!awareness || !doc) return;
+
+  const style = document.createElement('style');
+  document.head.appendChild(style);
+
+  const render = () => {
+    const rules: string[] = [];
+    awareness.getStates().forEach((state: any, clientId: number) => {
+      if (clientId === doc.clientID || !state?.user) return;
+
+      const color = state.user.color || '#2563eb';
+      const colorLight = state.user.colorLight || `${color}33`;
+      const name = String(state.user.name || 'Collaborator').replace(/"/g, '\\"');
+
+      rules.push(`
+        .yRemoteSelection-${clientId} { background-color: ${colorLight}; }
+        .yRemoteSelectionHead-${clientId} { border-left: 2px solid ${color}; position: relative; }
+        .yRemoteSelectionHead-${clientId}::after {
+          content: "${name}";
+          position: absolute;
+          top: -1.55rem;
+          left: -1px;
+          background: ${color};
+          color: white;
+          padding: 2px 7px;
+          border-radius: 4px;
+          white-space: nowrap;
+        }
+      `);
+    });
+    style.textContent = rules.join('\n');
+  };
+
+  awareness.on('change', render);
+  render();
+
+  return () => {
+    awareness.off('change', render);
+    style.remove();
+  };
+}, [manager]);
+```
+
+Pass local identity with `cursorData`; when omitted, the adapter falls back to the authenticated Velt user.
+
+
+### Step 8: CRDT Event Subscription (Optional)
+
+```tsx
+import { useEffect } from 'react';
+import { useVeltClient } from '@veltdev/react';
+
+const { client } = useVeltClient();
+
+useEffect(() => {
+  if (!client) return;
+
+  const subscription = client.getCrdtElement().on('updateData').subscribe((event) => {
+    if (event) console.log('CRDT update:', event);
+  });
+
+  return () => subscription?.unsubscribe?.();
+}, [client]);
+```
+
+
+### Step 9: Custom Encryption (Optional)
+
+```tsx
+const encryptionProvider = {
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+};
+
+<VeltProvider apiKey="YOUR_API_KEY" encryptionProvider={encryptionProvider}>
+  ...
+</VeltProvider>
+```
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+ · [EncryptConfig](/api-reference/sdk/models/data-models#encryptconfig)
+ · [DecryptConfig](/api-reference/sdk/models/data-models#decryptconfig)
+
+
+### Step 10: Error Handling (Optional)
+
+```tsx
+const collab = useCollaboration({
+  editorId: 'my-monaco-editor',
+  onError: (error) => console.error('Collaboration error:', error),
+});
+
+if (collab.error) return <div>Error: {collab.error.message}</div>;
+```
+
+Manager methods return safe fallback values when collaboration resources are unavailable.
+
+
+### Step 11: Access Collaboration Primitives (Advanced)
+
+The hook exposes commonly used primitives:
+
+```tsx
+const { primitives } = useCollaboration({ editorId: 'my-monaco-editor' });
+
+const ytext = primitives?.ytext;
+const awareness = primitives?.awareness;
+const undoManager = primitives?.undoManager;
+const doc = primitives?.doc;
+const provider = primitives?.provider;
+```
+
+The manager exposes the same resources plus the binding, editor, and store:
+
+```tsx
+const ytext = manager.getYText();
+const binding = manager.getBinding();
+const editor = manager.getEditor();
+const store = manager.getStore();
+```
+
+
+### Step 12: Enable, Disable, and Cleanup
+
+Delay or disable manager creation while continuing to render Monaco:
+
+```tsx
+<MonacoCrdtEditor
+  editorId="my-monaco-editor"
+  enabled={Boolean(currentUser && documentReady)}
+/>
+```
+
+The component and hook destroy the collaboration manager automatically. The hook also returns `destroy()` for early teardown. If you created Monaco yourself, dispose the editor and model separately because the manager does not own them.
+
+
+### Step 13: Client-only Rendering
+
+Monaco depends on browser APIs. In Next.js, load the collaborative editor without server-side rendering:
+
+```tsx
+import dynamic from 'next/dynamic';
+
+const CollaborativeMonaco = dynamic(
+  () => import('./CollaborativeMonaco'),
+  { ssr: false },
+);
+```
+
+
+## Notes
+
+- **Uncontrolled model**: Do not pass `value` or `defaultValue`; the bound `Y.Text` owns content.
+- **One dependency instance**: Deduplicate `yjs`, `y-protocols`, and `monaco-editor` to avoid incompatible constructors and awareness instances.
+- **Unique editorId**: Collaborators must use the same Velt document context and `editorId`.
+- **Plain-text model**: Monaco content is stored in `Y.Text`; the Monaco `language` affects editing behavior, not shared data format.
+- **Remote cursors**: `y-monaco` supplies decorations; your CSS controls labels and colors.
+- **Multiple editors**: Give independent models different `editorId` values. Editors sharing one model can be passed through `bindEditor()` options.
+- **Client-only**: Render Monaco only in the browser.
+- **Production authentication**: Use Velt's recommended server-backed authentication flow.
+
+
+## Testing and Debugging
+
+**To test collaboration:**
+1. Log in as two unique users in separate browser profiles.
+2. Open the same Velt document and Monaco `editorId`.
+3. Type, select text, undo, and redo in both windows.
+4. Save and restore a version, then reload and verify persistence.
+
+**Common issues:**
+- `Yjs was already imported`: Deduplicate `yjs` and remove nested or linked duplicate copies.
+- Text does not sync: Remove `value` and `defaultValue`, and confirm both clients use the same document and `editorId`.
+- Editor never initializes: Confirm Monaco is mounted, Velt is ready, and a user is identified.
+- Cursor labels are missing: Add the dynamic client-ID styles or supply your own awareness renderer.
+- SSR errors: Load the Monaco component client-side only.
+
+<Tip>
+Use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setup/core#veltcrdtstoremap) to inspect the shared text and provider state.
+</Tip>
+
+
+## Complete Example
+
+```tsx Complete App.tsx expandable lines
+import { useEffect, useState } from 'react';
+import { MonacoCrdtEditor } from '@veltdev/monaco-crdt-react';
+import {
+  VeltProvider,
+  useCurrentUser,
+  useSetDocuments,
+  useVeltClient,
+} from '@veltdev/react';
+import type { CollaborationManager, SyncStatus } from '@veltdev/monaco-crdt-react';
+import './monaco-cursors.css';
+
+const DOCUMENT_ID = 'monaco-crdt-demo-doc-1';
+
+const USERS = {
+  ada: {
+    userId: 'ada',
+    name: 'Ada Lovelace',
+    email: 'ada@example.com',
+    organizationId: 'my-org-id',
+    color: '#2563eb',
+  },
+  grace: {
+    userId: 'grace',
+    name: 'Grace Hopper',
+    email: 'grace@example.com',
+    organizationId: 'my-org-id',
+    color: '#0f766e',
+  },
+};
+
+function Header() {
+  const { client } = useVeltClient();
+  const user = useCurrentUser();
+
+  return (
+    <header>
+      {user ? (
+        <>
+          <span>Welcome, {user.name}</span>
+          <button onClick={() => client?.signOutUser()}>Logout</button>
+        </>
+      ) : (
+        Object.values(USERS).map((candidate) => (
+          <button key={candidate.userId} onClick={() => client?.identify(candidate)}>
+            Login as {candidate.name}
+          </button>
+        ))
+      )}
+    </header>
+  );
+}
+
+function CollaborativeEditor() {
+  const user = useCurrentUser();
+  const { setDocuments } = useSetDocuments();
+  const [status, setStatus] = useState<SyncStatus>('connecting');
+  const [manager, setManager] = useState<CollaborationManager | null>(null);
+  const [versionName, setVersionName] = useState('');
+
+  useEffect(() => {
+    if (!user) return;
+    setDocuments([{
+      id: DOCUMENT_ID,
+      metadata: { documentName: 'Monaco CRDT Demo' },
+    }]);
+  }, [user, setDocuments]);
+
+  if (!user) return <p>Choose a user to begin.</p>;
+
+  const saveVersion = async () => {
+    if (!versionName.trim() || !manager) return;
+    await manager.saveVersion(versionName.trim());
+    setVersionName('');
+  };
+
+  return (
+    <main>
+      <p>Status: {status} | Synced: {manager?.synced ? 'Yes' : 'No'}</p>
+      <input
+        value={versionName}
+        onChange={(event) => setVersionName(event.target.value)}
+        placeholder="Version name"
+      />
+      <button onClick={saveVersion}>Save version</button>
+      <MonacoCrdtEditor
+        editorId={DOCUMENT_ID}
+        language="typescript"
+        theme="vs-dark"
+        height="500px"
+        initialContent={'export function hello() {\n  return "world";\n}\n'}
+        cursorData={{ name: user.name, color: user.color }}
+        options={{ minimap: { enabled: false }, wordWrap: 'on' }}
+        onStatusChange={setStatus}
+        onManagerReady={setManager}
+        onError={console.error}
+      />
+    </main>
+  );
+}
+
+export default function App() {
+  return (
+    <VeltProvider apiKey="YOUR_VELT_API_KEY">
+      <Header />
+      <CollaborativeEditor />
+    </VeltProvider>
+  );
+}
+```
+
+```css Complete monaco-cursors.css expandable lines
+.yRemoteSelection {
+  background-color: rgba(37, 99, 235, 0.2);
+  opacity: 1;
+}
+
+.yRemoteSelectionHead {
+  border-left: 2px solid #2563eb;
+  min-height: 1.2em;
+}
+```
+
+
+## How It Works
+
+1. `VeltProvider` initializes the SDK, and `useSetDocuments` scopes collaboration with a document array after authentication.
+2. The wrapper waits for Velt, an authenticated user, and a mounted Monaco editor.
+3. The manager creates a Velt CRDT store and obtains the shared `Y.Text`.
+4. `y-monaco` binds that `Y.Text` to the Monaco model and maps awareness selections to editor decorations.
+5. Local text transactions merge with concurrent remote transactions without replacing the full model.
+6. Velt persists the Yjs update stream and named version snapshots.
+
+
+## APIs
+
+### React: MonacoCrdtEditor
+
+| Prop | Type | Required | Description |
+|---|---|---|---|
+| `editorId` | `string` | No* | Unique key for the shared editor. |
+| `documentId` | `string` | No* | Used as `editorId` when `editorId` is omitted. |
+| `veltClient` | `Velt` | No | Overrides the context client. |
+| `initialContent` | `string` | No | Initial plain text for a new document. |
+| `forceResetInitialContent` | `boolean` | No | Replaces existing shared text. |
+| `cursorData` | `MonacoCursorData` | No | Local cursor identity and colors. |
+| `debounceMs` | `number` | No | Backend store debounce interval. |
+| `enabled` | `boolean` | No | Creates or destroys collaboration while mounted. |
+| `onError` | `(error: Error) => void` | No | Receives non-fatal errors. |
+| `onStatusChange` | `(status: SyncStatus) => void` | No | Receives status changes. |
+| `onManagerReady` | `(manager) => void` | No | Receives the initialized manager. |
+| `onEditorReady` | `(editor) => void` | No | Receives the Monaco editor. |
+| `onMount` | `OnMount` | No | Receives the normal Monaco mount callback after capture. |
+
+*Provide either `editorId` or `documentId`. Other Monaco React props are passed through except `value` and `defaultValue`.
+
+
+### React: useCollaboration()
+
+| Return | Type | Description |
+|---|---|---|
+| `editorRef` | `(editor \| null) => void` | Receives a Monaco editor instance. |
+| `primitives` | `CollaborationPrimitives \| null` | Shared Yjs and provider objects. |
+| `manager` | `CollaborationManager \| null` | Base manager. |
+| `isLoading` | `boolean` | Initialization state. |
+| `synced` / `isSynced` | `boolean` | Initial backend sync state. |
+| `status` | `SyncStatus` | Connection status. |
+| `error` | `Error \| null` | Latest error. |
+| `versions` | `Version[]` | Saved versions. |
+| `saveVersion(name)` | `Promise<string>` | Saves a version. |
+| `restoreVersion(id)` | `Promise<boolean>` | Restores a version. |
+| `refreshVersions()` | `Promise<Version[]>` | Reloads versions. |
+| `destroy()` | `void` | Destroys collaboration early. |
+
+
+### CollaborationManager Methods
+
+| Method or property | Description |
+|---|---|
+| `initialize()` | Initializes the shared store. |
+| `destroy()` | Destroys binding and collaboration resources. |
+| `bindEditor(editor, options?)` | Binds or rebinds a Monaco model. |
+| `getCollaborationPrimitives()` | Returns shared primitives. |
+| `initialized`, `synced`, `status` | Current manager state. |
+| `onStatusChange(callback)` | Subscribes to connection status. |
+| `onSynced(callback)` | Subscribes to sync state. |
+| `getDoc()` | Returns the `Y.Doc`. |
+| `getText()` / `getYText()` | Returns the shared `Y.Text`. |
+| `getProvider()` | Returns the Velt sync provider. |
+| `getAwareness()` | Returns Yjs awareness. |
+| `getUndoManager()` | Returns the shared undo manager. |
+| `getBinding()` | Returns the `MonacoBinding`. |
+| `getEditor()` | Returns the bound Monaco editor. |
+| `getStore()` | Returns the Velt CRDT store. |
+| `saveVersion(name)` | Saves a version. |
+| `getVersions()` | Lists versions. |
+| `restoreVersion(id)` | Restores a version. |
+| `setStateFromVersion(version)` | Applies a supplied version object. |
+
+
+### Exported Types
+
+- `CollaborationConfig`, `CollaborationPrimitives`, `BindEditorOptions`
+- `UseCollaborationConfig` / `UseMonacoCrdtConfig`
+- `UseCollaborationReturn` / `MonacoCrdtHookResult`
+- `MonacoCrdtEditorProps`, `MonacoCursorData`, `MonacoBindingInstance`
+- `SyncStatus`, `Unsubscribe`, `Version`

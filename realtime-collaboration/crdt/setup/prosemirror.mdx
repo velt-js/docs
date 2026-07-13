@@ -1,0 +1,671 @@
+---
+title: ProseMirror Editor
+description: Setup Multiplayer Editing for ProseMirror Editor.
+---
+
+Enable real-time collaborative editing on ProseMirror Editors. The collaboration editing engine is built on top of [Yjs](https://docs.yjs.dev/), [y-prosemirror](https://github.com/yjs/y-prosemirror), and Velt SDK.
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- React (v18 or higher)
+- A Velt account with an API key ([sign up](https://console.velt.dev/))
+- Optional: TypeScript for type safety
+
+## Setup
+
+### Step 1: Install Dependencies
+
+```bash
+npm install @veltdev/prosemirror-crdt-react @veltdev/prosemirror-crdt @veltdev/react @veltdev/types prosemirror-model prosemirror-schema-basic prosemirror-schema-list prosemirror-state prosemirror-view prosemirror-keymap prosemirror-commands y-prosemirror yjs
+```
+
+Resolve one copy of `yjs` and `y-prosemirror` in your application. Duplicate Yjs constructors can break plugin bindings and awareness.
+
+
+### Step 2: Setup Velt
+
+Initialize the Velt client by following the [Velt Setup Docs](/get-started/quickstart). This is required for the collaboration engine to work.
+
+
+### Step 3: Create a Schema
+
+All collaborators must use a compatible ProseMirror schema. The React package includes a default schema with basic nodes, list nodes, and a highlight mark:
+
+```tsx
+import { createDefaultProseMirrorSchema } from '@veltdev/prosemirror-crdt-react';
+
+const schema = createDefaultProseMirrorSchema();
+```
+
+Create the schema once at module scope or memoize it. Do not construct a new schema on every render.
+
+For a custom highlight mark:
+
+```tsx
+import { Schema } from 'prosemirror-model';
+import { schema as basicSchema } from 'prosemirror-schema-basic';
+import { addListNodes } from 'prosemirror-schema-list';
+import {
+  createHighlightMarkSpec,
+} from '@veltdev/prosemirror-crdt-react';
+
+const nodes = addListNodes(
+  basicSchema.spec.nodes,
+  'paragraph block*',
+  'block',
+);
+
+const schema = new Schema({
+  nodes,
+  marks: basicSchema.spec.marks.addToEnd(
+    'highlight',
+    createHighlightMarkSpec('#fef08a'),
+  ),
+});
+```
+
+<Warning>Schema node and mark names are part of the shared document contract. Deploy schema changes as explicit migrations, especially when older clients may still be connected.</Warning>
+
+
+### Step 4: Initialize Collaborative Editor
+
+<Tabs>
+<Tab title="React Component">
+
+`ProseMirrorCrdtEditor` creates the `EditorView`, installs the Yjs plugins, and manages cleanup.
+
+```tsx
+import {
+  ProseMirrorCrdtEditor,
+  createDefaultProseMirrorSchema,
+} from '@veltdev/prosemirror-crdt-react';
+
+const schema = createDefaultProseMirrorSchema();
+
+function CollaborativeEditor() {
+  return (
+    <ProseMirrorCrdtEditor
+      editorId="my-prosemirror-editor"
+      schema={schema}
+      initialContent="Start writing here..."
+      cursorData={{ name: 'Ada', color: '#2563eb' }}
+      editorClassName="ProseMirror"
+      onError={(error) => console.error('Collaboration error:', error)}
+    />
+  );
+}
+```
+
+If `schema` is omitted, the component uses `defaultProseMirrorSchema`.
+
+</Tab>
+<Tab title="React Hook">
+
+Use `useCollaboration()` to control the mount, plugins, state, or `EditorView`:
+
+```tsx
+import {
+  createDefaultProseMirrorSchema,
+  useCollaboration,
+} from '@veltdev/prosemirror-crdt-react';
+
+const schema = createDefaultProseMirrorSchema();
+
+function CollaborativeEditor() {
+  const {
+    mountRef,
+    editorView,
+    manager,
+    isLoading,
+    isSynced,
+    status,
+    error,
+  } = useCollaboration({
+    editorId: 'my-prosemirror-editor',
+    schema,
+    initialContent: 'Start writing here...',
+    onError: (err) => console.error('Collaboration error:', err),
+  });
+
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <div>
+      <div>Status: {isLoading ? 'loading' : status} | Synced: {isSynced ? 'Yes' : 'No'}</div>
+      <div ref={mountRef} className="ProseMirror" />
+    </div>
+  );
+}
+```
+
+</Tab>
+<Tab title="Imperative API">
+
+Create the manager without automatic initialization, attach the collaboration plugins first, and then initialize. This ordering prevents remote updates from arriving before the `EditorView` can receive them.
+
+```tsx
+import { createCollaboration } from '@veltdev/prosemirror-crdt';
+
+const manager = await createCollaboration({
+  editorId: 'my-prosemirror-editor',
+  veltClient: client,
+  schema,
+  initialContent: 'Start writing here...',
+  autoInitialize: false,
+});
+
+const view = manager.createEditorView(mountElement, { schema });
+await manager.initialize();
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 5: Add Plugins, Keymaps, and CRDT Undo
+
+Extra plugins are appended after the Yjs sync, cursor, and undo plugins:
+
+```tsx
+import { keymap } from 'prosemirror-keymap';
+import { baseKeymap, toggleMark } from 'prosemirror-commands';
+import { redo, undo } from '@veltdev/prosemirror-crdt-react';
+
+const plugins = [
+  keymap({
+    'Mod-z': undo,
+    'Mod-y': redo,
+    'Mod-Shift-z': redo,
+    'Mod-b': toggleMark(schema.marks.strong),
+    'Mod-i': toggleMark(schema.marks.em),
+  }),
+  keymap(baseKeymap),
+];
+
+<ProseMirrorCrdtEditor
+  editorId="my-prosemirror-editor"
+  schema={schema}
+  plugins={plugins}
+/>
+```
+
+You can instead pass commands through the `keymap` prop; the manager combines them with Yjs-aware undo and redo.
+
+<Warning>Import the Yjs-aware `undo` and `redo` commands from `@veltdev/prosemirror-crdt-react`. Do not add `prosemirror-history` to a collaborative state because it creates a separate local history that does not understand remote CRDT transactions.</Warning>
+
+
+### Step 6: Bring Your Own EditorView (Optional)
+
+Pass an existing `EditorView` to the hook when your application owns its lifecycle:
+
+```tsx
+useCollaboration({
+  editorId: 'my-prosemirror-editor',
+  schema,
+  editorView: existingView,
+  destroyViewOnUnmount: false,
+});
+```
+
+The hook attaches the view to the manager but does not rebuild an existing state's plugin list. Ensure the view was created with `manager.createCollaborationPlugins()` or use `manager.createEditorState()` / `manager.createEditorView()`.
+
+
+### Step 7: Style Remote Cursors
+
+```css
+.velt-prosemirror-cursor,
+.ProseMirror-yjs-cursor {
+  border-left: 2px solid;
+  margin-left: -1px;
+  margin-right: -1px;
+  pointer-events: none;
+  position: relative;
+  word-break: normal;
+}
+
+.velt-prosemirror-cursor-label,
+.ProseMirror-yjs-cursor-label {
+  border-radius: 3px 3px 3px 0;
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 600;
+  left: -1px;
+  line-height: normal;
+  padding: 0.1rem 0.35rem;
+  position: absolute;
+  top: -1.4em;
+  user-select: none;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.velt-prosemirror-selection,
+.ProseMirror-yjs-selection {
+  background-color: rgba(124, 58, 237, 0.2);
+}
+```
+
+Pass `disableCursors` to keep document synchronization enabled without installing the cursor plugin:
+
+```tsx
+<ProseMirrorCrdtEditor
+  editorId="my-prosemirror-editor"
+  schema={schema}
+  disableCursors
+/>
+```
+
+
+### Step 8: Status Monitoring (Optional)
+
+```tsx
+useEffect(() => {
+  if (!manager) return;
+
+  const offStatus = manager.onStatusChange(console.log);
+  const offSynced = manager.onSynced(console.log);
+
+  return () => {
+    offStatus();
+    offSynced();
+  };
+}, [manager]);
+```
+
+The component also accepts `onStatusChange`, and the hook exposes reactive `status`, `synced` / `isSynced`, and `error` state.
+
+
+### Step 9: Version Management (Optional)
+
+```tsx
+const {
+  versions,
+  saveVersion,
+  restoreVersion,
+  refreshVersions,
+} = useCollaboration({
+  editorId: 'my-prosemirror-editor',
+  schema,
+});
+
+const versionId = await saveVersion('Reviewed draft');
+await refreshVersions();
+await restoreVersion(versionId);
+```
+
+Restoring a version changes the shared `Y.XmlFragment` for all collaborators. Refresh version metadata after peer version activity.
+
+
+### Step 10: Force Reset Initial Content (Optional)
+
+Seed content can be plain text or ProseMirror JSON:
+
+```tsx
+<ProseMirrorCrdtEditor
+  editorId="my-prosemirror-editor"
+  schema={schema}
+  initialContent={{
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [{ type: 'text', text: 'Start collaborating.' }],
+      },
+    ],
+  }}
+/>
+```
+
+Set `forceResetInitialContent` only for a deliberate reset. The supplied content is parsed using the configured schema.
+
+<Warning>Invalid JSON nodes or marks are rejected by the schema. Validate migrated content before using it as `initialContent`.</Warning>
+
+
+### Step 11: CRDT Event Subscription (Optional)
+
+```tsx
+const { client } = useVeltClient();
+
+useEffect(() => {
+  if (!client) return;
+
+  const subscription = client.getCrdtElement().on('updateData').subscribe((event) => {
+    if (event) console.log('CRDT update:', event);
+  });
+
+  return () => subscription?.unsubscribe?.();
+}, [client]);
+```
+
+
+### Step 12: Custom Encryption (Optional)
+
+```tsx
+const encryptionProvider = {
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+};
+
+<VeltProvider apiKey="YOUR_API_KEY" encryptionProvider={encryptionProvider}>
+  ...
+</VeltProvider>
+```
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+ · [EncryptConfig](/api-reference/sdk/models/data-models#encryptconfig)
+ · [DecryptConfig](/api-reference/sdk/models/data-models#decryptconfig)
+
+
+### Step 13: Error Handling (Optional)
+
+```tsx
+const collab = useCollaboration({
+  editorId: 'my-prosemirror-editor',
+  schema,
+  onError: (error) => console.error('Collaboration error:', error),
+});
+
+if (collab.error) return <div>Error: {collab.error.message}</div>;
+```
+
+
+### Step 14: Access Yjs Internals (Advanced)
+
+```tsx
+const doc = manager.getDoc();
+const xmlFragment = manager.getXmlFragment();
+const provider = manager.getProvider();
+const awareness = manager.getAwareness();
+const undoManager = manager.getUndoManager();
+const editorView = manager.getEditorView();
+const store = manager.getStore();
+```
+
+
+### Step 15: Enable, Disable, and Cleanup
+
+```tsx
+<ProseMirrorCrdtEditor
+  editorId="my-prosemirror-editor"
+  schema={schema}
+  enabled={Boolean(currentUser && documentReady)}
+/>
+```
+
+The component and hook destroy the manager automatically. By default, the hook also destroys an `EditorView` it created. It does not destroy a consumer-owned view unless you explicitly opt into that lifecycle.
+
+
+## Notes
+
+- **Stable schema**: Construct one schema and keep node and mark names compatible across clients.
+- **Plugin order**: Yjs sync, cursor, and undo plugins are installed before consumer plugins.
+- **CRDT history**: Use `y-prosemirror` undo and redo; do not add `prosemirror-history`.
+- **Shared data**: Rich document structure is stored in a `Y.XmlFragment`, not serialized HTML.
+- **Unique editorId**: Collaborators must share both the Velt document context and `editorId`.
+- **Initial content**: Plain text or ProseMirror JSON is applied once to a new shared fragment.
+- **View ownership**: The hook can create an `EditorView` or attach one owned by the application.
+- **Production authentication**: Use Velt's recommended server-backed authentication flow.
+
+
+## Testing and Debugging
+
+**To test collaboration:**
+1. Log in as two unique users in separate browser profiles.
+2. Open the same Velt document and ProseMirror `editorId`.
+3. Edit text, marks, lists, and selections concurrently.
+4. Verify Yjs undo affects only the local user's changes and shared content persists after reload.
+
+**Common issues:**
+- Unknown node or mark: Ensure all clients use a compatible schema and migrated JSON matches it.
+- Remote updates missing: Create the collaboration plugins and view before calling `manager.initialize()`.
+- Undo removes peer changes: Remove `prosemirror-history` and use the exported Yjs commands.
+- Cursors not appearing: Add cursor CSS and ensure `disableCursors` is false.
+- Duplicate Yjs warning: Deduplicate `yjs` and `y-prosemirror`.
+
+<Tip>
+Use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setup/core#veltcrdtstoremap) to inspect the shared XML fragment and provider state.
+</Tip>
+
+
+## Complete Example
+
+```tsx Complete App.tsx expandable lines
+import { useEffect } from 'react';
+import {
+  VeltProvider,
+  useCurrentUser,
+  useSetDocuments,
+  useVeltClient,
+} from '@veltdev/react';
+import {
+  ProseMirrorCrdtEditor,
+  createDefaultProseMirrorSchema,
+  redo,
+  undo,
+} from '@veltdev/prosemirror-crdt-react';
+import { keymap } from 'prosemirror-keymap';
+import { baseKeymap, toggleMark } from 'prosemirror-commands';
+import './prosemirror.css';
+
+const DOCUMENT_ID = 'prosemirror-crdt-demo-doc-1';
+const schema = createDefaultProseMirrorSchema();
+
+const editorPlugins = [
+  keymap({
+    'Mod-z': undo,
+    'Mod-y': redo,
+    'Mod-Shift-z': redo,
+    'Mod-b': toggleMark(schema.marks.strong),
+    'Mod-i': toggleMark(schema.marks.em),
+  }),
+  keymap(baseKeymap),
+];
+
+const USERS = {
+  ada: {
+    userId: 'ada',
+    name: 'Ada Lovelace',
+    email: 'ada@example.com',
+    organizationId: 'my-org-id',
+    color: '#2563eb',
+  },
+  grace: {
+    userId: 'grace',
+    name: 'Grace Hopper',
+    email: 'grace@example.com',
+    organizationId: 'my-org-id',
+    color: '#0f766e',
+  },
+};
+
+function Header() {
+  const { client } = useVeltClient();
+  const user = useCurrentUser();
+
+  return (
+    <header>
+      {user ? (
+        <>
+          <span>Welcome, {user.name}</span>
+          <button onClick={() => client?.signOutUser()}>Logout</button>
+        </>
+      ) : (
+        Object.values(USERS).map((candidate) => (
+          <button key={candidate.userId} onClick={() => client?.identify(candidate)}>
+            Login as {candidate.name}
+          </button>
+        ))
+      )}
+    </header>
+  );
+}
+
+function CollaborativeEditor({ documentId }: { documentId: string }) {
+  const user = useCurrentUser();
+  const { setDocuments } = useSetDocuments();
+
+  useEffect(() => {
+    if (!user) return;
+    setDocuments([{
+      id: documentId,
+      metadata: { documentName: 'ProseMirror CRDT Demo' },
+    }]);
+  }, [user, documentId, setDocuments]);
+
+  if (!user) return <p>Choose a user to begin.</p>;
+
+  return (
+    <ProseMirrorCrdtEditor
+      documentId={documentId}
+      schema={schema}
+      plugins={editorPlugins}
+      initialContent="Start collaborating in ProseMirror."
+      cursorData={{ name: user.name, color: user.color }}
+      editorClassName="ProseMirror"
+      onStatusChange={(status) => console.log('Status:', status)}
+      onError={console.error}
+    />
+  );
+}
+
+export default function App() {
+  return (
+    <VeltProvider apiKey="YOUR_VELT_API_KEY">
+      <Header />
+      <CollaborativeEditor documentId={DOCUMENT_ID} />
+    </VeltProvider>
+  );
+}
+```
+
+```css Complete prosemirror.css expandable lines
+.ProseMirror {
+  min-height: 320px;
+  padding: 1rem;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  outline: none;
+}
+
+.ProseMirror-yjs-cursor {
+  border-left: 2px solid;
+  margin-left: -1px;
+  margin-right: -1px;
+  pointer-events: none;
+  position: relative;
+}
+
+.ProseMirror-yjs-cursor-label {
+  border-radius: 3px 3px 3px 0;
+  color: white;
+  font-size: 0.65rem;
+  font-weight: 600;
+  left: -1px;
+  padding: 0.1rem 0.35rem;
+  position: absolute;
+  top: -1.4em;
+  white-space: nowrap;
+}
+
+.ProseMirror-yjs-selection {
+  background-color: rgba(124, 58, 237, 0.2);
+}
+```
+
+
+## How It Works
+
+1. The wrapper waits for Velt, an authenticated user, a schema, and a mount or existing view.
+2. The manager creates the Yjs sync, cursor, and undo plugins before initializing the shared store.
+3. `y-prosemirror` binds ProseMirror transactions to a shared `Y.XmlFragment`.
+4. Awareness carries user identity and selections for cursor decorations.
+5. Yjs merges concurrent structural edits, while the schema validates the resulting ProseMirror document.
+6. Velt persists updates and named versions.
+
+
+## APIs
+
+### React: ProseMirrorCrdtEditor
+
+| Prop | Type | Required | Description |
+|---|---|---|---|
+| `editorId` | `string` | No* | Unique key for the shared editor. |
+| `documentId` | `string` | No* | Used as `editorId` when omitted. |
+| `schema` | `Schema` | No | Schema for the shared document; defaults to the included schema. |
+| `initialContent` | `string \| ProseMirrorJSON` | No | Seed content for a new fragment. |
+| `forceResetInitialContent` | `boolean` | No | Replaces shared content on initialization. |
+| `cursorData` | `CursorData` | No | Local cursor identity and colors. |
+| `plugins` | `Plugin[]` | No | Plugins appended after collaboration plugins. |
+| `keymap` | `Record<string, Command>` | No | Extra key commands. |
+| `disableCursors` | `boolean` | No | Disables cursor plugin only. |
+| `enabled` | `boolean` | No | Enables manager creation. |
+| `viewProps` | `DirectEditorProps` | No | Props for a managed `EditorView`. |
+| `className` / `editorClassName` | `string` | No | Wrapper and mount class names. |
+| `onManagerReady` / `onEditorReady` | `function` | No | Receives manager or view. |
+| `onStatusChange` / `onError` | `function` | No | Status and error callbacks. |
+
+*Provide either `editorId` or `documentId`.
+
+
+### React: useCollaboration()
+
+The hook additionally accepts `mount`, `editorView`, `state`, and `destroyViewOnUnmount`.
+
+| Return | Type | Description |
+|---|---|---|
+| `mountRef` | `(element \| null) => void` | Mount receiver for a managed view. |
+| `editorView` | `EditorView \| null` | Active view. |
+| `manager` | `CollaborationManager \| null` | Base manager. |
+| `isLoading` | `boolean` | Initialization state. |
+| `synced` / `isSynced` | `boolean` | Initial backend sync state. |
+| `status` | `SyncStatus` | Connection status. |
+| `error` | `Error \| null` | Latest error. |
+| `versions` | `Version[]` | Saved versions. |
+| `saveVersion(name)` | `Promise<string>` | Saves a version. |
+| `restoreVersion(id)` | `Promise<boolean>` | Restores a version. |
+| `refreshVersions()` | `Promise<Version[]>` | Reloads versions. |
+| `destroy()` | `void` | Destroys collaboration early. |
+
+
+### Schema and Command Helpers
+
+- `createDefaultProseMirrorSchema()` creates the default basic/list/highlight schema.
+- `defaultProseMirrorSchema` is a pre-created default schema.
+- `createHighlightMarkSpec(defaultColor?)` creates the included highlight mark spec.
+- `undo` and `redo` are the Yjs-aware `y-prosemirror` commands re-exported by `@veltdev/prosemirror-crdt-react`; import them from the Velt wrapper as shown above.
+
+
+### CollaborationManager Methods
+
+| Method or property | Description |
+|---|---|
+| `initialize()` / `destroy()` | Starts or destroys collaboration. |
+| `createCollaborationPlugins(options?)` | Creates sync, cursor, undo, keymap, and consumer plugins. |
+| `createEditorState(schema, options?)` | Creates a collaborative state. |
+| `createEditorView(mount, options?)` | Creates and attaches a collaborative view. |
+| `attachEditorView(view)` | Attaches an existing view. |
+| `initialized`, `synced`, `status` | Current manager state. |
+| `onStatusChange(callback)` / `onSynced(callback)` | Status subscriptions. |
+| `getDoc()` | Returns the `Y.Doc`. |
+| `getXmlFragment()` | Returns the shared fragment. |
+| `getProvider()` | Returns the Velt provider. |
+| `getAwareness()` | Returns Yjs awareness. |
+| `getUndoManager()` | Returns the shared undo manager. |
+| `getEditorView()` | Returns the attached view. |
+| `getStore()` | Returns the Velt store. |
+| `saveVersion(name)` / `getVersions()` | Saves or lists versions. |
+| `restoreVersion(id)` / `setStateFromVersion(version)` | Restores shared state. |
+
+
+### Exported Types
+
+- `ProseMirrorPluginOptions`, `ProseMirrorEditorViewOptions`
+- `UseCollaborationConfig` / `UseProseMirrorCrdtConfig`
+- `UseCollaborationReturn` / `ProseMirrorCrdtHookResult`
+- `ProseMirrorCrdtEditorProps`, `ProseMirrorJSON`, `CursorData`
+- `SyncStatus`, `Unsubscribe`, `Version`
+
+Import the imperative `CollaborationConfig` type from `@veltdev/prosemirror-crdt`.

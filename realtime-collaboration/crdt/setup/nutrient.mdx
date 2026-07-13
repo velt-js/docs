@@ -1,0 +1,535 @@
+---
+title: Nutrient React
+description: Setup Multiplayer Collaboration for Nutrient Web SDK in React.
+---
+
+Enable real-time collaborative Nutrient Web SDK document state, annotations, comments, form values, and selections. The integration stores Nutrient Instant JSON in a Velt CRDT Store backed by [Yjs](https://docs.yjs.dev/).
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- React (v18 or higher)
+- A Nutrient Web SDK license
+- A Velt account with an API key ([sign up](https://console.velt.dev/))
+- Optional: TypeScript for type safety
+
+## Setup
+
+### Step 1: Install Dependencies
+
+```bash
+npm install @veltdev/nutrient-crdt-react @veltdev/nutrient-crdt @nutrient-sdk/viewer @veltdev/react @veltdev/types
+```
+
+Keep one copy of React, `@veltdev/react`, and `@veltdev/nutrient-crdt` in the application bundle.
+
+
+### Step 2: Setup Velt
+
+Initialize Velt with server-backed authentication by following the [Velt Setup Docs](/get-started/quickstart), then set a stable document before the viewer initializes:
+
+```tsx
+import { useSetDocument } from '@veltdev/react';
+
+useSetDocument('nutrient-review-123', { documentName: 'Nutrient review' });
+```
+
+
+### Step 3: Initialize Collaborative Viewer
+
+<Tabs>
+<Tab title="React Component">
+
+`NutrientCrdtEditor` creates the viewer host, loads Nutrient, attaches collaboration, and unloads the viewer on cleanup:
+
+```tsx
+import {
+  INSTANT_JSON_FORMAT,
+  NutrientCrdtEditor,
+} from '@veltdev/nutrient-crdt-react';
+
+const initialContent = {
+  format: INSTANT_JSON_FORMAT,
+  annotations: [],
+  comments: [],
+  formFieldValues: { customer: 'Acme Corp' },
+};
+
+function CollaborativeDocument() {
+  return (
+    <NutrientCrdtEditor
+      documentId="nutrient-review-123"
+      document="/documents/contract.pdf"
+      licenseKey="YOUR_NUTRIENT_LICENSE_KEY"
+      initialContent={initialContent}
+      className="nutrient-host"
+      onError={(error) => console.error('Collaboration error:', error)}
+    >
+      {(collaboration) => (
+        <span>{collaboration.isSynced ? 'Synced' : collaboration.status}</span>
+      )}
+    </NutrientCrdtEditor>
+  );
+}
+```
+
+```css
+.nutrient-host {
+  width: 100%;
+  height: 720px;
+  min-height: 520px;
+}
+```
+
+</Tab>
+<Tab title="React Hook">
+
+Use `useCollaboration()` when your application creates or already owns the Nutrient viewer:
+
+```tsx
+import { useCollaboration } from '@veltdev/nutrient-crdt-react';
+
+const collaboration = useCollaboration({
+  editorId: 'nutrient-review-123',
+  instance,
+  initialContent,
+  overlayContainer: hostElement,
+  debounceMs: 120,
+  onError: (error) => console.error('Collaboration error:', error),
+});
+```
+
+The hook waits for Velt, an authenticated user, and a viewer unless `initializeWithoutInstance` is enabled.
+
+</Tab>
+<Tab title="Provider API">
+
+```tsx
+import {
+  NutrientCrdtProvider,
+  CollaborationContext,
+} from '@veltdev/nutrient-crdt-react';
+
+<NutrientCrdtProvider config={{ editorId: 'nutrient-review-123', instance }}>
+  {(collaboration) => <span>{collaboration.status}</span>}
+</NutrientCrdtProvider>
+```
+
+`CollaborationProvider` is an alias of `NutrientCrdtProvider`. `CollaborationContext` exposes the same hook value for advanced composition.
+
+</Tab>
+<Tab title="Imperative API">
+
+```tsx
+import { createCollaboration } from '@veltdev/nutrient-crdt';
+
+const manager = await createCollaboration({
+  editorId: 'nutrient-review-123',
+  veltClient: client,
+  instance,
+  initialContent,
+  overlayContainer: hostElement,
+});
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 4: Customize Viewer Creation (Optional)
+
+The component accepts a Nutrient document input, license, CDN choice, viewer options, a module override, or a custom factory:
+
+```tsx
+import NutrientViewer from '@nutrient-sdk/viewer';
+
+<NutrientCrdtEditor
+  documentId="nutrient-review-123"
+  document={documentUrl}
+  useCDN
+  viewerOptions={{ toolbarItems }}
+  createInstance={async (host, initialContent) => {
+    return NutrientViewer.load({
+      container: host,
+      document: documentUrl,
+      instantJSON: initialContent,
+      licenseKey: 'YOUR_NUTRIENT_LICENSE_KEY',
+      useCDN: true,
+    });
+  }}
+/>
+```
+
+Pass `instance` when the application already owns the viewer; the component will not load or unload that external instance.
+
+
+### Step 5: Status Monitoring (Optional)
+
+```tsx
+const {
+  manager,
+  status,
+  synced,
+  isLoading,
+  error,
+  stats,
+} = collaboration;
+
+useEffect(() => {
+  if (!manager) return;
+  const offStatus = manager.onStatusChange(console.log);
+  const offSynced = manager.onSynced(console.log);
+  return () => {
+    offStatus();
+    offSynced();
+  };
+}, [manager]);
+```
+
+Local viewer actions can continue while reconnecting. `stats` reports viewer and Store availability, remote selection count, and last flush reason.
+
+
+### Step 6: Version Management (Optional)
+
+```tsx
+const versionId = await collaboration.saveVersion('Before approval');
+const version = await collaboration.getVersionById(versionId);
+await collaboration.refreshVersions();
+await collaboration.restoreVersion(versionId);
+```
+
+The manager flushes the viewer's current Instant JSON before saving. Restoring reapplies the saved state to the attached viewer.
+
+
+### Step 7: Initial Content and Force Reset (Optional)
+
+Use Nutrient Instant JSON as seed content:
+
+```tsx
+const initialContent = {
+  format: INSTANT_JSON_FORMAT,
+  annotations: [],
+  comments: [],
+  formFieldValues: { customer: 'Acme Corp' },
+};
+```
+
+The seed is used only when the shared Store has no document state. For an explicit reset:
+
+```tsx
+await collaboration.forceReset(initialContent);
+```
+
+<Warning>`forceResetInitialContent` and `forceReset()` replace shared annotations, comments, and form values for every collaborator.</Warning>
+
+
+### Step 8: Apply Document Changes
+
+Prefer focused helpers for ordinary application actions:
+
+```tsx
+await collaboration.setFormFieldValue('customer', 'Dunder Mifflin');
+await collaboration.addHighlight({
+  pageIndex: 0,
+  bbox: [72, 150, 220, 30],
+  color: '#fff59d',
+  text: 'Payment terms',
+});
+await collaboration.addComment({
+  text: 'Needs legal review',
+  pageIndex: 0,
+});
+```
+
+Use full snapshot methods for imports or specialized workflows:
+
+```tsx
+await collaboration.applyInstantJson(nextInstantJson, 'import');
+await collaboration.flushInstanceToStore('manual-save', true);
+collaboration.refreshSnapshots();
+```
+
+
+### Step 9: Configure Remote Selections (Optional)
+
+```tsx
+collaboration.setLocalSelection({
+  pageIndex: 0,
+  rects: [{ left: 72, top: 150, width: 220, height: 30, pageIndex: 0 }],
+  text: 'Selected text',
+});
+
+collaboration.renderRemoteSelections();
+```
+
+`remoteSelections` is reactive awareness state. It is not persisted as Instant JSON or included in versions. Call `clearRemoteSelectionOverlays()` before replacing the viewer or overlay host.
+
+
+### Step 10: CRDT Event Subscription (Optional)
+
+Subscribe to normalized document changes through the manager:
+
+```tsx
+useEffect(() => {
+  if (!collaboration.manager) return;
+  return collaboration.manager.onDocumentChange((event) => {
+    console.log(event.source, event.reason, event.state);
+  });
+}, [collaboration.manager]);
+```
+
+For application-wide Velt events:
+
+```tsx
+const subscription = client.getCrdtElement().on('updateData').subscribe(console.log);
+subscription?.unsubscribe?.();
+```
+
+
+### Step 11: Custom Encryption (Optional)
+
+```tsx
+const encryptionProvider = {
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+};
+
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  authProvider={authProvider}
+  encryptionProvider={encryptionProvider}
+>
+  ...
+</VeltProvider>
+```
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+
+
+### Step 12: Error Handling (Optional)
+
+```tsx
+const collaboration = useCollaboration({
+  editorId: 'nutrient-review-123',
+  instance,
+  onError: (error) => console.error('Nutrient collaboration:', error),
+});
+
+if (collaboration.error) return <div>{collaboration.error.message}</div>;
+```
+
+
+### Step 13: Access Yjs Internals (Advanced)
+
+```tsx
+const manager = collaboration.manager;
+const doc = manager?.getDoc();
+const map = manager?.getMap();
+const provider = manager?.getProvider();
+const awareness = manager?.getAwareness();
+const store = manager?.getStore();
+const state = manager?.getDocumentState();
+const instantJson = manager?.getInstantJson();
+```
+
+
+### Step 14: Attach, Detach, and Cleanup
+
+Initialize collaboration before the viewer exists when necessary:
+
+```tsx
+const collaboration = useCollaboration({
+  editorId: 'nutrient-review-123',
+  initializeWithoutInstance: true,
+});
+
+collaboration.attachInstance(instance, { applyRemoteState: true });
+collaboration.detachInstance();
+```
+
+The hook destroys its manager automatically. The drop-in component unloads only viewers it created. Call `destroy()` for early collaboration teardown.
+
+
+## Notes
+
+- **Snapshot model**: Nutrient Instant JSON is synchronized as document snapshots, not as character-level PDF edits.
+- **Document scope**: The adapter persists annotations, comments, and form field values; the PDF input remains a viewer resource.
+- **Viewer capability**: Full persistence requires an instance that supports Instant JSON export and application operations.
+- **Awareness**: Remote selections are transient and not part of versioned document content.
+- **Debounced flushes**: Viewer changes are batched before Store writes; default debounce is 120 ms.
+- **Unique editorId**: Collaborators must share the same Velt document and editor ID.
+- **Production authentication**: Use a server-backed Velt `authProvider`; never expose privileged server tokens in browser code.
+
+
+## Testing and Debugging
+
+**To test collaboration:**
+1. Open the same PDF, Velt document, and Nutrient `editorId` as two different users.
+2. Add annotations, comments, highlights, and form values in both clients.
+3. Verify remote selections, version restore, reconnection, and persistence after reload.
+4. Test viewer unload/reload and an attach-later flow.
+
+**Common issues:**
+- Viewer not loading: Verify the document URL, Nutrient license, CDN choice, and host height.
+- Collaboration remains loading: Confirm Velt authentication and a viewer instance, or use `initializeWithoutInstance`.
+- Missing document changes: Confirm the viewer supports `exportInstantJSON` and relevant change events.
+- Overlay position is incorrect: Render into the correct viewer host and refresh after viewport changes.
+- Existing data resets: Disable `forceResetInitialContent` during normal loads.
+
+<Tip>
+Use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setup/core#veltcrdtstoremap) to inspect the Instant JSON state and provider status.
+</Tip>
+
+
+## Complete Example
+
+```tsx Complete App.tsx expandable lines
+import { useMemo, useState } from 'react';
+import { VeltProvider, useSetDocument } from '@veltdev/react';
+import {
+  INSTANT_JSON_FORMAT,
+  NutrientCrdtEditor,
+  type CollaborationManager,
+  type InstantJson,
+} from '@veltdev/nutrient-crdt-react';
+
+const DOCUMENT_ID = 'nutrient-review-123';
+const USER = {
+  userId: 'ada',
+  organizationId: 'my-org-id',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+};
+
+const initialContent: InstantJson = {
+  format: INSTANT_JSON_FORMAT,
+  annotations: [],
+  comments: [],
+  formFieldValues: { customer: 'Acme Corp' },
+};
+
+function CollaborativeDocument() {
+  const [manager, setManager] = useState<CollaborationManager | null>(null);
+  const [versionName, setVersionName] = useState('');
+
+  useSetDocument(DOCUMENT_ID, { documentName: 'Nutrient review' });
+
+  const saveVersion = async () => {
+    if (!manager || !versionName.trim()) return;
+    await manager.saveVersion(versionName.trim());
+    setVersionName('');
+  };
+
+  return (
+    <main>
+      <input value={versionName} onChange={(event) => setVersionName(event.target.value)} />
+      <button onClick={saveVersion}>Save version</button>
+      <NutrientCrdtEditor
+        documentId={DOCUMENT_ID}
+        document="/documents/contract.pdf"
+        licenseKey="YOUR_NUTRIENT_LICENSE_KEY"
+        initialContent={initialContent}
+        className="nutrient-host"
+        onManagerReady={setManager}
+        onStatusChange={(status) => console.log('Status:', status)}
+        onError={console.error}
+      >
+        {(collaboration) => (
+          <p>{collaboration.status} · {collaboration.synced ? 'Synced' : 'Syncing'}</p>
+        )}
+      </NutrientCrdtEditor>
+    </main>
+  );
+}
+
+export default function App() {
+  const authProvider = useMemo(() => ({
+    user: USER,
+    retryConfig: { retryCount: 3, retryDelay: 1000 },
+    generateToken: async () => {
+      const response = await fetch('/api/velt/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(USER),
+      });
+      const { token } = await response.json();
+      return token;
+    },
+  }), []);
+
+  return (
+    <VeltProvider apiKey="YOUR_VELT_API_KEY" authProvider={authProvider}>
+      <CollaborativeDocument />
+    </VeltProvider>
+  );
+}
+```
+
+```css Complete styles.css expandable lines
+.nutrient-host {
+  width: 100%;
+  height: 720px;
+  min-height: 520px;
+}
+```
+
+
+## How It Works
+
+1. The wrapper waits for Velt, an authenticated user, an editor ID, and a Nutrient instance when required.
+2. The manager normalizes Instant JSON into a versioned `NutrientDocumentState`.
+3. Viewer change events schedule debounced snapshot exports to the Velt CRDT Store.
+4. Remote document state is applied to the attached Nutrient instance.
+5. Awareness carries page rectangles and selected text for transient remote overlays.
+6. Versions save and restore the complete Instant JSON state.
+
+
+## APIs
+
+### React: NutrientCrdtEditor
+
+| Prop group | Important props |
+|---|---|
+| Collaboration | `editorId`, `documentId`, `veltClient`, `initialContent`, `forceResetInitialContent`, `debounceMs`, `userColor`, `initializeWithoutInstance` |
+| Viewer | `instance`, `document`, `licenseKey`, `useCDN`, `viewerOptions`, `viewerModule`, `createInstance` |
+| UI | `overlayContainer`, `className`, `style`, `children` |
+| Lifecycle | `onInstanceReady`, `prepareInitialContent`, `onManagerReady`, `onStatusChange`, `onError` |
+
+
+### React: useCollaboration()
+
+| Return group | Fields and methods |
+|---|---|
+| Lifecycle | `manager`, `instance`, `isLoading`, `synced`, `isSynced`, `status`, `error`, `destroy()` |
+| Snapshots | `documentState`, `instantJson`, `stats`, `remoteSelections`, `refreshSnapshots()` |
+| Viewer and document | `attachInstance()`, `detachInstance()`, `flushInstanceToStore()`, `forceReset()`, `applyInstantJson()` |
+| Content | `addHighlight()`, `addComment()`, `setFormFieldValue()` |
+| Awareness | `publishCurrentSelection()`, `setLocalSelection()`, `renderRemoteSelections()`, `clearRemoteSelectionOverlays()` |
+| Versions | `versions`, `saveVersion()`, `getVersions()`, `getVersionById()`, `refreshVersions()`, `restoreVersion()`, `setStateFromVersion()` |
+
+
+### CollaborationManager Methods
+
+| Method group | Methods |
+|---|---|
+| Lifecycle | `initialize()`, `destroy()`, `attachInstance()`, `detachInstance()` |
+| Status | `initialized`, `synced`, `status`, `onStatusChange()`, `onSynced()`, `getStats()` |
+| Document | `getDocumentState()`, `getInstantJson()`, `applyInstantJson()`, `flushInstanceToStore()`, `forceReset()` |
+| Changes | `addHighlight()`, `addComment()`, `setFormFieldValue()`, `onDocumentChange()` |
+| Awareness | `publishCurrentSelection()`, `setLocalSelection()`, `getRemoteSelections()`, `renderRemoteSelections()`, `clearRemoteSelectionOverlays()` |
+| Versions | `saveVersion()`, `getVersions()`, `getVersionById()`, `restoreVersion()`, `setStateFromVersion()` |
+| Internals | `getDoc()`, `getMap()`, `getProvider()`, `getAwareness()`, `getStore()`, `getInstance()` |
+
+
+### Exported Types and Helpers
+
+- `UseCollaborationConfig`, `UseCollaborationReturn`, `NutrientCrdtEditorProps`, `NutrientCrdtProviderProps`, `CollaborationProviderProps`
+- `CollaborationConfig`, `AttachInstanceOptions`
+- `NutrientViewerInstance`, `NutrientViewerModule`, `InstantJson`, `NutrientDocumentState`, `NutrientStore`
+- `NutrientHighlightInput`, `NutrientCommentInput`, `DocumentChangeEvent`, `CollaborationStats`
+- `AwarenessSelection`, `RemoteSelection`, `SelectionRect`, `Version`, `SyncStatus`, `Unsubscribe`
+- `CollaborationManager`, `createCollaboration()`, `INSTANT_JSON_FORMAT`
+- `createDocumentState()`, `createSelectionState()`, `createHighlightAnnotation()`, `createCommentPayload()`
+- `addHighlightToInstantJson()`, `addCommentToInstantJson()`, `setFormFieldValue()`, `mergeInstantJson()`
+- `cloneJson()`, `stableStringify()`, `stripPdfId()`, `hasInstantJson()`, `isDocumentState()`, `normalizeRects()`

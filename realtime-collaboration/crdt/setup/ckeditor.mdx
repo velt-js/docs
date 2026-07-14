@@ -3,13 +3,13 @@ title: CKEditor 5 Editor
 description: Setup Multiplayer Editing for CKEditor 5.
 ---
 
-Enable real-time collaborative editing on CKEditor 5 Editors. The collaboration editing engine is built on top of [Yjs](https://docs.yjs.dev/) and Velt SDK.
+The `@veltdev/ckeditor-crdt-react` and `@veltdev/ckeditor-crdt` libraries enable real-time collaborative editing in CKEditor 5. The collaboration engine is built on [Yjs](https://docs.yjs.dev/) and the Velt SDK.
 
 ## Prerequisites
 
 - Node.js (v14 or higher)
-- React (v18 or higher)
 - A Velt account with an API key ([sign up](https://console.velt.dev/))
+- React (v18 or higher) when using the React wrapper
 - A CKEditor 5 license compatible with your build
 - Optional: TypeScript for type safety
 
@@ -17,16 +17,133 @@ Enable real-time collaborative editing on CKEditor 5 Editors. The collaboration 
 
 ### Step 1: Install Dependencies
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```bash
-npm install @veltdev/ckeditor-crdt-react @veltdev/ckeditor-crdt @veltdev/react @veltdev/types ckeditor5 @ckeditor/ckeditor5-react
+npm install @veltdev/ckeditor-crdt-react @veltdev/ckeditor-crdt @veltdev/react @veltdev/types ckeditor5 @ckeditor/ckeditor5-react yjs y-protocols
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+```bash
+npm install @veltdev/ckeditor-crdt @veltdev/crdt @veltdev/client ckeditor5 yjs y-protocols
+```
+
+</Tab>
+</Tabs>
+
 The React package provides the drop-in component and hook. The base package provides the imperative manager, provider adapter, and HTML content helpers.
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  resolve: {
+    dedupe: ['ckeditor5', 'yjs', 'y-protocols', 'lib0'],
+  },
+  optimizeDeps: {
+    include: ['ckeditor5'],
+  },
+});
+```
 
 
 ### Step 2: Setup Velt
 
-Initialize the Velt client by following the [Velt Setup Docs](/get-started/quickstart). This is required for the collaboration engine to work.
+Initialize Velt, authenticate a user, and set a stable document context before collaboration starts. Follow the [Velt Setup Docs](/get-started/quickstart) for the production token endpoint used by `authProvider`.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+import { useEffect, useState } from 'react';
+import {
+  VeltProvider,
+  useCurrentUser,
+  useSetDocuments,
+} from '@veltdev/react';
+
+const DOCUMENT_ID = 'article-123';
+const USER = {
+  userId: 'user-1',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  organizationId: 'org-1',
+};
+
+const authProvider = {
+  user: USER,
+  retryConfig: { retryCount: 3, retryDelay: 1000 },
+  generateToken: async () => {
+    const response = await fetch('/api/velt/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(USER),
+    });
+    const { token } = await response.json();
+    return token;
+  },
+};
+
+function CollaborationScope() {
+  const user = useCurrentUser();
+  const { setDocuments } = useSetDocuments();
+  const [documentReady, setDocumentReady] = useState(false);
+
+  useEffect(() => {
+    if (!user) {
+      setDocumentReady(false);
+      return;
+    }
+    setDocuments([{
+      id: DOCUMENT_ID,
+      metadata: { documentName: 'Article 123' },
+    }]);
+    setDocumentReady(true);
+  }, [user, setDocuments]);
+
+  return user && documentReady
+    ? <CollaborativeEditor />
+    : <p>Preparing collaboration...</p>;
+}
+
+<VeltProvider apiKey="YOUR_API_KEY" authProvider={authProvider}>
+  <CollaborationScope />
+</VeltProvider>
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Authenticate before setting the document. Wait for Velt readiness before creating CKEditor:
+
+```ts
+import { initVelt } from '@veltdev/client';
+
+const DOCUMENT_ID = 'article-123';
+const client = await initVelt('YOUR_API_KEY');
+
+await client.identify({
+  userId: 'user-1',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  organizationId: 'org-1',
+});
+
+await client.setDocument(DOCUMENT_ID, {
+  documentName: 'Article 123',
+});
+
+const initSubscription = client.getVeltInitState().subscribe((isReady) => {
+  if (isReady) void initializeCKEditor(client);
+});
+```
+
+</Tab>
+</Tabs>
 
 
 ### Step 3: Configure CKEditor
@@ -44,7 +161,10 @@ import {
   Heading,
   List,
   Highlight,
+  FontColor,
+  FontBackgroundColor,
   Undo,
+  GeneralHtmlSupport,
 } from 'ckeditor5';
 import 'ckeditor5/ckeditor5.css';
 
@@ -59,18 +179,28 @@ const editorConfig = {
     Heading,
     List,
     Highlight,
+    FontColor,
+    FontBackgroundColor,
     Undo,
+    GeneralHtmlSupport,
   ],
   toolbar: [
+    'undo', 'redo', '|',
     'heading', '|',
-    'bold', 'italic', 'underline', 'highlight', '|',
-    'bulletedList', 'numberedList', '|',
-    'undo', 'redo',
+    'bold', 'italic', 'underline', '|',
+    'fontColor', 'fontBackgroundColor', 'highlight', '|',
+    'bulletedList', 'numberedList',
   ],
 };
 ```
 
 Use your commercial CKEditor license key instead of `GPL` when required by your distribution.
+
+CKEditor serializes highlights as `<mark>` elements. This markup persists through realtime sync, force reset, and version restore:
+
+```html
+<mark class="marker-yellow" style="background-color:#fff59d;">Highlighted</mark>
+```
 
 
 ### Step 4: Initialize Collaborative Editor
@@ -78,6 +208,8 @@ Use your commercial CKEditor license key instead of `GPL` when required by your 
 - Pass an `editorId` to uniquely identify the shared editor.
 - Do not pass CKEditor React's `data` or `onReady` to the drop-in component; the CRDT wrapper owns content and editor capture.
 - Use `initialContent` as HTML seed content for a new shared document.
+
+The wrapper registers its Yjs fragment observer before the Store loads remote state. This ordering is required: attaching the observer after `Store.initialize()` can miss the initial server hydration.
 
 <Tabs>
 <Tab title="React Component">
@@ -89,7 +221,7 @@ function CollaborativeEditor() {
   return (
     <CKEditorCrdtEditor
       editor={ClassicEditor}
-      editorId="my-ckeditor-editor"
+      editorId={DOCUMENT_ID}
       initialContent="<p>Start writing here...</p>"
       config={editorConfig}
       cursorData={{ name: 'Ada', color: '#0f766e' }}
@@ -121,7 +253,7 @@ function CollaborativeEditor() {
     status,
     error,
   } = useCollaboration({
-    editorId: 'my-ckeditor-editor',
+    editorId: DOCUMENT_ID,
     initialContent: '<p>Start writing here...</p>',
     onError: (err) => console.error('Collaboration error:', err),
   });
@@ -146,29 +278,44 @@ function CollaborativeEditor() {
 <Warning>When using the hook, keep `data` empty and do not update it from React state. Forward `onAfterDestroy` to `editorRef(null)` so the manager releases a destroyed editor instance.</Warning>
 
 </Tab>
-<Tab title="Imperative API">
+<Tab title="Other Frameworks">
 
-```tsx
-import { createCollaboration } from '@veltdev/ckeditor-crdt-react';
+```ts
+import { createCollaboration } from '@veltdev/ckeditor-crdt';
 
-const manager = await createCollaboration({
-  editorId: 'my-ckeditor-editor',
-  veltClient: client,
-  editor,
-  initialContent: '<p>Start writing here...</p>',
-  onError: (error) => console.error('Collaboration error:', error),
-});
+async function initializeCKEditor(client) {
+  const editor = await ClassicEditor.create(
+    document.querySelector('#editor')!,
+    editorConfig,
+  );
+
+  const manager = await createCollaboration({
+    editorId: DOCUMENT_ID,
+    veltClient: client,
+    editor,
+    initialContent: '<p>Start writing here...</p>',
+    debounceMs: 125,
+    cursorData: { name: 'Ada', color: '#0f766e' },
+    cursorsContainer: document.querySelector<HTMLElement>('#editor-surface'),
+    onError: (error) => console.error('Collaboration error:', error),
+  });
+
+  return { editor, manager };
+}
 ```
 
 </Tab>
 </Tabs>
 
-Set the Velt document context before rendering the editor. The React integration waits until Velt is initialized, a user is authenticated, the CKEditor instance is ready, and `enabled` is not `false`.
+Set the Velt document context before rendering the editor. The React integration explicitly waits until Velt is initialized, a user is authenticated, the CKEditor instance is ready, and `enabled` is not `false`. Document context is a prerequisite, but the hook does not explicitly wait for it.
 
 
 ### Step 5: Status Monitoring (Optional)
 
 The hook returns reactive `status`, `synced` / `isSynced`, `isLoading`, and `error` state. The component offers `onStatusChange` and `onManagerReady` callbacks.
+
+<Tabs>
+<Tab title="React / Next.js">
 
 ```tsx
 useEffect(() => {
@@ -184,6 +331,25 @@ useEffect(() => {
 }, [manager]);
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const offStatus = manager.onStatusChange((status) => {
+  console.log('Status:', status);
+});
+const offSynced = manager.onSynced((synced) => {
+  console.log('Synced:', synced);
+});
+
+// Cleanup:
+offStatus();
+offSynced();
+```
+
+</Tab>
+</Tabs>
+
 <Note>Do not disable local editing simply because the provider is connecting. Local HTML changes synchronize when the connection returns.</Note>
 
 
@@ -191,18 +357,35 @@ useEffect(() => {
 
 The hook keeps version metadata in React state and refreshes it after saves and restores:
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx
 const {
   versions,
   saveVersion,
   restoreVersion,
   refreshVersions,
-} = useCollaboration({ editorId: 'my-ckeditor-editor' });
+} = useCollaboration({ editorId: DOCUMENT_ID });
 
 const versionId = await saveVersion('Approved copy');
 await refreshVersions();
 await restoreVersion(versionId);
 ```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const versionId = await manager.saveVersion('Approved copy');
+let versions = await manager.getVersions();
+
+await manager.restoreVersion(versionId);
+versions = await manager.getVersions();
+```
+
+</Tab>
+</Tabs>
 
 The methods are no-throw: when unavailable they resolve to `''`, `false`, or `[]`. A restore updates the shared HTML for every collaborator.
 
@@ -211,10 +394,13 @@ The methods are no-throw: when unavailable they resolve to `''`, `false`, or `[]
 
 `initialContent` is normalized HTML and is applied once to a new empty shared document:
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx
 <CKEditorCrdtEditor
   editor={ClassicEditor}
-  editorId="my-ckeditor-editor"
+  editorId={DOCUMENT_ID}
   config={editorConfig}
   initialContent="<h2>Project brief</h2><p>Start collaborating...</p>"
 />
@@ -225,12 +411,35 @@ For an explicit reset:
 ```tsx
 <CKEditorCrdtEditor
   editor={ClassicEditor}
-  editorId="my-ckeditor-editor"
+  editorId={DOCUMENT_ID}
   config={editorConfig}
   initialContent="<p>Fresh template</p>"
   forceResetInitialContent
 />
 ```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Add the reset options to the manager creation call from Step 4:
+
+```ts
+const editor = await ClassicEditor.create(
+  document.querySelector('#editor')!,
+  editorConfig,
+);
+
+const manager = await createCollaboration({
+  editorId: DOCUMENT_ID,
+  veltClient: client,
+  editor,
+  initialContent: '<p>Fresh template</p>',
+  forceResetInitialContent: true,
+});
+```
+
+</Tab>
+</Tabs>
 
 <Warning>`forceResetInitialContent` replaces existing shared HTML. Do not enable it during normal initialization.</Warning>
 
@@ -239,15 +448,18 @@ For an explicit reset:
 
 Remote carets and selections render in an overlay anchored to CKEditor's editable surface.
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx
 <CKEditorCrdtEditor
   editor={ClassicEditor}
-  editorId="my-ckeditor-editor"
+  editorId={DOCUMENT_ID}
   config={editorConfig}
   cursorData={{
-    name: currentUser.name,
-    color: currentUser.color,
-    colorLight: `${currentUser.color}33`,
+    name: user.name,
+    color: '#2563eb',
+    colorLight: '#2563eb33',
   }}
 />
 ```
@@ -258,8 +470,8 @@ The hook also returns reactive `remoteCursors`:
 
 ```tsx
 const { remoteCursors } = useCollaboration({
-  editorId: 'my-ckeditor-editor',
-  cursorData: { name: currentUser.name, color: currentUser.color },
+  editorId: DOCUMENT_ID,
+  cursorData: { name: user.name, color: '#2563eb' },
 });
 
 return (
@@ -272,6 +484,39 @@ return (
   </ul>
 );
 ```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Pass cursor identity and an optional overlay container when creating the manager:
+
+```ts
+const editor = await ClassicEditor.create(
+  document.querySelector('#editor')!,
+  editorConfig,
+);
+
+const manager = await createCollaboration({
+  editorId: DOCUMENT_ID,
+  veltClient: client,
+  editor,
+  cursorData: {
+    name: 'Ada Lovelace',
+    color: '#2563eb',
+    colorLight: '#2563eb33',
+  },
+  cursorsContainer: document.querySelector<HTMLElement>('#editor-surface'),
+});
+
+const offRemoteCursors = manager.onRemoteCursorsChange((cursors) => {
+  console.log('Remote cursors:', cursors);
+});
+```
+
+Set `cursorsContainer: null` to keep awareness data without rendering the overlay. Call `offRemoteCursors()` during cleanup.
+
+</Tab>
+</Tabs>
 
 Optional host styling:
 
@@ -287,6 +532,7 @@ Optional host styling:
   position: absolute;
 }
 
+.velt-ckeditor-remote-cursor,
 .velt-ckeditor-remote-cursor-caret {
   border-radius: 999px;
   min-height: 18px;
@@ -307,12 +553,21 @@ Optional host styling:
   position: absolute;
   white-space: nowrap;
 }
+
 ```
+
+The built-in overlay creates `.velt-ckeditor-remote-cursor`, `.velt-ckeditor-remote-cursor-caret`, `.velt-ckeditor-remote-cursor-label`, and `.velt-ckeditor-remote-selection` elements. Cursor labels also carry the collaborator name in `data-velt-cursor-name` for selectors, tests, or custom styling.
 
 
 ### Step 9: CRDT Event Subscription (Optional)
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx
+import { useEffect } from 'react';
+import { useVeltClient } from '@veltdev/react';
+
 const { client } = useVeltClient();
 
 useEffect(() => {
@@ -326,8 +581,28 @@ useEffect(() => {
 }, [client]);
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const crdtSubscription = client
+  .getCrdtElement()
+  .on('updateData')
+  .subscribe((event) => {
+    if (event) console.log('CRDT update:', event);
+  });
+
+// Cleanup:
+crdtSubscription.unsubscribe();
+```
+
+</Tab>
+</Tabs>
 
 ### Step 10: Custom Encryption (Optional)
+
+<Tabs>
+<Tab title="React / Next.js">
 
 ```tsx
 const encryptionProvider = {
@@ -335,10 +610,29 @@ const encryptionProvider = {
   decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
 };
 
-<VeltProvider apiKey="YOUR_API_KEY" encryptionProvider={encryptionProvider}>
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  authProvider={authProvider}
+  encryptionProvider={encryptionProvider}
+>
   ...
 </VeltProvider>
 ```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Set encryption before creating CKEditor collaboration:
+
+```ts
+client.setEncryptionProvider({
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+});
+```
+
+</Tab>
+</Tabs>
 
 See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
  · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
@@ -350,23 +644,56 @@ See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryp
 
 Use `onError` for collaboration errors and `onCKEditorError` for official CKEditor React watchdog errors:
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx
 <CKEditorCrdtEditor
   editor={ClassicEditor}
-  editorId="my-ckeditor-editor"
+  editorId={DOCUMENT_ID}
   config={editorConfig}
   onError={(error) => console.error('Collaboration:', error)}
   onCKEditorError={(error, details) => console.error('CKEditor:', error, details)}
 />
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+The direct manager reports collaboration errors through `onError`. Handle CKEditor creation errors separately:
+
+```ts
+try {
+  const editor = await ClassicEditor.create(
+    document.querySelector('#editor')!,
+    editorConfig,
+  );
+
+  const manager = await createCollaboration({
+    editorId: DOCUMENT_ID,
+    veltClient: client,
+    editor,
+    onError: (error) => {
+      console.error('CKEditor collaboration error:', error);
+    },
+  });
+} catch (error) {
+  console.error('CKEditor creation failed:', error);
+}
+```
+
+</Tab>
+</Tabs>
 
 ### Step 12: Access Yjs Internals (Advanced)
 
 The hook's `primitives` object groups lower-level resources:
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx
-const { primitives } = useCollaboration({ editorId: 'my-ckeditor-editor' });
+const { primitives } = useCollaboration({ editorId: DOCUMENT_ID });
 
 const editor = primitives?.editor;
 const doc = primitives?.doc;
@@ -385,13 +712,40 @@ const html = manager.getHtml();
 manager.setHtml('<p>Replacement content</p>');
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const doc = manager.getDoc();
+const xmlFragment = manager.getXmlFragment();
+const provider = manager.getProvider();
+const providerAdapter = manager.getProviderAdapter();
+const awareness = manager.getAwareness();
+const undoManager = manager.getUndoManager();
+const store = manager.getStore();
+
+const html = manager.getHtml();
+manager.setHtml('<p>Replacement content</p>');
+
+// Collaboration-aware application controls:
+undoManager?.undo();
+undoManager?.redo();
+```
+
+</Tab>
+</Tabs>
+
+The CKEditor source build includes its `Undo` plugin for the native toolbar. For custom collaboration-aware controls, use the manager's Yjs `UndoManager`; do not trigger both history paths from the same action.
 
 ### Step 13: Enable, Disable, and Cleanup
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx
 const collaboration = useCollaboration({
-  editorId: 'my-ckeditor-editor',
-  enabled: Boolean(currentUser && workspaceReady),
+  editorId: DOCUMENT_ID,
+  enabled: Boolean(user && documentReady),
 });
 ```
 
@@ -399,6 +753,24 @@ Changing `enabled` to `false` destroys the current manager; changing it back rei
 
 If you render CKEditor yourself, the editor remains application-owned. Forward `onAfterDestroy` to `editorRef(null)` and destroy CKEditor according to its normal lifecycle.
 
+</Tab>
+<Tab title="Other Frameworks">
+
+Keep every disposer. Destroy the manager before destroying the application-owned CKEditor instance:
+
+```ts
+crdtSubscription.unsubscribe();
+offRemoteCursors();
+offStatus();
+offSynced();
+initSubscription.unsubscribe();
+
+manager.destroy();
+await editor.destroy();
+```
+
+</Tab>
+</Tabs>
 
 ## Notes
 
@@ -406,8 +778,13 @@ If you render CKEditor yourself, the editor remains application-owned. Forward `
 - **CKEditor configuration**: Include every plugin used by the toolbar and provide the correct CKEditor license key.
 - **Unique editorId**: Collaborators must share the same Velt document context and editor ID.
 - **HTML data model**: The adapter stores normalized HTML in a Yjs XML fragment and preserves local selection while applying remote content.
+- **Initial remote hydration**: The manager registers its Yjs fragment observer before `Store.initialize()`. Preserve that ordering in custom integrations so server state loaded during initialization is not missed.
 - **Remote cursors**: The adapter renders an overlay and also exposes normalized cursor state for custom UI.
 - **StrictMode-safe**: The hook destroys stale managers during React remounts and dependency changes.
+- **React readiness**: The hook waits for Velt initialization, an authenticated user, the CKEditor instance, and `enabled`. It does not explicitly wait for document context, so set the document first.
+- **Editor-first direct setup**: Other frameworks create CKEditor before creating the collaboration manager.
+- **Other Frameworks lifecycle**: Unsubscribe callbacks, destroy the manager, and then destroy the application-owned CKEditor instance.
+- **One dependency instance**: Deduplicate `ckeditor5`, `yjs`, `y-protocols`, and `lib0` in linked or monorepo builds.
 - **Initial content**: Seed HTML is applied once unless an explicit reset is requested.
 - **Production authentication**: Use Velt's recommended server-backed authentication flow.
 
@@ -424,7 +801,7 @@ If you render CKEditor yourself, the editor remains application-owned. Forward `
 - Toolbar item unavailable: Add its CKEditor plugin to `config.plugins`.
 - License error: Provide `GPL` only for a GPL-compatible use, otherwise use your commercial license key.
 - Content does not sync: Remove controlled `data` updates and confirm both clients use the same document and `editorId`.
-- Manager never appears: Confirm Velt is initialized, a user is identified, and CKEditor's `onReady` fired.
+- Manager never appears: Confirm the document context was set first, Velt is initialized, a user is identified, and CKEditor's `onReady` fired. The document is a prerequisite, not an explicit hook wait condition.
 - Cursors not visible: Ensure `cursorsContainer` is not `null` and the editable element is mounted.
 - Stale manager after watchdog restart: Forward `onAfterDestroy` when using the hook directly.
 
@@ -435,15 +812,17 @@ Use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setu
 
 ## Complete Example
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx Complete App.tsx expandable lines
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CKEditorCrdtEditor } from '@veltdev/ckeditor-crdt-react';
 import type { CollaborationManager, SyncStatus } from '@veltdev/ckeditor-crdt-react';
 import {
   VeltProvider,
   useCurrentUser,
-  useSetDocument,
-  useVeltClient,
+  useSetDocuments,
 } from '@veltdev/react';
 import {
   ClassicEditor,
@@ -455,7 +834,10 @@ import {
   Heading,
   List,
   Highlight,
+  FontColor,
+  FontBackgroundColor,
   Undo,
+  GeneralHtmlSupport,
 } from 'ckeditor5';
 import 'ckeditor5/ckeditor5.css';
 
@@ -472,64 +854,63 @@ const editorConfig = {
     Heading,
     List,
     Highlight,
+    FontColor,
+    FontBackgroundColor,
     Undo,
+    GeneralHtmlSupport,
   ],
   toolbar: [
+    'undo', 'redo', '|',
     'heading', '|',
-    'bold', 'italic', 'underline', 'highlight', '|',
-    'bulletedList', 'numberedList', '|',
-    'undo', 'redo',
+    'bold', 'italic', 'underline', '|',
+    'fontColor', 'fontBackgroundColor', 'highlight', '|',
+    'bulletedList', 'numberedList',
   ],
 };
 
-const USERS = {
-  ada: {
-    userId: 'ada',
-    name: 'Ada Lovelace',
-    email: 'ada@example.com',
-    organizationId: 'my-org-id',
-    color: '#2563eb',
-  },
-  grace: {
-    userId: 'grace',
-    name: 'Grace Hopper',
-    email: 'grace@example.com',
-    organizationId: 'my-org-id',
-    color: '#0f766e',
-  },
+const USER = {
+  userId: 'ada',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  organizationId: 'my-org-id',
+  color: '#2563eb',
 };
 
-function Header() {
-  const { client } = useVeltClient();
-  const user = useCurrentUser();
-
-  return (
-    <header>
-      {user ? (
-        <>
-          <span>Welcome, {user.name}</span>
-          <button onClick={() => client?.signOutUser()}>Logout</button>
-        </>
-      ) : (
-        Object.values(USERS).map((candidate) => (
-          <button key={candidate.userId} onClick={() => client?.identify(candidate)}>
-            Login as {candidate.name}
-          </button>
-        ))
-      )}
-    </header>
-  );
-}
+const authProvider = {
+  user: USER,
+  retryConfig: { retryCount: 3, retryDelay: 1000 },
+  generateToken: async () => {
+    const response = await fetch('/api/velt/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(USER),
+    });
+    const { token } = await response.json();
+    return token;
+  },
+};
 
 function CollaborativeEditor() {
   const user = useCurrentUser();
   const [status, setStatus] = useState<SyncStatus>('connecting');
   const [manager, setManager] = useState<CollaborationManager | null>(null);
   const [versionName, setVersionName] = useState('');
+  const { setDocuments } = useSetDocuments();
+  const [documentReady, setDocumentReady] = useState(false);
 
-  useSetDocument(DOCUMENT_ID, { documentName: 'CKEditor CRDT Demo' });
+  useEffect(() => {
+    if (!user) {
+      setDocumentReady(false);
+      return;
+    }
+    setDocuments([{
+      id: DOCUMENT_ID,
+      metadata: { documentName: 'CKEditor CRDT Demo' },
+    }]);
+    setDocumentReady(true);
+  }, [user, setDocuments]);
 
-  if (!user) return <p>Choose a user to begin.</p>;
+  if (!user || !documentReady) return <p>Preparing collaboration...</p>;
 
   const saveVersion = async () => {
     if (!manager || !versionName.trim()) return;
@@ -551,7 +932,7 @@ function CollaborativeEditor() {
         editorId={DOCUMENT_ID}
         config={editorConfig}
         initialContent="<h2>Shared document</h2><p>Start collaborating...</p>"
-        cursorData={{ name: user.name, color: user.color }}
+        cursorData={{ name: user.name, color: '#2563eb' }}
         onStatusChange={setStatus}
         onManagerReady={setManager}
         onError={console.error}
@@ -562,23 +943,188 @@ function CollaborativeEditor() {
 
 export default function App() {
   return (
-    <VeltProvider apiKey="YOUR_VELT_API_KEY">
-      <Header />
+    <VeltProvider
+      apiKey="YOUR_VELT_API_KEY"
+      authProvider={authProvider}
+    >
       <CollaborativeEditor />
     </VeltProvider>
   );
 }
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+Create the CKEditor instance first. Only after it resolves should you pass that exact instance to the framework-agnostic collaboration manager.
+
+```ts Complete app.ts expandable lines
+import { initVelt } from '@veltdev/client';
+import {
+  createCollaboration,
+  type CollaborationManager,
+} from '@veltdev/ckeditor-crdt';
+import {
+  ClassicEditor,
+  Essentials,
+  Paragraph,
+  Bold,
+  Italic,
+  Underline,
+  Heading,
+  List,
+  Highlight,
+  FontColor,
+  FontBackgroundColor,
+  Undo,
+  GeneralHtmlSupport,
+} from 'ckeditor5';
+import 'ckeditor5/ckeditor5.css';
+
+const DOCUMENT_ID = 'ckeditor-crdt-demo-doc-1';
+
+const editorConfig = {
+  licenseKey: 'GPL',
+  plugins: [
+    Essentials,
+    Paragraph,
+    Bold,
+    Italic,
+    Underline,
+    Heading,
+    List,
+    Highlight,
+    FontColor,
+    FontBackgroundColor,
+    Undo,
+    GeneralHtmlSupport,
+  ],
+  toolbar: [
+    'undo', 'redo', '|',
+    'heading', '|',
+    'bold', 'italic', 'underline', '|',
+    'fontColor', 'fontBackgroundColor', 'highlight', '|',
+    'bulletedList', 'numberedList',
+  ],
+};
+
+let resources: {
+  editor: Awaited<ReturnType<typeof ClassicEditor.create>>;
+  manager: CollaborationManager;
+  offStatus: () => void;
+  offSynced: () => void;
+  offRemoteCursors: () => void;
+  crdtSubscription: { unsubscribe: () => void };
+} | null = null;
+
+async function initializeCKEditor(client) {
+  const editor = await ClassicEditor.create(
+    document.querySelector('#editor')!,
+    editorConfig,
+  );
+
+  const manager = await createCollaboration({
+    editorId: DOCUMENT_ID,
+    veltClient: client,
+    editor,
+    initialContent: '<h2>Shared document</h2><p>Start collaborating...</p>',
+    debounceMs: 125,
+    cursorData: {
+      name: 'Ada Lovelace',
+      color: '#2563eb',
+      colorLight: '#2563eb33',
+    },
+    cursorsContainer: document.querySelector<HTMLElement>('#editor-surface'),
+    onError: (error) => console.error('Collaboration error:', error),
+  });
+
+  if (!manager.getXmlFragment() || !manager.getEditor()) {
+    manager.destroy();
+    await editor.destroy();
+    throw new Error('CKEditor collaboration did not initialize');
+  }
+
+  const offStatus = manager.onStatusChange((status) => {
+    document.getElementById('status')!.textContent = status;
+  });
+  const offSynced = manager.onSynced((synced) => {
+    document.getElementById('synced')!.textContent = synced ? 'Yes' : 'No';
+  });
+  const offRemoteCursors = manager.onRemoteCursorsChange((cursors) => {
+    console.log('Remote cursors:', cursors);
+  });
+  const crdtSubscription = client
+    .getCrdtElement()
+    .on('updateData')
+    .subscribe((event) => {
+      if (event) console.log('CRDT update:', event);
+    });
+
+  document.getElementById('undo')?.addEventListener('click', () => {
+    manager.getUndoManager()?.undo();
+  });
+  document.getElementById('redo')?.addEventListener('click', () => {
+    manager.getUndoManager()?.redo();
+  });
+  document.getElementById('save-version')?.addEventListener('click', async () => {
+    const versionId = await manager.saveVersion('Approved copy');
+    console.log('Saved version:', versionId, await manager.getVersions());
+  });
+
+  resources = {
+    editor,
+    manager,
+    offStatus,
+    offSynced,
+    offRemoteCursors,
+    crdtSubscription,
+  };
+}
+
+const client = await initVelt('YOUR_VELT_API_KEY');
+
+await client.identify({
+  userId: 'ada',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  organizationId: 'my-org-id',
+});
+
+await client.setDocument(DOCUMENT_ID, {
+  documentName: 'CKEditor CRDT Demo',
+});
+
+let initializationStarted = false;
+const initSubscription = client.getVeltInitState().subscribe((isReady) => {
+  if (!isReady || initializationStarted) return;
+  initializationStarted = true;
+  void initializeCKEditor(client);
+});
+
+window.addEventListener('beforeunload', () => {
+  resources?.crdtSubscription.unsubscribe();
+  resources?.offRemoteCursors();
+  resources?.offStatus();
+  resources?.offSynced();
+  initSubscription.unsubscribe();
+
+  resources?.manager.destroy();
+  void resources?.editor.destroy();
+});
+```
+
+</Tab>
+</Tabs>
+
 
 ## How It Works
 
-1. Set the Velt document context before rendering the editor. The wrapper initializes after Velt is ready, a user is authenticated, and the CKEditor instance is available.
-2. The manager opens a Velt CRDT store keyed by `editorId` and stores normalized HTML in a Yjs XML fragment.
-3. CKEditor model changes are debounced and serialized into the shared document.
-4. Remote document changes update CKEditor while preserving the local DOM selection when possible.
-5. Yjs awareness carries user and selection metadata for the remote cursor overlay.
-6. Velt persists CRDT updates and named versions.
+1. React applications initialize Velt through an authenticated `VeltProvider`; other frameworks use `initVelt()`. Both authenticate before setting the shared document.
+2. The React hook explicitly waits for Velt initialization, an authenticated user, the CKEditor instance, and `enabled`. The document remains a prerequisite but is not an explicit hook wait condition.
+3. Direct integrations create CKEditor first and pass the resolved editor instance to `createCollaboration()`.
+4. The manager opens a Velt CRDT store keyed by `editorId`, registers the fragment observer, and only then initializes the Store so initial remote HTML is observed.
+5. CKEditor model changes are debounced into shared transactions; remote changes update CKEditor while preserving the local selection when possible.
+6. Awareness carries user and selection metadata for remote cursor overlays, and Velt persists CRDT updates and named versions.
 
 
 ## APIs
@@ -622,6 +1168,41 @@ export default function App() {
 | `restoreVersion(id)` | `Promise<boolean>` | Restores a version. |
 | `refreshVersions()` | `Promise<Version[]>` | Reloads versions. |
 | `destroy()` | `void` | Destroys collaboration early. |
+
+
+### Other Frameworks: createCollaboration()
+
+```ts
+import { createCollaboration } from '@veltdev/ckeditor-crdt';
+
+const editor = await ClassicEditor.create(
+  document.querySelector('#editor')!,
+  editorConfig,
+);
+
+const manager = await createCollaboration({
+  editorId: DOCUMENT_ID,
+  veltClient: client,
+  editor,
+  initialContent: '<p>Start writing here...</p>',
+  debounceMs: 125,
+  cursorData: { name: 'Ada', color: '#0f766e' },
+  cursorsContainer: document.querySelector<HTMLElement>('#editor-surface'),
+  onError: console.error,
+});
+```
+
+| Config | Type | Required | Description |
+|---|---|---|---|
+| `editorId` | `string` | Yes | Stable key for the shared CKEditor document. |
+| `veltClient` | `Velt` | Yes | Initialized, authenticated Velt client with a current document. |
+| `editor` | `CKEditorEditorLike` | Yes | CKEditor instance created before the manager. |
+| `initialContent` | `string` | No | Normalized HTML seed for a new, empty shared document. |
+| `forceResetInitialContent` | `boolean` | No | Explicitly replaces existing shared HTML. |
+| `cursorData` | `CKEditorCursorData` | No | Awareness identity and cursor colors. |
+| `cursorsContainer` | `HTMLElement \| null` | No | Cursor overlay host; `null` disables overlay DOM. |
+| `debounceMs` | `number` | No | Editor-to-CRDT write debounce. |
+| `onError` | `(error: Error) => void` | No | Receives non-fatal initialization and runtime errors. |
 
 
 ### CollaborationManager Methods

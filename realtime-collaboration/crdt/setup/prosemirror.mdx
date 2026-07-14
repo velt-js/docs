@@ -3,34 +3,158 @@ title: ProseMirror Editor
 description: Setup Multiplayer Editing for ProseMirror Editor.
 ---
 
-Enable real-time collaborative editing on ProseMirror Editors. The collaboration editing engine is built on top of [Yjs](https://docs.yjs.dev/), [y-prosemirror](https://github.com/yjs/y-prosemirror), and Velt SDK.
+The `@veltdev/prosemirror-crdt-react` and `@veltdev/prosemirror-crdt` libraries enable real-time collaborative editing in ProseMirror. The collaboration engine is built on [Yjs](https://docs.yjs.dev/), [y-prosemirror](https://github.com/yjs/y-prosemirror), and the Velt SDK.
 
 ## Prerequisites
 
 - Node.js (v14 or higher)
-- React (v18 or higher)
 - A Velt account with an API key ([sign up](https://console.velt.dev/))
+- React (v18 or higher) when using the React wrapper
 - Optional: TypeScript for type safety
 
 ## Setup
 
 ### Step 1: Install Dependencies
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```bash
 npm install @veltdev/prosemirror-crdt-react @veltdev/prosemirror-crdt @veltdev/react @veltdev/types prosemirror-model prosemirror-schema-basic prosemirror-schema-list prosemirror-state prosemirror-view prosemirror-keymap prosemirror-commands y-prosemirror yjs
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+```bash
+npm install @veltdev/prosemirror-crdt @veltdev/client prosemirror-model prosemirror-schema-basic prosemirror-schema-list prosemirror-state prosemirror-view prosemirror-keymap prosemirror-commands y-prosemirror yjs
+```
+
+</Tab>
+</Tabs>
+
 Resolve one copy of `yjs` and `y-prosemirror` in your application. Duplicate Yjs constructors can break plugin bindings and awareness.
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  resolve: {
+    dedupe: [
+      'yjs',
+      'y-prosemirror',
+      'prosemirror-model',
+      'prosemirror-state',
+      'prosemirror-view',
+      'prosemirror-transform',
+    ],
+  },
+});
+```
 
 
 ### Step 2: Setup Velt
 
-Initialize the Velt client by following the [Velt Setup Docs](/get-started/quickstart). This is required for the collaboration engine to work.
+Initialize Velt, authenticate a user, and set a stable document context before collaboration starts. Follow the [Velt Setup Docs](/get-started/quickstart) for the production token endpoint used by `authProvider`.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+import { useEffect, useState } from 'react';
+import {
+  VeltProvider,
+  useCurrentUser,
+  useSetDocuments,
+} from '@veltdev/react';
+
+const DOCUMENT_ID = 'article-123';
+const USER = {
+  userId: 'user-1',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  organizationId: 'org-1',
+};
+
+const authProvider = {
+  user: USER,
+  retryConfig: { retryCount: 3, retryDelay: 1000 },
+  generateToken: async () => {
+    const response = await fetch('/api/velt/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(USER),
+    });
+    const { token } = await response.json();
+    return token;
+  },
+};
+
+function CollaborationScope() {
+  const user = useCurrentUser();
+  const { setDocuments } = useSetDocuments();
+  const [documentReady, setDocumentReady] = useState(false);
+
+  useEffect(() => {
+    if (!user) {
+      setDocumentReady(false);
+      return;
+    }
+    setDocuments([{
+      id: DOCUMENT_ID,
+      metadata: { documentName: 'Article 123' },
+    }]);
+    setDocumentReady(true);
+  }, [user, setDocuments]);
+
+  return user && documentReady
+    ? <CollaborativeEditor />
+    : <p>Preparing collaboration...</p>;
+}
+
+<VeltProvider apiKey="YOUR_API_KEY" authProvider={authProvider}>
+  <CollaborationScope />
+</VeltProvider>
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Authenticate before setting the document, then wait for Velt readiness before building the ProseMirror manager and view:
+
+```ts
+import { initVelt } from '@veltdev/client';
+
+const DOCUMENT_ID = 'article-123';
+const client = await initVelt('YOUR_API_KEY');
+
+await client.identify({
+  userId: 'user-1',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  organizationId: 'org-1',
+});
+
+await client.setDocument(DOCUMENT_ID, {
+  documentName: 'Article 123',
+});
+
+const initSubscription = client.getVeltInitState().subscribe((isReady) => {
+  if (isReady) void initializeProseMirror(client);
+});
+```
+
+</Tab>
+</Tabs>
 
 
 ### Step 3: Create a Schema
 
 All collaborators must use a compatible ProseMirror schema. The React package includes a default schema with basic nodes, list nodes, and a highlight mark:
+
+<Tabs>
+<Tab title="React / Next.js">
 
 ```tsx
 import { createDefaultProseMirrorSchema } from '@veltdev/prosemirror-crdt-react';
@@ -38,9 +162,24 @@ import { createDefaultProseMirrorSchema } from '@veltdev/prosemirror-crdt-react'
 const schema = createDefaultProseMirrorSchema();
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+Use your application schema. This example uses the basic ProseMirror schema:
+
+```ts
+import { schema } from 'prosemirror-schema-basic';
+```
+
+</Tab>
+</Tabs>
+
 Create the schema once at module scope or memoize it. Do not construct a new schema on every render.
 
 For a custom highlight mark:
+
+<Tabs>
+<Tab title="React / Next.js">
 
 ```tsx
 import { Schema } from 'prosemirror-model';
@@ -65,6 +204,50 @@ const schema = new Schema({
 });
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+Define the mark in the schema owned by your application:
+
+```ts
+import { Schema, type MarkSpec } from 'prosemirror-model';
+import { schema as basicSchema } from 'prosemirror-schema-basic';
+import { addListNodes } from 'prosemirror-schema-list';
+
+const highlight: MarkSpec = {
+  attrs: { color: { default: '#fef08a' } },
+  parseDOM: [{
+    tag: 'span[data-highlight]',
+    getAttrs: (element) => ({
+      color: (element as HTMLElement).dataset.highlightColor || '#fef08a',
+    }),
+  }],
+  toDOM: (mark) => [
+    'span',
+    {
+      'data-highlight': 'true',
+      'data-highlight-color': mark.attrs.color,
+      style: `background-color: ${mark.attrs.color}`,
+    },
+    0,
+  ],
+};
+
+const nodes = addListNodes(
+  basicSchema.spec.nodes,
+  'paragraph block*',
+  'block',
+);
+
+const schema = new Schema({
+  nodes,
+  marks: basicSchema.spec.marks.addToEnd('highlight', highlight),
+});
+```
+
+</Tab>
+</Tabs>
+
 <Warning>Schema node and mark names are part of the shared document contract. Deploy schema changes as explicit migrations, especially when older clients may still be connected.</Warning>
 
 
@@ -86,7 +269,7 @@ const schema = createDefaultProseMirrorSchema();
 function CollaborativeEditor() {
   return (
     <ProseMirrorCrdtEditor
-      editorId="my-prosemirror-editor"
+      editorId={DOCUMENT_ID}
       schema={schema}
       initialContent="Start writing here..."
       cursorData={{ name: 'Ada', color: '#2563eb' }}
@@ -122,7 +305,7 @@ function CollaborativeEditor() {
     status,
     error,
   } = useCollaboration({
-    editorId: 'my-prosemirror-editor',
+    editorId: DOCUMENT_ID,
     schema,
     initialContent: 'Start writing here...',
     onError: (err) => console.error('Collaboration error:', err),
@@ -140,22 +323,47 @@ function CollaborativeEditor() {
 ```
 
 </Tab>
-<Tab title="Imperative API">
+<Tab title="Other Frameworks">
 
 Create the manager without automatic initialization, attach the collaboration plugins first, and then initialize. This ordering prevents remote updates from arriving before the `EditorView` can receive them.
 
-```tsx
-import { createCollaboration } from '@veltdev/prosemirror-crdt';
+```ts
+import {
+  createCollaboration,
+  redo,
+  undo,
+} from '@veltdev/prosemirror-crdt';
+import { EditorState } from 'prosemirror-state';
+import { EditorView } from 'prosemirror-view';
+import { keymap } from 'prosemirror-keymap';
+import { baseKeymap } from 'prosemirror-commands';
 
 const manager = await createCollaboration({
-  editorId: 'my-prosemirror-editor',
+  editorId: DOCUMENT_ID,
   veltClient: client,
   schema,
   initialContent: 'Start writing here...',
   autoInitialize: false,
 });
 
-const view = manager.createEditorView(mountElement, { schema });
+const collaboration = manager.createCollaborationPlugins({
+  plugins: [
+    keymap({
+      'Mod-z': undo,
+      'Mod-y': redo,
+      'Mod-Shift-z': redo,
+    }),
+    keymap(baseKeymap),
+  ],
+});
+
+const state = EditorState.create({
+  schema,
+  plugins: collaboration.plugins,
+});
+
+const view = new EditorView(mountElement, { state });
+manager.attachEditorView(view);
 await manager.initialize();
 ```
 
@@ -166,6 +374,9 @@ await manager.initialize();
 ### Step 5: Add Plugins, Keymaps, and CRDT Undo
 
 Extra plugins are appended after the Yjs sync, cursor, and undo plugins:
+
+<Tabs>
+<Tab title="React / Next.js">
 
 ```tsx
 import { keymap } from 'prosemirror-keymap';
@@ -184,7 +395,7 @@ const plugins = [
 ];
 
 <ProseMirrorCrdtEditor
-  editorId="my-prosemirror-editor"
+  editorId={DOCUMENT_ID}
   schema={schema}
   plugins={plugins}
 />
@@ -192,16 +403,46 @@ const plugins = [
 
 You can instead pass commands through the `keymap` prop; the manager combines them with Yjs-aware undo and redo.
 
-<Warning>Import the Yjs-aware `undo` and `redo` commands from `@veltdev/prosemirror-crdt-react`. Do not add `prosemirror-history` to a collaborative state because it creates a separate local history that does not understand remote CRDT transactions.</Warning>
+</Tab>
+<Tab title="Other Frameworks">
+
+Import the public commands from `@veltdev/prosemirror-crdt` and pass them while creating the collaboration plugin set in Step 4:
+
+```ts
+import { redo, undo } from '@veltdev/prosemirror-crdt';
+import { baseKeymap, toggleMark } from 'prosemirror-commands';
+import { keymap } from 'prosemirror-keymap';
+
+const collaboration = manager.createCollaborationPlugins({
+  keymap: {
+    'Mod-z': undo,
+    'Mod-y': redo,
+    'Mod-Shift-z': redo,
+    'Mod-b': toggleMark(schema.marks.strong),
+    'Mod-i': toggleMark(schema.marks.em),
+  },
+  plugins: [keymap(baseKeymap)],
+});
+```
+
+Use this `collaboration.plugins` array when creating the `EditorState`; do not call `createCollaborationPlugins()` a second time for the same state.
+
+</Tab>
+</Tabs>
+
+<Warning>Import Yjs-aware `undo` and `redo` from `@veltdev/prosemirror-crdt-react` or `@veltdev/prosemirror-crdt`, according to your integration. Do not import them directly from `y-prosemirror` in application code, and do not add `prosemirror-history` because it creates a separate local history that does not understand remote CRDT transactions.</Warning>
 
 
 ### Step 6: Bring Your Own EditorView (Optional)
+
+<Tabs>
+<Tab title="React / Next.js">
 
 Pass an existing `EditorView` to the hook when your application owns its lifecycle:
 
 ```tsx
 useCollaboration({
-  editorId: 'my-prosemirror-editor',
+  editorId: DOCUMENT_ID,
   schema,
   editorView: existingView,
   destroyViewOnUnmount: false,
@@ -210,6 +451,32 @@ useCollaboration({
 
 The hook attaches the view to the manager but does not rebuild an existing state's plugin list. Ensure the view was created with `manager.createCollaborationPlugins()` or use `manager.createEditorState()` / `manager.createEditorView()`.
 
+</Tab>
+<Tab title="Other Frameworks">
+
+When your application owns the view, use the same deferred lifecycle as Step 4: create the manager with `autoInitialize: false`, create the collaboration plugins and state, create the view, attach it, and initialize last.
+
+```ts
+const manager = await createCollaboration({
+  editorId: DOCUMENT_ID,
+  veltClient: client,
+  schema,
+  autoInitialize: false,
+});
+
+const collaboration = manager.createCollaborationPlugins();
+const state = EditorState.create({
+  schema,
+  plugins: collaboration.plugins,
+});
+const view = new EditorView(mountElement, { state });
+
+manager.attachEditorView(view);
+await manager.initialize();
+```
+
+</Tab>
+</Tabs>
 
 ### Step 7: Style Remote Cursors
 
@@ -247,18 +514,39 @@ The hook attaches the view to the manager but does not rebuild an existing state
 }
 ```
 
+The renderer also exposes `[data-remote-cursor]`, `[data-remote-cursor-label]`, and `[data-remote-selection]` attributes. Use these stable hooks for custom styling or automated verification when class names are not sufficient.
+
 Pass `disableCursors` to keep document synchronization enabled without installing the cursor plugin:
+
+<Tabs>
+<Tab title="React / Next.js">
 
 ```tsx
 <ProseMirrorCrdtEditor
-  editorId="my-prosemirror-editor"
+  editorId={DOCUMENT_ID}
   schema={schema}
   disableCursors
 />
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+Set the option when creating the one collaboration plugin set used by the state:
+
+```ts
+const collaboration = manager.createCollaborationPlugins({
+  disableCursors: true,
+});
+```
+
+</Tab>
+</Tabs>
 
 ### Step 8: Status Monitoring (Optional)
+
+<Tabs>
+<Tab title="React / Next.js">
 
 ```tsx
 useEffect(() => {
@@ -276,8 +564,29 @@ useEffect(() => {
 
 The component also accepts `onStatusChange`, and the hook exposes reactive `status`, `synced` / `isSynced`, and `error` state.
 
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const offStatus = manager.onStatusChange((status) => {
+  console.log('Status:', status);
+});
+const offSynced = manager.onSynced((synced) => {
+  console.log('Synced:', synced);
+});
+
+// Cleanup:
+offStatus();
+offSynced();
+```
+
+</Tab>
+</Tabs>
 
 ### Step 9: Version Management (Optional)
+
+<Tabs>
+<Tab title="React / Next.js">
 
 ```tsx
 const {
@@ -286,7 +595,7 @@ const {
   restoreVersion,
   refreshVersions,
 } = useCollaboration({
-  editorId: 'my-prosemirror-editor',
+  editorId: DOCUMENT_ID,
   schema,
 });
 
@@ -295,16 +604,69 @@ await refreshVersions();
 await restoreVersion(versionId);
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const versionId = await manager.saveVersion('Reviewed draft');
+let versions = await manager.getVersions();
+
+await manager.restoreVersion(versionId);
+versions = await manager.getVersions();
+```
+
+</Tab>
+</Tabs>
+
 Restoring a version changes the shared `Y.XmlFragment` for all collaborators. Refresh version metadata after peer version activity.
+
+Version metadata is not part of the shared ProseMirror fragment. If every collaborator displays a version list, broadcast a lightweight awareness field after a successful save or restore and refresh when a peer changes it:
+
+```ts
+const awareness = manager.getAwareness();
+
+function broadcastVersionRefresh(userId: string) {
+  awareness?.setLocalStateField('versionRefresh', {
+    by: userId,
+    at: Date.now(),
+    nonce: Math.random().toString(36).slice(2),
+  });
+}
+
+const seenVersionEvents = new Set<string>();
+async function refreshVersionList() {
+  const nextVersions = await manager.getVersions();
+  // Update your framework or DOM state with nextVersions.
+}
+
+const onAwarenessChange = () => {
+  for (const state of awareness?.getStates().values() ?? []) {
+    const event = state.versionRefresh;
+    if (!event?.nonce || seenVersionEvents.has(event.nonce)) continue;
+    seenVersionEvents.add(event.nonce);
+    void refreshVersionList();
+  }
+};
+
+awareness?.on('change', onAwarenessChange);
+
+// Cleanup:
+awareness?.off('change', onAwarenessChange);
+```
+
+Call `broadcastVersionRefresh(currentUserId)` after `saveVersion()` or `restoreVersion()`. Awareness is only an invalidation signal; always re-fetch the authoritative version list.
 
 
 ### Step 10: Force Reset Initial Content (Optional)
 
 Seed content can be plain text or ProseMirror JSON:
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx
 <ProseMirrorCrdtEditor
-  editorId="my-prosemirror-editor"
+  editorId={DOCUMENT_ID}
   schema={schema}
   initialContent={{
     type: 'doc',
@@ -318,6 +680,33 @@ Seed content can be plain text or ProseMirror JSON:
 />
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+Add the reset flag and replacement content to the deferred manager config from Step 4:
+
+```ts
+const manager = await createCollaboration({
+  editorId: DOCUMENT_ID,
+  veltClient: client,
+  schema,
+  initialContent: {
+    type: 'doc',
+    content: [{
+      type: 'paragraph',
+      content: [{ type: 'text', text: 'Start collaborating.' }],
+    }],
+  },
+  forceResetInitialContent: true,
+  autoInitialize: false,
+});
+```
+
+Continue with `createCollaborationPlugins()`, `EditorState`, `EditorView`, `attachEditorView(view)`, and finally `initialize()` exactly as shown in Step 4.
+
+</Tab>
+</Tabs>
+
 Set `forceResetInitialContent` only for a deliberate reset. The supplied content is parsed using the configured schema.
 
 <Warning>Invalid JSON nodes or marks are rejected by the schema. Validate migrated content before using it as `initialContent`.</Warning>
@@ -325,7 +714,13 @@ Set `forceResetInitialContent` only for a deliberate reset. The supplied content
 
 ### Step 11: CRDT Event Subscription (Optional)
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx
+import { useEffect } from 'react';
+import { useVeltClient } from '@veltdev/react';
+
 const { client } = useVeltClient();
 
 useEffect(() => {
@@ -339,8 +734,28 @@ useEffect(() => {
 }, [client]);
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const crdtSubscription = client
+  .getCrdtElement()
+  .on('updateData')
+  .subscribe((event) => {
+    if (event) console.log('CRDT update:', event);
+  });
+
+// Cleanup:
+crdtSubscription.unsubscribe();
+```
+
+</Tab>
+</Tabs>
 
 ### Step 12: Custom Encryption (Optional)
+
+<Tabs>
+<Tab title="React / Next.js">
 
 ```tsx
 const encryptionProvider = {
@@ -348,10 +763,29 @@ const encryptionProvider = {
   decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
 };
 
-<VeltProvider apiKey="YOUR_API_KEY" encryptionProvider={encryptionProvider}>
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  authProvider={authProvider}
+  encryptionProvider={encryptionProvider}
+>
   ...
 </VeltProvider>
 ```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Call `setEncryptionProvider()` before creating the collaboration manager:
+
+```ts
+client.setEncryptionProvider({
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+});
+```
+
+</Tab>
+</Tabs>
 
 See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
  · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
@@ -361,9 +795,12 @@ See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryp
 
 ### Step 13: Error Handling (Optional)
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx
 const collab = useCollaboration({
-  editorId: 'my-prosemirror-editor',
+  editorId: DOCUMENT_ID,
   schema,
   onError: (error) => console.error('Collaboration error:', error),
 });
@@ -371,8 +808,26 @@ const collab = useCollaboration({
 if (collab.error) return <div>Error: {collab.error.message}</div>;
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+Provide `onError` on the deferred manager config from Step 4:
+
+```ts
+onError: (error) => {
+  console.error('ProseMirror collaboration error:', error);
+},
+```
+
+After creating the plugins, verify `collaboration.plugins.length > 0` before constructing the view. If setup fails, destroy any view that was created and then destroy the manager.
+
+</Tab>
+</Tabs>
 
 ### Step 14: Access Yjs Internals (Advanced)
+
+<Tabs>
+<Tab title="React / Next.js">
 
 ```tsx
 const doc = manager.getDoc();
@@ -384,29 +839,69 @@ const editorView = manager.getEditorView();
 const store = manager.getStore();
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const doc = manager.getDoc();
+const xmlFragment = manager.getXmlFragment();
+const provider = manager.getProvider();
+const awareness = manager.getAwareness();
+const undoManager = manager.getUndoManager();
+const editorView = manager.getEditorView();
+const store = manager.getStore();
+```
+
+</Tab>
+</Tabs>
 
 ### Step 15: Enable, Disable, and Cleanup
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx
 <ProseMirrorCrdtEditor
-  editorId="my-prosemirror-editor"
+  editorId={DOCUMENT_ID}
   schema={schema}
-  enabled={Boolean(currentUser && documentReady)}
+  enabled={Boolean(user && documentReady)}
 />
 ```
 
 The component and hook destroy the manager automatically. By default, the hook also destroys an `EditorView` it created. It does not destroy a consumer-owned view unless you explicitly opt into that lifecycle.
 
+</Tab>
+<Tab title="Other Frameworks">
+
+Unsubscribe callbacks, destroy the `EditorView`, and then destroy the collaboration manager:
+
+```ts
+crdtSubscription.unsubscribe();
+offStatus();
+offSynced();
+initSubscription.unsubscribe();
+
+view.destroy();
+manager.destroy();
+```
+
+The manager owns the provider, awareness listeners, collaboration plugins, and Yjs undo manager. Your application owns the directly constructed `EditorView`.
+
+</Tab>
+</Tabs>
 
 ## Notes
 
 - **Stable schema**: Construct one schema and keep node and mark names compatible across clients.
 - **Plugin order**: Yjs sync, cursor, and undo plugins are installed before consumer plugins.
-- **CRDT history**: Use `y-prosemirror` undo and redo; do not add `prosemirror-history`.
+- **CRDT history**: Import the Yjs-aware `undo` and `redo` commands from the Velt ProseMirror package used by your integration; do not add `prosemirror-history`.
 - **Shared data**: Rich document structure is stored in a `Y.XmlFragment`, not serialized HTML.
+- **Shared content key**: The manager stores that fragment under the `prosemirror` key.
 - **Unique editorId**: Collaborators must share both the Velt document context and `editorId`.
 - **Initial content**: Plain text or ProseMirror JSON is applied once to a new shared fragment.
 - **View ownership**: The hook can create an `EditorView` or attach one owned by the application.
+- **Direct lifecycle**: Create the manager with `autoInitialize: false`, create plugins, create state, create the view, attach it, and call `initialize()` last.
+- **Other Frameworks lifecycle**: Unsubscribe callbacks, destroy the `EditorView`, and then destroy the manager.
 - **Production authentication**: Use Velt's recommended server-backed authentication flow.
 
 
@@ -432,13 +927,15 @@ Use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setu
 
 ## Complete Example
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx Complete App.tsx expandable lines
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
   VeltProvider,
   useCurrentUser,
   useSetDocuments,
-  useVeltClient,
 } from '@veltdev/react';
 import {
   ProseMirrorCrdtEditor,
@@ -464,58 +961,46 @@ const editorPlugins = [
   keymap(baseKeymap),
 ];
 
-const USERS = {
-  ada: {
-    userId: 'ada',
-    name: 'Ada Lovelace',
-    email: 'ada@example.com',
-    organizationId: 'my-org-id',
-    color: '#2563eb',
-  },
-  grace: {
-    userId: 'grace',
-    name: 'Grace Hopper',
-    email: 'grace@example.com',
-    organizationId: 'my-org-id',
-    color: '#0f766e',
-  },
+const USER = {
+  userId: 'ada',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  organizationId: 'my-org-id',
+  color: '#2563eb',
 };
 
-function Header() {
-  const { client } = useVeltClient();
-  const user = useCurrentUser();
-
-  return (
-    <header>
-      {user ? (
-        <>
-          <span>Welcome, {user.name}</span>
-          <button onClick={() => client?.signOutUser()}>Logout</button>
-        </>
-      ) : (
-        Object.values(USERS).map((candidate) => (
-          <button key={candidate.userId} onClick={() => client?.identify(candidate)}>
-            Login as {candidate.name}
-          </button>
-        ))
-      )}
-    </header>
-  );
-}
+const authProvider = {
+  user: USER,
+  retryConfig: { retryCount: 3, retryDelay: 1000 },
+  generateToken: async () => {
+    const response = await fetch('/api/velt/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(USER),
+    });
+    const { token } = await response.json();
+    return token;
+  },
+};
 
 function CollaborativeEditor({ documentId }: { documentId: string }) {
   const user = useCurrentUser();
   const { setDocuments } = useSetDocuments();
+  const [documentReady, setDocumentReady] = useState(false);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setDocumentReady(false);
+      return;
+    }
     setDocuments([{
       id: documentId,
       metadata: { documentName: 'ProseMirror CRDT Demo' },
     }]);
+    setDocumentReady(true);
   }, [user, documentId, setDocuments]);
 
-  if (!user) return <p>Choose a user to begin.</p>;
+  if (!user || !documentReady) return <p>Preparing collaboration...</p>;
 
   return (
     <ProseMirrorCrdtEditor
@@ -523,7 +1008,7 @@ function CollaborativeEditor({ documentId }: { documentId: string }) {
       schema={schema}
       plugins={editorPlugins}
       initialContent="Start collaborating in ProseMirror."
-      cursorData={{ name: user.name, color: user.color }}
+      cursorData={{ name: user.name, color: '#2563eb' }}
       editorClassName="ProseMirror"
       onStatusChange={(status) => console.log('Status:', status)}
       onError={console.error}
@@ -533,8 +1018,10 @@ function CollaborativeEditor({ documentId }: { documentId: string }) {
 
 export default function App() {
   return (
-    <VeltProvider apiKey="YOUR_VELT_API_KEY">
-      <Header />
+    <VeltProvider
+      apiKey="YOUR_VELT_API_KEY"
+      authProvider={authProvider}
+    >
       <CollaborativeEditor documentId={DOCUMENT_ID} />
     </VeltProvider>
   );
@@ -575,14 +1062,155 @@ export default function App() {
 }
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+The direct integration deliberately defers initialization until the collaboration plugins are installed in an `EditorState` and its `EditorView` is attached.
+
+```ts Complete app.ts expandable lines
+import { initVelt } from '@veltdev/client';
+import {
+  createCollaboration,
+  redo,
+  undo,
+  type CollaborationManager,
+} from '@veltdev/prosemirror-crdt';
+import { baseKeymap, toggleMark } from 'prosemirror-commands';
+import { keymap } from 'prosemirror-keymap';
+import { schema } from 'prosemirror-schema-basic';
+import { EditorState } from 'prosemirror-state';
+import { EditorView } from 'prosemirror-view';
+import './prosemirror.css';
+
+const DOCUMENT_ID = 'prosemirror-crdt-demo-doc-1';
+
+let resources: {
+  manager: CollaborationManager;
+  view: EditorView;
+  offStatus: () => void;
+  offSynced: () => void;
+  crdtSubscription: { unsubscribe: () => void };
+} | null = null;
+
+async function initializeProseMirror(client) {
+  let manager: CollaborationManager | null = null;
+  let view: EditorView | null = null;
+
+  try {
+    manager = await createCollaboration({
+      editorId: DOCUMENT_ID,
+      veltClient: client,
+      schema,
+      initialContent: 'Start collaborating in ProseMirror.',
+      cursorData: {
+        name: 'Ada Lovelace',
+        color: '#2563eb',
+        colorLight: '#2563eb33',
+      },
+      autoInitialize: false,
+      onError: (error) => console.error('Collaboration error:', error),
+    });
+
+    const collaboration = manager.createCollaborationPlugins({
+      keymap: {
+        'Mod-z': undo,
+        'Mod-y': redo,
+        'Mod-Shift-z': redo,
+        'Mod-b': toggleMark(schema.marks.strong),
+        'Mod-i': toggleMark(schema.marks.em),
+      },
+      plugins: [keymap(baseKeymap)],
+    });
+
+    if (collaboration.plugins.length === 0) {
+      throw new Error('ProseMirror collaboration plugins were not created');
+    }
+
+    const state = EditorState.create({
+      schema,
+      plugins: collaboration.plugins,
+    });
+
+    view = new EditorView(
+      document.getElementById('editor')!,
+      { state },
+    );
+
+    manager.attachEditorView(view);
+    await manager.initialize();
+
+    const offStatus = manager.onStatusChange((status) => {
+      document.getElementById('status')!.textContent = status;
+    });
+    const offSynced = manager.onSynced((synced) => {
+      document.getElementById('synced')!.textContent = synced ? 'Yes' : 'No';
+    });
+    const crdtSubscription = client
+      .getCrdtElement()
+      .on('updateData')
+      .subscribe((event) => {
+        if (event) console.log('CRDT update:', event);
+      });
+
+    const versionId = await manager.saveVersion('Initial collaborative draft');
+    console.log('Saved version:', versionId, await manager.getVersions());
+
+    resources = {
+      manager,
+      view,
+      offStatus,
+      offSynced,
+      crdtSubscription,
+    };
+  } catch (error) {
+    view?.destroy();
+    manager?.destroy();
+    console.error('Failed to initialize ProseMirror:', error);
+  }
+}
+
+const client = await initVelt('YOUR_VELT_API_KEY');
+
+await client.identify({
+  userId: 'ada',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  organizationId: 'my-org-id',
+});
+
+await client.setDocument(DOCUMENT_ID, {
+  documentName: 'ProseMirror CRDT Demo',
+});
+
+let initializationStarted = false;
+const initSubscription = client.getVeltInitState().subscribe((isReady) => {
+  if (!isReady || initializationStarted) return;
+  initializationStarted = true;
+  void initializeProseMirror(client);
+});
+
+window.addEventListener('beforeunload', () => {
+  resources?.crdtSubscription.unsubscribe();
+  resources?.offStatus();
+  resources?.offSynced();
+  initSubscription.unsubscribe();
+
+  resources?.view.destroy();
+  resources?.manager.destroy();
+});
+```
+
+</Tab>
+</Tabs>
+
 
 ## How It Works
 
-1. The wrapper waits for Velt, an authenticated user, a schema, and a mount or existing view.
-2. The manager creates the Yjs sync, cursor, and undo plugins before initializing the shared store.
-3. `y-prosemirror` binds ProseMirror transactions to a shared `Y.XmlFragment`.
-4. Awareness carries user identity and selections for cursor decorations.
-5. Yjs merges concurrent structural edits, while the schema validates the resulting ProseMirror document.
+1. React applications initialize Velt with an authenticated `VeltProvider`; other frameworks use `initVelt()`. Both authenticate before setting the document.
+2. The React wrapper waits for Velt, an authenticated user, and a mount or existing view. It uses the supplied schema when present and otherwise uses the package's default schema.
+3. Direct integrations create a non-initialized manager, install its Yjs sync, cursor, and undo plugins in an `EditorState`, create and attach the `EditorView`, and only then initialize the shared store.
+4. `y-prosemirror` binds ProseMirror transactions to a shared `Y.XmlFragment`, while awareness carries user identity and selections.
+5. Yjs merges concurrent structural edits, and the shared schema validates the resulting ProseMirror document.
 6. Velt persists updates and named versions.
 
 
@@ -635,7 +1263,38 @@ The hook additionally accepts `mount`, `editorView`, `state`, and `destroyViewOn
 - `createDefaultProseMirrorSchema()` creates the default basic/list/highlight schema.
 - `defaultProseMirrorSchema` is a pre-created default schema.
 - `createHighlightMarkSpec(defaultColor?)` creates the included highlight mark spec.
-- `undo` and `redo` are the Yjs-aware `y-prosemirror` commands re-exported by `@veltdev/prosemirror-crdt-react`; import them from the Velt wrapper as shown above.
+- `undo` and `redo` are Yjs-aware commands re-exported by both `@veltdev/prosemirror-crdt-react` and `@veltdev/prosemirror-crdt`. Import them from the Velt package used by your integration.
+
+
+### Other Frameworks: createCollaboration()
+
+```ts
+import { createCollaboration } from '@veltdev/prosemirror-crdt';
+
+const manager = await createCollaboration({
+  editorId: DOCUMENT_ID,
+  veltClient: client,
+  schema,
+  initialContent: 'Start writing here...',
+  cursorData: { name: 'Ada', color: '#2563eb' },
+  autoInitialize: false,
+  onError: console.error,
+});
+```
+
+| Config | Type | Required | Description |
+|---|---|---|---|
+| `editorId` | `string` | Yes | Stable key for the shared ProseMirror fragment. |
+| `veltClient` | `Velt` | Yes | Initialized, authenticated Velt client. |
+| `schema` | `Schema` | No* | Shared ProseMirror schema. Required when parsing `initialContent` or calling `createEditorState()`; otherwise optional. |
+| `initialContent` | `string \| ProseMirrorJSON` | No | Seed content for a new, empty fragment. |
+| `forceResetInitialContent` | `boolean` | No | Explicitly replaces existing shared content. |
+| `cursorData` | `CursorData` | No | Awareness identity and cursor colors. |
+| `debounceMs` | `number` | No | Backend persistence debounce interval. |
+| `autoInitialize` | `boolean` | Yes for direct setup | Set to `false` so the view can be attached before hydration. |
+| `onError` | `(error: Error) => void` | No | Receives non-fatal initialization and runtime errors. |
+
+After this call, follow the exact plugin, state, view, attach, and initialize sequence shown in Step 4.
 
 
 ### CollaborationManager Methods

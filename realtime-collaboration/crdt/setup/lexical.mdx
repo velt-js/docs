@@ -8,8 +8,8 @@ The `@veltdev/lexical-crdt-react` and `@veltdev/lexical-crdt` libraries enable r
 ## Prerequisites
 
 - Node.js (v14 or higher)
-- React (v18 or higher)
 - A Velt account with an API key ([sign up](https://console.velt.dev/))
+- React (v18 or higher) when using the React wrapper
 - Optional: TypeScript for type safety
 
 ## Setup
@@ -26,12 +26,111 @@ npm install @veltdev/lexical-crdt-react @veltdev/lexical-crdt @veltdev/react lex
 ```
 
 </Tab>
+<Tab title="Other Frameworks">
+
+```bash
+npm install @veltdev/lexical-crdt @veltdev/client lexical @lexical/rich-text @lexical/yjs yjs
+```
+
+Install any additional `@lexical/*` node packages required by your schema. Keep one copy of `lexical`, every `@lexical/*` package, and `yjs` in the final application bundle.
+
+</Tab>
 </Tabs>
 
 
 ### Step 2: Setup Velt
 
-Initialize the Velt client by following the [Velt Setup Docs](/get-started/quickstart). This is required for the collaboration engine to work.
+Initialize Velt, authenticate a user, and set a stable document context before collaboration starts. Follow the [Velt Setup Docs](/get-started/quickstart) for the production token endpoint used by `authProvider`.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+import { useEffect, useState } from 'react';
+import {
+  VeltProvider,
+  useCurrentUser,
+  useSetDocuments,
+} from '@veltdev/react';
+
+const DOCUMENT_ID = 'my-lexical-editor';
+const USER = {
+  userId: 'user-1',
+  name: 'John Doe',
+  email: 'john@example.com',
+  organizationId: 'org-1',
+};
+
+const authProvider = {
+  user: USER,
+  retryConfig: { retryCount: 3, retryDelay: 1000 },
+  generateToken: async () => {
+    const response = await fetch('/api/velt/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(USER),
+    });
+    const { token } = await response.json();
+    return token;
+  },
+};
+
+function CollaborationScope() {
+  const user = useCurrentUser();
+  const { setDocuments } = useSetDocuments();
+  const [documentReady, setDocumentReady] = useState(false);
+
+  useEffect(() => {
+    if (!user) {
+      setDocumentReady(false);
+      return;
+    }
+    setDocuments([{
+      id: DOCUMENT_ID,
+      metadata: { documentName: 'Shared Lexical Document' },
+    }]);
+    setDocumentReady(true);
+  }, [user, setDocuments]);
+
+  return user && documentReady
+    ? <LexicalEditor documentId={DOCUMENT_ID} />
+    : <p>Preparing collaboration...</p>;
+}
+
+<VeltProvider apiKey="YOUR_API_KEY" authProvider={authProvider}>
+  <CollaborationScope />
+</VeltProvider>
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Create one Velt client, set the shared document, authenticate the user, and wait for Velt before creating Lexical:
+
+```ts
+import { initVelt } from '@veltdev/client';
+
+const DOCUMENT_ID = 'my-lexical-editor';
+const client = await initVelt('YOUR_API_KEY');
+
+client.setDocument(DOCUMENT_ID, {
+  documentName: 'Shared Lexical Document',
+});
+
+await client.identify({
+  userId: 'user-1',
+  name: 'John Doe',
+  email: 'john@example.com',
+  organizationId: 'org-1',
+});
+
+const initSubscription = client.getVeltInitState().subscribe((isReady) => {
+  if (isReady) void initializeLexical(client);
+});
+```
+
+</Tab>
+</Tabs>
 
 
 ### Step 3: Initialize Collaborative Editor
@@ -41,7 +140,39 @@ Initialize the Velt client by following the [Velt Setup Docs](/get-started/quick
 - Pass an `editorId` to uniquely identify each editor instance you have in your app.
 
 <Tabs>
-<Tab title="React / Next.js">
+<Tab title="React Component">
+
+Use `LexicalCollaborationPlugin` when you only need lifecycle wiring and do not need to render reactive collaboration state:
+
+```tsx
+import { LexicalComposer } from '@lexical/react/LexicalComposer';
+import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin';
+import { ContentEditable } from '@lexical/react/LexicalContentEditable';
+import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary';
+import { LexicalCollaborationPlugin } from '@veltdev/lexical-crdt-react';
+
+const initialConfig = {
+  namespace: 'my-collab-editor',
+  editorState: null,
+  onError: console.error,
+};
+
+function LexicalEditor() {
+  return (
+    <LexicalComposer initialConfig={initialConfig}>
+      <LexicalCollaborationPlugin editorId="my-lexical-editor" />
+      <RichTextPlugin
+        contentEditable={<ContentEditable className="lexical-editor" />}
+        placeholder={<div>Start typing...</div>}
+        ErrorBoundary={LexicalErrorBoundary}
+      />
+    </LexicalComposer>
+  );
+}
+```
+
+</Tab>
+<Tab title="React Hook">
 
 Use `useLexicalComposerCollaboration()` inside the composer when you need reactive collaboration state.
 
@@ -97,28 +228,73 @@ function LexicalEditor({ documentId }: { documentId: string }) {
 }
 ```
 
-Use `LexicalCollaborationPlugin` when you only need lifecycle wiring and do not need to read collaboration state:
+<Warning>Set `editorState: null` in the Lexical composer. Providing a separate composer state can conflict with the shared CRDT document.</Warning>
 
-```tsx
-import { LexicalCollaborationPlugin } from '@veltdev/lexical-crdt-react';
+</Tab>
+<Tab title="Other Frameworks">
 
-<LexicalComposer initialConfig={initialConfig}>
-  <LexicalCollaborationPlugin editorId="my-lexical-editor" />
-  <RichTextPlugin
-    contentEditable={<ContentEditable className="lexical-editor" />}
-    placeholder={<div>Start typing...</div>}
-    ErrorBoundary={LexicalErrorBoundary}
-  />
-</LexicalComposer>
+Create and configure Lexical first, attach its root element, and only then pass the editor to `createCollaboration()`:
+
+```ts
+import { createEditor } from 'lexical';
+import {
+  HeadingNode,
+  QuoteNode,
+  registerRichText,
+} from '@lexical/rich-text';
+import {
+  createCollaboration,
+  type CollaborationManager,
+} from '@veltdev/lexical-crdt';
+
+let editor: ReturnType<typeof createEditor> | null = null;
+let manager: CollaborationManager | null = null;
+let unregisterRichText: (() => void) | null = null;
+let offStatus: (() => void) | null = null;
+let offSynced: (() => void) | null = null;
+
+async function initializeLexical(client) {
+  if (manager) return;
+
+  editor = createEditor({
+    namespace: 'my-collab-editor',
+    nodes: [HeadingNode, QuoteNode],
+    onError: console.error,
+  });
+
+  editor.setRootElement(document.querySelector('#editor'));
+  unregisterRichText = registerRichText(editor);
+
+  manager = await createCollaboration({
+    editorId: DOCUMENT_ID,
+    editor,
+    veltClient: client,
+    cursorData: { name: 'John Doe', color: '#7c3aed' },
+    onError: (error) => console.error('Collaboration error:', error),
+  });
+
+  offStatus = manager.onStatusChange((status) => console.log('Status:', status));
+  offSynced = manager.onSynced((synced) => console.log('Synced:', synced));
+}
+
+function destroyLexical() {
+  offStatus?.();
+  offSynced?.();
+  manager?.destroy();
+  unregisterRichText?.();
+  editor?.setRootElement(null);
+  manager = null;
+  editor = null;
+}
 ```
 
-<Warning>Set `editorState: null` in the Lexical composer. Providing a separate composer state can conflict with the shared CRDT document.</Warning>
+Do not register Lexical's history plugin. The collaboration manager exposes the binding's `Y.UndoManager` through `manager.getUndoManager()` so local undo/redo remains collaboration-aware.
 
 </Tab>
 </Tabs>
 
 
-### Step 4: Use an Explicit Editor Instance (Optional)
+### Step 4: Use an Explicit Editor Instance in React (Optional)
 
 If you create and hold a `LexicalEditor` instance outside `LexicalComposer`, use `useCollaboration()` and pass the instance explicitly:
 
@@ -131,24 +307,11 @@ const { primitives, isLoading, isSynced, status, error, manager } = useCollabora
 });
 ```
 
-For framework-agnostic apps, register the editor's nodes and root element first, then create the manager with an authenticated Velt client:
-
-```ts
-import { createCollaboration } from '@veltdev/lexical-crdt';
-
-const manager = await createCollaboration({
-  editorId: 'my-lexical-editor',
-  editor: myLexicalEditor,
-  veltClient,
-  onError: (error) => console.error('Collaboration error:', error),
-});
-
-// During teardown
-manager.destroy();
-```
-
 
 ### Step 5: Status Monitoring (Optional)
+
+<Tabs>
+<Tab title="React / Next.js">
 
 Both hooks return reactive `status`, `isSynced`, and `error` state:
 
@@ -185,12 +348,36 @@ useEffect(() => {
 }, [manager]);
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+Read the current values or subscribe to changes on the manager. Save and call both unsubscribe functions during cleanup:
+
+```ts
+console.log(manager.initialized, manager.status, manager.synced);
+
+const offStatus = manager.onStatusChange((status) => {
+  console.log('Status:', status);
+});
+
+const offSynced = manager.onSynced((synced) => {
+  console.log('Synced:', synced);
+});
+
+// During teardown
+offStatus();
+offSynced();
+```
+
+</Tab>
+</Tabs>
+
 
 ### Step 6: Version Management (Optional)
 
 Save and restore named snapshots through the manager. Restored versions are applied to every connected user in real time.
 
-```tsx
+```ts
 if (!manager) return;
 
 const versionId = await manager.saveVersion('Before major edit');
@@ -198,10 +385,22 @@ const versions = await manager.getVersions();
 await manager.restoreVersion(versionId);
 ```
 
+When your application already has the complete `Version` object, use the lower-level state application API instead of `restoreVersion()`:
+
+```ts
+const selectedVersion = versions.find((version) => version.versionId === versionId);
+if (selectedVersion) {
+  await manager.setStateFromVersion(selectedVersion);
+}
+```
+
 
 ### Step 7: Force Reset Initial Content (Optional)
 
-By default, `initialContent` is applied exactly once when the shared document is brand new. It can be serialized Lexical editor state or plain text.
+By default, `initialContent` is applied exactly once when the shared document is brand new. Use a stringified serialized Lexical editor state. React wrappers may also accept the wrapper's documented plain-text convenience form.
+
+<Tabs>
+<Tab title="React / Next.js">
 
 ```tsx
 useLexicalComposerCollaboration({
@@ -211,6 +410,46 @@ useLexicalComposerCollaboration({
 });
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const manager = await createCollaboration({
+  editorId: DOCUMENT_ID,
+  editor,
+  veltClient: client,
+  initialContent: JSON.stringify({
+    root: {
+      children: [{
+        children: [{
+          detail: 0,
+          format: 0,
+          mode: 'normal',
+          style: '',
+          text: 'Start writing…',
+          type: 'text',
+          version: 1,
+        }],
+        direction: null,
+        format: '',
+        indent: 0,
+        type: 'paragraph',
+        version: 1,
+      }],
+      direction: null,
+      format: '',
+      indent: 0,
+      type: 'root',
+      version: 1,
+    },
+  }),
+  forceResetInitialContent: false,
+});
+```
+
+</Tab>
+</Tabs>
+
 <Warning>Use `forceResetInitialContent` only for deliberate reset workflows. It clears the current shared document and replaces it with `initialContent` for every connected user.</Warning>
 
 
@@ -218,16 +457,38 @@ useLexicalComposerCollaboration({
 
 Remote carets, labels, and text selections render through Lexical's collaboration cursor layer. Pass user identity through `cursorData`, then style the Lexical collaboration theme classes:
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx
 useLexicalComposerCollaboration({
   editorId: 'my-lexical-editor',
   cursorData: {
-    name: currentUser.name,
-    color: currentUser.color,
-    awarenessData: { userId: currentUser.userId },
+    name: user.name,
+    color: '#7c3aed',
+    awarenessData: { userId: user.userId },
   },
 });
 ```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const manager = await createCollaboration({
+  editorId: DOCUMENT_ID,
+  editor,
+  veltClient: client,
+  cursorData: {
+    name: 'John Doe',
+    color: '#7c3aed',
+    awarenessData: { role: 'editor' },
+  },
+});
+```
+
+</Tab>
+</Tabs>
 
 ```css
 [data-lexical-cursors='true'] {
@@ -268,6 +529,9 @@ useLexicalComposerCollaboration({
 
 Listen for real-time CRDT data events using `getCrdtElement().on()` from the Velt client.
 
+<Tabs>
+<Tab title="React / Next.js">
+
 ```tsx
 import { useEffect } from 'react';
 import { useVeltClient } from '@veltdev/react';
@@ -285,10 +549,31 @@ useEffect(() => {
 }, [client]);
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const crdtSubscription = client
+  .getCrdtElement()
+  .on('updateData')
+  .subscribe((event) => {
+    if (event) console.log('CRDT update:', event);
+  });
+
+// During teardown
+crdtSubscription.unsubscribe();
+```
+
+</Tab>
+</Tabs>
+
 
 ### Step 10: Custom Encryption (Optional)
 
 Encrypt CRDT data before it is stored in Velt by registering a custom encryption provider. For CRDT methods, input data is of type `Uint8Array | number[]`.
+
+<Tabs>
+<Tab title="React / Next.js">
 
 ```tsx
 const encryptionProvider = {
@@ -296,10 +581,29 @@ const encryptionProvider = {
   decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
 };
 
-<VeltProvider apiKey="YOUR_API_KEY" encryptionProvider={encryptionProvider}>
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  authProvider={authProvider}
+  encryptionProvider={encryptionProvider}
+>
   ...
 </VeltProvider>
 ```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Call `setEncryptionProvider()` before creating the collaboration manager:
+
+```ts
+client.setEncryptionProvider({
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+});
+```
+
+</Tab>
+</Tabs>
 
 See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
  · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
@@ -310,6 +614,9 @@ See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryp
 ### Step 11: Error Handling (Optional)
 
 Pass an `onError` callback to handle initialization or runtime errors. The reactive `error` state is also available for rendering.
+
+<Tabs>
+<Tab title="React / Next.js">
 
 ```tsx
 const collab = useLexicalComposerCollaboration({
@@ -322,10 +629,30 @@ if (collab.error) {
 }
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const manager = await createCollaboration({
+  editorId: DOCUMENT_ID,
+  editor,
+  veltClient: client,
+  onError: (error) => console.error('Lexical collaboration error:', error),
+});
+```
+
+The package reports unexpected failures through `onError`; manager getters and version methods return null-safe or empty fallback values instead of throwing.
+
+</Tab>
+</Tabs>
+
 
 ### Step 12: Access Yjs Internals (Advanced)
 
 The hooks return lower-level Lexical, Yjs, and Velt handles through `primitives`:
+
+<Tabs>
+<Tab title="React / Next.js">
 
 ```tsx
 const { primitives, manager } = useLexicalComposerCollaboration({
@@ -354,8 +681,31 @@ manager?.getUndoManager();
 manager?.getStore();
 ```
 
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const editor = manager.getEditor();
+const binding = manager.getBinding();
+const doc = manager.getDoc();
+const xmlText = manager.getXmlText();
+const provider = manager.getProvider();
+const lexicalProvider = manager.getLexicalProvider();
+const awareness = manager.getAwareness();
+const undoManager = manager.getUndoManager();
+const store = manager.getStore();
+```
+
+</Tab>
+</Tabs>
+
+Let the manager own binding setup, provider attachment, awareness, and Yjs history. Do not wire `@lexical/yjs` manually alongside it.
+
 
 ### Step 13: Cleanup
+
+<Tabs>
+<Tab title="React / Next.js">
 
 The hooks destroy the manager automatically when the component unmounts or when the `editorId`, editor, or Velt client changes. Pass `enabled: false` to tear down collaboration early while keeping the component mounted.
 
@@ -365,6 +715,27 @@ const collab = useLexicalComposerCollaboration({
   enabled: collaborationEnabled,
 });
 ```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Unsubscribe callbacks and destroy collaboration before discarding the Lexical editor:
+
+```ts
+crdtSubscription.unsubscribe();
+offStatus();
+offSynced();
+initSubscription.unsubscribe();
+
+manager.destroy();
+unregisterRichText();
+editor.setRootElement(null);
+```
+
+`manager.destroy()` removes the cursor overlay, provider/store resources, binding, undo manager, and listeners. It is safe to call more than once.
+
+</Tab>
+</Tabs>
 
 
 ## Notes
@@ -376,6 +747,10 @@ const collab = useLexicalComposerCollaboration({
 - **Plugin form**: Use `LexicalCollaborationPlugin` when you do not need reactive status, error, or manager values.
 - **Cursor identity**: Pass `cursorData` so remote carets and selections can display user information.
 - **Lifecycle**: The hooks wait for the Lexical root element, Velt initialization, and an authenticated user before creating the manager.
+- **Other Frameworks lifecycle**: Create and attach Lexical first, then create one manager; destroy the manager before discarding the editor.
+- **Collaborative history**: Do not register Lexical's normal history plugin. Use the binding's Yjs-backed undo manager from `manager.getUndoManager()`.
+- **Debounced writes**: The Store default is `debounceMs: 0`, so backend writes are immediate when the option is omitted. Lexical's separate snapshot-flush scheduler falls back to 250 ms after applying seeded or prefetched snapshot state.
+- **Dependency deduplication**: Keep one copy of `lexical`, each `@lexical/*` package, and `yjs` in the application bundle.
 - **Production authentication**: Do not expose privileged server tokens in browser code; use Velt's recommended server-backed authentication flow.
 
 
@@ -392,6 +767,7 @@ const collab = useLexicalComposerCollaboration({
 - Initial content conflicts: Set the composer's `editorState` to `null`.
 - Cursors not appearing: Pass `cursorData` and include the Lexical collaboration theme classes in your editor theme and CSS.
 - Changes not syncing: Confirm both users have the same Velt document context and `editorId`.
+- Manual reconnect: Use `manager.getProvider()?.connect()` to reconnect or `manager.getProvider()?.disconnect()` to test an offline transition.
 
 <Tip>
 Enable browser console warnings to see detailed debugging information. You can also use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setup/core#veltcrdtstoremap) to inspect and monitor your CRDT stores in real time.
@@ -408,72 +784,71 @@ A complete collaborative Lexical editor with user login, status display, cursor 
 **App.tsx**
 
 ```tsx Complete App.tsx expandable lines
+import { useEffect, useMemo, useState } from 'react';
 import {
   VeltProvider,
   useCurrentUser,
-  useSetDocument,
-  useVeltClient,
+  useSetDocuments,
 } from '@veltdev/react';
 import { CollaborativeEditor, DOCUMENT_ID } from './Editor';
 
-const USERS = {
-  michael: {
-    userId: 'michael',
-    name: 'Michael Scott',
-    email: 'michael.scott@dundermifflin.com',
-    organizationId: 'my-org-id',
-    color: '#7c3aed',
-  },
-  jim: {
-    userId: 'jim',
-    name: 'Jim Halpert',
-    email: 'jim.halpert@dundermifflin.com',
-    organizationId: 'my-org-id',
-    color: '#0f766e',
-  },
+const USER = {
+  userId: 'michael',
+  name: 'Michael Scott',
+  email: 'michael.scott@dundermifflin.com',
+  organizationId: 'my-org-id',
+  color: '#7c3aed',
 };
-
-function Header() {
-  const { client } = useVeltClient();
-  const veltUser = useCurrentUser();
-
-  if (veltUser) {
-    return (
-      <header>
-        <span>Welcome, {veltUser.name}</span>
-        <button onClick={() => client?.signOutUser()}>Logout</button>
-      </header>
-    );
-  }
-
-  return (
-    <header>
-      {Object.values(USERS).map((user) => (
-        <button key={user.userId} onClick={() => client?.identify(user)}>
-          Login as {user.name}
-        </button>
-      ))}
-    </header>
-  );
-}
 
 function AppContent() {
   const veltUser = useCurrentUser();
-  useSetDocument(DOCUMENT_ID, { documentName: 'Lexical CRDT React Demo' });
+  const { setDocuments } = useSetDocuments();
+  const [documentReady, setDocumentReady] = useState(false);
+
+  useEffect(() => {
+    if (!veltUser) {
+      setDocumentReady(false);
+      return;
+    }
+    setDocuments([{
+      id: DOCUMENT_ID,
+      metadata: { documentName: 'Lexical CRDT React Demo' },
+    }]);
+    setDocumentReady(true);
+  }, [veltUser, setDocuments]);
 
   return (
     <div>
-      <Header />
-      <CollaborativeEditor key={veltUser?.userId || '__none__'} />
+      {veltUser && documentReady ? (
+        <CollaborativeEditor key={veltUser.userId} />
+      ) : (
+        <p>Preparing collaboration...</p>
+      )}
     </div>
   );
 }
 
-export const App = () => (
-  <VeltProvider apiKey="YOUR_API_KEY">
-    <AppContent />
-  </VeltProvider>
-);
+export default function App() {
+  const authProvider = useMemo(() => ({
+    user: USER,
+    retryConfig: { retryCount: 3, retryDelay: 1000 },
+    generateToken: async () => {
+      const response = await fetch('/api/velt/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(USER),
+      });
+      const { token } = await response.json();
+      return token;
+    },
+  }), []);
+
+  return (
+    <VeltProvider apiKey="YOUR_API_KEY" authProvider={authProvider}>
+      <AppContent />
+    </VeltProvider>
+  );
+}
 ```
 
 **Editor.tsx**
@@ -514,7 +889,7 @@ function CollaborationBridge() {
     cursorData: veltUser
       ? {
           name: veltUser.name,
-          color: veltUser.color,
+          color: '#7c3aed',
           awarenessData: { userId: veltUser.userId },
         }
       : undefined,
@@ -568,18 +943,174 @@ export function CollaborativeEditor() {
 ```
 
 </Tab>
+<Tab title="Other Frameworks">
+
+This vanilla TypeScript example creates Lexical before the manager, uses collaborative undo/redo, monitors status, subscribes to CRDT events, and tears down every listener explicitly.
+
+```html
+<div id="status">Connecting...</div>
+<div id="editor" class="lexical-editor" contenteditable="true"></div>
+<button id="undo">Undo</button>
+<button id="redo">Redo</button>
+<button id="save-version">Save version</button>
+```
+
+```ts Complete main.ts expandable lines
+import { createEditor, type LexicalEditor } from 'lexical';
+import {
+  HeadingNode,
+  QuoteNode,
+  registerRichText,
+} from '@lexical/rich-text';
+import { initVelt } from '@veltdev/client';
+import {
+  createCollaboration,
+  type CollaborationManager,
+} from '@veltdev/lexical-crdt';
+
+const API_KEY = 'YOUR_API_KEY';
+const DOCUMENT_ID = 'lexical-crdt-demo-doc-1';
+
+let editor: LexicalEditor | null = null;
+let manager: CollaborationManager | null = null;
+let unregisterRichText: (() => void) | null = null;
+let offStatus: (() => void) | null = null;
+let offSynced: (() => void) | null = null;
+let initSubscription: { unsubscribe(): void } | null = null;
+let crdtSubscription: { unsubscribe(): void } | null = null;
+
+const undo = () => manager?.getUndoManager()?.undo();
+const redo = () => manager?.getUndoManager()?.redo();
+const saveVersion = () => {
+  void manager?.saveVersion('Manual checkpoint');
+};
+
+const initialContent = JSON.stringify({
+  root: {
+    children: [{
+      children: [{
+        detail: 0,
+        format: 0,
+        mode: 'normal',
+        style: '',
+        text: 'Start writing…',
+        type: 'text',
+        version: 1,
+      }],
+      direction: null,
+      format: '',
+      indent: 0,
+      type: 'paragraph',
+      version: 1,
+    }],
+    direction: null,
+    format: '',
+    indent: 0,
+    type: 'root',
+    version: 1,
+  },
+});
+
+async function main() {
+  const client = await initVelt(API_KEY);
+
+  client.setDocument(DOCUMENT_ID, {
+    documentName: 'Shared Lexical Document',
+  });
+
+  await client.identify({
+    userId: 'ada',
+    name: 'Ada Lovelace',
+    email: 'ada@example.com',
+    organizationId: 'my-org-id',
+  });
+
+  initSubscription = client.getVeltInitState().subscribe(async (isReady) => {
+    if (!isReady || manager) return;
+
+    editor = createEditor({
+      namespace: 'lexical-collab-demo',
+      nodes: [HeadingNode, QuoteNode],
+      onError: console.error,
+    });
+    editor.setRootElement(document.querySelector('#editor'));
+    unregisterRichText = registerRichText(editor);
+
+    manager = await createCollaboration({
+      editorId: DOCUMENT_ID,
+      editor,
+      veltClient: client,
+      initialContent,
+      cursorData: {
+        name: 'Ada Lovelace',
+        color: '#7c3aed',
+        awarenessData: { userId: 'ada' },
+      },
+      onError: (error) => console.error('Collaboration error:', error),
+    });
+
+    const renderStatus = () => {
+      const element = document.getElementById('status');
+      if (element && manager) {
+        element.textContent = `${manager.status} / synced: ${manager.synced}`;
+      }
+    };
+
+    renderStatus();
+    offStatus = manager.onStatusChange(renderStatus);
+    offSynced = manager.onSynced(renderStatus);
+
+    crdtSubscription = client
+      .getCrdtElement()
+      .on('updateData')
+      .subscribe((event) => console.log('CRDT update:', event));
+
+    document.getElementById('undo')?.addEventListener('click', undo);
+    document.getElementById('redo')?.addEventListener('click', redo);
+    document.getElementById('save-version')?.addEventListener('click', saveVersion);
+  });
+}
+
+export function destroy() {
+  document.getElementById('undo')?.removeEventListener('click', undo);
+  document.getElementById('redo')?.removeEventListener('click', redo);
+  document.getElementById('save-version')?.removeEventListener('click', saveVersion);
+  crdtSubscription?.unsubscribe();
+  crdtSubscription = null;
+  offStatus?.();
+  offStatus = null;
+  offSynced?.();
+  offSynced = null;
+  initSubscription?.unsubscribe();
+  initSubscription = null;
+
+  manager?.destroy();
+  manager = null;
+  unregisterRichText?.();
+  unregisterRichText = null;
+  editor?.setRootElement(null);
+  editor = null;
+}
+
+window.addEventListener('pagehide', destroy, { once: true });
+void main();
+```
+
+Do not add Lexical's history plugin to this example. The remote cursor overlay is created and removed automatically by the collaboration manager.
+
+</Tab>
 </Tabs>
 
 
 ## How It Works
 
-1. **`VeltProvider` and `useSetDocument`** initialize the Velt SDK and scope collaboration to a Velt document.
-2. **`useLexicalComposerCollaboration`** reads the editor from `LexicalComposerContext` and waits for the editor root, Velt client, and authenticated user.
+1. **Velt initialization and authentication** happen through `VeltProvider` in React or `initVelt()` and `identify()` in other frameworks. Both paths establish the same stable document context.
+2. **React wrappers** obtain the editor from `LexicalComposerContext` or accept an explicit editor. Other frameworks create the Lexical editor, register its nodes, and attach its root before creating collaboration.
 3. **The collaboration manager** creates a Velt CRDT store backed by a Yjs document and a shared `Y.XmlText`.
-4. **The official `@lexical/yjs` binding** connects Lexical editor updates to the shared `Y.XmlText`, so text, formatting, headings, lists, and concurrent edits merge at the character level.
-5. **Remote cursors and selections** render through the Lexical collaboration cursor layer using Yjs awareness and the configured `cursorData`.
+4. **The official `@lexical/yjs` binding** connects Lexical updates to the shared `Y.XmlText`, so text, formatting, headings, and concurrent edits merge at the character level.
+5. **Yjs awareness** drives the manager-owned remote cursor overlay, while the binding's `Y.UndoManager` provides collaboration-aware undo and redo.
 6. **Version management** saves the complete Yjs state as a named snapshot that can be restored for every connected user.
-7. **Cleanup is automatic** when the component unmounts or collaboration is disabled.
+7. **React cleanup** is automatic when the wrapper unmounts or collaboration is disabled. Other frameworks unsubscribe callbacks and destroy the manager before discarding Lexical.
 
 
 ## APIs
@@ -597,7 +1128,7 @@ The primary hook for applications using `<LexicalComposer>`. It reads the editor
   - `initialContent`: Serialized Lexical editor state or plain text for a brand-new document.
   - `forceResetInitialContent`: Replace existing shared content during initialization. Default: `false`.
   - `cursorData`: Cursor name, color, and custom awareness data.
-  - `debounceMs`: Throttle interval in milliseconds for base-store backend writes. Default: `0` (immediate). When the option is omitted, Lexical's separate prefetched-snapshot flush uses a `250` ms fallback.
+  - `debounceMs`: Throttle interval in milliseconds for backend writes. Store default: `0` ms (immediate). The internal snapshot-flush scheduler separately falls back to 250 ms when this option is omitted.
   - `onError`: Callback for non-fatal collaboration errors.
 - Returns:
   - `primitives`: Lexical, Yjs, and Velt integration handles. `null` while loading.
@@ -629,12 +1160,13 @@ Null-rendering component form of `useLexicalComposerCollaboration()`. Use it whe
 ```
 
 
-### Imperative: createCollaboration()
+### Other Frameworks: createCollaboration()
 
 The framework-agnostic `createCollaboration()` factory from `@veltdev/lexical-crdt` creates and initializes the manager for an existing `LexicalEditor`.
 
 - Signature: `createCollaboration(config: CollaborationConfig): Promise<CollaborationManager>`
 - Required config: `editorId`, `editor`, and an initialized, authenticated `veltClient`.
+- Optional config: `initialContent`, `cursorData`, `debounceMs` (Store default: 0 ms), `forceResetInitialContent`, and `onError`. The internal snapshot-flush scheduler separately falls back to 250 ms when `debounceMs` is omitted.
 - Cleanup: Call `manager.destroy()` before disposing the editor.
 
 
@@ -651,6 +1183,11 @@ The framework-agnostic `createCollaboration()` factory from `@veltdev/lexical-cr
 | `awareness` | `Awareness \| null` | Yjs awareness instance for remote users and cursors. |
 | `undoManager` | `Y.UndoManager \| null` | Collaborative undo manager. |
 | `store` | `Store<string> \| null` | Underlying Velt CRDT store. |
+
+
+### LexicalProviderAdapter
+
+`LexicalProviderAdapter` is exported from `@veltdev/lexical-crdt`. It adapts Velt's `SyncProvider` events to the provider interface expected by `@lexical/yjs`; the collaboration manager creates it automatically, so most applications should access the existing adapter through `manager.getLexicalProvider()` instead of constructing another one.
 
 
 ### Version
@@ -748,6 +1285,12 @@ Get the shared `Y.XmlText` bound to Lexical content.
 
 - Returns: `Y.XmlText | null`
 
+#### manager.getXmlFragment()
+
+Alias of `getXmlText()` provided for parity with other CRDT integrations.
+
+- Returns: `Y.XmlText | null`
+
 #### manager.getProvider()
 
 Get the Velt sync provider.
@@ -786,6 +1329,7 @@ Encrypt CRDT data before it is stored in Velt by registering a custom encryption
 ```tsx
 <VeltProvider
   apiKey="YOUR_API_KEY"
+  authProvider={authProvider}
   encryptionProvider={{
     encrypt: async ({ data }) => myEncrypt(data),
     decrypt: async ({ data }) => myDecrypt(data),

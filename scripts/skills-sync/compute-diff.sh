@@ -34,7 +34,8 @@ git cat-file -e "$AFTER_SHA" 2>/dev/null || { echo "AFTER_SHA $AFTER_SHA not fou
 # Emit one JSON line per changed file, then assemble into a JSON array.
 # Statuses: A (added), M (modified), D (deleted), R (renamed). Skip C (copied) — treat as A.
 TMP_JSONL="$(mktemp)"
-trap 'rm -f "$TMP_JSONL"' EXIT
+TMP_OUT_OF_SCOPE_JSONL="$(mktemp)"
+trap 'rm -f "$TMP_JSONL" "$TMP_OUT_OF_SCOPE_JSONL"' EXIT
 
 # Pre-filter: drop paths that mapping.md marks as explicitly out-of-scope.
 # This keeps the agent's diff.json small so it stays within its turn budget.
@@ -70,6 +71,12 @@ git diff --name-status --no-renames "$BEFORE_SHA" "$AFTER_SHA" -- \
       # Skip out-of-scope paths before they enter diff.json
       if is_out_of_scope "$path"; then
         echo "Skipping out-of-scope: $path"
+        jq -nc \
+          --arg path "$path" \
+          --arg status "$status" \
+          --arg reason "explicitly out-of-scope in skills-sync mapping" \
+          '{path: $path, status: $status, reason: $reason}' \
+          >> "$TMP_OUT_OF_SCOPE_JSONL"
         continue
       fi
       # numstat for additions/deletions on this single path
@@ -97,5 +104,12 @@ else
   echo '[]' > "$OUT_DIR/diff.json"
 fi
 
+if [ -s "$TMP_OUT_OF_SCOPE_JSONL" ]; then
+  jq -s '.' "$TMP_OUT_OF_SCOPE_JSONL" > "$OUT_DIR/out-of-scope.json"
+else
+  echo '[]' > "$OUT_DIR/out-of-scope.json"
+fi
+
 echo "Wrote $OUT_DIR/diff.json ($(jq 'length' "$OUT_DIR/diff.json") changed files)"
+echo "Wrote $OUT_DIR/out-of-scope.json ($(jq 'length' "$OUT_DIR/out-of-scope.json") skipped files)"
 echo "Wrote per-file hunks under $HUNKS_DIR"

@@ -1,0 +1,442 @@
+---
+title: "Data models"
+sidebarTitle: "Data models"
+description: "Reference Velt data entities, fields, events, and documented absences for customization work."
+---
+
+<Note>
+**Source of truth: exhaustive for what it covers.** Generated from Velt data-model metadata.
+
+- **If a name isn't on this page, it doesn't exist**: don't use it (a missing identifier resolves to `undefined`).
+- Never invent or guess a name; use only identifiers that appear verbatim here or that you verified against ground truth and added here.
+- *Scope: exhaustive for the comments + notifications + core data layer (every documented field, the hook/event that surfaces it, and the API that mutates it). Other-feature entities (recorder, presence, cursor, CRDT, suggestions) are summarized, and out-of-scope internals (deep anchor/xpath structures, transcription, full document-user shape) are documented as absences rather than fully enumerated.*
+</Note>
+
+The **data layer** behind every Velt feature: what Velt stores, the field names and types on each entity, the hook/event that surfaces each field at runtime, and the API that mutates it. Use this to decide whether a requirement is feasible with primitives/headless: a UI need is only achievable if the field it depends on actually exists, is exposed by a hook/event, and (if it must change) is writable via an API. Where a field or capability does **not** exist, this file says so plainly; see [`## Absences & limits`](#absences--limits).
+
+How to read each table:
+
+- **Field**: the property name as it appears on the object you receive.
+- **Type**: its shape.
+- **Meaning**: what it holds.
+- **Exposed by**: the read hook (or event payload) that carries it live.
+- **Writable via**: the API that changes it. `read-only` means there is no client API to set it (server-derived or auto-generated).
+
+Cross-references: [`Hooks`](/ui-customization/reference/hooks) for hook signatures, [`Events`](/ui-customization/reference/events) for event names/payloads, [`APIs`](/ui-customization/reference/apis) for imperative element methods, [`Component config`](/ui-customization/reference/component-config) for custom-data prop shapes (`customStatus`/`customPriority`/`customCategory`/`customReactions`).
+
+The two foundational entities are `CommentAnnotation` (a **thread**: one pin, with a list of comments) and `Comment` (a single **reply** inside that thread). Most other entities hang off these.
+
+---
+
+## CommentAnnotation (thread)
+
+One comment pin / thread. The root object returned by `useCommentAnnotations()`. Its `comments` array holds the individual replies.
+
+| Field | Type | Meaning | Exposed by | Writable via |
+|---|---|---|---|---|
+| `annotationId` | `string` | Unique thread id. | `useCommentAnnotations`, `useCommentAnnotationById` | read-only (auto-generated) |
+| `annotationNumber` | `number` | Human-facing thread number (shown on the pin). | same | read-only (auto-generated) |
+| `annotationIndex` | `number` | 1-based position in the current annotation list. | same | read-only (computed) |
+| `comments` | `Comment[]` | The replies in this thread (see [Comment](#comment-reply)). | same | `useAddComment` / `useUpdateComment` / `useDeleteComment` |
+| `from` | `User` | The thread's creator (see [User](#user--usercontact)). | same | read-only (set at create) |
+| `status` | `CustomStatus` | Workflow status object (`{id,color,name,type}`). Defaults to the built-in OPEN status. | same | `useUpdateStatus` (`updateStatus({annotationId,status})`) |
+| `statusUpdatedByUserId` | `string` | Id of the user who last changed status. | same | read-only |
+| `priority` | `CustomPriority` | Priority object (`{id,color,name}`). Absent until set. | same | `useUpdatePriority` |
+| `commentCategories` | `CustomCategory[]` | Categories assigned to the thread. | same | set via `customCategory` config + auto/assign flows |
+| `assignedTo` | `User` | The assignee, if assigned. | same | `useAssignUser` (`assignUser({annotationId,assignedTo})`) |
+| `approved` | `boolean` | Whether the thread was approved (approval flow). | same | `useApproveCommentAnnotation` / `useRejectCommentAnnotation` |
+| `iam.accessMode` | `CommentAccessMode` | Public vs private access mode. | same | `useUpdateAccess` (`updateAccess({annotationId,accessMode})`) |
+| `visibilityConfig` | `{type,organizationId?,userIds?}` | Visibility scope (`public` / `organizationPrivate` / `restricted`). | same | `useUpdateAccess` + `visibility` on add requests; private mode APIs |
+| `resolvedByUserId` / `resolvedByUser` | `string` / `User` | Who resolved the thread. | same | set by `useResolveCommentAnnotation` |
+| `context` | `any` | **Custom app data** attached to the thread (see [storage patterns](#custom-data-storage-patterns)). | same | context provider / `addContext` on the add event / `context` prop |
+| `contextId` | `string` | Hash id derived from `context`. | same | read-only (derived) |
+| `customList` | `CustomAnnotationDropdownItem[]` | Selected items from a custom annotation dropdown. | same | `customListDataOnAnnotation` prop + dropdown UI |
+| `location` / `locationId` | `Location` / `number` | Sub-location this thread belongs to (see [Location](#location)). | same | set at create via `location`/`locationId` props |
+| `targetElement` / `targetElementId` | `TargetElement` / `string` | DOM anchor the pin attaches to. | same | set at create |
+| `targetTextRange` | `TargetTextRange` | Text selection range for inline/text comments. | same | set at create (text comments) |
+| `position` / `positionX` / `positionY` | `CursorPosition` / `number` | Pin coordinates. | same | read-only (set at placement; drag updates) |
+| `screenWidth` / `screenHeight` / `screenScrollHeight` / `screenScrollTop` | `number` | Author's screen/scroll dimensions at capture time. | same | read-only (auto-generated) |
+| `pageInfo` | `PageInfo` | Page metadata (path/url/title) at creation. | same | set via `useSetPageInfo` |
+| `createdAt` / `lastUpdated` | timestamp | Thread create / last-update times. | same | read-only (auto-generated) |
+| `unread` | `boolean` | Whether the current user has unread content here. | same; counts via `useUnreadCommentCountByAnnotationId` | read (mark-as-read UI / actions) |
+| `views` / `viewedByUserIds` / `viewedBy` | `CommentAnnotationViews` / `string[]` / `User[]` | Read-receipt data (who has seen it). See [Views](#views). | same | read-only (server-derived) |
+| `subscribedUsers` / `unsubscribedUsers` / `subscribedGroups` | maps | Notification subscription state, keyed by user/group. | same | `useSubscribeCommentAnnotation` / `useUnsubscribeCommentAnnotation` |
+| `involvedUserIds` / `mentionedUserIds` | `string[]` | Server-derived sets of participants / @mentioned users. | same | read-only (server-derived) |
+| `ghostComment` | `GhostComment` | Present when the anchor element is gone (orphaned pin). | same | read-only |
+| `isDraft` | `boolean` | Thread is an unsent draft. | same | read-only |
+| `multiThreadAnnotationId` | `string` | Owning multi-thread pin id, when in multi-thread mode (see [MultiThreadCommentAnnotation](#multithreadcommentannotation)). | same | set at create |
+| `color` | `string` | Pin/thread color used to render the marker. | same | read-only (SDK-assigned) |
+| `metadata` | `CommentMetadata` | Thread-level metadata bag (`extends BaseMetadata`; `[key]: any`). **Distinct from `context`**: a separate per-thread bag, not the custom-context store. | same | set at create |
+| `areaAnnotationId` | `string` | Linked area-annotation id (area comments). | same | read-only |
+| `isPageAnnotation` | `boolean` | Thread is a page-level comment (not anchored to a DOM element). | same | read-only |
+| `targetInlineCommentElementId` | `string` | Target element id for an inline-comment section. | same | set at create |
+| `inlineCommentSectionConfig` | `{ id: string, name?: string }` | The inline-comment section this thread belongs to. | same | set at create |
+| `selectAllContent` | `boolean` | Text comment spans all text content of the `targetElementId`. | same | set at create (text comments) |
+| `sourceId` | `string` | Caller-supplied source id stamped on the thread (e.g. via `addManualComment`). | same | set at create |
+| `commentType` / `type` | `string` | Comment kind / annotation type (`'comment'` default). | same | set at create |
+| `sourceType` | `string` | `'agent'` marks an AI-authored thread (blue pin + agent header). | same | read-only (stamped server-side) |
+| `agent` | `AgentData` | AI agent identity + output (see [AgentData](#agentdata)). Present on agent threads. | same | read-only (written upstream) |
+| `suggestion` | `SuggestionData` | Suggestion-mode data; present iff `type === 'suggestion'`. | same | Suggestion element API (not a direct setter) |
+| `resolved` / `inProgress` / `documentParams` / `documentParamsId` | None | **Deprecated.** Use `status` and `location`/`locationId` instead. | None | |
+
+### MultiThreadCommentAnnotation
+
+The grouping pin that holds **multiple comment threads** at one anchor, used when multi-thread mode is on (`enableMultiThreadMode()`). Each child `CommentAnnotation` points back to it via [`CommentAnnotation.multiThreadAnnotationId`](#commentannotation-thread). It is not a thread itself: it is a container whose `commentAnnotationsMap` holds the child threads.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `annotationId` | `string` | Unique multi-thread pin id (the value child threads carry in `multiThreadAnnotationId`). |
+| `commentAnnotationsMap` | `{ [commentAnnotationId]: CommentAnnotation }` | The child threads grouped under this pin, keyed by their id. |
+| `commentAnnotations` | `{ [commentAnnotationId]: boolean }` | Membership map of child thread ids (presence flags). |
+| `from` | `User` | Creator of the multi-thread pin. |
+| `location` / `locationId` | `Location` / `number` | Sub-document scope. |
+| `position` | `CursorPosition` | Pin coordinates. |
+| `targetElement` / `targetElementId` | `TargetElement` / `string` | DOM anchor the pin attaches to. |
+| `targetTextRange` | `TargetTextRange` | Text selection range (inline/text multi-thread). |
+| `targetInlineCommentElementId` / `inlineCommentSectionConfig` | `string` / `{ id, name? }` | Inline-comment section anchoring. |
+| `areaAnnotationId` | `string` | Linked area-annotation id (area multi-thread). |
+| `type` | `string` | Annotation kind. |
+| `isDraft` | `boolean` | Pin is an unsent draft. |
+| `sourceId` | `string` | Caller-supplied source id. |
+| `metadata` | `MultiThreadMetadata` | Metadata bag (`extends BaseMetadata`). |
+| `ghostComment` / `context` | `GhostComment` / `any` | Orphaned-pin marker / custom context bag. |
+
+All fields are read-only from the SDK (set at placement / managed); children are mutated through the normal comment APIs on each `CommentAnnotation`.
+
+## Comment (reply)
+
+A single message inside a thread's `comments` array. Not fetched on its own as a reactive stream: read it from the parent `CommentAnnotation.comments`, or imperatively via `useGetComment()` (`await getComment({annotationId})` → `Comment[]`).
+
+| Field | Type | Meaning | Exposed by | Writable via |
+|---|---|---|---|---|
+| `commentId` | `number` | Unique id within the thread. | `CommentAnnotation.comments[]`, `useGetComment` | read-only (auto-generated) |
+| `commentText` | `string` | Plain-text body. | same | `useUpdateComment` |
+| `commentHtml` | `string` | Rich-text (HTML) body. | same | `useUpdateComment` |
+| `from` | `User` | The reply's author. | same | read-only (set at create) |
+| `to` | `User[]` | Users @mentioned in this reply. | same | set at create (mentions) |
+| `taggedUserContacts` | `AutocompleteUserContactReplaceData[]` | Resolved mention contacts. | same | set at create |
+| `status` | `'added' \| 'updated'` | Lifecycle marker of the reply (newly added vs subsequently updated). | same | read-only (set by add/update) |
+| `customList` | `AutocompleteReplaceData[]` | Selected items from a custom autocomplete list on the reply. | same | `createCustomListDataOnComment` + composer UI |
+| `toOrganizationUserGroup` | `AutocompleteGroupReplaceData[]` | Group `@mentions` (org/team mentions) on the reply. | same | set at create (group mentions) |
+| `type` | `'text' \| 'voice'` | Content kind. | same | set at create |
+| `commentVoiceUrl` | `string` | Voice-note URL (voice comments). | same | set at create |
+| `attachments` | `Attachment[]` | Files on this reply (see [Attachment](#attachment)). | same | `useAddAttachment` / `useDeleteAttachment` |
+| `recorders` | `RecordedData[]` | Recordings on this reply (see [RecordedData](#recordeddata)). | same | `useGetRecording` / `useDeleteRecording` |
+| `reactionAnnotations` / `reactionAnnotationIds` | `ReactionAnnotation[]` / `string[]` | Reactions on this reply (see [ReactionAnnotation](#reaction--reactionannotation)). | same | `useAddReaction` / `useToggleReaction` / `useDeleteReaction` |
+| `createdAt` | timestamp | When the reply was posted. | same | read-only (auto-generated) |
+| `lastUpdated` | `Date` | When the reply was last touched. | same | read-only (auto-generated) |
+| `isEdited` | `boolean` | Whether the reply was edited after posting. | same | read-only (set by edit) |
+| `editedAt` | timestamp | When it was last edited. | same | read-only (set by edit) |
+| `isDraft` | `boolean` | Reply is an unsent draft. | same | read-only |
+| `metadata` | `any` | **Customer-supplied per-reply data**, persisted as-is (see [storage patterns](#custom-data-storage-patterns)). Only present when a caller provides it. | same | set on the `Comment` passed to `useAddComment`/`useUpdateComment` |
+| `context` | `any` | Per-reply context bag. | same | set on the `Comment` at add time |
+| `replaceContentHtml` / `replaceContentText` | `string` | Replacement content for accepted suggestions. | same | set at create (suggestion flows) |
+| `sourceType` | `string` | `'agent'` for agent-authored replies. | same | read-only (server-side) |
+| `agent` | `AgentData` | Agent identity for an agent reply. | same | read-only (written upstream) |
+
+> **No per-edit author identity.** `Comment` records `isEdited`/`editedAt` but **not who** edited it: see [Absences](#absences--limits).
+
+## User / UserContact
+
+`User` is the identified user (yourself, or any `from`/`assignedTo`/`to` actor on a thread). `UserContact` is a lighter shape used for mention/assignee lists.
+
+`User` fields: `userId` (your id), `name`, `email`, `photoUrl`, `color`, `textColor` (avatar colors), `initial`, `plan`, `groupId`, `organizationId`, `type`, `isAdmin`, `isReadOnly`, `isAnonymous`, `isGuest`, `userSnippylyId` (internal id used as the key in `views`), `contacts` (`UserContact[]`).
+
+`UserContact` fields: `userId`, `name`, `email` (required), `photoUrl`, `groupId`, `visibility` (`'group' \| 'private'`), `color`, `textColor`, `initial`.
+
+| Read | Exposed by | Writable via |
+|---|---|---|
+| Current identified user | `useCurrentUser()` → `User \| null` | `useIdentify()` (`identify(user)`) |
+| Current user's permissions | `useCurrentUserPermissions()` | permission provider |
+| Mention/contact list | `useContactList()`, `useContactUtils()` | `customAutocompleteSearch` + `ContactElement` |
+| Selected contact (mention/assign) | `useContactSelected()` → `SelectedUserContact` | None |
+
+`SelectedUserContact` wraps a `UserContact` with `isOrganizationContact`, `isDocumentContact`, `documentAccessType`. The `assignUser` API takes a `UserContact` as `assignedTo`. All user identity originates from `identify()`; the SDK adds `color`/`textColor`/`userSnippylyId`/`initial`.
+
+## Reaction / ReactionAnnotation
+
+A `ReactionAnnotation` is the container pinned to a comment (or element); it holds a `reactions` array of individual `Reaction`s.
+
+`ReactionAnnotation` fields: `annotationId`, `commentAnnotationId` (the comment it's attached to), `reactions` (`Reaction[]`), `from` (`User`), `targetElement`/`targetElementId`, `position` (`CursorPosition`), `location`/`locationId`, `type` (`string`), `annotationIndex` (`number`, 1-based), `pageInfo` ([`PageInfo`](#pageinfo)), `icon`/`iconUrl`/`iconEmoji`, `lastUpdated`, `metadata`, `involvedUserIds` (server-derived), and `context` (typed `Context`: `{ access: {[key]: string|number}, accessFields?: string[] }`: **not** a free-form `any` bag, unlike `CommentAnnotation.context`).
+
+`Reaction` fields: `variant` (emoji variant), `from` (`User`), `lastUpdated`.
+
+| Read | Exposed by | Writable via |
+|---|---|---|
+| Reactions on a comment | `CommentAnnotation.comments[].reactionAnnotations` | `useAddReaction` / `useDeleteReaction` / `useToggleReaction` |
+| Reaction events | `useCommentEventCallback('addReaction' \| 'deleteReaction' \| 'toggleReaction')` | None |
+
+The emoji set is defined by the `customReactions` prop (`ReactionMap`: `{ [reactionId]: { url?, svg?, emoji? } }`). Reaction add/delete/toggle requests reference a `reactionId` and optional `customReaction` (`ReactionItem`).
+
+## Attachment
+
+A file on a comment.
+
+| Field | Type | Meaning | Exposed by | Writable via |
+|---|---|---|---|---|
+| `attachmentId` | `number` | Unique id. | `Comment.attachments[]`, `useGetAttachment` | read-only (auto-generated) |
+| `name` | `string` | File name. | same | set on upload |
+| `size` | `number` | File size in bytes. | same | read-only |
+| `type` | `RecorderFileFormat` | File type. | same | read-only |
+| `mimeType` | `any` | MIME type. | same | read-only |
+| `url` | `string` | Download URL. | same | read-only (server-set) |
+| `bucketPath` | `string` | Storage path. | same | read-only |
+| `thumbnail` / `thumbnailWithPlayIconUrl` / `previewImages` | `string` / `string[]` | Preview images. | same | read-only |
+| `metadata` | `any` | Arbitrary attachment metadata. | same | set on upload (`metadata` in upload options) |
+| `isAttachmentResolverUsed` | `boolean` | Whether this attachment was served via the attachment resolver (self-hosting). | same | read-only (server-derived) |
+
+Mutate via `useAddAttachment` (`addAttachment({annotationId,files})`), `useDeleteAttachment`, `useGetAttachment`. `allowedFileTypes` prop whitelists types.
+
+## CustomStatus / CustomPriority / CustomCategory
+
+Definition objects you supply via props/APIs to populate the status/priority/category controls. They share a base `{id, color, name}` (`CustomFilter`).
+
+| Type | Fields | Defined via | Lands on |
+|---|---|---|---|
+| `CustomStatus` | `id, color, name, type:'default'\|'ongoing'\|'terminal', lightColor?, svg?, iconUrl?` | `customStatus` prop or `commentElement.setCustomStatus([...])` | `CommentAnnotation.status` |
+| `CustomPriority` | `id, color, name, lightColor?, svg?, iconUrl?` | `customPriority` prop | `CommentAnnotation.priority` |
+| `CustomCategory` | `id, color, name` | `customCategory` prop | `CommentAnnotation.commentCategories[]` |
+
+The `type` on `CustomStatus` drives lifecycle semantics (`terminal` ≈ resolved/done). See [`Component config`](/ui-customization/reference/component-config) for the exact prop shapes and examples. **Right-tool note:** statuses/priorities are a small fixed workflow vocabulary; for arbitrary per-thread labels prefer `customCategory` or the thread `context` bag rather than overloading status.
+
+## Views
+
+Read-receipt / view-tracking data. Surfaced on `CommentAnnotation.views` and through the views feature.
+
+`CommentAnnotationViews` = `{ views: { [userSnippylyId]: { timestamp } }, comments: { [commentId]: { views: {...} } }, metadata? }`. So per-thread and per-comment "seen by whom and when" is keyed by `userSnippylyId` (the internal user id on `User`). `Views` also has `documentViews` and `locationViews` (aggregated by user and by date).
+
+| Read | Exposed by | Writable via |
+|---|---|---|
+| Per-thread / per-comment views | `CommentAnnotation.views`, `.viewedBy`, `.viewedByUserIds` | read-only (server-derived) |
+| Aggregate analytics | `useUniqueViewsByUser`, `useUniqueViewsByDate`, `useViewsUtils` | read-only |
+
+## Location
+
+A sub-document scope. Threads, reactions, presence and cursors all carry a `location`.
+
+`Location` fields: `id`, `locationName`, `version` (`{id, name}`), **plus arbitrary custom keys** (`[key: string]: any`): see [storage patterns](#custom-data-storage-patterns). Set via `useSetLocation`/`useSetLocations`/`useSetRootLocation` (or the `location`/`locationId` props on comment surfaces). Filterable in the sidebar via the location filter. The SDK derives a numeric `locationId` hash from the `Location` object.
+
+## PageInfo
+
+Page metadata captured when an annotation is created, plus per-feature deep-link URLs. Surfaced on [`CommentAnnotation.pageInfo`](#commentannotation-thread) and `ReactionAnnotation.pageInfo` (read); written via `useSetPageInfo()` (`{ setPageInfo }`) / cleared via `useClearPageInfo()`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `url` | `string` | Full URL of the page. |
+| `path` | `string` | Path, excluding the base URL. |
+| `queryParams` | `string` | Query-string of the page. |
+| `baseUrl` | `string` | Base URL (domain). |
+| `title` | `string` | Page title. |
+| `screenWidth` | `number` | Author's screen width (auto-generated). |
+| `deviceInfo` | `IDeviceInfo` | Device/screen info. |
+| `commentUrl` / `recorderUrl` / `tagUrl` / `areaUrl` / `arrowUrl` | `string` | Deep-link reference URLs to the respective annotation type. |
+
+All fields are optional. Read-only except via `useSetPageInfo` (you supply the override; the SDK auto-fills `screenWidth`/`deviceInfo`).
+
+## CustomAnnotationDropdownData / CustomAnnotationDropdownItem
+
+The shape behind a thread's [`CommentAnnotation.customList`](#commentannotation-thread): a custom dropdown attached to an annotation via `createCustomListDataOnAnnotation(data)` (see [`APIs`](/ui-customization/reference/apis)).
+
+- `CustomAnnotationDropdownItem` = `{ id: string, label: string }`: a single selectable option.
+- `CustomAnnotationDropdownData` = `{ type: 'multi' | 'single', placeholder?: string, data: CustomAnnotationDropdownItem[] }`: the dropdown definition (`type` controls single vs multi-select). The selected items land on `CommentAnnotation.customList` as `CustomAnnotationDropdownItem[]`.
+
+> **Not the same as `Comment.customList`.** That one is a per-reply autocomplete list (`AutocompleteReplaceData[]`), set via `createCustomListDataOnComment`. The annotation-level dropdown is `CustomAnnotationDropdownItem[]`.
+
+## TargetTextRange
+
+The anchored text selection on a text/inline comment ([`CommentAnnotation.targetTextRange`](#commentannotation-thread)). Most fields are xpath internals (`commonAncestorContainer`, `commonAncestorContainerFXpath`, `commonAncestorContainerCFXpath`, `commonAncestorContainerAnchor`, `occurrence`) used to re-resolve the selection in the DOM. The one customer-useful field:
+
+- **`text`** (`string`): the actual selected text the comment was anchored to. Read this to show "commented on: …". The remaining fields are anchor-resolution internals; treat them as opaque.
+
+## AgentData
+
+Identity + output of an AI agent that authored a thread/reply. Present on `CommentAnnotation.agent` and `Comment.agent` when `sourceType === 'agent'`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `agentName` | `string` | Canonical agent display name (card header). |
+| `name` | `string` | Legacy display name; superseded by `agentName`. |
+| `avatar` | `string` | Agent avatar URL (falls back to a default icon). |
+| `result` | `AgentResult` | Structured output; `result.title` is the bold headline on the suggestion card. |
+| `agentFields` | `string[]` | Queryable agent attributes; matchable via `CommentRequestQuery.agentFields`. |
+
+**Read-only from the SDK**: written upstream by the agent; there is no client API to author or edit `agent`. The agent-suggestion UI renders only when `agent` is present, `type === 'suggestion'`, and the viewer is an admin.
+
+## Notification
+
+A single notification row. Read with `useNotificationsData(query?)` → `Notification[]`.
+
+| Field | Type | Meaning | Writable via |
+|---|---|---|---|
+| `id` | `string` | Notification id. | read-only |
+| `notificationSource` | `string` | Source feature (e.g. `comment`). | read-only |
+| `actionType` | `string` | What happened (e.g. added/updated). | read-only |
+| `isUnread` | `boolean` | Unread for this user. | read (mark-read flows on the panel) |
+| `isNotificationResolverUsed` | `boolean` | Whether this notification's copy was produced by the notification resolver. | read-only |
+| `isCommentResolverUsed` | `boolean` | Whether the comment text shown came via the comment resolver (self-hosting). | read-only |
+| `actionUser` | `User` | Who triggered it. | read-only |
+| `timestamp` | `number` | When it occurred. | read-only |
+| `forYou` | `boolean` | Whether it targets the current user ("For You" tab). | read-only |
+| `displayHeadlineMessage` / `displayBodyMessage` | `string` | Rendered text. | read-only (template-driven) |
+| `displayHeadlineMessageTemplate` / `displayBodyMessageTemplate` (+ `…TemplateData`) | `string` / object | Message templates + variables (override copy). | resolver / template config |
+| `targetAnnotationId` | `string` | The annotation this notification points to. | read-only |
+| `metadata` | `NotificationMetadata` | `documentId`, `locationId`, `location`, org ids. | read-only |
+| `notifyUsers` / `notifyUsersByUserId` | maps | Recipients by email / user id. | read-only |
+| `notificationSourceData` | `any` | Raw source payload. | read-only |
+
+### NotificationRawData (the notification resolver input)
+
+When you customize notification copy through the **notification resolver** (or templates), the SDK builds a raw notification object first: `NotificationRawData`: which is the shape the resolver round-trip is formed from. The guide tells customizers to use the resolver; this is what it receives. Key fields you can read/branch on:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `oldStatus` / `newStatus` | `string` | Status before/after a status-change notification. |
+| `oldAccess` / `newAccess` | `string` | Access mode before/after an access-change notification. |
+| `annotationData` | `any` | The triggering annotation object (`targetAnnotationData` holds the specific comment). |
+| `customData` | `any` | Arbitrary custom data carried through to the resolver/template. |
+| `notifyUsers` | `{ [email]: boolean }` | Recipient map (by email hash). |
+| `actionUser` / `actionType` / `notificationSource` | `User` / enum / enum | Who acted, what happened, and the source feature. |
+| `displayHeadlineMessageTemplate` / `displayBodyMessageTemplate` (+ `…TemplateData`) | `string` / object | Template + variables you override to customize copy. |
+
+This is the raw, server-shaped input: distinct from the `Notification` row above (the resolved object you read in the UI via `useNotificationsData`).
+
+Counts via `useUnreadNotificationsCount()` → `{ forYou, all }`. Settings via `useNotificationSettings()` (`settings`, `setSettings`, `setSettingsInitialConfig`). Panel tabs configured by `tabConfig` (`forYou`/`documents`/`all`/`people`). Notification content itself is **not** mutated by a client write API: customize copy through templates/resolvers, behavior through props/settings.
+
+## PresenceUser
+
+A user currently present on the document. Read with `usePresenceData(query?)` → `GetPresenceDataResponse` (or the deprecated `usePresenceUsers()` → `PresenceUser[]`).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `userId` | `string` | User id. |
+| `name` / `email` / `photoUrl` | `string` | Identity (from `identify`). |
+| `onlineStatus` | `string` | `active` / `inactive` / `offline` (auto-managed). |
+| `color` / `textColor` / `initial` | `string` | Avatar colors / initial. |
+| `timestamp` | any | Last heartbeat time. |
+| `location` / `locationId` | `Location` / `number` | Where the user is present. |
+| `isTabAway` / `isUserIdle` | `boolean` | Activity flags. |
+| `isReadOnly` / `isAnonymous` | `boolean` | Access flags. |
+| `localOnly` | `boolean` | Custom user added via `addUser`, not persisted. |
+| `userSnippylyId` | `string` | Internal id. |
+
+All presence fields are **read-only** (server-/SDK-managed); identity comes from `identify()`. Change events: `usePresenceEventCallback('multipleUsersOnline' \| 'userStateChange')`. Inactivity thresholds set via `VeltPresence` props (`inactivityTime`, `offlineInactivityTime`).
+
+## CursorUser
+
+A user's live cursor. Read with `useCursorUsers()` → `CursorUser[]`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `userId` / `name` / `email` / `photoUrl` | None | Identity. |
+| `positionX` / `positionY` | `number` | Live mouse position. |
+| `comment` | `string` | Short note attached to the cursor. |
+| `onlineStatus` | `string` | `active` / `inactive` / `offline`. |
+| `color` / `textColor` / `initial` | `string` | Cursor colors / initial. |
+| `screenWidth` / `screenHeight` / `screenScrollHeight` | `number` | Author screen dimensions. |
+| `targetElement` / `position` | `TargetElement` / `CursorPosition` | Anchor for the cursor. |
+| `location` / `locationId` | `Location` / `number` | Scope. |
+| `timestamp` | any | Last update. |
+
+All **read-only** (auto-generated live). Change event: `onCursorUserChange` on `VeltCursor`. Avatars on cursors via the `avatarMode` prop.
+
+## RecordedData
+
+A finished recording attached to a comment. Read with `useGetRecording()` (imperative) or from `Comment.recorders[]`; also delivered by `useRecorderAddHandler()`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | `string` | Recorder annotation id. |
+| `type` | `string` | `audio` / `video` / `screen`. |
+| `videoUrl` / `audioUrl` | `string` | Media URLs. |
+| `thumbnailUrl` / `thumbnailWithPlayIconUrl` | `string` | Poster images. |
+| `videoPlayerUrl` | `string` | Hosted player URL. |
+| `tag` | `string` | Embeddable player tag. |
+| `chunkUrls` | `{ [n]: string }` | Per-chunk upload URLs. |
+
+Mutate via `useDeleteRecording` / `useGetRecording`. Recorder change events via `useRecorderEventCallback(...)` and the recorder events in [`Events`](/ui-customization/reference/events) (`recordingDone`, `transcriptionDone`, …). Recording media URLs are server-set (read-only).
+
+## ActivityRecord
+
+A single activity-feed event. Read with `useAllActivities(config?)` → `ActivityRecord[]`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | `string` | Activity id. |
+| `featureType` | `'comment'\|'reaction'\|'recorder'\|'crdt'\|'custom'` | Originating feature. |
+| `actionType` | `string` | `entity_type.action` (e.g. `comment_annotation.status_change`, `comment.add`). |
+| `actionUser` | `User` | Who acted. |
+| `timestamp` | `number` | When (server-set). |
+| `targetEntityId` | `string` | Parent entity id (e.g. `annotationId`). |
+| `targetSubEntityId` | `string \| null` | Sub-entity id (e.g. `commentId`); null for entity-level actions. |
+| `changes` | `{ [key]: { from?, to? } }` | From/to change pairs (e.g. `status`, `assignedTo`). |
+| `entityData` / `entityTargetData` | snapshot | Full parent / sub-entity snapshot at action time. |
+| `displayMessage` | `string` | Computed display text (never stored). |
+| `displayMessageTemplate` (+ `…TemplateData`) | `string` / object | **Custom activities only**: your own message template. |
+| `actionIcon` | `string` | Icon URL/identifier. |
+| `immutable` | `boolean` | If true, cannot be updated/deleted via REST. |
+
+Scope/filter via `ActivitySubscribeConfig` (`documentIds`, `featureTypes`, `actionTypes`, `userIds`, `maxDays`, …). Reading is reactive; activities are written by the features themselves (custom activities are created server-side / via REST, not a React mutation hook in this guide).
+
+## LiveStateData
+
+Arbitrary application state synced across collaborators. Read/write with `useLiveStateData` / `useSetLiveStateData` (and `useUiState` for shared UI state).
+
+| Field | Type | Meaning | Writable via |
+|---|---|---|---|
+| `id` | `string` | MD5 of `liveStateDataId`. | read-only (derived) |
+| `liveStateDataId` | `string` | Your sync key. | set at write |
+| `data` | `string\|number\|boolean\|JSON` | The synced value (this is your free-form payload). | `useSetLiveStateData` (`merge?` to deep-merge) |
+| `updatedBy` | `User` | Who last wrote it. | read-only (auto) |
+| `lastUpdated` | any | Last write time. | read-only (auto) |
+| `tabId` | `string \| null` | Originating tab. | auto |
+
+This is the **general-purpose escape hatch** for syncing custom data that has no home on any other entity. Single-editor-mode state (`SingleEditorLiveStateData`: `editor`, `requestEditorAccess`) rides the same feature; access events are in [`Events`](/ui-customization/reference/events) under Live State Sync.
+
+---
+
+## Custom-data storage patterns
+
+Four places hold arbitrary application data. Pick by lifetime and scope:
+
+| Mechanism | Shape | Set via | Surfaces on | Use for |
+|---|---|---|---|---|
+| **Thread `context`** | `context?: any` | `useSetContextProvider()` (a `(documentId, location?) => context` provider), the `addContext(context)` callback on the `addCommentAnnotation` event, or the `context` prop on comment surfaces (`VeltComments`, `VeltCommentTool`, `VeltCommentPin`, `VeltCommentBubble`, sidebars, inline sections) | `CommentAnnotation.context` (+ derived `contextId`) | App state a thread was created against (record id, route, selection metadata). Filterable via the sidebar custom filter. |
+| **Reply `metadata`** | `metadata?: any` | the `metadata` field on the `Comment` you pass to `useAddComment` / `useUpdateComment` | `Comment.metadata` | Per-reply app data persisted as-is (only present when you set it). |
+| **`Location` custom fields** | `{ id, locationName, version?, [key]: any }` | `useSetLocation` / `useSetLocations` | `CommentAnnotation.location`, `PresenceUser.location`, `CursorUser.location` | Sub-document scoping + extra attributes that travel with the scope. |
+| **`CustomCategory`** | `{ id, color, name }` | `customCategory` prop | `CommentAnnotation.commentCategories[]` | A fixed, filterable label vocabulary (the right tool for tag-like categorization). |
+
+For larger/looser app state with no entity home, use **`LiveStateData`** (above). The `context` bag is the most common choice for "attach my record id to this thread."
+
+## Absences & limits
+
+State these as confident "not supported" verdicts:
+
+- **Per-edit editor identity is not stored.** `Comment` has `isEdited` and `editedAt` but no field for *who* edited a reply. "Who edited this reply" **cannot** be shown client-side from the model. Only the original author (`Comment.from`) is available.
+- **No per-reply `createdBy`-vs-`editedBy` distinction.** `from` is the author; there is no separate last-editor user object on `Comment` or `CommentAnnotation` (only `statusUpdatedByUserId` and `resolvedByUserId` exist, scoped to those specific actions).
+- **`agent`, `suggestion`, `involvedUserIds`, `mentionedUserIds`, `views`/`viewedBy` are read-only.** They are written upstream/server-side; no client API mutates them. UI that *displays* them is feasible; UI that *edits* them is not (for suggestions, use the Suggestion element API, not a field write).
+- **Notification content has no client write API.** You cannot mutate a `Notification` object directly. Change copy through message templates / the notification resolver, and behavior through `tabConfig` / settings, not by writing the entity. This forces a template/resolver (server-side) path for custom notification text.
+- **Presence/cursor fields are fully managed.** `onlineStatus`, positions, colors, timestamps are auto-generated; you influence them only through identity (`identify`) and config props (`inactivityTime`, `avatarMode`, …), never by writing the field.
+- **Activity records are not mutated from React.** Reading is reactive (`useAllActivities`); creating/updating custom activities and deleting records is a server-side/REST path, and `immutable` records reject REST mutation entirely.
+- **`context` is set, not patched per-field client-side.** It is provided wholesale (provider/`addContext`/prop) and hashed into `contextId`; there is no React hook to mutate one key of an existing thread's `context` in place (server REST is the path for editing stored context).
+
+## Runtime-access map
+
+Quick lookup: entity → the hook that reads it live → the event that fires on change.
+
+| Entity | Read hook | Change event (`.on(...)` / `use…EventCallback`) |
+|---|---|---|
+| `CommentAnnotation` (all) | `useCommentAnnotations()` | `addCommentAnnotation`, `deleteCommentAnnotation`, `updateStatus`, `updatePriority`, `assignUser`, `updateAccess`, `resolveComment` |
+| `CommentAnnotation` (one) | `useCommentAnnotationById({annotationId})` | same |
+| `CommentAnnotation` (filtered) | `useGetCommentAnnotations(query?)` | same |
+| `Comment` (reply) | `CommentAnnotation.comments[]` / `useGetComment()` | `addComment`, `updateComment`, `deleteComment` |
+| `User` (current) | `useCurrentUser()` | `userUpdate` (core) |
+| `UserContact` (lists) | `useContactList()` / `useContactSelected()` | `autocompleteSearch` |
+| `ReactionAnnotation` / `Reaction` | via `Comment.reactionAnnotations` | `addReaction`, `deleteReaction`, `toggleReaction` |
+| `Attachment` | via `Comment.attachments` / `useGetAttachment()` | `addAttachment`, `deleteAttachment`, `attachmentDownloadClicked` |
+| `RecordedData` | `useGetRecording()` / `useRecorderAddHandler()` | recorder events (`recordingDone`, `transcriptionDone`, `deleteRecording`) |
+| `Notification` | `useNotificationsData()` / `useUnreadNotificationsCount()` | `settingsUpdated` |
+| `PresenceUser` | `usePresenceData()` | `multipleUsersOnline`, `userStateChange` |
+| `CursorUser` | `useCursorUsers()` | `onCursorUserChange` (`VeltCursor` prop) |
+| `ActivityRecord` | `useAllActivities(config?)` | (reactive stream; no separate change event) |
+| `LiveStateData` | `useLiveStateData()` / `useUiState()` | live-state-sync events (`editorAssigned`, `accessRequested`, …) |
+| `Views` | `CommentAnnotation.views` / `useUniqueViewsByUser` | (reactive; server-derived) |

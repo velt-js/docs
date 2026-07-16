@@ -1,0 +1,92 @@
+---
+title: "Context: attach your own data to comments, read it in the UI"
+sidebarTitle: "Context"
+description: "Attach and render custom application context in Velt comments and custom UI."
+---
+
+**Context** is arbitrary, customer-defined key-value metadata you attach to a comment/annotation when it's created. Velt stores it on the annotation (`annotation.context.*`), it survives round-trips, and your wireframes can read it. It's the bridge between **your app's domain** (a form question, an invoice line, an email block) and **Velt's comment UI**, and it's how you **scope a comment to a specific element** on the page.
+
+This is a core customization concept: if your design shows app-specific info in the comment UI (a question title in the dialog header, a "jump to this row" button, a per-element comment), context is how you get that data in.
+
+---
+
+## 1. Attach context (two ways)
+
+### A. Declarative props (simplest): on `VeltCommentTool` / `VeltCommentBubble`
+```tsx
+const targetElementId = `question-${question.id}`;   // matches the DOM id of the element
+
+<VeltCommentTool
+  contextInPageModeComposer={true}
+  targetElementId={targetElementId}                  // scopes the comment to that element
+  context={{ questionId: question.id, questionNumber: question.number, questionTitle: question.title }}
+/>
+```
+- **`context`**: your object (any keys). Lands on `annotation.context`.
+- **`targetElementId`**: ties the comment/bubble to a DOM element with that `id` (so the bubble renders on that row).
+- **`contextInPageModeComposer`**: routes this context into the page-mode composer flow.
+
+(Other domain shapes work the same: `context={{ title: step.label, scope: "step", stepId: step.id }}`, `context={{ device, mode }}`, etc.)
+
+### B. Imperative (page-mode composer flow): via `useCommentUtils()`
+When a comment tool is clicked, Velt fires a `commentToolClick` event carrying that tool's `context` + `targetElementId`; push it into the shared page-mode composer, then focus it:
+```tsx
+const commentUtils = useCommentUtils();
+const evt = useCommentEventCallback('commentToolClick');
+useEffect(() => {
+  if (commentUtils && evt) {
+    commentUtils.setContextInPageModeComposer({ context: evt.context, targetElementId: evt.targetElementId });
+    commentUtils.focusPageModeComposer();
+  }
+}, [evt]);
+// after submit / on cancel:
+commentUtils.clearPageModeComposerContext();
+```
+API (all on `useCommentUtils()`): **`setContextInPageModeComposer({ context, targetElementId })`**, **`focusPageModeComposer()`**, **`clearPageModeComposerContext()`**. (Under the hood this is the `context` argument of `addComment(...)`.)
+
+---
+
+## 2. Read context in the wireframe
+
+Context is readable via `{…}` tokens: display with `<VeltData field="…">`, branch with `<VeltIf condition="…">`. **The path prefix depends on the surface:**
+
+| Where you're reading it | Path prefix |
+|---|---|
+| Comment dialog | `annotation.context.<key>` (also `commentAnnotation.context.<key>`) |
+| Page-mode composer (live, not yet saved) | `context.<key>` |
+| Sidebar focused thread | `focusedAnnotation.context.<key>` |
+| Notification list item | `notification.notificationSourceData.context.<key>` (or `notification.metadata.<key>`) |
+
+```tsx
+// custom dialog header: only when the context key exists
+<VeltIf condition="!{pageModeComposer} && {annotation.context.questionTitle}">
+  <VeltButtonWireframe type="button" id="navigate-to-question-button">
+    <VeltData field="annotation.context.questionNumber" />. <VeltData field="annotation.context.questionTitle" />
+  </VeltButtonWireframe>
+</VeltIf>
+
+// composer header echoing the active context while composing (bare context. path)
+<VeltIf condition="{pageModeComposer} && {context.questionTitle}">
+  <VeltData field="context.questionTitle" />
+</VeltIf>
+```
+
+> The custom `id="navigate-to-question-button"` button is wired to app behavior via the `veltButtonClick` bridge ([`Patterns and tips`](/ui-customization/patterns-and-tips)): e.g. scroll to the question.
+
+---
+
+## 3. What context enables
+
+1. **Scope a comment to a specific element**: `targetElementId` + a matching DOM `id` (e.g. `question-${id}`); a `<VeltCommentBubble targetElementId=…>` then renders that element's bubble in place.
+2. **Show app metadata in the comment UI**: question title/number in the header, an invoice line label, an email device/mode badge: straight off `annotation.context.*`.
+3. **Conditional UI by domain type**: branch the wireframe on context, e.g. `velt-class="'is-action': {annotation.context.commentType} === 'action'"` or `velt-if="{annotation.context.type} === 'ApproverComment'"`.
+4. **Deep-linking / navigation**: a "jump to" button that exists only when a context key is present, handled via `veltButtonClick`.
+
+---
+
+## Checklist
+
+- [ ] Attach `context` (+ `targetElementId` for element scoping) on the comment trigger, **or** via `setContextInPageModeComposer` for the page-mode flow.
+- [ ] Read it with the correct path prefix for the surface (`annotation.context.*` in the dialog, `context.*` in the page-mode composer, `focusedAnnotation.context.*` in the sidebar).
+- [ ] Gate context-dependent UI with `velt-if="{…context.key}"` so it only shows when present.
+- [ ] Clear page-mode context after submit/cancel (`clearPageModeComposerContext()`).

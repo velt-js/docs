@@ -1,0 +1,256 @@
+---
+title: "Comments Sidebar"
+sidebarTitle: "Comments sidebar"
+description: "Reference runtime behavior for Velt comments sidebar components and props."
+---
+
+Runtime behavior of every prop on the three sidebar entry points. [`Props`](/ui-customization/reference/props) gives each prop's **name, type, and default**; this file gives what each prop **does at runtime**, its **default behavior** when omitted, and how it **interacts** with related props. See the [behaviors index](/ui-customization/reference/behaviors) for the dialog/composer state machine and the cross-component prop matrix.
+
+Three components are covered:
+
+- **`VeltCommentsSidebar` (V1)**: the original sidebar. Filtering is driven by a `filterConfig` (which system filter dimensions appear) plus a `filters` object (active selections) plus a fixed "minimal filter" quick-filter dropdown. Layout: overlay (default), `embedMode`, or `floatingMode`.
+- **`VeltCommentsSidebarV2`**: the newer, **filter-capable** sidebar. Filtering is **descriptor-driven**: you declare `filters` / `miniFilters` / `minimalFilters` as `FilterField[]` arrays and the sidebar builds the filter UI from them. Adds virtual-scroll tuning (`measuredSize`/`minBufferPx`/`maxBufferPx`), `filterOperator`, and `onFullscreenClick`. See [V1-vs-V2 differences](#v1-vs-v2-behavioral-differences).
+- **`VeltSidebarButton`**: the launcher button. It renders a comment-count badge and toggles a sidebar; in `floatingMode` it owns the opened sidebar and the click-outside-to-close behavior. Most of its non-button props are **pass-throughs** forwarded to the sidebar it opens.
+
+All three resolve `darkMode` through the shared theme system, render their default markup unless a matching **wireframe `variant`** is registered, and (for V1/V2) restore their last filter/sort state from **per-browser-session storage**, which **overrides** `defaultMinimalFilter`.
+
+---
+
+## Per-prop behavior (exhaustive)
+
+The exhaustive per-prop behavior for the three sidebar entry points is organized **per component** below: each `## Velt…` subsection carries that component's full prop table (default + runtime behavior + interactions) plus its own no-prop baseline (the **Default behaviors (… no prop needed)** block); the [V1-vs-V2 behavioral differences](#v1-vs-v2-behavioral-differences) table at the end captures where the two sidebars diverge. Every prop in [`Props`](/ui-customization/reference/props) for these components is covered; see [Coverage](#coverage).
+
+## VeltCommentsSidebar (V1)
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `embedMode` | `null` (off) | Renders the sidebar **inline** in your layout (a static block in document flow) instead of as a Velt-positioned overlay. While embedded the sidebar is treated as always-visible: comments are pushed to the data layer even when no open/close has fired. | Mutually exclusive in practice with the default overlay. If both `embedMode` and `floatingMode` are set, the template takes the **embed-or-floating** branch (non-overlay); `embedMode` is the dominant layout signal for "is this always on screen." `position`/`forceClose` have no meaning while embedded. |
+| `floatingMode` | `false` | Floats the sidebar **over** content (overlay panel) rather than inline. Used together with `VeltSidebarButton` so the button toggles a floating panel. | Distinct from default overlay: floating mode wires click-outside-to-close. With `embedMode` also set, embed wins. |
+| `enableUrlNavigation` | off | **Deprecated alias of `urlNavigation`**: identical effect (`enableSidebarUrlNavigation`). | Use `urlNavigation`. If both are passed, last one set wins (both call the same service toggle). |
+| `urlNavigation` | off | When on, clicking a comment writes its location/annotation into the URL, and a deep link to that URL navigates to and selects the comment on load. | Pairs with `queryParamsComments` for query-param-based selection. Both feed the same comment-service navigation layer. |
+| `queryParamsComments` | off | Drives comment **selection via query params** (selected annotation id round-trips through the query string). | Complementary to `urlNavigation` (path/hash style). Enable whichever your routing uses. |
+| `pageMode` | `false` | Switches to **page-level comments**: no pins are placed; a single page-mode composer renders **at the sidebar level** (top of the sidebar) and new comments attach to the page rather than an element. | Composer placement is governed by `pageMode` + `pageModeComposerVariant` (wireframe) + `pageModePlaceholder` (text). Context for page-mode comments is built from the page location, and the page-mode composer's own context override is cleared on submit. |
+| `currentLocationSuffix` | `false` | Appends the current location to created/displayed entries so comments are scoped/labeled by where they were made. | Affects how comments are tagged with location; combine with location filtering. |
+| `variant` | `'sidebar'` | Selects the **wireframe variant** for the sidebar shell. If a wireframe with that name is registered, it replaces the default markup; otherwise default renders. | Distinct from `dialogVariant`, `focusedThreadDialogVariant`, `pageModeComposerVariant`: each scopes a different surface. Unmatched variant name silently falls back to default. |
+| `pageModeComposerVariant` | `'sidebar'` | Wireframe variant for the **page-mode composer** specifically. | Only relevant when `pageMode` is on. |
+| `dialogVariant` | `'sidebar'` | Wireframe variant for **comment dialogs opened from inside the sidebar** (thread cards). | Separate from the sidebar shell `variant` and from `focusedThreadDialogVariant`. |
+| `shadowDom` | `undefined` (inherits SDK default, on) | Renders the sidebar inside a **shadow root** for style isolation, and toggles the sidebar-shadow-DOM service flag. Tracks whether `true` was passed explicitly. | Set `false` to style with normal selector CSS. The explicit-flag tracking means an unset `shadowDom` is **not** treated as `false`. |
+| `sortData` | `undefined` | Primary list sort applied at data load: `'asc'` → oldest-first by last-updated; `'none'` → newest-first by **createdAt**; any other/unset → **newest-first by last-updated** (the default). | Runs **before** `sortBy`/`sortOrder`. When `sortBy`+`sortOrder` are set they **re-sort on top**, so they win. Also: the in-sidebar sort dropdown (`date`/`unread`) only runs when **neither** `sortData` **nor** `sortOrder` is set (`if (!sortData && !sortOrder)`), so setting either disables the user's sort toggle. |
+| `filterConfig` | rich default (see note) | Declares **which system filter dimensions appear** and their labels/grouping: location("Pages"), document(off), people("Author"), assigned, tagged, involved, priority, status(off), category, commentType, version. | Defines the *available* filters; `filters` supplies the *active selections*. Disabling a dimension here removes it from the panel. Document & status are **off by default**. |
+| `groupConfig` | `{ enable: true, name: 'Group By' }` | Enables grouping the comment list and labels the group-by control. Setting `enable: false` clears `groupBy` (no grouping). | Group-by selection is persisted to session storage and restored on reopen. |
+| `filters` | empty selections | Applies specific **active filter values** programmatically (e.g. `{ status: [...], people: [...] }`); pushed to the comment service as the active filter set. | The *values*; `filterConfig` is the *available dimensions*. **Session-restored filters override** the initial `filters` on reopen (see Default behaviors). |
+| `excludeLocationIds` | none | Hides comments whose location id is in the list (filtered out before display, including from the sidebar-button count). | Applied globally to the sidebar data stream. |
+| `openSidebar` | None | **Deprecated alias of `onSidebarOpen`**: emits when the sidebar opens. | Use `onSidebarOpen`; both fire. |
+| `onSidebarOpen` | None | Callback fired when the sidebar opens. | None |
+| `onSidebarCommentClick` | None | **Deprecated alias of `onCommentClick`**: emits the clicked comment. | Use `onCommentClick`. |
+| `onCommentClick` | None | Callback fired when a comment row is clicked (payload is the comment/annotation). | With `urlNavigation` on, the click also drives URL/selection. |
+| `onSidebarClose` | None | Callback fired when the sidebar closes. | None |
+| `onCommentNavigationButtonClick` | None | Callback for the prev/next thread navigation buttons inside the sidebar. | None |
+| `darkMode` | `false` | Applies the dark theme to the sidebar surface. | Resolved through the shared theme service; can be inherited from global theme if unset. |
+| `position` | `'right'` | Anchors the overlay sidebar to the **right** or **left** edge of the viewport. | No effect in `embedMode` (inline, no anchoring). |
+| `filterPanelLayout` | `'bottomSheet'` | How the **filter panel** presents: `'bottomSheet'` (slides up from bottom) or `'menu'` (dropdown menu). | Independent of `filterOptionLayout` (which controls option presentation inside the panel). |
+| `customActions` | off | Enables **custom action slots** in the sidebar (toggles the sidebar-custom-actions service flag); custom-action state is persisted to session storage. | When custom actions are active, the sidebar yields its data/count handling to the custom-action pipeline (the built-in filtered-count path is skipped). |
+| `focusedThreadDialogVariant` | `'sidebar'` | Wireframe variant for the **focused-thread** dialog (the single-thread expanded view). | Only used when `focusedThreadMode` / focus is active. |
+| `focusedThreadMode` | `false` | Toggles focused-thread mode (service flag): opening a thread shows it as a dedicated focused view with a back button rather than in the scrolling list. | Pairs with `openAnnotationInFocusMode` (which annotations auto-open focused) and `focusedThreadDialogVariant`. |
+| `openAnnotationInFocusMode` | `false` | When on, clicking an annotation **opens it in focus mode** automatically (service flag). | Requires/complements `focusedThreadMode`. |
+| `searchPlaceholder` | `'Search comments'` | Placeholder text for the sidebar search input. | The search input filters the list client-side via the filter `input` field. |
+| `filterOptionLayout` | `'checkbox'` | How filter **options** render inside the panel: `'checkbox'` list or `'dropdown'`. | Independent of `filterPanelLayout`. Note this default **differs from V2** (V2 defaults to `'dropdown'`). |
+| `filterCount` | `true` | Shows per-option **counts** next to filter values. | Set `false` to hide counts. |
+| `fullExpanded` | `false` | Forces thread cards to render **fully expanded** (all comments) rather than collapsed previews. | Overrides the default collapsed-preview behavior described in the [behaviors index](/ui-customization/reference/behaviors) collapse matrix. |
+| `systemFiltersOperator` | `'and'` (`AND`) | Combines **different system filter dimensions** with AND or OR (e.g. status AND people, vs status OR people). | OR is always used *within* a single dimension's multi-selection; this prop only governs *across* dimensions. |
+| `sidebarButtonCountType` | service default (`'default'`) | Sets what the associated sidebar **button count** reflects: `'default'` (total) or `'filter'` (count after the sidebar's active filters). Forwarded to the comment service so `VeltSidebarButton` reads it. | `'filter'` keeps the badge stable across open/close because the filtered-comment map persists independently of visibility. |
+| `filterGhostCommentsInSidebar` | off | When on, **ghost comments** (comments whose anchor is no longer on the DOM) are included when filtering/counting. | Affects both the list and the button count. |
+| `fullScreen` | `false` | Enables full-screen rendering of the sidebar (toggles the full-screen service flag) and the fullscreen toggle button. | The fullscreen button emits via the fullscreen output. |
+| `readOnly` | `false` | **Sidebar-local view-only** mode: dialogs *within this sidebar* become read-only (no compose/edit/react). Does **not** affect pins, inline sections, or other contexts. | If `readOnly` is **not explicitly set**, the sidebar falls back to the **global** read-only state from the comment service; if explicitly set, the local value wins and the global subscription will not override it. The effective value is `localReadOnly OR globalReadOnly`. |
+| `dialogSelection` | `true` | Whether thread dialogs in the sidebar can be **selected**. `false` disables selection. | Stored as `selection`. Setting to `false` also suppresses the selection-driven expand. Interacts with `expandOnSelection`. |
+| `expandOnSelection` | `true` | When a thread is selected it **expands** (reveals all comments + composer). `false` lets a thread be selected without expanding: it stays a first/last preview and the composer stays hidden. | Coerced as `value !== false`, so only an explicit `false` disables it. Pairs with `dialogSelection` and the collapse matrix in the [behaviors index](/ui-customization/reference/behaviors). |
+| `context` | none | Arbitrary key/value object attached to **comments created** from this sidebar (e.g. metadata). | In page mode the page-mode composer can override context and clears it on submit. |
+| `defaultMinimalFilter` | `'all'` | Sets the **initial quick filter** (the minimal-filter dropdown). Values: `'all'`, `'read'`, `'unread'`, `'open'`, `'resolved'`, `'assignedToMe'`, `'reset'`. Behavior per value: **all** = everything except resolved (unless resolved already on DOM); **read** = seen & not resolved; **unread** = unread & not resolved (plus any currently-selected); **open** = status type `default`; **resolved** = the resolved status only; **assignedToMe** = assigned to the current user; **reset** = no minimal filtering (all incl. resolved). | **Session-restored state overrides this**: if a saved minimal filter exists for the browser session it wins, so `defaultMinimalFilter` is only deterministic on a fresh session. Sets both `minimalFilter` and the dropdown's selected option. |
+| `sortOrder` | `undefined` | Sort direction `'asc'` / `'desc'` for the data-load sort. Applied **after** `sortData`, re-sorting the list, so it (with `sortBy`) overrides `sortData`. | With `sortBy='createdAt'` sorts by created date; with `sortBy='lastUpdated'` (or unset) sorts by last-updated. Setting `sortOrder` also **disables the in-sidebar sort dropdown** (see `sortData`). |
+| `sortBy` | `undefined` | The field the post-load sort uses: `'createdAt'` or `'lastUpdated'`. Only takes effect alongside `sortOrder`. | If `sortBy` is unset but `sortOrder` is set, the sort falls back to last-updated. Wins over `sortData`. |
+| `forceClose` | `true` | When `true`, the sidebar is force-closed (not rendered as an open overlay) until explicitly opened. Coerced as `value !== false`. | Setting `false` allows it to stay open. No effect in `embedMode`. |
+| `commentPlaceholder` | SDK default | Placeholder text for the **new-comment** composer input. | None |
+| `replyPlaceholder` | SDK default | Placeholder text for the **reply** composer input. | None |
+| `editPlaceholder` | SDK default | Generic placeholder when editing. | Overridden by `editCommentPlaceholder` / `editReplyPlaceholder` for the specific edit case. |
+| `editCommentPlaceholder` | SDK default | Placeholder when editing a top-level **comment**. | Takes precedence over `editPlaceholder` for comment edits. |
+| `editReplyPlaceholder` | SDK default | Placeholder when editing a **reply**. | Takes precedence over `editPlaceholder` for reply edits. |
+| `pageModePlaceholder` | SDK default | Placeholder for the **page-mode** composer. | Only used when `pageMode` is on. |
+
+**Default behaviors (V1, no prop needed):**
+
+- **Layout:** with no `embedMode`/`floatingMode`, the sidebar is a **Velt-positioned overlay** anchored `right` and is force-closed (`forceClose: true`) until opened.
+- **Filter restored from saved state:** on open the sidebar reads its last-used **filters** and **group-by** from per-browser-session storage and re-applies them. This **overrides** both the `filters` prop and `defaultMinimalFilter`. There is a one-time legacy reset of page filters. To make `defaultMinimalFilter` deterministic, no saved filter must exist (first session).
+- **Default filter panel:** `filterConfig` ships with Pages, Author, Assigned, Tagged, Involved, Priority, Category, Comment Type, and Versions **on**; Documents and Status **off**.
+- **Default sort:** newest-first by **last-updated** (`sortData` unset, no `sortBy`/`sortOrder`).
+- **Default minimal filter:** `'all'` (everything except resolved).
+- **Selection:** dialogs are selectable (`dialogSelection: true`) and **expand on selection** (`expandOnSelection: true`).
+- **Read-only:** off locally; falls back to global read-only if not explicitly set.
+- **`filterCount`** on; `filterOptionLayout` `'checkbox'`; `filterPanelLayout` `'bottomSheet'`; `systemFiltersOperator` `'and'`.
+
+---
+
+## VeltCommentsSidebarV2
+
+V2 is the **newer, filter-capable** sidebar. Filtering is **descriptor-driven** (`FilterField[]` arrays) rather than the V1 `filterConfig` enable-map. Many feature toggles forward to the same comment-service flags as V1, so cross-component effects match.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `pageMode` | `false` | Page-level comments: no pins, page-mode composer at sidebar level. | Same as V1; pairs with `pageModeComposerVariant` / `pageModePlaceholder`. |
+| `focusedThreadMode` | `false` | Open threads in a dedicated focused view (with back button). | Pairs with `openAnnotationInFocusMode`, `focusedThreadDialogVariant`. |
+| `readOnly` | `false` | View-only: composer/edit/react disabled for dialogs in this sidebar. | Same fall-back-to-global semantics as V1. |
+| `embedMode` | `null` | Inline render instead of overlay. **Typed `string`** in V2 (an attribute-style value), not boolean: pass a string. | With `floatingMode`, embed is the dominant always-on-screen layout. |
+| `floatingMode` | `false` | Float the sidebar over content. | Used with `VeltSidebarButton` floating launcher. |
+| `position` | `'right'` | Anchor side `'right'` / `'left'`. | No effect in embed mode. |
+| `variant` | `'sidebar'` | Wireframe variant for the sidebar shell. | Separate from `dialogVariant`/`focusedThreadDialogVariant`/`pageModeComposerVariant`. |
+| `forceClose` | `true` | Force closed until opened. | Same as V1. |
+| `darkMode` | `false` | Dark theme. | Resolved through the shared theme system (inherited from `ThemedComponent`); can inherit global theme. |
+| `defaultCondition` | `true` | **Visibility gate** (inherited from the V2 base). `true` = respect the component's normal visibility conditions; `false` = always show, bypassing those conditions. | Use `false` when you place the sidebar yourself and want it to render unconditionally. String `''`/`'true'` coerce to `true`. |
+| `filters` | `[]` (no fields) | **Dual-shape.** **Array** → `FilterField[]` descriptors; each entry becomes a filter **section/dimension** in the filter UI (this is the V2 way). **Object** → treated as V1-style **active selections** (`{status:[...], people:[...]}`) and routed to the same comment-service setter as V1's `filters`. | This is the core V2 filtering input. Pass an array to *define* filter dimensions; pass an object to *apply* values. Invalid input → empty (`[]`). |
+| `miniFilters` | `[]` → defaults to Status | `FilterField[]` shown as stacked sections **inside the single compact mini-filter dropdown** (the "Status ⌄" control). Empty → just Status. | Same descriptor shape as `filters`. Distinct from the main filter panel. |
+| `minimalFilters` | `[]` | Array of configurable **header dropdowns**: one filter/sort/quick dropdown per entry, rendered in the header **instead of** the single default mini-filter when non-empty. Entry `type` is `'filter'` (fields auto-register for faceting), `'sort'` (sort criteria), or `'quick'` (quick-filter actions). | When non-empty it **replaces** the default mini-filter dropdown. `'filter'` entries' fields auto-register; `'sort'`/`'quick'` need no extra config. Invalid input → `[]`. |
+| `filterOperator` | `'and'` | Combines **different filter fields** with AND/OR. OR is always applied **within** a single field's selections. | V2-native name for the same concept as V1 `systemFiltersOperator` (which is an alias here). |
+| `filterPanelLayout` | `'bottomSheet'` | Main filter panel position: `'bottomSheet'` or `'menu'`. | Same as V1. |
+| `filterOptionLayout` | `'dropdown'` | Per-field option control: `'dropdown'` or `'checkbox'`. | **Default differs from V1** (V1 = `'checkbox'`). |
+| `filterCount` | `true` | Show per-option counts in the filter UI. | Same as V1. |
+| `filterGhostCommentsInSidebar` | `false` | Include ghost comments (anchor no longer on DOM) when filtering/counting. Forwarded to the comment-service flag. | Affects list + button count. |
+| `systemFiltersOperator` | `undefined` | **V1 alias of `filterOperator`**: combine different filter fields with AND/OR. | Prefer `filterOperator` in V2; this exists for V1 parity. |
+| `defaultMinimalFilter` | `undefined` (effective `'all'`) | **Initial quick filter** on load: `all` \| `read` \| `unread` \| `open` \| `resolved` \| `assignedToMe` \| `reset` \| `null`. Set into the core service as the starting active quick filter. | **A default only: sessionStorage restore overrides it** (matches V1). Re-applied on input change. Precedence: explicit input > sessionStorage > default. |
+| `excludeLocationIds` | `[]` | Hide comments for these location ids. Parsed from JSON array. | Same as V1. |
+| `sortBy` | `undefined` | Date field to sort by: `'lastUpdated'` (effective default) or `'createdAt'`. | Pairs with `sortOrder`. |
+| `sortOrder` | `undefined` | Sort direction `'asc'` / `'desc'`. | With `sortBy`. |
+| `sortData` | `undefined` | Legacy custom sort spec, **stored for parity; rarely used** in V2. | Prefer `sortBy`+`sortOrder` in V2. |
+| `customActions` | `false` | Enable custom action slots (service flag). | Same flag as V1. |
+| `openAnnotationInFocusMode` | `false` | Auto-open clicked annotations in focus mode. | Pairs with `focusedThreadMode`. |
+| `enableUrlNavigation` | `false` | **Deprecated alias of `urlNavigation`.** | Use `urlNavigation`. |
+| `urlNavigation` | `false` | Sync selection into URL / navigate on deep link. | Pairs with `queryParamsComments`. |
+| `queryParamsComments` | `false` | Query-param comment selection. | None |
+| `fullScreen` | `false` | Full-screen rendering + fullscreen toggle. | Toggle emits via `onFullscreenClick`. |
+| `shadowDom` | `false` | Render in a shadow root (style isolation). | V2 default is `false` (boolean-transformed), unlike V1 where unset means "inherit on". Set `true` to isolate. |
+| `fullExpanded` | `false` | Render thread cards fully expanded. | Overrides collapsed-preview default. |
+| `dialogSelection` | `true` | Whether dialogs are selectable. | Pairs with `expandOnSelection`. |
+| `expandOnSelection` | `true` | Expand a thread when selected. | Only explicit `false` disables it. |
+| `currentLocationSuffix` | `false` | Append current location to entries. | Same as V1. |
+| `sidebarButtonCountType` | `undefined` | Source for the sidebar button count: `'default'` (total) or `'filter'` (after active filters). Forwarded to comment service. | Read by `VeltSidebarButton`. |
+| `dialogVariant` | `'sidebar'` | Wireframe variant for dialogs opened in the sidebar. | None |
+| `focusedThreadDialogVariant` | `'sidebar'` | Wireframe variant for the focused-thread dialog. | Used with focus mode. |
+| `pageModeComposerVariant` | `'sidebar'` | Wireframe variant for the page-mode composer. | Used with `pageMode`. |
+| `pageModePlaceholder` | `''` | Placeholder for the page-mode composer. | Used with `pageMode`. |
+| `searchPlaceholder` | `'Search comments'` | Placeholder for the search input. | None |
+| `commentPlaceholder` | `''` | New-comment composer placeholder. | None |
+| `replyPlaceholder` | `''` | Reply composer placeholder. | None |
+| `editPlaceholder` | `''` | Generic edit placeholder. | Overridden by `editCommentPlaceholder`/`editReplyPlaceholder`. |
+| `editCommentPlaceholder` | `''` | Edit-comment placeholder. | Wins over `editPlaceholder` for comment edits. |
+| `editReplyPlaceholder` | `''` | Edit-reply placeholder. | Wins over `editPlaceholder` for reply edits. |
+| `context` | `null` | Object attached to comments created from this sidebar (JSON-parsed). | Page-mode composer may override + clear on submit. |
+| `groupConfig` | `undefined` | Grouping config object (JSON-parsed). When grouping is enabled the list is grouped; restored group-by respects an explicit value. | Grouping config is read **before** initialize so a session-restored group-by is honored. |
+| `measuredSize` | `220` | Virtual-scroll **estimated row height** (px) used to size/measure list rows. Numeric-coerced with `220` fallback. | Tuning knob for the V2 virtual scroller; mis-sizing only affects scroll smoothness, not which rows render. |
+| `minBufferPx` | `1000` | Virtual-scroll **minimum buffer** (px) rendered beyond the viewport before more rows are fetched/rendered. | Must be ≤ `maxBufferPx`. Numeric-coerced with `1000` fallback. |
+| `maxBufferPx` | `2000` | Virtual-scroll **maximum buffer** (px) kept rendered around the viewport. | Numeric-coerced with `2000` fallback. Pairs with `minBufferPx`. |
+| `onSidebarOpen` | None | Sidebar-opened callback. | None |
+| `openSidebar` | None | **Deprecated alias of `onSidebarOpen`.** | Use `onSidebarOpen`. |
+| `onSidebarClose` | None | Sidebar-closed callback. | None |
+| `onCommentClick` | None | Comment-row-clicked callback. | None |
+| `onSidebarCommentClick` | None | **Deprecated alias of `onCommentClick`.** | Use `onCommentClick`. |
+| `onCommentNavigationButtonClick` | None | Prev/next thread navigation callback. | None |
+| `onFullscreenClick` | None | Fired when the fullscreen toggle is clicked. **V2-only** event (no V1 equivalent on the public surface). | Pairs with `fullScreen`. |
+
+**Default behaviors (V2, no prop needed):**
+
+- **Filtering is descriptor-driven:** with no `filters`/`miniFilters`/`minimalFilters`, the header shows a single default mini-filter (Status). Declaring `minimalFilters` replaces that default with your header dropdowns; declaring `filters` as an array builds the main filter panel.
+- **Filter/sort restored from session:** like V1, V2 persists filter+sort state to per-browser-session storage and **restores it over `defaultMinimalFilter`** (precedence input > sessionStorage > default).
+- **`filterOptionLayout` defaults to `'dropdown'`** (V1 defaults to `'checkbox'`).
+- **`shadowDom` defaults `false`** (V1 unset ≈ inherit-on).
+- **Default sort:** last-updated descending (effective) when `sortBy`/`sortOrder` unset.
+- **Virtual scroll:** `measuredSize 220`, `minBufferPx 1000`, `maxBufferPx 2000`.
+- **`defaultCondition` true:** the sidebar respects its normal visibility gate; selectable + expand-on-selection on.
+
+---
+
+## VeltSidebarButton
+
+The launcher button. It renders a comment-count badge and toggles a sidebar. In `floatingMode` it **owns** the opened (floating) sidebar and the click-outside-to-close behavior; otherwise it toggles the page's sidebar. The `*Variant` / `filter*` / `position` / `pageMode` props are **pass-throughs** forwarded to the sidebar it opens.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `tooltipText` | none | Tooltip shown on button hover. | Purely presentational. |
+| `darkMode` | `false` | Dark theme for the button. Only applied when explicitly set (`null`/`undefined` leaves the inherited theme). String `'false'` → off; anything else → on. | Inherits global theme if unset. |
+| `shadowDom` | (button) explicit-tracked | Render the **button** inside a shadow root. Tracks whether `true` was passed explicitly. | Distinct from `sidebarShadowDom` (which isolates the opened sidebar). |
+| `floatingMode` | `false` | Makes the button toggle a **floating** sidebar that the button itself owns. Enables **click-outside-to-close**: clicking outside the button + sidebar (and not inside a CDK overlay, and not when opened by a custom trigger, and not on a download button) closes the floating sidebar. | When off, the button toggles the page-level sidebar instead. The floating panel inherits the pass-through props below. |
+| `variant` | none | Wireframe variant for the **button**. Looks up `velt-sidebar-button-wireframe` / `velt-comments-sidebar-button-wireframe` (optionally suffixed `---<variant>`). | Distinct from `sidebarVariant` (the opened sidebar's shell). Unmatched → default button markup. |
+| `pageMode` | `false` | **Pass-through:** forwarded to the sidebar so the opened sidebar runs in page mode. | Forwarded only; pairs with `pageModeComposerVariant`. |
+| `sortData` | `''` | **Pass-through** list sort for the opened sidebar. | Same semantics as V1 `sortData`. |
+| `urlNavigation` | `null` | **Pass-through** URL navigation for the opened sidebar. | None |
+| `currentLocationSuffix` | `null` | **Pass-through:** append current location. | None |
+| `filterConfig` | `null` | **Pass-through:** which filter dimensions appear in the opened sidebar. | Same shape as V1 `filterConfig`. |
+| `groupConfig` | `null` | **Pass-through:** grouping config for the opened sidebar. | None |
+| `filters` | `null` | **Pass-through:** active filter selections for the opened sidebar. | None |
+| `excludeLocationIds` | `null` | **Pass-through:** hide these locations: **and** they are excluded from the button's own count. | Affects both the badge and the opened list. |
+| `dialogVariant` | `'sidebar'` | **Pass-through:** dialog wireframe variant for the opened sidebar. | None |
+| `pageModeComposerVariant` | `'sidebar'` | **Pass-through:** page-mode composer variant. | Pairs with `pageMode`. |
+| `sidebarShadowDom` | `true` | Shadow-DOM isolation for the **opened sidebar** (not the button). | Distinct from the button's own `shadowDom`. Default on. |
+| `sidebarVariant` | none | Wireframe variant for the **opened sidebar's shell**. | Distinct from button `variant`. |
+| `position` | `'right'` | **Pass-through:** which side the opened sidebar anchors to. | None |
+| `filterPanelLayout` | `'bottomSheet'` | **Pass-through:** filter panel layout for the opened sidebar. | None |
+| `sidebarButtonCountType` | service default | What the **badge count** reflects: `'default'` (total comments with content) or `'filter'` (count after the sidebar's active filters / client API override). Forwarded to comment service. | For `'filter'`, the badge re-evaluates when the sidebar's filtered map **or** the client API override changes, and stays stable across sidebar open/close (both sources persist independent of visibility). Client API override takes precedence over the built-in filter map. |
+| `filterGhostCommentsInSidebar` | off | When on, **ghost comments** are included in the button count (and forwarded to the sidebar). | Toggles the same service flag as the sidebar. |
+| `onCommentClick` | None | Fires when a comment is clicked in the opened sidebar. | None |
+| `onSidebarOpen` | None | Fires when the sidebar opens (button toggled it on). | None |
+| `commentCountType` | `'total'` | Badge count semantics: `'total'` (all comments) or `'unread'` (unread count). `'unread'` → recomputed from the unread-comments map. | Distinct from `sidebarButtonCountType`: `commentCountType` is total-vs-unread on the badge; `sidebarButtonCountType` is default-vs-filter on the data source. They compose. |
+| `defaultCondition` | `true` | Visibility gate (the button root **always shows**: `shouldShow` returns `true`). | The button is a root element and is rendered unconditionally; `defaultCondition` exists for parity with other primitives. |
+
+**Default behaviors (VeltSidebarButton, no prop needed):**
+
+- **Always visible:** the button root always renders (`shouldShow` is `true`); it shows a default button unless a custom button child or wireframe `variant` is supplied.
+- **Toggles the page sidebar:** with `floatingMode` off, clicking toggles the page-level sidebar; with it on, the button owns a floating sidebar and closes it on outside-click.
+- **Count:** `commentCountType` `'total'` (all comments with content; terminal/resolved excluded unless resolved-on-DOM); `sidebarButtonCountType` from service default (total). `'unread'` recomputes from the unread map.
+- **Shadow DOM:** the opened sidebar is shadow-isolated by default (`sidebarShadowDom: true`).
+- **Shared context:** the button uses the shared `'default'` context so standalone `velt-sidebar-button-*` count/icon primitives on the page read its fetched data; it does **not** clear that context on destroy.
+
+---
+
+## Default behaviors (no prop needed)
+
+Each component's zero-prop baseline is documented in its **Default behaviors (… no prop needed)** block above. In brief:
+
+- **V1**: a Velt-positioned overlay anchored `right`, force-closed until opened, restoring its last filters/group-by from session storage (which overrides `filters` and `defaultMinimalFilter`); default minimal filter `'all'`; newest-first-by-last-updated sort; `filterOptionLayout: 'checkbox'`.
+- **V2**: the same overlay/embed/floating model but descriptor-driven (a single Status mini-filter with no `filters`/`miniFilters`/`minimalFilters`); `filterOptionLayout: 'dropdown'`; `shadowDom` `false`; virtual-scroll defaults `measuredSize 220` / `minBufferPx 1000` / `maxBufferPx 2000`.
+- **`VeltSidebarButton`**: always renders, toggles the page sidebar (or owns a floating one with click-outside-to-close); badge `commentCountType: 'total'`; opened sidebar shadow-isolated.
+
+## Prop-interaction matrix
+
+The pairwise prop interactions are documented in each prop's **Interactions & gotchas** column above; the cross-version differences are tabulated in [V1-vs-V2 behavioral differences](#v1-vs-v2-behavioral-differences) below. The interactions worth restating:
+
+- Session-restored filter/sort state **overrides** both the `filters` prop and `defaultMinimalFilter`.
+- Sort precedence: `sortData` first, then `sortBy` + `sortOrder` **re-sort on top**. Setting either `sortData` or `sortOrder` disables the in-sidebar sort dropdown.
+- `embedMode` dominates `floatingMode`/`position`/`forceClose` when both are set.
+- `readOnly` is `localReadOnly OR globalReadOnly`; `expandOnSelection` pairs with `dialogSelection`.
+- Deprecated aliases fire/write alongside their replacements: `enableUrlNavigation`→`urlNavigation`, `openSidebar`→`onSidebarOpen`, `onSidebarCommentClick`→`onCommentClick`.
+
+## Positioning & composition
+
+All three are **statically placed**: the sidebar is not anchored to a pin: it docks to the viewport `left`/`right` as an overlay by default, renders inline in your layout under `embedMode`, or floats over content under `floatingMode`; `VeltSidebarButton` renders where you mount it and owns the floating sidebar in `floatingMode`. This is the statically-placed column of the anchored-vs-static axis: see [`Component definitions`](/ui-customization/reference/component-definitions) and [`Behaviors` → Positioning ownership](/ui-customization/reference/behaviors#positioning-ownership-anchored-surfaces).
+
+## V1-vs-V2 behavioral differences
+
+| Axis | V1 (`VeltCommentsSidebar`) | V2 (`VeltCommentsSidebarV2`) |
+|---|---|---|
+| **Filter model** | `filterConfig` enable-map declares which fixed system dimensions appear; `filters` object supplies active selections. | **Descriptor-driven:** `filters` (as `FilterField[]`), `miniFilters`, and `minimalFilters` arrays *build* the filter UI. `filters` is dual-shape: an object still routes to the V1 active-selections path. |
+| **Filter operator** | `systemFiltersOperator` (`'and'` default). | `filterOperator` (`'and'` default); `systemFiltersOperator` kept as an alias. OR always within a field. |
+| **Filter option layout default** | `filterOptionLayout: 'checkbox'`. | `filterOptionLayout: 'dropdown'`. |
+| **Header quick filter** | Single fixed minimal-filter dropdown; `defaultMinimalFilter` is a `SidebarFilterCriteria`. | Configurable header dropdowns via `minimalFilters` (filter/sort/quick); `defaultMinimalFilter` also accepts `null`. |
+| **`embedMode` type** | `boolean`. | `string` (attribute-style). |
+| **`shadowDom` default** | unset ≈ inherit-on; explicit-tracked. | `false`. |
+| **Virtual scroll tuning** | not exposed. | `measuredSize` / `minBufferPx` / `maxBufferPx`. |
+| **Fullscreen event** | no public `onFullscreenClick`. | `onFullscreenClick` event. |
+| **Visibility gate** | not a public prop. | `defaultCondition` (default `true`). |
+| **Shared behaviors** | Both: session-restored filter/sort **overrides** `defaultMinimalFilter`; same overlay/embed/floating layout model; same sort precedence (`sortData` first, `sortBy`+`sortOrder` override); same feature-flag forwarding (`customActions`, `urlNavigation`, `focusedThreadMode`, `fullScreen`, `filterGhostCommentsInSidebar`, `sidebarButtonCountType`); same deprecated aliases (`enableUrlNavigation`→`urlNavigation`, `openSidebar`→`onSidebarOpen`, `onSidebarCommentClick`→`onCommentClick`). | |
+
+---
+
+## Coverage
+
+- **`VeltCommentsSidebar` (V1):** 51 / 51 props covered.
+- **`VeltCommentsSidebarV2`:** 58 / 58 props covered.
+- **`VeltSidebarButton`:** 25 / 25 props covered.
+
+Every behavior above is covered in this reference.

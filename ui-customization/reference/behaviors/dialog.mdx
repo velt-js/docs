@@ -1,0 +1,222 @@
+---
+title: "Comment Dialog & Inline"
+sidebarTitle: "Comment dialog"
+description: "Reference runtime behavior for comment dialog and inline comment surfaces."
+---
+
+`VeltCommentDialog`, `VeltMultiThreadCommentDialog`, `VeltCommentText`, `VeltInlineCommentsSection`, and `VeltInlineReactionsSection` are the comment-thread **rendering surfaces**: they render an annotation's thread (and its composer) in a specific context. This file owns the layer above [`Props`](/ui-customization/reference/props) for these five: **what every prop does at runtime, its default, and how it combines with the others**, plus the default behaviors you get with no prop at all.
+
+- **Anchored vs static (the key axis):**
+  - **`VeltCommentDialog`** is the **anchored, Velt-positioned** floating pin dialog: it renders **one** comment thread (one annotation) and Velt anchors it to its pin/overlay. It does not place itself: it only emits a reposition request on resize. See [`Behaviors` → Positioning ownership](/ui-customization/reference/behaviors#positioning-ownership-anchored-surfaces).
+  - **`VeltMultiThreadCommentDialog`** is the same anchored surface, but it hosts **many** comment threads (annotations) at **one** pin location: a list with per-thread filter/sort, mark-all-read/resolved bulk actions, a "new thread" button, and an empty placeholder. Single dialog = one thread; multi-thread dialog = a container of selectable threads at one anchor.
+  - **`VeltInlineCommentsSection`** is **statically placed / in-flow**: it renders a thread list inside your own layout (a plain `role="region"` container), scoped to a `targetElementId`/folder/context: **not** a floating overlay. It actively **suppresses** the floating pin avatars on its target element (comments live in the section list instead).
+  - **`VeltInlineReactionsSection`** is the reactions analogue: a statically-placed emoji/reaction bar bound to a target element.
+  - **`VeltCommentText`** turns a piece of your own content into a **clickable, comment-anchored hotspot**: it projects your content and opens the bound annotation's dialog (single or multi-thread) as a floating overlay on hover/selection.
+- **Anchored-vs-static classification:** see [`Component definitions`](/ui-customization/reference/component-definitions).
+- **Shared deep behaviors:** the dialog's **collapse** structure (`collapsedComments` × `collapsedRepliesPreview`), **composer** open/collapsed lifecycle, **variant → context scoping**, the **dialog state machine**, **placeholder priority**, and `fullExpanded` vs default all live in [`Behaviors`](/ui-customization/reference/behaviors). The per-prop rows below give what each prop does and link there for the full interaction/state-machine detail: they do not repeat the long explanations.
+
+---
+
+## Per-prop behavior (exhaustive)
+
+The exhaustive per-prop behavior for these five surfaces is organized **per component** below: each `## Velt…` subsection carries that component's full prop table (default + runtime behavior + interactions) and its own `### Default behaviors (no prop needed)` block, the nested shape the template sanctions. Every prop in [`Props`](/ui-customization/reference/props) for these components is covered; see [Provable coverage](#provable-coverage).
+
+## VeltCommentDialog
+
+The single-thread, anchored pin dialog. It renders **one** annotation's thread plus its composer, and selects one of three internal layout modes from mutually-exclusive predicates: **dialog/inbox mode** (the default floating-pin branch), **sidebar mode** (`sidebarMode`), and **inline-section mode** (`inlineCommentSectionMode`). The top-level render gate is the visibility condition AND the show-default condition.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `annotationId` | (none) | Binds the dialog to a specific annotation; resolves/creates that annotation's shared config so the real thread loads (vs. an empty composer). Falls back to the `annotation-id` attribute when unset. | Required for standalone use. Superseded when a parent passes the annotation object / config directly. Changing it re-syncs the thread. Also the `anonymousEmail` override no-ops without it. |
+| `multiThreadAnnotationId` | (none) | Selects one thread **within** a multi-thread pin; written into UI state and adds the `--multi-thread-mode` host class. | Styling/scoping only: no separate layout branch here. Meaningful only when the annotation is part of a multi-thread pin. |
+| `defaultCondition` | `true` | Render gate. `true` honors the normal "config + annotation present" visibility check; `false` short-circuits it so the dialog **always** renders (testing/docs escape hatch). | Tri-state string-coerced (`''`/`'true'` → true). Only affects visibility, not mode selection. |
+| `inlineCommentSectionMode` | `false` | Switches the dialog into **inline-section** layout (used when rendered inside `VeltInlineCommentsSection`). | Mutually exclusive with `sidebarMode` and dialog mode. Forced `false` for the standalone `annotation-id` path unless explicitly set. Only this mode honors `composerPosition` top/bottom. |
+| `commentPinSelected` | `false` | Whether the source pin is selected. OR'd with `fullExpanded` into the dialog's selected state → `selected` host class, which (with default `expandOnSelection`) reveals all comments + composer. On select it marks an unread annotation read and requests overlay reposition; on deselect it saves/cancels any draft. | String-coerced (`''` → true). Drives the selection half of the [dialog state machine](/ui-customization/reference/behaviors#dialog-state-machine). Interacts with `fullExpanded`, `expandOnSelection`, `focusedThreadMode`, `pageModeComposer`. |
+| `fullExpanded` | `false` | Forces the thread fully expanded (every comment, no message truncation) regardless of selection. OR'd with `commentPinSelected` into the selected state. | Opposite end from `collapsedComments`: don't set both. See [`Behaviors` → fullExpanded vs default](/ui-customization/reference/behaviors#fullexpanded-vs-default). |
+| `shadowDom` | `true` | Shadow-DOM style isolation for the dialog. Priority: explicit prop value → host's `dialogShadowDOM` → default `true`. When explicitly `true`, wraps the wireframe host in an internal shadow-DOM element. | String-coerced: only literal `'false'` turns it off. See [`Behaviors` → shadowDom vs dialogShadowDom](/ui-customization/reference/behaviors#shadowdom-vs-dialogshadowdom-and-the-per-surface-flags). |
+| `darkMode` | `false` | Dark theme; stored in UI state and synced to the themed component. Purely visual. | Component-level value overrides global/feature dark mode. |
+| `readOnly` | `false` | View-only. When true, **hides** the header, composer, and composer-top/bottom (the templates guard on `!readOnly`). | Both `composerPosition` resolvers require `!readOnly`, so a read-only dialog shows no composer in any position. |
+| `sidebarMode` | `false` | Switches the dialog into **sidebar** layout (the dialog as rendered inside the comments sidebar). | Mutually exclusive with inline-section and dialog modes. Pairs with `expandOnSelection={false}` for selection-without-expansion in the sidebar list. |
+| `isFocusedThreadEnabled` | `false` | Enables focused-thread affordances (consumed by child header/primitives). | Pairs with `focusedThreadMode` / `openAnnotationInFocusMode`. No direct template branch in the dialog itself. |
+| `openAnnotationInFocusMode` | `false` | Marks that selecting the annotation should open it in focus mode (emitted via the open-focused-thread output). | Emits the focus-mode request; this reference does not document the receiving surface. |
+| `expandOnSelection` | `true` | Whether selecting the dialog **expands** it (replies + composer) or only selects it. `false` lets a sidebar thread be selected without expanding (stays a first+last preview, composer stays hidden). | Sidebar-context behavior. The selection→expanded edge of the [state machine](/ui-customization/reference/behaviors#dialog-state-machine). |
+| `inlineCommentMode` | `false` | Adds the `inline-comment-mode` classes (a styling mode distinct from inline-**section** mode), but **only when** `isInsidePdfViewer` is false. | Suppressed inside a PDF viewer. Do not confuse with `inlineCommentSectionMode`. |
+| `inboxMode` | `false` | Inbox rendering: adds the `inbox` classes and forces show-all-comments on. Rendered inside the dialog/inbox branch. | Shares the dialog-mode branch with the default floating dialog. |
+| `isInsidePdfViewer` | `false` | Adjusts behavior inside a PDF viewer; in particular it **suppresses** the `inlineCommentMode` classes. | Gates `inlineCommentMode`. Also set automatically from bottom-sheet data. |
+| `multiThread` | `false` | Marks this dialog as part of a multi-thread annotation (feature-state flag). | Styling via `multiThreadAnnotationId`; the actual many-threads list is `VeltMultiThreadCommentDialog`. No direct branch here. |
+| `commentComposerMode` | `false` | Composer-only styling mode: adds the `--comment-composer-mode` class. | None |
+| `dialogSelection` | `true` | Governs whether sidebar selection behavior is allowed (consumed by sidebar parents). | No local template branch; this reference documents no downstream effect beyond enabling sidebar selection. |
+| `dialogMode` | `true` (effective) | Drives the `dialog`/`--dialog-mode` classes and the "all comments" button. | **Gotcha:** the input is effectively **inert as a wire-through**: the component sets dialog mode to `true` independently rather than reading this prop. Passing `false` has no documented effect in this reference. |
+| `focusedThreadMode` | `false` | Focused-thread layout: adds the `--focused-thread-mode` class. Critically, when true it **skips draft auto-save / abandon-draft** on destroy/change (back-nav safety). | Interacts with draft behavior, `pageModeComposer`. |
+| `pageModeComposer` | `false` | Page-mode composer instance: adds the `--page-mode-composer` class; **never** creates/saves drafts; only this instance answers page-mode focus requests; overrides the sidebar branch so the dialog branch renders. | The page-level composer for sidebar `pageMode`: see [`Behaviors` → embedMode / pageMode](/ui-customization/reference/behaviors#embedmode--pagemode-sidebar). |
+| `messageTruncation` | `false` | Truncates long message bodies with show-more/less. | Pairs with `messageTruncationLines`. Independent of how many comment cards render. See [`Behaviors` → fullExpanded vs default](/ui-customization/reference/behaviors#fullexpanded-vs-default). |
+| `initialEditCommentIndex` | `null` | Opens the dialog with a specific comment index in **edit mode** (after view init, if the index is in range, enters edit mode for that comment). | `number \| string \| null`; out-of-range / negative is ignored. The timeout is cleared on destroy. |
+| `messageTruncationLines` | `4` | Max lines shown before truncation. | Only effective when `messageTruncation` is true. String-coerced via parseInt, falling back to `4`. |
+| `variant` | `'dialog'` | Picks the named dialog **wireframe variant**: resolves `velt-comment-dialog-wireframe---<variant>` for a custom template. | The variant is also the scoping key. Setting it on `VeltComments` changes the **floating pin** dialog only; sidebar/inline/page contexts have their own variant props. See [`Behaviors` → Variant → context scoping](/ui-customization/reference/behaviors#variant--context-scoping). |
+| `composerPosition` | `'bottom'` (effective) | Composer placement **in inline-section mode**: `'top'` renders the composer above the thread, unset/`'bottom'` below. | No effect in dialog/sidebar mode (composer is always bottom there). Both resolvers also require `!readOnly`. |
+| `sortBy` | (none → natural/creation order) | Sort field for the comment list (`'createdAt'` / `'lastUpdated'`). Only written when defined. | Applied together with `sortOrder`. Ordering only: does not collapse/hide cards. See [`Behaviors` → sortBy × sortOrder](/ui-customization/reference/behaviors#sortby--sortorder). |
+| `sortOrder` | (none) | Sort direction (`'asc'` / `'desc'`). Only written when defined. | Pairs with `sortBy`. |
+| `commentPinType` | `'pin'` | The pin type this dialog belongs to (`'bubble' \| 'pin' \| 'chart' \| 'text'`); appended to the wireframe cache key so each pin type can resolve a distinct template. | Normally set by the portal, not by you. No layout branch. |
+| `containerComponentId` | (none, `''`) | Id of the owning container component; used for scoping. | No local template branch. |
+| `targetElementId` | (none) | Anchor element id. Used to **match incoming composer file-attachment events**: a batch applies when its target id is empty or equals this. | Not stored in the dialog config: it is an event filter, not a positioning input (Velt owns placement). |
+| `targetComposerElementId` | (none) | Composer anchor element id, passed down to every composer instance to anchor the composer to an external element. | Re-applied after config swaps. |
+| `locationVersion` | (none, `''`) | Version tag for the annotation's location, stored in UI state. | No local branch; used downstream for location resolution. |
+| `locationDisplayName` | (none) | Intended display name for the location. | **Gotcha:** declared but **never read** in the dialog or its primitives: effectively **inert** here. This reference documents no other consuming surface. |
+| `context` | (none) | Free-form key/value object set at the config root; new comments created here carry it, and `velt-data` children can interpolate `{context.xxx}`. | Updated on the annotation and composer paths. Does not retro-tag existing comments. |
+| `placeholder` | (none) | Generic composer placeholder set at the config root with the **highest** priority: overrides `commentPlaceholder` / `replyPlaceholder`. | Written only when truthy. See the [placeholder priority chain](/ui-customization/reference/behaviors#commentplaceholder-vs-replyplaceholder-priority). |
+| `commentPlaceholder` | (none) | Placeholder for the **new-comment** composer (thread has no comments yet). | Overridden by `placeholder`; never co-applies with `replyPlaceholder` (comment count decides which is live). See the [priority chain](/ui-customization/reference/behaviors#commentplaceholder-vs-replyplaceholder-priority). |
+| `replyPlaceholder` | (none) | Placeholder for the **reply** composer (thread already has comments). | Overridden by `placeholder`. See the [priority chain](/ui-customization/reference/behaviors#commentplaceholder-vs-replyplaceholder-priority). |
+| `editPlaceholder` | (none) | Generic edit-mode placeholder. | The edit chain is separate from the new-comment chain; `editCommentPlaceholder` / `editReplyPlaceholder` are the more specific edit placeholders. |
+| `editCommentPlaceholder` | (none) | Placeholder when editing a **top-level comment**. | More specific than `editPlaceholder`. |
+| `editReplyPlaceholder` | (none) | Placeholder when editing a **reply**. | More specific than `editPlaceholder`; use the specific top-level/reply placeholders when you need different copy for each edit context. |
+| `anonymousEmail` | (none) | Per-annotation override for whether anonymous email mentions are allowed in this dialog's annotation context. When set, applies a local override for the annotation; when cleared, removes it. | **No-op without an `annotationId`** (it keys on the annotation). Per-annotation override of the global setting without mutating it. |
+
+### Default behaviors (no prop needed)
+
+- **Collapsed preview until selected:** the dialog shows the **first comment only** until its pin is selected; selecting reveals all comments and (with default `expandOnSelection`) the composer. The composer is **hidden** until selection when the thread already has comments. Full collapse/preview structure (first + "N more replies" + last) lives in [`Behaviors` → collapsedComments × collapsedRepliesPreview](/ui-customization/reference/behaviors#collapsedcomments--collapsedrepliespreview-the-exact-rendered-reply-structure).
+- **Composer opens collapsed:** the composer renders collapsed (single line) and expands to full actions on focus/click, then collapses on submit: see [`Behaviors` → Composer lifecycle / state machine](/ui-customization/reference/behaviors#dialog-state-machine).
+- **Velt owns positioning:** the dialog never places itself; it emits a reposition request when its size changes (composer expands, recording starts) and the host re-anchors. See [`Behaviors` → Positioning ownership](/ui-customization/reference/behaviors#positioning-ownership-anchored-surfaces).
+- **Selection / composer state is per dialog instance:** the sidebar list, a focused thread, and a floating pin dialog for the same annotation do not leak selection/composer state into each other.
+
+---
+
+## VeltMultiThreadCommentDialog
+
+The **many-threads-at-one-anchor** dialog. It subscribes to all child comment-annotations under one `multiThreadAnnotationId` and renders them as a list with a comment-count, filter + sort dropdowns, mark-all-read / mark-all-resolved bulk actions, a "new thread" button, and an empty placeholder. Drilling into one child thread hides the top-level composer. State lives in a per-instance context config.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `annotationId` | (none) | Standalone-primitive binding only: keys the per-instance context config (falling back to the `multi-thread-annotation-id` / `annotation-id` attribute), subscribing the annotations for that id. | On the full root dialog this path is unused (the root assigns its own context id). With nothing set it uses the `'default'` context. |
+| `multiThreadAnnotationId` | (none) | The identifier of the multi-thread pin (the grouping of many threads). Drives the annotation subscription that populates the thread list, and seeds a fresh annotation with this id. | Re-syncs on change and (for temporary annotations) re-subscribes. Passed to add-comment only when not a temporary id. The core scoping input. |
+| `annotation` | (none, required) | The multi-thread annotation **object** passed directly. For a **temporary** annotation, the SDK subscribes by its child `commentAnnotations` keys instead of by id. Its `location` / `metadata` / `context` / `targetElementId` are extracted for new comments. | On change, hides the top-level composer when a child annotation is selected, and (temporary case) re-subscribes when the child-comment count changes. |
+| `user` | `new User()` | The current/author user object, propagated down to composer/author context via the config signal. | This reference documents config propagation only; no additional downstream consumer is listed. |
+| `commentPinSelected` | `false` | Selection/visual-state flag exposed in UI state for the source pin. | No logic branch in this component; treat it as state for downstream styling and wireframes. |
+| `commentPinType` | (none, null) | Categorizes the pin type, exposed in UI state. | No branching here; use it as styling/wireframe state. |
+| `dialogVariant` | `'dialog'` | Distinguishes the dialog presentation mode (e.g. `'dialog'` vs bottom-sheet), stored in UI state and passed to child dialog primitives. | Distinct from `variant`; this reference documents pass-through to child dialog primitives only. |
+| `variant` | (none → base wireframe) | Picks the named **wireframe variant**: appends `---<variant>` to `velt-multi-thread-comment-dialog-wireframe` to load a variant-specific template; also drives the dynamic-template directive. Stored in the per-instance local UI state. | The template/skin selector for the multi-thread dialog. See [`Behaviors` → Variant → context scoping](/ui-customization/reference/behaviors#variant--context-scoping). |
+| `inboxMode` | `false` | Toggles the `--inbox-mode` container class, switching the dialog into inbox layout. | Directly drives the host class (not just pass-through). |
+| `containerComponentId` | (none, null) | Scopes new comments to a container component instance: passed straight into add-comment. | None |
+| `context` | (none, null) | Free-form context passed as the `context` argument when saving a new comment. | For a **temporary** annotation, that annotation's own `context` overrides this. |
+| `readOnly` | `false` | View-only flag exposed in UI state to suppress editing/composer affordances. | Composer disabling happens downstream; this reference documents the read-only state handoff. |
+| `defaultCondition` | `true` | Render gate via the conditional-render directive: `true` honors the normal visibility conditions, `false` bypasses them (always shows). | Tri-state string-coerced (`''`/`'true'` → true). |
+| `onSaveComment` | (callback) | Fires when a comment is saved. **Gotcha:** as exposed, it is wired through the component's internal save method + the public `saveComment` output + a config function wrapper; persistence goes through the action service → add-comment, after which the new-thread annotation resets and the list scrolls to the bottom. | Both the React `on*` output binding and config callback wrapper exist; this reference treats them as the same save hook surface. |
+
+### Default behaviors (no prop needed)
+
+- **Many threads, one anchor:** unlike `VeltCommentDialog` (one thread), this dialog holds an **array** of annotations under one pin and renders list-only affordances (count, filter, sort, bulk mark-all, new-thread, empty placeholder).
+- **Composer hides on drill-in:** selecting one child thread hides the top-level "new thread" composer.
+- **Standalone state from the factory:** mounted as a standalone primitive without a root, its state comes from the default multi-thread config factory (e.g. shadow-DOM on, `dialogVariant: 'dialog'`, minimal-filter `'all'`), not from these inputs.
+
+---
+
+## VeltCommentText
+
+A **content hotspot**, not a text renderer. It projects your own content (`ng-content`) and, on hover/selection, opens the bound annotation's dialog as a floating overlay anchored to the element. Both inputs are mutually-exclusive alternatives: supply one. Almost all of its runtime state (hover, selection, mode flags) is **internal**, populated from services/pointer events, not author-settable props.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `annotationId` | (none) | Resolves the **single-thread** comment annotation and binds it as the hotspot's annotation. On hover/selection, opens `VeltCommentDialog` in the overlay. Toggles a `comment-available` host attribute when the annotation resolves; self-removes from the DOM (~500ms) when the annotation is deleted. | **Visibility gating:** a resolved/terminal annotation may be **hidden** unless resolved-comments-on-DOM display is enabled (or it is currently selected). This reference does not list the public toggle name for showing resolved comments. Use one of `annotationId` / `multiThreadAnnotationId`. |
+| `multiThreadAnnotationId` | (none) | Resolves the **multi-thread** comment annotation and binds it; selecting opens `VeltMultiThreadCommentDialog` in the overlay (the multi-thread branch) instead of the single dialog. Self-removes on annotation delete. | No terminal/resolved gating (adopted unconditionally). Mutually exclusive with `annotationId`. |
+
+### Default behaviors (no prop needed)
+
+- **Renders projected content + overlay, not a comment string:** the component shows whatever you wrap inside it plus a connected-overlay dialog: it does **not** itself render "the latest comment text." If you need the raw comment body as text, that is a Data-layer read (see [`Data models`](/ui-customization/reference/data-models)), not this component.
+- **Pointer-driven open:** `pointerover` / `pointerout` toggle hover; `pointerup` toggles pin selection, which surfaces the dialog overlay.
+
+---
+
+## VeltInlineCommentsSection
+
+A **statically-placed, in-flow** thread list scoped to a target element / folder / context. It renders a plain `role="region"` container (no portal, no pin anchor) and **suppresses** the floating pin avatars on its target (it sets `data-velt-comment-disabled` on the target and hides any pin portals the global system creates, restoring them on destroy). The section renders only when one of its gating values (`targetElementId` / `folderId` / `context`) is present.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `config` | (none) | **Inert in V2**: the section manages state via services/signals; the V1 `config` setter was removed (its parsed value was discarded). | Passing it is a **no-op**. Use `targetElementId` for identity. |
+| `targetInlineCommentElementId` | (none) | **@deprecated → `targetElementId`.** Lowest-priority fallback in the target-coalescing chain; a change triggers a re-fetch. | Ignored when `targetElementId` or `targetCommentElementId` is set. |
+| `targetCommentElementId` | (none) | **@deprecated → `targetElementId`.** Middle-priority fallback; change triggers re-fetch. | Overrides `targetInlineCommentElementId`; superseded by `targetElementId`. |
+| `targetElementId` | (none) | Primary identity/target: trimmed and used as the instance id (standalone primitives sharing it read the same context), drives initialization/query, and is the element whose floating pins get suppressed. | Highest of the three target inputs; one of the render-gating values. |
+| `darkMode` | `false` | Dark theme; resolved through component > feature > global precedence and synced to the container's `.dark` class. | Component value overrides global/feature dark mode. |
+| `variant` | (none → `inline` wireframe) | Picks the section **wireframe variant**: appends `---<variant>` to the wireframe name when not `'inline'`. | Custom/registered wireframe lookup. See [`Behaviors` → Variant → context scoping](/ui-customization/reference/behaviors#variant--context-scoping). |
+| `dialogVariant` | `'inline'` | Variant passed to the per-thread/dialog primitives to pick the inner dialog rendering. | Independent of `variant`; this reference documents pass-through to child primitives. |
+| `composerVariant` | `'inline'` | Variant selecting the composer rendering in child primitives. | Pairs with `composerPosition`; this reference documents pass-through to child primitives. |
+| `shadowDom` | `true` | Shadow-DOM isolation: when truthy (and no custom template) the content is wrapped in an internal shadow-DOM element. A separate explicit-flag tracks whether the attribute was actually passed. | With a **custom template**, shadow wrapping applies only when `shadowDom` was passed explicitly. See [`Behaviors` → shadowDom vs dialogShadowDom](/ui-customization/reference/behaviors#shadowdom-vs-dialogshadowdom-and-the-per-surface-flags). |
+| `multiThread` | `true` | Whether the section shows **multiple** threads (default) vs. a single thread. | Note this default differs from the dialog's `multiThread` default (`false`). This reference documents the prop handoff, not the complete single-vs-multi rendering diff. |
+| `sortData` | (no input in V2) | **@deprecated.** Not present on the V2 component; sorting is driven by `sortBy` / `sortOrder`. | Passing it has **no effect**. Treat it as removed from the V2 runtime surface. |
+| `composerPosition` | (none) | Positions the composer (e.g. top/bottom) in child primitives. | Pairs with `composerVariant`; this reference documents pass-through to child primitives. |
+| `sortBy` | `'createdAt'` | Sort field; synced into the sort state and re-sorts the thread list on change. | Combined with `sortOrder` to derive the active sort option. See [`Behaviors` → sortBy × sortOrder](/ui-customization/reference/behaviors#sortby--sortorder). |
+| `sortOrder` | `'asc'` | Sort direction; synced into sort state and triggers the same re-sort. | Combined with `sortBy`. |
+| `fullExpanded` | `false` | Renders threads/composer fully expanded rather than collapsed. | See [`Behaviors` → fullExpanded vs default](/ui-customization/reference/behaviors#fullexpanded-vs-default). |
+| `context` | (none) | Free-form context (object or JSON string; parse errors ignored) pushed into the targeting config; **part of the query** and a render-gating value. Change triggers re-fetch. | Combines with `contextOptions`. |
+| `contextOptions` | (none) | Resolution options (object or JSON string) modifying how `context` is applied to the query; change triggers re-fetch. | Only meaningful alongside `context`. |
+| `locationId` | (none) | Scopes the comments query to a Velt location; change triggers re-fetch. | None |
+| `documentId` | (none) | Scopes to a document; the client id is converted to the internal server document id; change triggers re-fetch. | None |
+| `folderId` | (none) | Scopes to a folder; the server folder id is derived from it; change triggers re-fetch. | One of the render-gating values. |
+| `commentPlaceholder` | (none) | Placeholder for the new-comment composer. | Overlaps with `composerPlaceholder`; prefer `placeholder` for global override or the more specific comment/reply placeholders for explicit context. |
+| `replyPlaceholder` | (none) | Placeholder for the reply composer. | None |
+| `composerPlaceholder` | (none) | Placeholder for the composer. | Overlaps with `commentPlaceholder`; prefer `placeholder` for global override or the more specific comment/reply placeholders for explicit context. |
+| `editPlaceholder` | (none) | Placeholder when editing. | Fallback for the two specific edit placeholders; use `editCommentPlaceholder` or `editReplyPlaceholder` when context-specific copy matters. |
+| `editCommentPlaceholder` | (none) | Placeholder when editing a top-level comment. | More specific than `editPlaceholder`. |
+| `editReplyPlaceholder` | (none) | Placeholder when editing a reply. | More specific than `editPlaceholder`. |
+| `readOnly` | `false` | View-only; also pushed as a per-instance local read-only setting to disable the composer/actions for this section instance. | Per-instance override (does not mutate global state). |
+| `anonymousEmail` | (none) | Per-instance override for anonymous email mentions; applied on init (if set early) and on change. | Tri-state: takes effect only when explicitly provided; `undefined`/`null` leaves it unset. |
+| `messageTruncation` | `false` | Clamps long comment text. | Gates `messageTruncationLines`. |
+| `messageTruncationLines` | `4` | Lines shown before truncating. | String parsed via parseInt, falling back to `4`; only meaningful with `messageTruncation`. |
+| `defaultCondition` | `true` | Render gate via the conditional-render directive: `true` honors the section's visibility conditions, `false` bypasses them (always shows). | Tri-state string-coerced. |
+
+### Default behaviors (no prop needed)
+
+- **In-flow, not anchored:** the section renders inside your layout where you place it; it does not float and does not place itself.
+- **Pin suppression on the target:** to avoid double UI, it disables and hides the global floating pin avatars on its target element (restoring them when unmounted): comments appear in the section list instead.
+- **Multi-thread by default:** unlike the dialog, the section defaults to showing multiple threads (`multiThread` default `true`).
+
+---
+
+## VeltInlineReactionsSection
+
+A **statically-placed reactions/emoji bar** bound to a target element. On init it fetches existing reaction annotations for the target's section id and renders them; users add via the emoji picker or by clicking an existing reaction pill, all scoped to the target. It renders only when **both** `targetReactionElementId` and a logged-in user are present.
+
+| Prop | Default | Behavior | Interactions & gotchas |
+|---|---|---|---|
+| `targetReactionElementId` | (none) | The required anchor: identifies which element/section the reaction bar belongs to. Setting it fetches that section's reaction annotations; all add/update calls are scoped to this id. | **Nothing renders** until this is set **and** a user is present. |
+| `darkMode` | `false` | Dark theme (boolean or string); resolved value pushed into the component config. | Precedence: component `darkMode` > feature > global theme. |
+| `variant` | (none → `inline` wireframe) | Picks the **wireframe variant**: resolves `velt-inline-reactions-section-wireframe---<variant>` when set, else the base wireframe. | Must match a registered variant or it falls back to the default inline layout. See [`Behaviors` → Variant → context scoping](/ui-customization/reference/behaviors#variant--context-scoping). |
+| `shadowDom` | `true` | Shadow-DOM isolation; when true, content renders inside an internal shadow-DOM element. A separate explicit flag is used with custom templates. | With a custom template, shadow wrapping applies only if `shadowDom="true"` was passed explicitly. |
+| `customReactions` | (none → service default `{}`) | Overrides the default emoji set offered in the picker. A `ReactionMap`: a keyed map of `reactionId → { url?, svg?, emoji? }` (each entry supplies the reaction's visual as a hosted image URL, raw SVG, or an emoji character: all three fields optional). Accepts an object or JSON string. | Set via the reaction service, so it affects reactions **globally**, not just this instance. This reference documents no per-instance scoping for other reaction components. |
+
+### Default behaviors (no prop needed)
+
+- **Gated on target + user:** renders only when both `targetReactionElementId` and a logged-in user exist.
+- **Reads existing reactions:** on mount it loads the target section's existing reaction annotations and shows them as pills; clicking a pill or picking an emoji adds/updates the user's reaction scoped to the target.
+- **Default emoji set:** with no `customReactions`, the picker offers Velt's default reaction set (service default `{}` → built-in set).
+
+---
+
+## Default behaviors (no prop needed)
+
+Each surface's zero-prop baseline is documented in its `### Default behaviors (no prop needed)` block above. In brief:
+
+- **`VeltCommentDialog`**: collapsed first-comment preview until the pin is selected; composer hidden until selection (on a thread that already has comments) and opens collapsed; Velt owns positioning; selection/composer state is per instance.
+- **`VeltMultiThreadCommentDialog`**: holds many threads at one anchor with list-only affordances (count, filter, sort, bulk mark-all, new-thread, empty placeholder); the top-level composer hides on drill-in; standalone state comes from the multi-thread config factory.
+- **`VeltCommentText`**: renders your projected content plus a connected overlay dialog (not a comment string); pointer events drive hover/selection.
+- **`VeltInlineCommentsSection`**: in-flow (not anchored); suppresses the floating pin avatars on its target; multi-thread by default.
+- **`VeltInlineReactionsSection`**: renders only when both a target id and a logged-in user exist; loads existing reactions; offers Velt's default emoji set with no `customReactions`.
+
+## Prop-interaction matrix
+
+Pairwise interactions are documented in each prop's **Interactions & gotchas** column above. The cross-cutting, multi-prop matrices that span these surfaces: the `collapsedComments × collapsedRepliesPreview` collapse structure, the composer open/collapsed lifecycle, `sortBy × sortOrder`, `shadowDom` vs `dialogShadowDom`, the placeholder-priority chain, `fullExpanded` vs default, and variant → context scoping: live in the [behaviors index](/ui-customization/reference/behaviors) and are linked from the rows above rather than duplicated here.
+
+## Positioning & composition
+
+`VeltCommentDialog` and `VeltMultiThreadCommentDialog` are **anchored / Velt-positioned**: they anchor to their pin/overlay and emit a reposition request on resize; they take no coordinate input (`targetElementId` is an event filter, not a position). `VeltInlineCommentsSection`, `VeltInlineReactionsSection`, and `VeltCommentText`'s host are **statically placed**: they render in your own layout flow where you mount them (`VeltCommentText` then opens an anchored overlay on selection). See [`Behaviors` → Positioning ownership](/ui-customization/reference/behaviors#positioning-ownership-anchored-surfaces) and the anchored-vs-static classification in [`Component definitions`](/ui-customization/reference/component-definitions).
+
+## Provable coverage
+
+Counted against [`Props`](/ui-customization/reference/props) `### VeltCommentDialog` / `### VeltMultiThreadCommentDialog` / `### VeltCommentText` / `### VeltInlineCommentsSection` / `### VeltInlineReactionsSection`:
+
+- **VeltCommentDialog: 44/44:** annotationId, multiThreadAnnotationId, defaultCondition, inlineCommentSectionMode, commentPinSelected, fullExpanded, shadowDom, darkMode, readOnly, sidebarMode, isFocusedThreadEnabled, openAnnotationInFocusMode, expandOnSelection, inlineCommentMode, inboxMode, isInsidePdfViewer, multiThread, commentComposerMode, dialogSelection, dialogMode, focusedThreadMode, pageModeComposer, messageTruncation, initialEditCommentIndex, messageTruncationLines, variant, composerPosition, sortBy, sortOrder, commentPinType, containerComponentId, targetElementId, targetComposerElementId, locationVersion, locationDisplayName, context, placeholder, commentPlaceholder, replyPlaceholder, editPlaceholder, editCommentPlaceholder, editReplyPlaceholder, anonymousEmail. (props.md lists 43 rows; "~44" estimate matched: every row covered.)
+- **VeltMultiThreadCommentDialog: 14/14:** annotationId, multiThreadAnnotationId, annotation, user, commentPinSelected, commentPinType, dialogVariant, variant, inboxMode, containerComponentId, context, readOnly, defaultCondition, onSaveComment. (props.md lists 14 rows; "~15" estimate: every row covered.)
+- **VeltCommentText: 2/2:** annotationId, multiThreadAnnotationId. (props.md lists 2 rows; the component has exactly two `@Input`s in source, so the list is complete: the "~3" estimate counted the prose line.)
+- **VeltInlineCommentsSection: 32/32:** config, targetInlineCommentElementId, targetCommentElementId, targetElementId, darkMode, variant, dialogVariant, composerVariant, shadowDom, multiThread, sortData, composerPosition, sortBy, sortOrder, fullExpanded, context, contextOptions, locationId, documentId, folderId, commentPlaceholder, replyPlaceholder, composerPlaceholder, editPlaceholder, editCommentPlaceholder, editReplyPlaceholder, readOnly, anonymousEmail, messageTruncation, messageTruncationLines, defaultCondition: plus the two deprecated aliases counted inline. Every row covered.
+- **VeltInlineReactionsSection: 5/5:** targetReactionElementId, darkMode, variant, shadowDom, customReactions. Every row covered.
+
+**Coverage limits documented inline:** `VeltCommentDialog`: `dialogMode` as a live wire-through, `openAnnotationInFocusMode` / `dialogSelection` downstream surfaces, `locationDisplayName` being read anywhere, the precedence among the three edit placeholders. `VeltMultiThreadCommentDialog`: `commentPinSelected` / `commentPinType` / `dialogVariant` visual effects, `user` consumer, `onSaveComment` as output vs config callback. `VeltCommentText`: the public toggle name for showing resolved/terminal annotations. `VeltInlineCommentsSection`: `dialogVariant` / `composerVariant` / `composerPosition` rendering effects, single-vs-multi-thread rendering, `commentPlaceholder` vs `composerPlaceholder` precedence, the edit-placeholder precedence, `sortData` alias intent. `VeltInlineReactionsSection`: no per-instance `customReactions` scoping is documented. **No prop is skipped.**

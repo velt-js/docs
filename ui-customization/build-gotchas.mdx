@@ -1,0 +1,48 @@
+---
+title: "Build gotchas: common traps and fixes"
+sidebarTitle: "Build gotchas"
+description: "Avoid common build-time mistakes when translating design specs into Velt UI customizations."
+---
+
+<Info>
+**Audience: AI coding agents** (and teams running them). This page is part of the deterministic agent workflow for building and verifying Velt UI customizations. Customizing by hand? Start with the [Approaches](/ui-customization/styling) and [Feature Guides](/ui-customization/features/other-features).
+</Info>
+
+These are common failure modes when building Velt UI customizations from a design. Check them before assuming the SDK is broken.
+
+## Inspecting
+- **Inspect the LIVE rendered node, not the registry template.** A wireframe is cloned: the `velt-*-wireframe` custom-element tags are the hidden registry copy (0-size, empty). `document.querySelector('.hw-x')` may hit that copy. Always pick the element with `getBoundingClientRect().width > 0` (the visible clone) and read *its* classes/computed styles. Measuring the wrong node is how you "verify" something that's actually broken.
+
+## Wireframe clone behavior
+- **Some slots OVERWRITE their inner markup with their own label.** `ToggleReply` replaced custom `<svg/> + <span>Reply</span>` with a plain "Reply" text node; `CopyLink` did the same. **Fix:** don't nest icons in those slots: inject the icon via CSS `::before` (a data-URI SVG on your `.hw-*` class), which survives the clone.
+- **Wireframe MARKUP changes need a FULL page reload to take effect, not just new wireframes.** CSS edits hot-reload fine, but the `<VeltWireframe>` registry is built at mount: changing an existing template's markup (e.g. switching the composer's send to a self-closing `ActionButton`, or swapping Cancel to a `VeltButtonWireframe`) **re-renders under Fast Refresh but does NOT re-register the template**: the browser keeps rendering the OLD wireframe, so your fix "doesn't work" until a hard reload. After ANY `*Wf.tsx` change: hard-reload (Cmd-Shift-R), re-auth, reopen, and verify in a freshly-loaded tab, never a hot-reloaded one. (This masked a *correct* composer-submit fix as "still broken".)
+- **Container slots drop undeclared children**: declare the full child tree you intend to use.
+
+## Styling / scoping
+- **Class CSS needs shadow off + `!important`** (R6/R9b). With `shadowDom={false}` the live classes are reachable; Velt's runtime CSS is high-specificity, so overrides need `!important`.
+- **The page-mode composer renders the WHOLE dialog wireframe** (your `.hw-card` and all). It inherits the card chrome (border/shadow/resolve-icon) and crushes the input. **Fix:** scope the card chrome off in that context: `.velt-comment-dialog--page-mode-composer .hw-card { border:none; box-shadow:none; padding:0; background:transparent }`: leaving just the composer pill. (Alternatively give the page-mode composer its own variant via `pageModeComposerVariant`.)
+- **Composer "active" state = the `.velt-composer-open` ancestor class** (focus/compose), not a "has-text" class (there is none). Style the send button: grey/disabled by default, dark/enabled under `.velt-composer-open`.
+- **Avatar fill color is user-data-driven**, not CSS: "User 1" renders peach. To match a design that shows a flat dark avatar, override `.…s-user-avatar-initial-container { background }` + the initial color (this overrides per-user colors: a deliberate choice to flag).
+- **The send-arrow indigo lives on an inner element** (`.velt-composer--input-button`), not the outer `.velt-composer--submit-button`: override the inner one.
+
+## Composer actions, collapsed replies, resolved state
+- **Cancel button: use `VeltButtonWireframe`, never a raw `<button>`.** The dialog/reply composer has no native Cancel slot.
+  - Render Cancel as a `VeltButtonWireframe` (a Velt-owned button) and wire it in the host via `useVeltEventCallback("veltButtonClick")` to clear and collapse the composer.
+  - A raw `<button onClick>` in wireframe markup does not run because it is cloned to plain DOM (R4). It breaks specifically in the **in-thread reply composer**: page mode can look fine while the reply composer is dead.
+  - The host handler must scope to both composers, but **`commentAnnotation` does not distinguish them because both carry one**. The real distinguisher is the annotation's comment count: the **page-mode** composer fires with a fresh **draft** (`commentAnnotation.comments.length === 0`); a **reply** composer fires with the **existing thread** (`comments.length > 0`). Route the clear accordingly.
+  - Key the Send button's enabled/dark state off the submit button's `:disabled` attribute rather than only `.velt-composer-open`; it tracks empty-vs-filled exactly.
+- **Send button → leave `Composer.ActionButton` SELF-CLOSING; paint the arrow with CSS.** Injecting a child (`<svg>`/`<span>`) into `ActionButton` is dropped by the clone and can kill the native submit in the reply composer. Leave it empty so Velt renders the functional submit, then mask the up-arrow via CSS (`::after`/`mask` on the live button class: grey idle → dark under `.velt-composer-open`).
+- **"Show N replies…" (MoreReply): the clone DROPS trailing text, so add the ellipsis in CSS.** Velt renders the text in `.velt-hidden-count`; the cloner drops every node after the last velt element, so the trailing `…` is gone.
+  - Re-add it via `::after { content:'…' }` on `velt-comment-dialog-more-reply-text-internal`.
+  - Gate the row on `:has(.velt-hidden-count)` (NOT `:not(:empty)`) so a fully-expanded thread (empty MoreReply) doesn't show a lone chevron.
+  - Indent to the message column and draw the **rail-line continuation** (a 1px line in the avatar gutter joining the chevron to the next avatar); suppress Velt's default full-width divider.
+  - **Collapse the EMPTY slots**: a single comment / fully-expanded thread renders an empty `velt-comment-dialog-more-reply-internal` AND empty `velt-comment-dialog-toggle-reply-internal` that still take vertical space *inside the card border*, leaving dead space below "Reply". Add `velt-comment-dialog-more-reply-internal:not(:has(.velt-hidden-count)), velt-comment-dialog-toggle-reply-internal:not(:has(…count…:not(:empty))) { display:none !important }` so only a populated "Show N replies" row occupies space (on open AND resolved cards).
+- **Resolved card = muted AND no reply.** Per the design a resolved comment hides its reply affordance. Velt adds no `--resolved` class: detect resolved via the rendered unresolve button (`.velt-comment-dialog:has(velt-comment-dialog-unresolve-button-internal .hw-icon-btn)`), then mute colours/avatar AND `display:none` the reply + `velt-comment-dialog-toggle-reply-internal` + any reply composer. Leaving them shows empty bottom space.
+
+## Dropdowns / selected state
+- **The minimal-filter `SelectedIcon` slot renders as ONE standalone, full-width, `opacity:0` element**: it does NOT auto-place a tick per row. **Fix:** hide that slot and put a ✓ on the actually-selected row via CSS: `.…content-item--selected .hw-filter-item::after { content:"✓"; margin-left:auto }`. (Gating with `VeltIf {isSelected}` does NOT work in this V1 sort/filter context: it resolves falsy.)
+- **A right-edge-anchored dropdown can overflow the viewport** (the trigger sits at the sidebar's right edge). The content's default `left/right` may push a wide menu off-screen, clipping the tick. **Fix:** shift the menu into view (e.g. `transform: translateX(-Npx)` on the menu, or right-anchor it) so it opens leftward.
+
+## Interaction driving (when verifying in the browser)
+- **Velt triggers need a real pointer click; `element.click()` (JS) often won't fire the Angular handler.** Use a real click at the element's coordinates.
+- **Velt auth or `documentsReady` can stall after reloads** (`useCurrentUser` doesn't emit, so nothing mounts and the `velt-*` count is 0). This is an environment block, not a build failure. Wait longer for the mount, recover with a fresh tab, or re-authenticate in the app. Triage app vs. build before blaming the customization.

@@ -1,167 +1,239 @@
 ---
-title: Setup Wireframes
+title: "Getting Started: Setup, the shadowDom rule, and folder structure"
+sidebarTitle: "Setup"
+description: "Set up the project structure, shadow DOM strategy, and customization files needed before changing Velt UI."
 ---
 
-# Understanding Wireframes
+This page gets you to the point where you can actually customize. It assumes the decision tree ([`Decision tree`](/ui-customization/decision-tree)) has told you which layer(s) you're using.
 
-Wireframes are templates that define how Velt components should render in your app:
-- Act as global templates. Changes apply everywhere the component is used.
-- Allow full customization of layout and styling.
-- Wireframes themselves don't render in the DOM.
+<Note>
+**Start from a working Velt installation.** This guide assumes Velt is already installed, the user is already authenticated, and comments, sidebars, or the relevant collaboration surfaces are already rendering. Your customization work is to add wireframes, compose primitives, and add CSS. You do **not** need to rebuild SDK setup, auth, or documents unless the app is not rendering Velt yet. The one exception is the primitives path: there you fetch data with hooks and loop over it as part of the customization itself. Section 1 is context only; skip to [the `shadowDom` rule](#2-the-shadowdom-rule-read-this-before-any-css-or-wireframe-work) if the app already shows Velt's default UI.
+</Note>
 
-<Warning>
-Adding any children to a wireframe template removes most of its default styling. This gives you full control over the layout.
-However, you will still need to use a combination of CSS overrides on any remaining styles and your own components to achieve the desired styling.
-</Warning>
+---
 
+## 1. What's already in the project (context: you don't build this)
 
-## Step-by-Step Setup
+The pieces below already exist in the target app. You don't write them: this section just helps you **recognize** them so you know the customization will render:
 
 <Steps>
-<Step title="Add the root Wireframe Container">
-
-<Tabs>
-<Tab title="React / Next.js">
-
-```jsx
-import { VeltWireframe, VeltProvider } from '@veltdev/react'
-
-<VeltProvider>
-    <VeltWireframe>
-        {/* Your customization templates */}
-    </VeltWireframe>
-</VeltProvider>
-```
-</Tab>
-
-<Tab title="Other Frameworks">
-```html
-<!-- Add style="display:none;" to prevent flash before SDK init -->
-<velt-wireframe style="display:none;">
-    <!-- Your customization templates -->
-</velt-wireframe>
-```
-</Tab>
-</Tabs>
+<Step title="Install the SDK">
+React apps use `@veltdev/react`. Vanilla or other framework apps use `@veltdev/client`; the same `<velt-*>` custom elements apply.
 </Step>
+<Step title="Authenticate the user via an auth provider">
+Pass an **`authProvider`** to `<VeltProvider>`. This is the production way to sign a user in: the auth provider carries the `user` object **and** a `generateToken` callback that returns a Velt JWT. The SDK calls it on sign-in and refreshes it automatically on expiry. The token is minted by *your* backend, which holds your Velt API secret, so users can't spoof identity.
 
-<Step title="Add Component Wireframes">
+```tsx
+import type { VeltAuthProvider } from "@veltdev/types";
 
-Copy the wireframe template of the component you want to customize. You can find the wireframe templates in the component's UI Customization documentation.
+const authProvider: VeltAuthProvider = {
+  user: { userId: "u1", name: "Ada", email: "ada@acme.com" },
+  generateToken: async () => {
+    const res = await fetch("/api/velt/token", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: "u1" }),
+    });
+    return (await res.json()).token;        // your backend mints the Velt JWT
+  },
+  retryConfig: { retryCount: 3, retryDelay: 1000 },
+};
 
-<Tabs>
-<Tab title="React / Next.js">
-
-```jsx
-<VeltWireframe>
-    {/* Example: Customizing Comment Dialog Header */}
-    <VeltCommentDialogWireframe.Header>
-        <div className="flex items-center gap-2">
-            <VeltCommentDialogWireframe.Status />
-            <VeltCommentDialogWireframe.Priority />
-            <div className="flex-grow" />
-            <VeltCommentDialogWireframe.Options />
-            <VeltCommentDialogWireframe.ResolveButton />
-        </div>
-    </VeltCommentDialogWireframe.Header>
-</VeltWireframe>
+<VeltProvider apiKey="YOUR_API_KEY" authProvider={authProvider}>…</VeltProvider>
 ```
-</Tab>
 
-<Tab title="Other Frameworks">
-```html
-<velt-wireframe style="display:none;">
-    <!-- Example: Customizing Comment Dialog Header -->
-    <velt-comment-dialog-header-wireframe>
-        <div class="flex items-center gap-2">
-            <velt-comment-dialog-status-wireframe></velt-comment-dialog-status-wireframe>
-            <velt-comment-dialog-priority-wireframe></velt-comment-dialog-priority-wireframe>
-            <div class="flex-grow"></div>
-            <velt-comment-dialog-options-wireframe></velt-comment-dialog-options-wireframe>
-            <velt-comment-dialog-resolve-button-wireframe></velt-comment-dialog-resolve-button-wireframe>
-        </div>
-    </velt-comment-dialog-header-wireframe>
-</velt-wireframe>
-```
-</Tab>
-</Tabs>
+`VeltAuthProvider` = `{ user, generateToken?, retryConfig?, options?, onError? }`. There's also a simpler `useIdentify()` → `identify(user)` for quick prototyping without tokens, but **prefer the auth provider** because it's what production setups and the reference implementations use.
 </Step>
-
-<Step title="Customize the Template">
-
-You can customize using the options like:
-- [Layout](/ui-customization/layout): Customize the layout of the component
-- [Styling](/ui-customization/styling): Apply custom CSS and [themes](https://playground.velt.dev/themes)
-- [Template Variables](/ui-customization/template-variables): Add dynamic content to your templates
-- [Conditional Templates](/ui-customization/conditional-templates): Add conditional rendering logic
-- [Custom Actions](/ui-customization/custom-action-component): Add custom interactivity
-
-**Example:**
-<Tabs>
-<Tab title="React / Next.js">
-
-```jsx
-<VeltWireframe>
-    <VeltCommentDialogWireframe.Header>
-        <div>
-            Custom HTML
-        </div>
-        <VeltCommentDialogWireframe.Status />
-        <VeltCommentDialogWireframe.Priority />
-        <VeltCommentDialogWireframe.Options />
-        <VeltCommentDialogWireframe.CopyLink />
-        <VeltCommentDialogWireframe.ResolveButton />
-    </VeltCommentDialogWireframe.Header>
-</VeltWireframe>
-```
-</Tab>
-
-<Tab title="Other Frameworks">
-```html
-<velt-wireframe style="display:none;">
-    <velt-comment-dialog-header-wireframe>
-        <div>
-            Custom HTML
-        </div>
-        <velt-comment-dialog-status-wireframe></velt-comment-dialog-status-wireframe>
-        <velt-comment-dialog-priority-wireframe></velt-comment-dialog-priority-wireframe>
-        <velt-comment-dialog-options-wireframe></velt-comment-dialog-options-wireframe>
-        <velt-comment-dialog-copy-link-wireframe></velt-comment-dialog-copy-link-wireframe>
-        <velt-comment-dialog-resolve-button-wireframe></velt-comment-dialog-resolve-button-wireframe>
-    </velt-comment-dialog-header-wireframe>
-</velt-wireframe>
-```
-</Tab>
-</Tabs>
-
-</Step>
-
-<Step title="Add the Feature Components">
-
-- After defining templates, use the actual feature components in your app as normal.
-- The wireframe components are not meant to be rendered directly in your application. They merely serve as template definitions.
-
-<Tabs>
-<Tab title="React / Next.js">
-
-```jsx
-function MyApp() {
-  return (
-    <div className="my-app">
-      <VeltComments /> {/* Will use your custom template */}
-    </div>
-  )
-}
-```
-</Tab>
-
-<Tab title="Other Frameworks">
-```html
-<div class="my-app">
-  <velt-comments></velt-comments> <!-- Will use your custom template -->
-</div>
-```
-</Tab>
-</Tabs>
+<Step title="Set the document">
+Use `const { setDocuments } = useSetDocuments();`, then call `setDocuments(documents, options)` so there's a place for comments to live. Note the setter pattern: it is **not** `useSetDocuments([...])`.
 </Step>
 </Steps>
+
+If comments/sidebar render at all, you're ready to customize. If nothing renders, fix setup first: customization can't show what isn't initialized.
+
+<Tip>
+**Mental model for "where to start":** get Velt's **default** UI showing in your app *first*, unstyled. Confirm comments work. *Then* start customizing. Never start by building custom UI against a Velt that isn't initialized: you won't be able to tell setup bugs from styling bugs.
+</Tip>
+
+---
+
+## 2. The `shadowDom` rule (read this before any CSS or wireframe work)
+
+Velt can render inside a **shadow DOM** (an isolated DOM bubble). That isolation blocks your stylesheets.
+
+**Two cases:**
+
+- **Variable-only theming** (you only override `--velt-*` tokens): works **regardless** of shadow DOM: variables cross the boundary. You don't strictly need to change anything.
+- **Selector-based CSS** (class/element selectors) **or styled wireframes**: these **cannot** reach inside the shadow DOM. Two supported options: pick one:
+  - **A. Turn shadow DOM off** so your normal stylesheet reaches the elements:
+    ```tsx
+    <VeltComments shadowDom={false} />
+    <VeltCommentsSidebar shadowDom={false} />
+    ```
+  - **B. Keep shadow DOM on and inject your CSS into the shadow root** (keeps Velt's style isolation):
+    ```tsx
+    const { client } = useVeltClient();
+    client.injectCustomCss({ type: "styles", value: ".velt-comment-dialog-composer{border-radius:10px !important}" });
+    ```
+
+What breaks if you do neither: your `--velt-*` overrides still apply, but your **class-based CSS** won't reach inside, so it looks like "my CSS does nothing."
+
+**Rule of thumb:** anything beyond pure variable theming ⇒ shadow DOM off **or** `injectCustomCss`. (See [`CSS`](/ui-customization/styling) and [`Rules`](/ui-customization/rules).)
+
+---
+
+## 3. Recommended folder structure
+
+This structure keeps **your app code**, **Velt setup**, and **Velt UI customization** cleanly separated. Use it as-is.
+
+```text
+components/
+├── Header.tsx, Body.tsx, …          ← your normal app UI (no Velt customization here)
+└── velt/                            ← ALL Velt-related code lives here
+    ├── VeltCollaboration.tsx        Mounts Velt components + global config
+    ├── VeltInitializeUser.tsx       Identify the user
+    ├── VeltInitializeDocument.tsx   Set the document(s)
+    └── ui-customization/            ← ALL customization lives here
+        ├── VeltCustomization.tsx    The single <VeltWireframe> root (if wireframing)
+        ├── VeltCommentDialogWf.tsx  One file per customized surface
+        ├── VeltCommentSidebarWf.tsx
+        ├── ThreadCardWf.tsx
+        └── styles.css               ONE stylesheet for all Velt CSS
+```
+
+Why this works:
+
+- **One place to look.** Anyone (or any tool) finds all customization under `components/velt/ui-customization/`.
+- **App UI stays separate** from Velt UI: no tangling.
+- **One stylesheet** for all Velt CSS variables/classes, not scattered across components.
+- **One `<VeltWireframe>` root** (in `VeltCustomization.tsx`): required (see below), and easy to find.
+
+<Tip>
+For **CSS-only** or **primitives-only** customization you may not need a `ui-customization/` folder at all: a single `velt.css` + the components in `VeltCollaboration.tsx` is enough. Adopt the full structure when you start wireframing.
+</Tip>
+
+---
+
+## 4. The structural rules you must follow from day one
+
+These come up in every approach; the full list is in [`Rules`](/ui-customization/rules). The two that affect setup:
+
+1. **Use one `<VeltWireframe>` in the whole app.** It feeds a global registry; extra roots merge first-with-content-wins (order-dependent, conflict-prone). Put one in `VeltCustomization.tsx`, rendered once near the root. (See R1 in [`Rules`](/ui-customization/rules).)
+2. **`shadowDom={false}` on any component you style.** (Section 2.)
+
+---
+
+## 5. A complete minimal example
+
+Everything in one place: provider + auth provider → document → a wireframed dialog + themed CSS. This is the smallest setup that renders a customized comment surface.
+
+```tsx
+// app.tsx (or your root)
+import type { VeltAuthProvider } from "@veltdev/types";
+import {
+  VeltProvider, VeltComments, VeltCommentTool,
+  useSetDocuments, useVeltInitState,
+} from "@veltdev/react";
+import { useEffect } from "react";
+import { VeltCustomization } from "./components/velt/ui-customization/VeltCustomization";
+import "./components/velt/ui-customization/styles.css";   // one stylesheet (CSS theming)
+
+// Auth provider: signs the user in + supplies a backend-minted Velt JWT (auto-refreshed)
+const authProvider: VeltAuthProvider = {
+  user: { userId: "u1", name: "Ada", email: "ada@acme.com" },
+  generateToken: async () =>
+    (await fetch("/api/velt/token", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: "u1" }),
+    }).then(r => r.json())).token,
+};
+
+function VeltInit() {
+  const { setDocuments } = useSetDocuments();
+  useEffect(() => {
+    setDocuments([{ id: "doc-1", metadata: { documentName: "My Doc" } }]);
+  }, [setDocuments]);
+  return null;
+}
+
+export default function App() {
+  return (
+    <VeltProvider apiKey="YOUR_API_KEY" authProvider={authProvider}>
+      <VeltInit />
+      {/* one wireframe registry for the whole app (custom dialog layout) */}
+      <VeltCustomization />
+      {/* the live feature: renders using the registered wireframe; shadowDom off so CSS reaches it */}
+      <VeltComments shadowDom={false} />
+      <VeltCommentTool />
+      {/* …your app content… */}
+    </VeltProvider>
+  );
+}
+```
+
+```tsx
+// components/velt/ui-customization/VeltCustomization.tsx
+import { VeltWireframe, VeltCommentDialogWireframe } from "@veltdev/react";
+
+export function VeltCustomization() {
+  return (
+    <VeltWireframe>{/* exactly one in the app */}
+      <VeltCommentDialogWireframe>
+        <VeltCommentDialogWireframe.Header>
+          <header className="vcd-header">
+            <VeltCommentDialogWireframe.Status />
+            <VeltCommentDialogWireframe.ResolveButton />
+            <VeltCommentDialogWireframe.CloseButton />
+          </header>
+        </VeltCommentDialogWireframe.Header>
+        <VeltCommentDialogWireframe.Body>
+          <VeltCommentDialogWireframe.Threads>
+            <VeltCommentDialogWireframe.ThreadCard>
+              <div className="vcd-card">
+                <VeltCommentDialogWireframe.ThreadCard.Avatar />
+                <VeltCommentDialogWireframe.ThreadCard.Name />
+                <VeltCommentDialogWireframe.ThreadCard.Message />
+              </div>
+            </VeltCommentDialogWireframe.ThreadCard>
+          </VeltCommentDialogWireframe.Threads>
+        </VeltCommentDialogWireframe.Body>
+        <VeltCommentDialogWireframe.Composer>
+          <VeltCommentDialogWireframe.Composer.Input />
+          <VeltCommentDialogWireframe.Composer.ActionButton type="submit" />
+        </VeltCommentDialogWireframe.Composer>
+      </VeltCommentDialogWireframe>
+    </VeltWireframe>
+  );
+}
+```
+
+```css
+/* components/velt/ui-customization/styles.css */
+:root { --velt-light-mode-accent: #625DF5; --velt-default-font-family: "Inter", sans-serif; }
+.vcd-header { display:flex; gap:8px; align-items:center; }
+.vcd-card  { display:flex; gap:8px; }
+```
+
+Swap the wireframe for a plain `<VeltCommentDialog>` primitive, or drop the `VeltCustomization` entirely and rely on CSS only: the rest of the wiring is identical.
+
+---
+
+## 6. Cross-cutting concerns (a11y, i18n, RTL, responsive, testing)
+
+These apply across every approach: handle them as you build, not after. Quick version below; **full guidance in [`Cross-cutting concerns`](/ui-customization/localisation).**
+
+- **Accessibility.** Velt's default UI and its slot components ship with roles/labels/keyboard behavior; **primitives keep it**. In **wireframes**, your custom markup is *yours* to make accessible (add `aria-*`/roles/labels, ensure focus order), but always keep the `Velt…Wireframe.X` slot components for anything interactive, since they carry both behavior **and** a11y. Verify with keyboard-only + a screen reader.
+- **i18n / localization.** Three levers: (1) **override Velt's built-in strings / add languages** with `client.setTranslations({ en: { "<key>": "My text" }, fr: { … } })` and switch with `client.setLanguage("fr")`; (2) pass translated **placeholder props** (`commentPlaceholder`, `replyPlaceholder`, `editPlaceholder`, …); (3) for text in *your own* wireframe markup or headless components, localize it yourself. So you can fully translate or reword Velt's UI text.
+- **RTL.** Set `dir="rtl"` on your container; Velt UI inherits direction. Check mirrored layouts on your custom wireframe/CSS (padding/margins, icon direction). If a surface doesn't mirror cleanly, fix it in your CSS rather than hacking Velt internals (R0).
+- **Responsive / mobile.** Use the layout props (`filterPanelLayout="bottomSheet"`, `embedMode`, the dialog's bottom-sheet mode) plus your own CSS media queries on your wrappers/wireframe markup. See [`Component config`](/ui-customization/reference/component-config).
+- **Testing / verifying a customization.** Per surface: compare against Velt's default (remove your customization); check the empty / loading / unread / resolved states; check dark mode; check keyboard + scroll; resize for mobile. For automated tests, assert on Velt's **stateful classes** ([`CSS classes`](/ui-customization/reference/css-classes)) or read data via **hooks** ([`Hooks`](/ui-customization/reference/hooks)).
+
+---
+
+## 7. How to think while customizing
+
+- **One feature at a time.** Customize the comment dialog fully, verify it, then move to the sidebar. Don't customize several surfaces half-way.
+- **Cheapest layer first.** CSS → Wireframes → Primitives → Headless. Escalate only when blocked (the decision tree's escalation notes tell you when).
+- **Look up, don't guess.** Every CSS variable, wireframe slot, variable token, and hook is listed in [`reference/`](/ui-customization/reference/component-catalog). If it's not there, it doesn't exist: don't invent names.
+- **Verify against the default.** When something looks wrong, compare with Velt's default UI (temporarily remove your customization). It isolates "my styling" from "Velt behavior."
+
+Next, open the page for your chosen layer: [`CSS`](/ui-customization/styling), [`Primitives`](/ui-customization/primitives), [`Wireframes`](/ui-customization/layout), or [`Headless`](/ui-customization/headless). If you're mixing layers, use [`Combining approaches`](/ui-customization/combining-approaches).

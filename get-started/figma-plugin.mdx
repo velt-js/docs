@@ -1,0 +1,156 @@
+---
+title: "Figma to Velt UI Plugin"
+description: "Install the velt-customize plugin in Cursor or Claude Code to turn a Figma design into clean Velt UI customization (comments + notifications) on your React app."
+---
+
+Turn a **Figma design** into working **Velt UI customization** directly in your AI coding editor. The `velt-customize` plugin reads your design from Figma, plans the customization surface by surface, builds it in your app, and verifies each result against the design in a real browser, or honestly reports what the Velt SDK can't do yet.
+
+<CardGroup cols={2}>
+  <Card title="Cursor Plugin" icon="github" href="https://github.com/velt-js/velt-figma-plugin-cursor">
+    velt-js/velt-figma-plugin-cursor
+  </Card>
+
+  <Card title="Claude Code Plugin" icon="github" href="https://github.com/velt-js/velt-figma-plugin-claude">
+    velt-js/velt-figma-plugin-claude
+  </Card>
+</CardGroup>
+
+## When to Use
+
+* You have a Figma design for how Velt comments or notifications should look in your product
+* You want your AI agent to build the customization for you (CSS, wireframes, or primitives) instead of hand-writing it
+* You want every result verified against the design in a live browser, not just generated and hoped for
+
+<Info>
+  This plugin customizes Velt's **UI** on an app where Velt is already installed and working. If you haven't set up Velt yet, start with the [AI Plugins](/get-started/plugins) or [Quickstart](/get-started/quickstart) first.
+</Info>
+
+## Prerequisites
+
+* **Node.js** 18+
+* A **React app** with `@veltdev/react` installed, authenticated, and rendering Velt's default UI
+* A **Figma design** of your desired Velt UI, plus a [Figma personal access token](https://www.figma.com/developers/api#access-tokens) (figma.com → Settings → Security → Personal access tokens)
+* **Chrome** (Claude Code) or Cursor's built-in browser, used to verify results against the design
+
+## Quickstart
+
+<Tabs>
+  <Tab title="Cursor">
+    1. Clone the plugin repository and install it:
+
+    ```bash
+    git clone https://github.com/velt-js/velt-figma-plugin-cursor.git
+    cd velt-figma-plugin-cursor
+    npm run all
+    ```
+
+    This validates the plugin and copies its skills, rules, commands, and agents into `~/.cursor/`. **Fully restart Cursor** afterwards.
+
+    2. Store your Figma token (kept in your OS keychain, never in a file):
+
+    ```bash
+    node scripts/figma-extract.mjs token set
+    ```
+
+    3. Install the one screenshot dependency:
+
+    ```bash
+    npm i -g playwright-core
+    ```
+
+    4. Open **your app's repo** in Cursor (not the plugin repo) and start a run:
+
+    ```
+    /velt-customize-run <figma-loop-node-url> --mode "wireframes + primitives" --budget balanced
+    ```
+  </Tab>
+
+  <Tab title="Claude Code">
+    1. Inside Claude Code, install the plugin and restart:
+
+    ```
+    /plugin marketplace add velt-js/velt-figma-plugin-claude
+    /plugin install velt-customize@velt-customize
+    ```
+
+    2. Store your Figma token (kept in your OS keychain, never in a file):
+
+    ```bash
+    node "$CLAUDE_PLUGIN_ROOT/scripts/figma-extract.mjs" token set
+    ```
+
+    3. Connect the **Claude in Chrome** extension. The plugin uses Chrome to check your running app against the design.
+
+    4. Open your app's folder in Claude Code, make sure your dev server can run, and start a run:
+
+    ```
+    /velt-customize:run <figma-loop-node-url> --mode "wireframes + primitives" --budget balanced
+    ```
+  </Tab>
+</Tabs>
+
+<Info>
+  The Figma URL must point at one **Loop** node in your file (right-click the Loop → Copy link), not the whole file. Keep a Loop to 8 frames or fewer; split bigger designs into several Loops and run them one at a time.
+</Info>
+
+### Run Options
+
+| Flag       | Values                                                                                  | Description                                                                            |
+| ---------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `--mode`   | `strictly wireframe`, `strictly primitives`, `wireframes + primitives`, `freeform`      | How the plugin is allowed to build. Leave it out and it asks you, with a recommendation |
+| `--budget` | `strict`, `balanced`, `thorough`                                                        | How long it may spend per block                                                         |
+
+## What's Included
+
+| Resource     | Count | Description                                                                                                                       |
+| ------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **Commands** | 4     | Run, fix, clear, and memory (see below)                                                                                             |
+| **Agents**   | 4     | `velt-orchestrator` (drives the run), `velt-planner` (plans), `velt-builder` (builds), `velt-judge` (independently verifies)         |
+| **Skills**   | 14    | Customization approaches (CSS, wireframes, primitives), extraction, verification, comments, notifications, references, and rules    |
+| **Guide**    | 1     | A bundled customization knowledge base; the single source of truth the agents read on every run                                    |
+
+## Available Commands
+
+| Cursor                          | Claude Code                    | Description                                                             |
+| ------------------------------- | ------------------------------ | ----------------------------------------------------------------------- |
+| `/velt-customize-run <url>`     | `/velt-customize:run <url>`    | Start a customization run from a Figma Loop node URL                    |
+| `/velt-customize-fix "<issue>"` | `/velt-customize:fix "<issue>"`| Surgically fix one described mismatch, then re-verify the affected area |
+| `/velt-customize-clear`         | `/velt-customize:clear`        | Wipe run state and start fresh (does not touch generated code)          |
+| `/velt-customize-memory`        | `/velt-customize:memory`       | Inspect what the plugin has learned across runs                         |
+
+## How It Works
+
+Each run follows a plan → approve → build → verify loop:
+
+1. **Plan**: reads your Figma Loop via the Figma REST API, recognizes which Velt component each design element is, and picks the cheapest viable approach per surface
+2. **Approach gate**: shows you a per-surface coverage matrix with a recommendation and **waits for your confirmation** before building anything
+3. **Build → Judge loop**: builds one surface at a time; an independent, fresh-context Judge verifies each result against the design in a live browser, with screenshot evidence. Failures retry, escalate to a heavier approach, or end as a documented SDK gap
+4. **Report**: coverage achieved, screenshots, any SDK gaps, and the generated code under `components/velt/ui-customization/`
+
+You can watch progress live from a second terminal:
+
+```bash
+node <plugin-path>/scripts/progress.mjs --watch
+```
+
+## Troubleshooting
+
+### The run halts at preflight
+
+Preflight checks every prerequisite (Figma token, browser, target app, Node version) and halts with the exact fix if any is missing. Follow the printed instruction and re-run the command.
+
+### "No Figma token" error
+
+Design intake uses the Figma REST API and requires a token; there is no Figma desktop fallback. Store one with `figma-extract.mjs token set`, or set the `FIGMA_TOKEN` environment variable in CI/cloud environments. Verify with `figma-extract.mjs token status`.
+
+### Commands don't appear after install
+
+Restart your editor fully. Cursor loads plugin files from `~/.cursor/` (re-run `npm run all` after moving or updating the repo), and Claude Code registers plugin commands at startup (or use `/reload-plugins`).
+
+---
+
+## Next Steps
+
+* [AI Plugins](/get-started/plugins): Velt SDK knowledge, skills, and MCP servers for your editor
+* [UI Customization](/ui-customization/how-it-works): how Velt UI customization works under the hood
+* [Quickstart](/get-started/quickstart): set up Velt in your app first

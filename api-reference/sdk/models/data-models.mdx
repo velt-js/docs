@@ -5288,11 +5288,15 @@ The `dataProvider` event emits different resolver event types depending on the d
 | Property                | Type          | Required | Description                                                                                                              |
 | ----------------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `urlAllowList`          | string[]      | No       | Restricts Velt features to specific pages by specifying partial URL strings.                                             |
-| `featureAllowList`      | FeatureType[] | No       | Only allows the provided Velt features to run.                                                                           |
+| `featureAllowList`      | FeatureType[] | No       | Allow-list of Velt features permitted to run. In the modular SDK it also controls chunk preloading: when set, only the listed feature chunks are preloaded (others load on demand via `preload*()` / `getXElement()`); when omitted (default `undefined`), all lazy feature chunks are preloaded in the background, preserving pre-modular behavior. Calling `preload*()` or `getXElement()` for an omitted feature auto-enables it. |
 | `userPlanAllowList`     | string[]      | No       | Restricts Velt features to specific user plans.                                                                          |
 | `userIdAllowList`       | string[]      | No       | Restricts Velt features to specific users.                                                                               |
 | `usePrefersColorScheme` | boolean       | No       | If set to true, listens to changes on the `prefers-color-scheme` media query to set the global theme of Velt components. |
 | `globalStyles`          | boolean       | No       | Controls whether Velt's global CSS styles are loaded. Default: true                                                      |
+
+Valid modular feature keys for `featureAllowList` are: `'comment'`, `'cursor'`, `'presence'`, `'huddle'`, `'recorder'`, `'notification'`, `'reaction'`, `'arrow'`, `'tag'`, `'rewriter'`, `'selection'`, `'area'`, `'activity'`, `'views'`, `'userInvite'`, `'userRequest'`, `'videoPlayer'`, `'crdt'`, and `'liveStateSync'`.
+
+Use these strings when configuring modular chunk preloading. The `Features` enum below documents public enum values; `Features.LIVE_SELECTION` remains `'liveSelection'` for backward compatibility, while the v6 modular allow-list key for Live Selection is `'selection'`.
 
 #### Features
 
@@ -5304,6 +5308,7 @@ The `dataProvider` event emits different resolver event types depending on the d
 | `ARROW`           | `'arrow'`         | No       | Arrow feature for drawing arrows                   |
 | `AUDIO_HUDDLE`    | `'audioHuddle'`   | No       | Audio huddle feature for voice conversations       |
 | `COMMENT`         | `'comment'`       | No       | Comment feature for adding comments                |
+| `CRDT`            | `'crdt'`          | No       | CRDT feature (lazy chunk `velt-crdt.js`)           |
 | `CURSOR`          | `'cursor'`        | No       | Cursor feature for showing user cursors            |
 | `HUDDLE`          | `'huddle'`        | No       | Huddle feature for video conversations             |
 | `LIVE_STATE_SYNC` | `'liveStateSync'` | No       | Live state sync feature                            |
@@ -11925,9 +11930,9 @@ Request payload for `sdk.api.agents.createAgent`. Accepts additional passthrough
 | `name` | `string` | Yes | Agent display name. |
 | `description` | `string` | No | Human-readable agent description. |
 | `rawInstructions` | `string` | No | Unprocessed natural-language instructions. |
-| `instructions` | `string` | No | Resolved/structured instructions. |
+| `instructions` | `string` | No | Resolved/structured instructions. Required when the configured strategy is `ai`, `service+ai`, or `stagehand-agent`. |
 | `enabled` | `boolean` | No | Whether the agent is active. |
-| `metadata` | `Record<string, unknown>` | No | Arbitrary metadata. |
+| `metadata` | `Record<string, unknown>` | No | Arbitrary metadata. Server-managed metadata keys (`type`, `category`, `internal`, `apiKey`) are rejected on create/update-version payloads. |
 | `contextGathering` | `ContextGatheringConfig` | No | Context gathering configuration. |
 | `execution` | `AgentExecutionConfig` | No | Execution configuration. |
 | `response` | `AgentResponseConfig` | No | Response configuration. |
@@ -11935,6 +11940,8 @@ Request payload for `sdk.api.agents.createAgent`. Accepts additional passthrough
 | `input` | `AgentInputConfig` | No | Input configuration. |
 | `scope` | `AgentScopeConfig` | No | Scope configuration. |
 | `setup` | `AgentSetupConfig` | No | Setup configuration. |
+
+Create and update-version payloads also reject the top-level server-managed `managedBy` field with `400 INVALID_ARGUMENT`.
 
 ### `UpdateAgentRequest` (Node)
 
@@ -11949,13 +11956,13 @@ Request payload for `sdk.api.agents.updateAgent`.
 
 ### `UpdateAgentVersionRequest` (Node)
 
-Request payload for `sdk.api.agents.updateAgentVersion`. Accepts additional passthrough fields.
+Request payload for `sdk.api.agents.updateAgentVersion`. Accepts additional passthrough fields. Partial updates deep-merge nested config objects, so omitted siblings under `execution`, `contextGathering`, and similar blocks are preserved.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `agentId` | `string` | Yes | Agent to version. |
 | `rawInstructions` | `string` | No | Unprocessed natural-language instructions. |
-| `instructions` | `string` | No | Resolved/structured instructions. |
+| `instructions` | `string` | No | Resolved/structured instructions. Required when the configured strategy is `ai`, `service+ai`, or `stagehand-agent`. |
 | `phaseTimeoutMs` | `number` | No | Positive integer phase timeout in ms. |
 | `contextGathering` | `ContextGatheringConfig` | No | Context gathering configuration. |
 | `execution` | `AgentExecutionConfig` | No | Execution configuration. |
@@ -11964,6 +11971,8 @@ Request payload for `sdk.api.agents.updateAgentVersion`. Accepts additional pass
 | `input` | `AgentInputConfig` | No | Input configuration. |
 | `scope` | `AgentScopeConfig` | No | Scope configuration. |
 | `setup` | `AgentSetupConfig` | No | Setup configuration. |
+
+Update-version payloads also reject the top-level server-managed `managedBy` field and server-managed metadata keys (`metadata.type`, `metadata.category`, `metadata.internal`, `metadata.apiKey`) with `400 INVALID_ARGUMENT`.
 
 ### `DeleteAgentRequest` (Node)
 
@@ -12167,6 +12176,76 @@ Request payload for `sdk.api.agents.removeAgentsFromGroup`.
 | `groupId` | `string` | Yes | Target group. |
 | `agentIds` | `string[]` | Yes | Agents to remove, 1..100. |
 
+### Agent configuration nested types (Node)
+
+These config types are referenced by `CreateAgentRequest` and `UpdateAgentVersionRequest`.
+
+```ts
+interface ResponseFieldDescriptions {
+  summary?: string;
+  title?: string;
+  description?: string;
+  severity?: string;
+  targetText?: string;
+  suggestion?: string;
+  isPageLevel?: string;
+  issueType?: string;
+  confidence?: string;
+  htmlSelector?: string;
+  findingType?: string;
+}
+
+type RestApiAuthConfig =
+  | { type: 'none' }
+  | { type: 'bearer'; token: string }
+  | { type: 'basic'; username: string; password: string }
+  | { type: 'header'; headers: Record<string, string> };
+
+interface RestApiEndpoint {
+  url: string;
+  description: string;
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  auth?: RestApiAuthConfig;
+  headers?: Record<string, string>;
+  query?: Record<string, string>;
+  body?: unknown;
+  cacheTtlSeconds?: number; // default 0, max 86400
+  timeoutMs?: number; // default 10000, max 30000
+  responsePath?: string;
+}
+
+interface RestApiContextStrategyOptions {
+  endpoints: RestApiEndpoint[]; // 1..10
+  maxResponseBytes?: number; // default 1000000, max 5000000
+}
+
+interface ContextGatheringConfig {
+  strategies?: string[]; // include 'rest-api' to inject {{restApiData}}
+  strategyOptions?: {
+    'rest-api'?: RestApiContextStrategyOptions;
+  } & Record<string, Record<string, unknown>>;
+}
+
+type McpAuthConfig = { type: 'none' } | { type: 'header'; headers: Record<string, string> };
+
+interface McpServerConfig {
+  url: string;
+  auth?: McpAuthConfig;
+  allowedTools?: string[];
+}
+
+interface AgentExecutionConfig {
+  executionStrategy?: 'default' | 'ai' | 'service+ai' | 'stagehand-agent' | 'mcp-tools' | string;
+  mcpServers?: McpServerConfig[];
+  responseDescriptions?: ResponseFieldDescriptions;
+  serviceId?: string;
+  strategyOptions?: Record<string, Record<string, unknown>>;
+  knowledge?: Record<string, unknown>;
+}
+```
+
+Secret-bearing `rest-api` and `mcp-tools` auth fields are encrypted at rest and returned redacted on read paths, including agent version snapshots.
+
 ### `MemorySearchRequest` (Node)
 
 Request payload for `sdk.api.memory.search`.
@@ -12292,8 +12371,43 @@ Request payload for `sdk.api.memory.searchKnowledge`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `query` | `string` | Yes | Search query. |
-| `sourceId` | `string \| string[]` | No | Omit for whole workspace; array of 2..30 ids. |
-| `limit` | `number` | No | Result limit, 1..50, default 10. |
+| `sourceId` | `string \| string[]` | No | Omit for whole workspace; array of 2..30 ids. When `includeRules` is `true`, narrows both knowledge chunks and extracted rules. |
+| `limit` | `number` | No | Result limit, 1..50, default 10. When `includeRules` is `true`, this is the combined cap after merging both corpora. |
+| `includeRules` | `boolean` | No | Defaults to `false`. When `true`, also searches extracted rules and merges them with knowledge-chunk hits. Non-boolean values are rejected. |
+
+### `MemoryKnowledgeSearchResult` (Node)
+
+Result item returned by `sdk.api.memory.searchKnowledge`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `sourceId` | `string` | No | Knowledge source that produced the hit. |
+| `text` | `string` | Yes | Matched chunk text or extracted-rule text. |
+| `score` | `number` | No | Cosine distance; lower is more relevant. Absent for recency-fallback hits. |
+| `kind` | `'chunk' \| 'rule'` | No | Present only when `includeRules` is `true`; distinguishes knowledge chunks from extracted rules. |
+| `ruleId` | `string` | No | Rule document id. Present only on `kind: 'rule'` hits. |
+| `category` | `string` | No | Optional rule category. Present only on rule hits when the rule has a category. |
+
+### `MemoryKnowledgeSearchResponse` (Node)
+
+Response payload returned under `result` from `sdk.api.memory.searchKnowledge`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `results` | `MemoryKnowledgeSearchResult[]` | Yes | Search results. When `includeRules` is omitted or `false`, result items keep the existing chunk-only shape with no `kind`, `ruleId`, or `category`. |
+| `recordsSearched` | `number` | Yes | For `includeRules: true`, equals the number of returned results after merging and truncating to `limit`. |
+
+### `KnowledgeRuleHit` (Node)
+
+Extracted-rule hit returned by internal rule search helpers and surfaced in `MemoryKnowledgeSearchResult` when `includeRules` is `true`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `ruleId` | `string` | Yes | Firestore document id for the extracted rule. |
+| `sourceId` | `string` | No | Knowledge source that produced the rule. |
+| `text` | `string` | Yes | Extracted rule text. |
+| `score` | `number` | No | Cosine distance; lower is more relevant. Absent for recency-fallback hits. |
+| `category` | `string` | No | Optional category from the rule document. |
 
 ### `MemoryListKnowledgeSourcesRequest` (Node)
 
@@ -12385,9 +12499,8 @@ Request payload for `sdk.api.approval.createDefinition`.
 | `description` | `string` | No | Description, up to 2000 chars. |
 | `scope` | `ApprovalScope` | No | Definition scope. |
 | `nodes` | `ApprovalNode[]` | Yes | Workflow nodes, 1..100. |
-| `edges` | `ApprovalEdge[]` | Yes | Workflow edges; may be empty; max 500. |
+| `edges` | `ApprovalEdge[]` | Yes | Workflow edges (unified `EdgeSchema`: `from`/`to`/`on`/`when`/`loop`); may be empty; max 500. Reject paths and loop-backs are `on:'reject'` edges. |
 | `groups` | `ApprovalGroup[]` | No | Node groups. |
-| `loops` | `ApprovalLoop[]` | No | Loop definitions. |
 | `triggers` | `ApprovalTrigger[]` | No | Trigger definitions. |
 | `tags` | `string[]` | No | Tags. |
 | `custom` | `Record<string, unknown>` | No | Arbitrary custom data. |
@@ -12433,6 +12546,70 @@ Request payload for `sdk.api.approval.listDefinitions`.
 | `cursor` | `number` | No | Pagination cursor. |
 | `organizationId` | `string` | No | Organization context. |
 | `documentId` | `string` | No | Document context. |
+
+### Approval graph nested types (Node)
+
+These graph types are referenced by approval definition requests and `DefinitionView` responses.
+
+```ts
+type JsonAst = Record<string, unknown>;
+
+type ApprovalEdgeEndpoint = string | { kind: 'node'; nodeId: string } | { kind: 'group'; groupId: string };
+
+interface ApprovalEdge {
+  from: ApprovalEdgeEndpoint;
+  to: ApprovalEdgeEndpoint;
+  on?: 'approve' | 'reject' | 'always' | 'exhausted' | 'custom'; // default 'always'
+  when?: string; // JSON-AST string, only valid when on === 'custom'
+  loop?: { maxIterations: number }; // 1..20, only on an on:'reject' back-edge
+}
+
+interface ApprovalNodeBase {
+  nodeId: string;
+  type: 'agent' | 'human' | 'webhook';
+  slaMs?: number;
+  requireNonEmptyOutput?: boolean;
+  name?: string; // 1..200
+  description?: string; // max 2000
+}
+
+type ApprovalNode =
+  | (ApprovalNodeBase & { type: 'agent'; config: Record<string, unknown> })
+  | (ApprovalNodeBase & {
+      type: 'human';
+      config: {
+        reviewerIds?: string[];
+        reviewers?: Array<{ userId: string; mandatory: boolean }>;
+        reviewerEmails?: string[];
+        commentBody?: string;
+      };
+    })
+  | (ApprovalNodeBase & { type: 'webhook'; config: Record<string, unknown> });
+
+interface ApprovalCompiledForwardEdge {
+  from: string;
+  to: string;
+  role: 'approve' | 'reject' | 'always' | 'exhausted' | 'custom';
+  when: JsonAst | null;
+  fromGroupId?: string;
+  toGroupId?: string;
+}
+
+interface ApprovalCompiledLoop {
+  loopId: string;
+  entryNodeId: string;
+  bodyNodeIds: string[];
+  maxIterations: number;
+  onExhausted: { routeToNodeId: string } | null;
+}
+
+interface ApprovalCompiledGraph {
+  forwardEdges: ApprovalCompiledForwardEdge[];
+  loops: ApprovalCompiledLoop[];
+}
+```
+
+Every `DefinitionView` returned by create, get, and list includes read-only `compiled.forwardEdges` and `compiled.loops` alongside the authored `edges`.
 
 ### `ApprovalDispatchExecutionRequest` (Node)
 

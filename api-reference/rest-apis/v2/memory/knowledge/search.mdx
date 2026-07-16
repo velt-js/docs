@@ -30,15 +30,19 @@ Use this API to run a semantic vector search over the **content of your ingested
     </ParamField>
 
     <ParamField body="sourceId" type="string | string[]">
-      Restrict the search to one or more knowledge sources. A single id restricts to that source; an array of **2 to 30** ids fans out one prefiltered nearest-neighbour search per id and merges/re-ranks the combined results by distance. Omit to search the entire workspace knowledge base.
+      Restrict the search to one or more knowledge sources. A single id restricts to that source; an array of **2 to 30** ids fans out one prefiltered nearest-neighbour search per id and merges/re-ranks the combined results by distance. Omit to search the entire workspace knowledge base. When `includeRules` is `true`, `sourceId` narrows both corpora simultaneously (a single id restricts both searches; an array fans out one query per id per corpus, then merges).
     </ParamField>
 
     <ParamField body="limit" type="integer">
-      Maximum number of results to return.
+      Maximum number of results to return (1–50). When `includeRules` is `true`, this is the combined cap across both corpora (global top-N after the merge), not a per-corpus quota.
+    </ParamField>
+
+    <ParamField body="includeRules" type="boolean" default="false">
+      When `true`, also vector-searches the extracted-rules corpus and merges those hits with the knowledge-chunk hits into one relevance-ranked list. When omitted or `false`, only knowledge chunks are searched and the response shape is unchanged. Must be a boolean; non-boolean values (e.g. the string `"true"` or `1`) are rejected with a `400`.
     </ParamField>
 
     <Note>
-      This endpoint is **workspace-scoped**. `organizationId` and `documentId` are not accepted; the strict schema rejects them rather than silently ignoring them. An unknown or cross-workspace `sourceId` returns empty results (never an error or a cross-tenant read). On embedding failure, the endpoint falls back to a recency query.
+      This endpoint is **workspace-scoped**. `organizationId` and `documentId` are not accepted; the strict schema rejects them rather than silently ignoring them. An unknown or cross-workspace `sourceId` returns empty results (never an error or a cross-tenant read). On embedding failure the endpoint never throws; it falls back to a recency query, returning the most-recently-ingested items (honoring `sourceId`). When `includeRules` is `true`, both corpora fall back to recency independently.
     </Note>
   </Expandable>
 </ParamField>
@@ -80,9 +84,31 @@ Use this API to run a semantic vector search over the **content of your ingested
 }
 ```
 
+#### Search chunks and extracted rules together
+
+```JSON
+{
+  "data": {
+    "query": "image format requirements",
+    "includeRules": true,
+    "limit": 5
+  }
+}
+```
+
+```bash cURL
+curl -X POST https://api.velt.dev/v2/memory/knowledge/search \
+  -H "x-velt-api-key: $VELT_API_KEY" \
+  -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{ "data": { "query": "image format requirements", "includeRules": true, "limit": 5 } }'
+```
+
 # Response
 
-Each result includes the matched `sourceId`, the chunk `text`, and a `score`: the cosine distance, where **lower is more relevant**. `recordsSearched` reports how many sources were queried.
+Each result includes the matched `sourceId`, the result `text`, and, when vector search succeeds, a `score`: the cosine distance, where **lower is more relevant**. For the default chunk-only response, `recordsSearched` remains unchanged from the prior contract; when `includeRules` is `true`, it equals the number of returned items after merging and truncating to `limit`.
+
+When `includeRules` is omitted or `false`, the response is byte-identical to the prior contract: items have the shape `{ sourceId?, text, score? }` with no `kind`, `ruleId`, or `category` keys.
 
 #### Success Response
 
@@ -97,6 +123,34 @@ Each result includes the matched `sourceId`, the chunk `text`, and a `score`: th
       }
     ],
     "recordsSearched": 1
+  }
+}
+```
+
+When `includeRules` is `true`, every item gains a `kind` field (`"chunk"` or `"rule"`). `kind: "rule"` items also include a `ruleId` and an optional `category`; `kind: "chunk"` items carry no extra fields. Items are sorted ascending by `score` (cosine distance, lower is more relevant); recency-fallback items (returned when embedding fails) have no `score` and sort last. The endpoint embeds the query once, reuses that vector for both corpora, concatenates both result sets, deduplicates by the `(kind, id)` tuple, and truncates the merged list to `limit`. Here, `recordsSearched` equals the number of items returned after truncation. A rule hit's `ruleId` corresponds to the `id` field on [List Extracted Rules](/api-reference/rest-apis/v2/memory/knowledge/rules).
+
+#### Success Response (includeRules: true)
+
+```JSON
+{
+  "result": {
+    "results": [
+      {
+        "kind": "rule",
+        "ruleId": "rule_3f2...",
+        "sourceId": "src_checklist",
+        "text": "All images must be WEBP, max width 1200px",
+        "score": 0.09,
+        "category": "§Navigation Bar"
+      },
+      {
+        "kind": "chunk",
+        "sourceId": "src_brief",
+        "text": "Our target audience is enterprise buyers...",
+        "score": 0.21
+      }
+    ],
+    "recordsSearched": 2
   }
 }
 ```

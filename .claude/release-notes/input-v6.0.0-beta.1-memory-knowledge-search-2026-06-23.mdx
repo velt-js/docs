@@ -1,0 +1,151 @@
+Velt SDK Release Notes - 2026-06-23
+Release Date: June 23, 2026
+
+Summary
+SDK    Files Changed    Insertions    Deletions
+shared-firebase-function    24    +1828    -38
+
+Features
+1. Knowledge Search: Opt-In Combined Chunk + Rule Search (includeRules)
+What: The POST /v2/memory/knowledge/search endpoint now accepts an optional includeRules boolean field. When set to true, the search embeds the query exactly once and runs parallel vector searches over both the knowledge_chunks corpus (reference content) and the custom_context corpus (extracted rules). Both result sets are merged into a single relevance-ranked list, with each item tagged by a kind discriminator ("chunk" or "rule"). Rule hits additionally carry a ruleId (the rule's Firestore doc id) and an optional category field.
+
+Why: Callers previously had to query chunks and rules in separate requests and merge the results themselves. The combined search path embeds the query once and returns a unified, globally ranked list, reducing latency and Gemini embedding cost.
+
+Impact: Developers using /v2/memory/knowledge/search can now retrieve extracted rules alongside reference chunks in a single call. The existing response shape is fully preserved when includeRules is omitted or false — no migration required for existing integrations.
+
+Request:
+
+{
+  "data": {
+    "query": "image format requirements",
+    "includeRules": true,
+    "limit": 5
+  }
+}
+
+Example:
+
+curl -X POST https://api.velt.dev/v2/memory/knowledge/search \
+  -H "x-velt-api-key: $VELT_API_KEY" \
+  -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{ "data": { "query": "image format requirements", "includeRules": true, "limit": 5 } }'
+
+Request Fields (additions):
+
+Field    Type    Required    Default    Description
+includeRules    boolean    no    false    true → also vector-search the custom_context (extracted-rules) corpus and merge results with chunk hits. false/omitted → chunk-only, response shape unchanged. Non-boolean is rejected (400).
+
+Updated limit semantics when includeRules: true: limit is the combined cap across both corpora (global top-N after merge), not a per-corpus quota. The existing 1–50 bounds still apply.
+
+Updated sourceId semantics when includeRules: true: sourceId narrows both corpora simultaneously. A single string restricts both searches to one source; a 2–30 element array fans out one query per source id in each corpus and merges the results.
+
+Response (when includeRules: true):
+
+{
+  "result": {
+    "results": [
+      {
+        "kind": "rule",
+        "ruleId": "rule_3f2...",
+        "sourceId": "src_checklist",
+        "text": "All images must be WEBP, max width 1200px",
+        "score": 0.09,
+        "category": "§Navigation Bar"
+      },
+      {
+        "kind": "chunk",
+        "sourceId": "src_brief",
+        "text": "Our target audience is enterprise buyers...",
+        "score": 0.21
+      }
+    ],
+    "recordsSearched": 2
+  }
+}
+
+Response shape rules:
+
+When includeRules is omitted or false, items have the existing shape { sourceId?, text, score? } with no kind, ruleId, or category keys — byte-identical to the prior response contract.
+When includeRules: true, every item gains a kind field. kind: "chunk" items carry no additional fields beyond the base shape. kind: "rule" items also carry ruleId and an optional category.
+Items are sorted ascending by cosine distance (score). Items from the recency fallback path (when embedding fails) have no score and sort last.
+recordsSearched equals the number of items in the returned results array after merging and truncating to limit.
+
+Type:
+
+interface KnowledgeSearchResult {
+  sourceId?: string;
+  text: string;
+  score?: number;
+  // Present only when includeRules: true
+  kind?: 'chunk' | 'rule';
+  ruleId?: string;      // rule hits only
+  category?: string;    // rule hits only, when set on the rule doc
+}
+
+interface KnowledgeSearchResponse {
+  results: KnowledgeSearchResult[];
+  recordsSearched: number;
+}
+
+Merge contract (INV-022): The query is embedded exactly once per request and the resulting vector is shared across both corpus searches (no second Gemini embedding call). Both result sets are concatenated, sorted ascending by cosine distance, deduplicated by (kind, id) tuple (a chunk and a rule that happen to share the same id string are kept as two distinct items), then truncated to limit.
+
+Degraded-mode behavior: If the embedding call fails or times out, both corpora route to their recency fallback independently, returning the most-recently-ingested items for the workspace (honoring sourceId if provided). The endpoint never throws on embedding failure.
+
+Tenant safety: All rule-corpus queries carry the co-located metadata.apiKey tenant clause before the findNearest vector search, identical to the chunk-corpus path. sourceId is an additive filter on top of the tenant clause.
+
+API Changes
+1. KnowledgeRuleHit — New Type for Rule Search Results
+What: A new exported TypeScript interface KnowledgeRuleHit describes a single extracted-rule search hit returned by the internal getKnowledgeRules helper and surfaced in the knowledgeSearch response when includeRules: true.
+
+Why: The rule corpus (custom_context) stores rules with a different shape than knowledge chunks — keyed by a ruleId (the Firestore doc id) and carrying an optional rule category. KnowledgeRuleHit formalizes this shape for internal consumers.
+
+Impact: Internal SDK consumers calling getKnowledgeRules directly can type their results against this interface.
+
+Type:
+
+export interface KnowledgeRuleHit {
+  ruleId: string;
+  sourceId?: string;
+  text: string;
+  score?: number;      // cosine distance; absent on recency-fallback hits
+  category?: string;   // absent when the rule doc has no category
+}
+
+Used in: knowledge-rules-search.ts → getKnowledgeRules(), MemoryService.knowledgeSearch() (merged result mapping)
+
+2. KnowledgeSearchSchema — New includeRules Field
+What: KnowledgeSearchSchema (Zod) gains an optional includeRules: z.boolean().optional() field. The controller defaults an absent value to false before passing it to MemoryService.knowledgeSearch, preserving the existing chunk-only response shape.
+
+Why: Strict schema validation ensures that non-boolean values (e.g., the string "true" or the integer 1) are rejected with a 400 before reaching the search logic.
+
+Impact: Non-boolean values for includeRules now return a 400 validation error instead of being silently ignored.
+
+3. MemoryService.knowledgeSearch — Updated Signature
+What: MemoryService.knowledgeSearch now accepts an optional includeRules?: boolean parameter and returns an updated result type that includes the optional kind, ruleId, and category fields when includeRules: true.
+
+Why: Required to orchestrate the combined chunk + rule search path while keeping the default chunk-only path unchanged.
+
+Impact: Existing callers that do not pass includeRules observe no change in behavior or response shape.
+
+Updated signature:
+
+static async knowledgeSearch(params: {
+  apiKey: string;
+  query: string;
+  sourceId?: string | string[];
+  limit?: number;
+  includeRules?: boolean;
+}): Promise<{
+  results: Array<{
+    sourceId?: string;
+    text: string;
+    score?: number;
+    kind?: 'chunk' | 'rule';
+    ruleId?: string;
+    category?: string;
+  }>;
+  recordsSearched: number;
+}>
+
+This should be appended to the v6.0.0-beta.1 release note.

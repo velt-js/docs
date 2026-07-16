@@ -3420,6 +3420,10 @@ await sdk.api.token.getToken('org-123', 'user-1', 'john@example.com', false);
 }
 ```
 
+<Note>
+Custom agent config supports the `rest-api` context-gathering strategy and the `mcp-tools` execution strategy. Secret-bearing REST API and MCP auth fields are encrypted at rest and redacted on read paths. Create and update-version payloads reject server-managed fields such as `managedBy`, `metadata.type`, `metadata.category`, `metadata.internal`, and `metadata.apiKey`; strategies that require instructions (`ai`, `service+ai`, `stagehand-agent`) reject empty `instructions`.
+</Note>
+
 {/*
 ### Agents
 
@@ -3687,8 +3691,13 @@ These shared/nested config interfaces are referenced by the request types above.
 ```ts
 interface ResponseFieldDescriptions { summary?: string; title?: string; description?: string; severity?: string; targetText?: string; suggestion?: string; isPageLevel?: string; issueType?: string; confidence?: string; htmlSelector?: string; findingType?: string; }
 interface KnowledgeConfig { useMemory?: boolean; maxChunks?: number; /* 1..20 * / maxPatterns?: number; /* 1..20 * / maxActivities?: number; /* 1..20 * / }
-interface ContextGatheringConfig { strategies?: string[]; /* non-empty when present * / strategyOptions?: Record<string, Record<string, unknown>>; }
-interface AgentExecutionConfig { responseDescriptions?: ResponseFieldDescriptions; executionStrategy?: string; serviceId?: string; strategyOptions?: Record<string, Record<string, unknown>>; knowledge?: KnowledgeConfig; }
+type RestApiAuthConfig = { type: 'none' } | { type: 'bearer'; token: string } | { type: 'basic'; username: string; password: string } | { type: 'header'; headers: Record<string, string> };
+interface RestApiEndpoint { url: string; description: string; method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; auth?: RestApiAuthConfig; headers?: Record<string, string>; query?: Record<string, string>; body?: unknown; cacheTtlSeconds?: number; /* max 86400 */ timeoutMs?: number; /* max 30000 */ responsePath?: string; }
+interface RestApiContextStrategyOptions { endpoints: RestApiEndpoint[]; /* 1..10 */ maxResponseBytes?: number; /* default 1000000, max 5000000 */ }
+interface ContextGatheringConfig { strategies?: string[]; /* includes 'rest-api'; non-empty when present * / strategyOptions?: { 'rest-api'?: RestApiContextStrategyOptions } & Record<string, Record<string, unknown>>; }
+type McpAuthConfig = { type: 'none' } | { type: 'header'; headers: Record<string, string> };
+interface McpServerConfig { url: string; auth?: McpAuthConfig; allowedTools?: string[]; }
+interface AgentExecutionConfig { responseDescriptions?: ResponseFieldDescriptions; executionStrategy?: 'default' | 'ai' | 'service+ai' | 'stagehand-agent' | 'mcp-tools' | string; serviceId?: string; strategyOptions?: Record<string, Record<string, unknown>>; knowledge?: KnowledgeConfig; mcpServers?: McpServerConfig[]; }
 interface AgentResponseConfig { useAiFormatting?: boolean; formattingPrompt?: string; responseAdapter?: string; }
 interface AgentPostProcessConfig { guardrails?: { enabled?: boolean }; matchAndMerge?: { enabled?: boolean }; pinResolution?: { enabled?: boolean }; annotations?: { enabled?: boolean; strategy?: string }; analytics?: { enabled?: boolean }; customProcessors?: string[]; }
 interface AgentInputUserContextField { id: string; title: string; type: 'string' | 'number' | 'boolean'; required?: boolean; defaultValue?: string | number | boolean; }
@@ -3834,12 +3843,16 @@ await sdk.api.memory.deleteKnowledge({ sourceId: 'src-1' });
 
 #### `searchKnowledge`
 
-- Vector-search the workspace's knowledge chunks.
+- Vector-search the workspace's knowledge chunks. Pass `includeRules: true` to also search extracted rules and merge rule hits with chunk hits in one relevance-ranked response.
 - Params: [MemoryKnowledgeSearchRequest](/api-reference/sdk/models/data-models#memoryknowledgesearchrequest-node)
-- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
+- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node) with [MemoryKnowledgeSearchResponse](/api-reference/sdk/models/data-models#memoryknowledgesearchresponse-node) under `result`
 
 ```ts
-await sdk.api.memory.searchKnowledge({ query: 'color contrast guidelines' });
+await sdk.api.memory.searchKnowledge({
+  query: 'image format requirements',
+  includeRules: true,
+  limit: 5,
+});
 ```
 
 #### `listKnowledgeSources`
@@ -3973,7 +3986,7 @@ A new service for defining approval/review workflows (graphs of agent, human, an
 
 #### `createDefinition`
 
-- Create a workflow definition (nodes, edges, groups, loops, triggers).
+- Create a workflow definition (nodes, edges, groups, triggers).
 - Params: [ApprovalCreateDefinitionRequest](/api-reference/sdk/models/data-models#approvalcreatedefinitionrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
 
@@ -3984,8 +3997,9 @@ await sdk.api.approval.createDefinition({
   scope: { level: 'organization', organizationId: 'org-123' },
   nodes: [
     { nodeId: 'review', type: 'human', config: { reviewers: [{ userId: 'user-1', mandatory: true }], commentBody: 'Please review before publishing.' } },
+    { nodeId: 'rework', type: 'agent', config: { agentId: '__mock__', urlPath: 'documentUrl' } },
   ],
-  edges: [],
+  edges: [{ from: 'review', to: 'rework', on: 'reject' }],
 });
 ```
 
@@ -4001,8 +4015,9 @@ await sdk.api.approval.updateDefinition({
   name: 'Document Publish Review v2',
   nodes: [
     { nodeId: 'review', type: 'human', config: { reviewers: [{ userId: 'user-1', mandatory: true }], commentBody: 'Please review before publishing.' } },
+    { nodeId: 'rework', type: 'agent', config: { agentId: '__mock__', urlPath: 'documentUrl' } },
   ],
-  edges: [],
+  edges: [{ from: 'review', to: 'rework', on: 'reject' }],
   ifVersion: 1,
 });
 ```
@@ -4132,26 +4147,26 @@ await sdk.api.approval.recordReviewerDecision({ executionId: 'exec-1', stepId: '
 These node/graph/config interfaces are referenced by the request types above. They are not standalone data-model entries.
 
 ```ts
+type JsonAst = Record<string, unknown>;
 interface ApprovalScope { level: 'apiKey' | 'organization' | 'document'; organizationId?: string; documentId?: string; }
 interface ApprovalAgentResolutionPolicy { kind: 'allResolved' | 'minResolved'; minCount?: number; } // minCount req. when 'minResolved' (1..500)
 interface ApprovalAgentNodeConfig { agentId: string; urlPath: string; /* 1..500 */ crossPageExecute?: boolean; maxUrlsToProcess?: number; /* positive int, max 500 */ userContextMapping?: Record<string, string>; pollIntervalMs?: number; /* 5000..60000 */ promptOverride?: string; /* max 8000 */ inputMapping?: Record<string, string>; requireNonEmptyOutput?: boolean; agentMaxRuntimeMs?: number; /* positive int, max 24h */ blocking?: boolean; resolutionPolicy?: ApprovalAgentResolutionPolicy; /* required when blocking */ }
 interface ApprovalHumanReviewer { userId: string; mandatory: boolean; }
-interface ApprovalHumanNodeOnRejectLoopBack { toNodeId: string; /* 1..64 */ maxIterations?: number; /* 1..20 */ onExhausted?: { routeToNodeId?: string }; when?: string; /* max 2000 */ }
-interface ApprovalHumanNodeOnReject { routeToNodeId?: string; loopBack?: ApprovalHumanNodeOnRejectLoopBack; } // exactly one
-interface ApprovalHumanNodeConfig { reviewerIds?: string[]; /* mutually exclusive with reviewers; 1..50 */ reviewers?: ApprovalHumanReviewer[]; /* unique userIds; >=1 mandatory; 1..50 */ reviewerEmails?: string[]; /* max 50 */ commentBody?: string; /* max 8000 */ onReject?: ApprovalHumanNodeOnReject; }
+interface ApprovalHumanNodeConfig { reviewerIds?: string[]; /* mutually exclusive with reviewers; 1..50 */ reviewers?: ApprovalHumanReviewer[]; /* unique userIds; >=1 mandatory; 1..50 */ reviewerEmails?: string[]; /* max 50 */ commentBody?: string; /* max 8000 */ } // reject path is an outgoing on:'reject' edge
 interface ApprovalWebhookNodeConfig { url: string; /* https, allowed host, max 2000 */ method?: 'GET' | 'POST'; mode?: 'sync' | 'async'; authMode?: 'hmac' | 'token' | 'none'; authTokenHeader?: string; /* required when authMode === 'token'; max 500 */ timeoutMs?: number; /* 1000..60000 */ expectedStatusCodes?: number[]; /* each 100..599; max 20 */ bodyTemplate?: 'envelope' | 'pass-through' | 'none'; /* 'none' requires method GET */ requestHeaders?: Record<string, string>; /* reserved/x-velt-* headers rejected; values max 2000 */ }
-interface ApprovalAgentNode { nodeId: string; type: 'agent'; config: ApprovalAgentNodeConfig; slaMs?: number; requireNonEmptyOutput?: boolean; }
-interface ApprovalHumanNode { nodeId: string; type: 'human'; config: ApprovalHumanNodeConfig; slaMs?: number; requireNonEmptyOutput?: boolean; }
-interface ApprovalWebhookNode { nodeId: string; type: 'webhook'; config: ApprovalWebhookNodeConfig; slaMs?: number; requireNonEmptyOutput?: boolean; }
+interface ApprovalAgentNode { nodeId: string; type: 'agent'; config: ApprovalAgentNodeConfig; slaMs?: number; requireNonEmptyOutput?: boolean; name?: string; /* 1..200 */ description?: string; /* max 2000 */ }
+interface ApprovalHumanNode { nodeId: string; type: 'human'; config: ApprovalHumanNodeConfig; slaMs?: number; requireNonEmptyOutput?: boolean; name?: string; /* 1..200 */ description?: string; /* max 2000 */ }
+interface ApprovalWebhookNode { nodeId: string; type: 'webhook'; config: ApprovalWebhookNodeConfig; slaMs?: number; requireNonEmptyOutput?: boolean; name?: string; /* 1..200 */ description?: string; /* max 2000 */ }
 type ApprovalNode = ApprovalAgentNode | ApprovalHumanNode | ApprovalWebhookNode;
-interface ApprovalEdge { from: string; to: string; when?: string; } // from/to 1..64; when max 1000
+type ApprovalEdgeEndpoint = string | { kind: 'node'; nodeId: string } | { kind: 'group'; groupId: string };
+interface ApprovalEdge { from: ApprovalEdgeEndpoint; to: ApprovalEdgeEndpoint; on?: 'approve' | 'reject' | 'always' | 'exhausted' | 'custom'; /* default 'always' */ when?: string; /* JSON-AST; only valid when on==='custom' */ loop?: { maxIterations: number /* 1..20 */ }; /* only on an on:'reject' back-edge */ }
 type ApprovalQuorumPolicy = 'waitAll' | 'cancelOnQuorum' | 'joinOnQuorum';
 interface ApprovalGroup { groupId: string; /* 1..64 */ memberNodeIds: string[]; /* 1..500 */ expectedSteps: number; /* 1..500 */ quorum: number; /* 1..500 */ onQuorumMet?: ApprovalQuorumPolicy; requiredNodeIds?: string[]; /* max 500 */ }
+interface ApprovalCompiledForwardEdge { from: string; to: string; role: 'approve' | 'reject' | 'always' | 'exhausted' | 'custom'; when: JsonAst | null; fromGroupId?: string; toGroupId?: string; }
+interface ApprovalCompiledLoop { loopId: string; entryNodeId: string; bodyNodeIds: string[]; maxIterations: number; onExhausted: { routeToNodeId: string } | null; }
+interface ApprovalCompiledGraph { forwardEdges: ApprovalCompiledForwardEdge[]; loops: ApprovalCompiledLoop[]; } // read-only on DefinitionView responses
 interface ApprovalInboundWebhookTrigger { authMode: 'hmac' | 'bearer'; secret: string; /* 16..512 */ idempotencyHeader?: string; /* 1..128 */ idempotencyBodyPath?: string; /* 1..256 */ payloadMapping?: 'pass-through' | 'wrap'; }
 interface ApprovalTrigger { triggerId: string; /* 1..128 */ eventName?: string; /* max 128 */ filters?: Record<string, unknown>; inboundWebhook?: ApprovalInboundWebhookTrigger; }
-interface ApprovalLoopRejectTrigger { when?: string; } // max 2000
-interface ApprovalLoopExhaustionPolicy { routeToNodeId?: string; } // 1..64
-interface ApprovalLoop { loopId: string; /* 1..64 */ entryNodeId: string; /* 1..64 */ bodyNodeIds: string[]; /* 1..50 */ onIterationReject?: ApprovalLoopRejectTrigger; onExhausted?: ApprovalLoopExhaustionPolicy; maxIterations: number; /* 1..20 */ }
 interface ApprovalWebhookConfig { url: string; secret: string; eventTypes?: string[]; } // url https/max2000; secret 16..512; eventTypes each 1..128, max 50
 ```
 

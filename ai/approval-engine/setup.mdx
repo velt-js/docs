@@ -52,16 +52,16 @@ You'll build the smallest workflow that exercises the whole engine: one human ap
 ```mermaid
 flowchart LR
     Start([Dispatch:<br/>'review this item']) --> M["manager-approval<br/>(human)"]
-    M -->|"when decision == approve"| Done([Run complete])
-    M -->|"on reject"| RW["rework-notice<br/>(agent)"]
+    M -->|"approve: no outgoing edge"| Done([Run complete])
+    M -->|"on: reject"| RW["rework-notice<br/>(agent)"]
     RW --> Done
 ```
 
 ### Step 1: Create the definition
 
-A `human` node must declare what happens on rejection: either an `onReject` shorthand or membership in a `loops[]` body. Here we use the `onReject.routeToNodeId` shorthand to send rejections to a follow-up node, and we gate the success edge with `when: decision == 'approve'` so it only fires on approval.
+A `human` node must declare a reject path: an outgoing `on:"reject"` edge. Here we send rejections to a follow-up node with an `on:"reject"` edge. Approvals have no outgoing edge in this minimal workflow, so the run completes after the approval step. The `approve` and `reject` roles auto-compile their predicates, so you don't hand-write a `when` for them.
 
-The `when` value is a **JSON-AST string**: the engine parses it as JSON and evaluates it with a safe walker, never as JavaScript. The follow-up node uses the reserved `__mock__` agent id so you can run this end-to-end without registering a real agent (use a real `agentId` in production).
+The follow-up node uses the reserved `__mock__` agent id so you can run this end-to-end without registering a real agent (use a real `agentId` in production).
 
 ```bash
 curl -X POST https://api.velt.dev/v2/workflow/definitions/create \
@@ -79,8 +79,7 @@ curl -X POST https://api.velt.dev/v2/workflow/definitions/create \
           "type": "human",
           "config": {
             "reviewers": [{ "userId": "u_manager_01", "mandatory": true }],
-            "commentBody": "Please review and approve this document.",
-            "onReject": { "routeToNodeId": "rework-notice" }
+            "commentBody": "Please review and approve this document."
           }
         },
         {
@@ -90,19 +89,15 @@ curl -X POST https://api.velt.dev/v2/workflow/definitions/create \
         }
       ],
       "edges": [
-        {
-          "from": "manager-approval",
-          "to": "rework-notice",
-          "when": "{\"op\":\"eq\",\"args\":[{\"var\":\"output.decision\"},\"reject\"]}"
-        }
+        { "from": "manager-approval", "to": "rework-notice", "on": "reject" }
       ]
     }
   }'
 ```
 
-A successful create returns a `DefinitionView` with `version: 1` and `status: "active"`. Definitions are linted at write time: cycles, dangling edges, unreachable nodes, and quorum misconfiguration all fail before you ever dispatch. If the engine rejects the definition you'll get `INVALID_ARGUMENT` with a [linter code](/ai/approval-engine/customize-behavior#linter-rules) in the message.
+A successful create returns a `DefinitionView` with `version: 1` and `status: "active"`. Definitions are validated at write time: schema errors, authored-edge contract errors from `compileGraph`, cycles, dangling edges, unreachable nodes, and quorum misconfiguration all fail before you ever dispatch. If the engine rejects the definition you'll get `INVALID_ARGUMENT` with a validation key in the message. A `human` node with no outgoing `on:"reject"` edge is rejected with `APPROVAL_HUMAN_NODE_REQUIRES_REJECT_PATH`.
 
-The `onReject.routeToNodeId` shorthand synthesizes the reject-gated edge for you, so you only need to author the explicit approve-side routing. See [Per-human-node `onReject` shorthand](/ai/approval-engine/customize-behavior#per-human-node-onreject-shorthand) for choosing a rejection strategy. Full request shape: [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition).
+See [the edge model](/ai/approval-engine/customize-behavior#edge-model) for reject, loop-back, and custom routing. Full request shape: [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition).
 
 ### Step 2: Dispatch an execution
 
@@ -318,9 +313,9 @@ Once the basics click, you compose richer graphs. Here's an AI-assisted parallel
 
 Short pointers to the features you'll reach for next. Each links to the decision-level guidance and the field-level contract.
 
-- **Conditional routing (`when` expressions).** Gate any edge with a `when` JSON-AST predicate over `output.*`, `step.*`, and `execution.input.*`. Operators include equality, comparison, boolean and/or/not, regex, includes, startsWith, endsWith, length, isEmpty. → [Edge gating expressions](/ai/approval-engine/customize-behavior#edge-gating-expressions).
-- **Parallel groups & quorum.** Declare a `groups[]` entry to run reviewers in parallel under one of three policies: `waitAll` (observability only), `cancelOnQuorum` (stop bothering siblings once enough approve), `joinOnQuorum` (run the successor once after quorum). Use `requiredNodeIds` for "these specific people must approve." → [`onQuorumMet` policies](/ai/approval-engine/customize-behavior#onquorummet-policies) · [Specific-must-approve quorum](/ai/approval-engine/customize-behavior#specific-must-approve-quorum).
-- **Rejection handling: shorthand vs. loops.** For one reviewer, `onReject.routeToNodeId` (route away) or `onReject.loopBack` (retry up to N times, then escalate) usually suffice. When multiple parallel reviewers must share one retry budget, or a whole stage must rewind as a unit, declare a top-level `loops[]` region instead. → [Loop regions](/ai/approval-engine/customize-behavior#loop-regions) · [When to use a loop vs. the `onReject` shorthand](/ai/approval-engine/customize-behavior#when-to-use-a-loop-vs-the-onreject-shorthand).
+- **Conditional routing (`when` expressions).** Gate any edge with `on:"custom"` and a `when` JSON-AST predicate over `output.*`, `step.*`, and `execution.input.*`. Operators include equality, comparison, boolean and/or/not, regex, includes, startsWith, endsWith, length, isEmpty. → [Custom predicates](/ai/approval-engine/customize-behavior#custom-predicates).
+- **Parallel groups & quorum.** Declare a `groups[]` entry to run reviewers in parallel under one of three policies: `waitAll` (observability only, or a collective unanimity branch when used as an edge source), `cancelOnQuorum` (stop bothering siblings once enough approve), `joinOnQuorum` (run the successor once after quorum). Use `requiredNodeIds` for "these specific people must approve." → [`onQuorumMet` policies](/ai/approval-engine/customize-behavior#onquorummet-policies) · [Specific-must-approve quorum](/ai/approval-engine/customize-behavior#specific-must-approve-quorum).
+- **Rejection handling: reject edges & loop-backs.** A human node's reject path is an outgoing `on:"reject"` edge. To retry up to N times, mark a reject back-edge to an earlier node with `loop { maxIterations }` and add a sibling `on:"exhausted"` edge to escalate at the cap; the server derives the loop region. → [The edge model](/ai/approval-engine/customize-behavior#edge-model) · [Loop regions](/ai/approval-engine/customize-behavior#loop-regions).
 - **SLA timers & escalation.** Set `slaMs` on a node to enforce a deadline; on breach the step becomes `breached` and the engine follows your outgoing edges. **Gotcha:** a node with `slaMs` must have an edge that routes on `status == 'breached'`, or the definition is rejected (`missing-breach-edge`). Agent nodes also have a hard runtime ceiling (`agentMaxRuntimeMs`, default 30 min). → [SLA and breach handling](/ai/approval-engine/customize-behavior#sla-and-breach-handling).
 - **Agent nodes.** An agent node requires `agentId` and `urlPath` (a dot-path into `triggerContext` that resolves the URL the agent should act on). The step output exposes `agentExecutionStatus`, `agentResultsSummary`, and a `decision` (`approve` when the agent passed). Some configurations post findings that are resolved via [Record Agent Resolution](/api-reference/rest-apis/v2/approval-engine/steps/record-agent-resolution). → [Agent nodes](/ai/approval-engine/customize-behavior#agent-nodes).
 - **Externally-triggered runs & async callbacks.** Beyond dispatching from your backend, external systems can kick off runs or complete long-running steps via the inbound webhook surface. → [Inbound webhook handler](/ai/approval-engine/overview#inbound-webhook-handler).
@@ -352,7 +347,7 @@ Errors use the standard envelope with a gRPC-style status code:
 
 | Code | Meaning |
 | --- | --- |
-| `INVALID_ARGUMENT` | Request failed schema or linter validation. |
+| `INVALID_ARGUMENT` | Request failed schema, `compileGraph`, or linter validation. |
 | `UNAUTHENTICATED` | Missing/invalid `x-velt-auth-token`. |
 | `PERMISSION_DENIED` | Token valid but lacks the required scope (e.g. admin-only `/steps/resolve`). |
 | `NOT_FOUND` | Unknown `executionId`, `definitionId`, or `stepId`. |
@@ -362,12 +357,12 @@ Errors use the standard envelope with a gRPC-style status code:
 
 Most common "the engine rejected my definition" causes (all `INVALID_ARGUMENT`, with a code in the message):
 
-- **Human node missing a reject path:** add `onReject`, or include the node in a `loops[]` body.
+- **`APPROVAL_HUMAN_NODE_REQUIRES_REJECT_PATH`:** a human node has no outgoing `on:"reject"` edge. Add one.
 - **`missing-breach-edge`:** a node has `slaMs` but no edge routes on `status == 'breached'`.
 - **`when` written as JavaScript:** it must be a JSON-AST string, not `"output.decision == 'approve'"`.
 - **Group quorum > `expectedSteps`**, or a non-blocking agent placed in a quorum group (it has no `decision`, so quorum can never be met).
 
-See the full list under [Linter rules](/ai/approval-engine/customize-behavior#linter-rules) and [Canonical codes](/ai/approval-engine/customize-behavior#canonical-codes).
+See the full list under [Linter rules](/ai/approval-engine/customize-behavior#linter-rules), [Edge model validation errors](/ai/approval-engine/customize-behavior#edge-model-validation-errors), and [Canonical codes](/ai/approval-engine/customize-behavior#canonical-codes).
 
 ## Limitations in v1
 

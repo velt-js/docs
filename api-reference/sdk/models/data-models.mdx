@@ -42,7 +42,7 @@
 | `targetElementId`         | `string`                                                                  | No       | ID of the target element for the comment annotation if available                                                                                                                          |
 | `viewedBy`                | [`Users[]`](#user)                                                        | No       | List of users who have viewed/read this comment annotation                                                                                                                                |
 | `unread`                  | `boolean`                                                                 | No       | Whether the annotation is unread by current user                                                                                                                                          |
-| `visibilityConfig`        | [`CommentAnnotationVisibilityConfig`](#commentannotationvisibilityconfig) | No       | Human-readable visibility configuration for the annotation. Contains type, organizationId, and userIds. Defaults to `{ type: 'public' }` for new annotations without explicit visibility. |
+| `visibilityConfig`        | [`CommentAnnotationVisibilityConfig`](#commentannotationvisibilityconfig) | No       | Human-readable visibility configuration for the annotation. Contains type, organizationId, organizationIds, and userIds. Defaults to `{ type: 'public' }` for new annotations without explicit visibility. |
 | `agent`                   | [`CommentAnnotationAgent`](#commentannotationagent)                       | No       | Present when the annotation was authored by an AI agent. Carries the agent identity and structured result used to render the Agent Suggestion card. |
 | `sourceType`              | `string`                                                                  | No       | Origin of the annotation. Selects the agent-identity vs human-author header variant rendered for suggestion comments. |
 | `suggestion`              | [`CommentAnnotationSuggestion`](#commentannotationsuggestion)             | No       | Suggestion state for typed-suggestion annotations. Mutated by [`acceptSuggestion()`](/api-reference/sdk/api/api-methods#acceptsuggestion) / [`rejectSuggestion()`](/api-reference/sdk/api/api-methods#rejectsuggestion). |
@@ -272,26 +272,63 @@ Configuration object for **API methods** that update comment visibility. Uses [`
 | ---------------- | ------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `type`           | [`CommentVisibilityType`](#commentvisibilitytype) | Yes      | Visibility level: `'public'`, `'organizationPrivate'`, or `'restricted'`.                                                        |
 | `annotationId`   | `string`                                          | Yes      | Annotation ID of the comment to update visibility.                                                                               |
-| `organizationId` | `string`                                          | No       | Organization ID. Required when `type` is `'organizationPrivate'`.                                                                |
+| `organizationId` | `string`                                          | No       | Organization ID. Used when `type` is `'organizationPrivate'`. If neither `organizationId` nor `organizationIds` is provided, the comment defaults to the logged-in user's own organization. |
+| `organizationIds` | `string[]`                                       | No       | Organization IDs for `organizationPrivate` visibility; visible to all listed orgs; merged + de-duplicated with `organizationId`. |
 | `userIds`        | `string[]`                                        | No       | User IDs who can see the comment. Used when `type` is `'restricted'`. The current user is automatically appended if not present. |
 
 #### PrivateModeConfig
 
 ---
 
-Configuration for enabling private mode via **API methods**. Subset of [`CommentVisibilityConfig`](#commentvisibilityconfig) — excludes `annotationId` and `organizationId`. Uses [`CommentVisibilityType`](#commentvisibilitytype) values.
+Configuration for enabling private mode via **API methods**. Subset of [`CommentVisibilityConfig`](#commentvisibilityconfig) — excludes `annotationId`. Uses [`CommentVisibilityType`](#commentvisibilitytype) values. As of v5.0.3, `PrivateModeConfig` also accepts `organizationId` / `organizationIds` for multi-org private mode.
 
 ```typescript
-type PrivateModeConfig = Omit<
-  CommentVisibilityConfig,
-  "annotationId" | "organizationId"
->;
+type PrivateModeConfig = Omit<CommentVisibilityConfig, "annotationId">;
 ```
 
 | Property  | Type                                              | Required | Description                                                                                                                   |
 | --------- | ------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `type`    | [`CommentVisibilityType`](#commentvisibilitytype) | Yes      | Visibility level applied when private mode is active.                                                                         |
+| `organizationId` | `string`                                   | No       | Organization ID. Used when `type` is `'organizationPrivate'`.                                                                |
+| `organizationIds` | `string[]`                                | No       | Organization IDs for `organizationPrivate` visibility; visible to all listed orgs; merged + de-duplicated with `organizationId`. |
 | `userIds` | `string[]`                                        | No       | User IDs who can see comments. Used when `type` is `'restricted'`. The current user is automatically appended if not present. |
+
+#### OrgContact
+
+---
+
+A single team / organization entry offered in the comment dialog's "Selected Teams" visibility picker. Supplied via [`updateOrgList()`](/api-reference/sdk/api/api-methods#updateorglist).
+
+```typescript
+class OrgContact {
+  /** Unique organization identifier you use to identify the team / organization. */
+  id: string;
+  /** The team / organization's display name (shown in the "Selected Teams" picker). */
+  name?: string;
+}
+```
+
+| Property | Type     | Required | Description                                                                |
+| -------- | -------- | -------- | -------------------------------------------------------------------------- |
+| `id`     | `string` | Yes      | Unique organization identifier you use to identify the team / organization. |
+| `name`   | `string` | No       | The team / organization's display name shown in the "Selected Teams" picker. |
+
+#### UpdateOrgListConfig
+
+---
+
+Config passed to [`updateOrgList()`](/api-reference/sdk/api/api-methods#updateorglist) to set the teams shown in the "Selected Teams" visibility picker.
+
+```typescript
+interface UpdateOrgListConfig {
+  /** The list of organizations / teams to offer in the "Selected Teams" picker. */
+  orgList: OrgContact[];
+}
+```
+
+| Property  | Type                          | Required | Description                                                                |
+| --------- | ----------------------------- | -------- | -------------------------------------------------------------------------- |
+| `orgList` | [`OrgContact[]`](#orgcontact) | Yes      | The list of organizations / teams to offer in the "Selected Teams" picker. |
 
 #### CommentAnnotationVisibilityConfig
 
@@ -301,9 +338,10 @@ Human-readable visibility configuration stored on a comment annotation.
 
 | Property         | Type                                              | Required | Description                                                                                           |
 | ---------------- | ------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
-| `type`           | [`CommentVisibilityType`](#commentvisibilitytype) | Yes      | The visibility type for the comment annotation.                                                       |
-| `organizationId` | `string`                                          | No       | The organization ID for organization-private visibility.                                              |
-| `userIds`        | `string[]`                                        | No       | The user IDs for restricted visibility. Always includes the current user when type is `'restricted'`. |
+| `type`            | [`CommentVisibilityType`](#commentvisibilitytype) | Yes      | The visibility type for the comment annotation.                                                       |
+| `organizationId`  | `string`                                          | No       | The organization ID for organization-private visibility.                                              |
+| `organizationIds` | `string[]`                                         | No       | Organization IDs for `organizationPrivate` visibility (display-only mirror of `CommentVisibilityConfig.organizationIds`; visible to all listed orgs). |
+| `userIds`         | `string[]`                                         | No       | User IDs that can see the comment (display-only mirror of the self tokens in `context.accessFields`). For non-public comments this ALWAYS includes the author's `userId`, reflecting the author self-token invariant. |
 
 
 #### CommentAnnotationSubscribedUsers
@@ -537,8 +575,9 @@ Configuration for text formatting toolbar options in comment composers.
 | ------------------- | --------------------------------------------- | -------- | --------------------------------------------------------------------------------- |
 | `commentAnnotation` | `{ [key: string]: PartialCommentAnnotation }` | Yes      | Map of comment annotation data to save                                            |
 | `metadata`          | `BaseMetadata`                                | No       | Additional metadata for the request. eg: apikey, organizationId, documentId, etc. |
-| `event`             | `ResolverActions`                             | No       | Event name that caused the save request                                           |
+| `event`             | [`ResolverActions`](#resolveractions) \| [`CommentResolverSaveEvent`](#commentresolversaveevent) \| `string` | No       | The save event. One of the 4 core PII events (`ResolverActions`) or, when opted in via `additionalSaveEvents`, a non-core annotation-level event (`CommentResolverSaveEvent`). Also accepts raw strings for forward-compatibility. |
 | `commentId`         | `string`                                      | No       | ID of the comment to save                                                         |
+| `targetComment`     | [`PartialComment`](#partialcomment)           | No       | The comment the action occurred on, resolved by the frontend from `commentId` against the payload's `commentAnnotation[*].comments` map. A convenience alias for data already in the payload (no new data egress) and request context only — never persisted by `saveComments`. Omitted when `commentId` is absent or unmatched. |
 
 #### DeleteCommentResolverRequest
 
@@ -614,7 +653,7 @@ Configuration for text formatting toolbar options in comment composers.
 | -------------------- | --------------------- | -------- | -------------------------------------------- |
 | `editor`             | `Editor`              | Yes      | Slate editor instance.                       |
 | `editorId`           | `string`              | No       | Optional editor ID used to scope operations. |
-| `commentAnnotations` | `CommentAnnotation[]` | No       | Annotations to render/highlight.             |
+| `commentAnnotations` | [`CommentAnnotation`](#commentannotation)`[]` | No       | Annotations to render/highlight.             |
 
 For the CommentAnnotation model referenced above, see [CommentAnnotation](#commentannotation).
 
@@ -954,6 +993,612 @@ Logical anchor stored in `annotation.context.textEditorConfig`. Designed to surv
 | `text`       | `string` | Yes      | The (canonicalized) selected text.                                       |
 | `pageNumber` | `number` | Yes      | 1-based page number where the comment lives.                             |
 | `occurrence` | `number` | Yes      | 1-based count of this exact text on the page. Re-validated on each edit. |
+
+### DraftJS
+
+#### DraftJSEditor
+
+---
+
+Editor wrapper object passed to the DraftJS Velt comment helpers.
+
+| Property         | Type                               | Required | Description                         |
+| ---------------- | ---------------------------------- | -------- | ----------------------------------- |
+| `editorState`    | `EditorState`                      | Yes      | Current DraftJS editor state.       |
+| `setEditorState` | `(state: EditorState) => void`     | Yes      | Function used to update the editor. |
+
+#### DraftJSVeltEditorProps
+
+---
+
+Props for the `DraftJSVeltEditor` React wrapper.
+
+| Property      | Type                       | Required | Description                                                                    |
+| ------------- | -------------------------- | -------- | ------------------------------------------------------------------------------ |
+| `editorState` | `EditorState`              | Yes      | Current DraftJS editor state.                                                  |
+| `onChange`    | `(state: EditorState) => void` | Yes   | Callback invoked when the editor state changes.                                |
+| `editorId`    | `string`                   | No       | Optional editor ID used to scope operations for multi-editor pages.            |
+| `...props`    | `EditorProps`              | No       | Other standard DraftJS `Editor` props, such as `placeholder` or `spellCheck`.  |
+
+#### AddCommentRequest
+
+---
+
+| Property   | Type                    | Required | Description                                          |
+| ---------- | ----------------------- | -------- | ---------------------------------------------------- |
+| `editor`   | [`DraftJSEditor`](#draftjseditor) | Yes | DraftJS editor wrapper object.                       |
+| `editorId` | `string`                | No       | Optional editor ID used to scope operations.         |
+| `context`  | `unknown`               | No       | Optional custom context to attach to the annotation. |
+
+#### RenderCommentsRequest
+
+---
+
+| Property             | Type                  | Required | Description                                  |
+| -------------------- | --------------------- | -------- | -------------------------------------------- |
+| `editor`             | [`DraftJSEditor`](#draftjseditor) | Yes | DraftJS editor wrapper object.               |
+| `editorId`           | `string`              | No       | Optional editor ID used to scope operations. |
+| `commentAnnotations` | `CommentAnnotation[]` | No       | Annotations to render/highlight.             |
+
+For the CommentAnnotation model referenced above, see [CommentAnnotation](#commentannotation).
+
+### ProseMirror
+
+#### AddCommentRequest
+
+---
+
+| Property   | Type                                                 | Required | Description                                          |
+| ---------- | ---------------------------------------------------- | -------- | ---------------------------------------------------- |
+| `editor`   | `EditorView`                                         | Yes      | ProseMirror editor view instance.                    |
+| `editorId` | `string`                                             | No       | Optional editor ID used to scope operations.         |
+| `context`  | [`CommentAnnotationContext`](#commentannotationcontext-1) | No  | Optional custom context to attach to the annotation. |
+
+#### RenderCommentsRequest
+
+---
+
+| Property             | Type                  | Required | Description                                  |
+| -------------------- | --------------------- | -------- | -------------------------------------------- |
+| `editor`             | `EditorView`          | Yes      | ProseMirror editor view instance.            |
+| `editorId`           | `string`              | No       | Optional editor ID used to scope operations. |
+| `commentAnnotations` | `CommentAnnotation[]` | No       | Annotations to render/highlight.             |
+
+For the CommentAnnotation model referenced above, see [CommentAnnotation](#commentannotation).
+
+#### VeltCommentsPluginConfig
+
+---
+
+Configuration options for the `VeltCommentsPlugin()` function.
+
+| Property           | Type      | Required | Description                                                                       |
+| ------------------ | --------- | -------- | --------------------------------------------------------------------------------- |
+| `editorId`         | `string`  | No       | Unique identifier for this editor instance. Use it for multi-editor scenarios.    |
+| `persistVeltMarks` | `boolean` | No       | Reserved for API parity. ProseMirror highlights are always view-only overlays.    |
+
+#### CommentAnnotationContext
+
+---
+
+Context object for comment annotations. Contains text editor configuration and any additional custom metadata.
+
+| Property           | Type                                      | Required | Description                                                |
+| ------------------ | ----------------------------------------- | -------- | ---------------------------------------------------------- |
+| `textEditorConfig` | [`TextEditorConfig`](#texteditorconfig-2) | No       | Text editor configuration auto-generated by the library.   |
+| `[key: string]`    | `unknown`                                 | No       | Any additional custom properties you want to attach.       |
+
+#### TextEditorConfig
+
+---
+
+Nested in `CommentAnnotationContext`.
+
+| Property     | Type     | Required | Description                                       |
+| ------------ | -------- | -------- | ------------------------------------------------- |
+| `text`       | `string` | Yes      | The selected text content.                        |
+| `occurrence` | `number` | Yes      | The occurrence index of the text in the document. |
+| `editorId`   | `string` | No       | The editor ID associated with this comment.       |
+
+#### SelectionContext
+
+---
+
+Context extracted from the current ProseMirror editor selection.
+
+| Property     | Type     | Required | Description                                                            |
+| ------------ | -------- | -------- | ---------------------------------------------------------------------- |
+| `text`       | `string` | Yes      | Selected text content.                                                 |
+| `from`       | `number` | Yes      | ProseMirror start position of the selection.                           |
+| `to`         | `number` | Yes      | ProseMirror end position of the selection.                             |
+| `occurrence` | `number` | Yes      | 1-based index of `text` among all matches in the document.             |
+| `locationId` | `string` | No       | Optional Velt location id derived from a `data-velt-location-id` ancestor. |
+
+### TinyMCE
+
+#### AddCommentRequest
+
+---
+
+Request interface for the TinyMCE `addComment()` function. The library automatically writes `context.textEditorConfig` with the selected text, its 1-based occurrence index in the document, and the editor ID when one is provided.
+
+| Property   | Type                                                      | Required | Description                                          |
+| ---------- | --------------------------------------------------------- | -------- | ---------------------------------------------------- |
+| `editor`   | `Editor`                                                  | Yes      | TinyMCE editor instance.                             |
+| `editorId` | `string`                                                  | No       | Optional editor ID used to scope operations.         |
+| `context`  | [`CommentAnnotationContext`](#commentannotationcontext-2) | No       | Optional custom context to attach to the annotation. |
+
+#### RenderCommentsRequest
+
+---
+
+Request interface for the TinyMCE `renderComments()` function. Comments are resolved back to TinyMCE DOM ranges and rendered as view-only overlay elements.
+
+| Property             | Type                  | Required | Description                                  |
+| -------------------- | --------------------- | -------- | -------------------------------------------- |
+| `editor`             | `Editor`              | Yes      | TinyMCE editor instance.                     |
+| `editorId`           | `string`              | No       | Optional editor ID used to scope operations. |
+| `commentAnnotations` | `CommentAnnotation[]` | No       | Annotations to render/highlight.             |
+
+For the CommentAnnotation model referenced above, see [CommentAnnotation](#commentannotation).
+
+#### TinymceVeltCommentsConfig
+
+---
+
+Configuration options for the TinyMCE Velt comments plugin. In TinyMCE init options, `editorId` maps to `velt_comments_editor_id` and `persistVeltMarks` maps to `velt_comments_persist_marks`.
+
+| Property           | Type      | Required | Description                                                                    |
+| ------------------ | --------- | -------- | ------------------------------------------------------------------------------ |
+| `editorId`         | `string`  | No       | Unique identifier for this editor instance. Use it for multi-editor scenarios. |
+| `persistVeltMarks` | `boolean` | No       | Reserved for API parity. TinyMCE highlights are always view-only overlays.     |
+
+#### CommentAnnotationContext
+
+---
+
+Context object for comment annotations. Contains text editor configuration and any additional custom metadata.
+
+| Property           | Type                                      | Required | Description                                                |
+| ------------------ | ----------------------------------------- | -------- | ---------------------------------------------------------- |
+| `textEditorConfig` | [`TextEditorConfig`](#texteditorconfig-3) | No       | Text editor configuration auto-generated by the library.   |
+| `[key: string]`    | `unknown`                                 | No       | Any additional custom properties you want to attach.       |
+
+#### TextEditorConfig
+
+---
+
+Nested in `CommentAnnotationContext`.
+
+| Property     | Type     | Required | Description                                       |
+| ------------ | -------- | -------- | ------------------------------------------------- |
+| `text`       | `string` | Yes      | The selected text content.                        |
+| `occurrence` | `number` | Yes      | The 1-based occurrence index of the selected text in the document. |
+| `editorId`   | `string` | No       | The editor ID associated with this comment.       |
+
+### CKEditor
+
+<a id="ckeditor-addcommentrequest" />
+
+#### AddCommentRequest
+
+---
+
+Request interface for the CKEditor `addComment()` function.
+
+| Property   | Type                       | Required | Description                                          |
+| ---------- | -------------------------- | -------- | ---------------------------------------------------- |
+| `editor`   | `Editor`                   | Yes      | CKEditor 5 editor instance.                          |
+| `editorId` | `string`                   | No       | Optional editor ID used to scope operations.         |
+| `context`  | [`CommentAnnotationContext`](#ckeditor-commentannotationcontext) | No | Optional custom context to attach to the annotation. |
+
+<a id="ckeditor-rendercommentsrequest" />
+
+#### RenderCommentsRequest
+
+---
+
+Request interface for the CKEditor `renderComments()` function.
+
+| Property             | Type                  | Required | Description                                  |
+| -------------------- | --------------------- | -------- | -------------------------------------------- |
+| `editor`             | `Editor`              | Yes      | CKEditor 5 editor instance.                  |
+| `editorId`           | `string`              | No       | Optional editor ID used to scope operations. |
+| `commentAnnotations` | `CommentAnnotation[]` | No       | Annotations to render/highlight.             |
+
+For the CommentAnnotation model referenced above, see [CommentAnnotation](#commentannotation).
+
+<a id="ckeditor-veltcommentspluginconfig" />
+
+#### VeltCommentsPluginConfig
+
+---
+
+Configuration options for `config.veltComments` in the CKEditor editor config.
+
+| Property           | Type      | Required | Description                                                              |
+| ------------------ | --------- | -------- | ------------------------------------------------------------------------ |
+| `editorId`         | `string`  | No       | Unique identifier for this editor instance.                              |
+| `persistVeltMarks` | `boolean` | No       | Reserved for API parity; highlights are always rendered as an overlay.   |
+
+<a id="ckeditor-commentannotationcontext" />
+
+#### CommentAnnotationContext
+
+---
+
+Context object merged into the Velt comment annotation by `addComment()`.
+
+| Property           | Type                                             | Required | Description                                                |
+| ------------------ | ------------------------------------------------ | -------- | ---------------------------------------------------------- |
+| `textEditorConfig` | [`TextEditorConfig`](#ckeditor-texteditorconfig) | No       | Text editor configuration auto-generated by the library.   |
+| `[key: string]`    | `unknown`                                        | No       | Additional custom properties to attach to the annotation.  |
+
+<a id="ckeditor-texteditorconfig" />
+
+#### TextEditorConfig
+
+---
+
+Logical text anchor stored in `annotation.context.textEditorConfig`.
+
+| Property     | Type     | Required | Description                                       |
+| ------------ | -------- | -------- | ------------------------------------------------- |
+| `text`       | `string` | Yes      | The selected text content.                        |
+| `occurrence` | `number` | Yes      | The occurrence index of the text in the document. |
+| `editorId`   | `string` | No       | The editor ID associated with this comment.       |
+
+### Monaco
+
+#### AddCommentRequest
+
+---
+
+Request interface for the Monaco `addComment()` function. The library automatically writes `context.textEditorConfig` with the selected text, its 1-based occurrence index in the document, and the editor ID when one is provided.
+
+| Property   | Type                                                      | Required | Description                                          |
+| ---------- | --------------------------------------------------------- | -------- | ---------------------------------------------------- |
+| `editor`   | `MonacoEditor`                                            | Yes      | Monaco editor instance.                              |
+| `editorId` | `string`                                                  | No       | Optional editor ID used to scope operations.         |
+| `context`  | [`CommentAnnotationContext`](#commentannotationcontext-3) | No       | Optional custom context to attach to the annotation. |
+
+#### RenderCommentsRequest
+
+---
+
+Request interface for the Monaco `renderComments()` function. Comments are resolved back to Monaco ranges and rendered as view-only overlay elements.
+
+| Property             | Type                  | Required | Description                                  |
+| -------------------- | --------------------- | -------- | -------------------------------------------- |
+| `editor`             | `MonacoEditor`        | Yes      | Monaco editor instance.                      |
+| `editorId`           | `string`              | No       | Optional editor ID used to scope operations. |
+| `commentAnnotations` | `CommentAnnotation[]` | No       | Annotations to render/highlight.             |
+
+For the CommentAnnotation model referenced above, see [CommentAnnotation](#commentannotation).
+
+#### MonacoVeltCommentsConfig
+
+---
+
+Configuration options for the `registerVeltComments()` function.
+
+| Property           | Type      | Required | Description                                                                |
+| ------------------ | --------- | -------- | -------------------------------------------------------------------------- |
+| `editorId`         | `string`  | No       | Unique identifier for this editor instance. Use it for multi-editor scenarios. |
+| `persistVeltMarks` | `boolean` | No       | Reserved for API parity. Monaco highlights are always view-only overlays.  |
+
+#### VeltCommentsHandle
+
+---
+
+Return value from `registerVeltComments()`.
+
+| Property  | Type         | Required | Description                                                                 |
+| --------- | ------------ | -------- | --------------------------------------------------------------------------- |
+| `dispose` | `() => void` | Yes      | Removes Monaco listeners, tracking decorations, overlay elements, and local selected-comment subscriber cleanup. |
+
+#### CommentAnnotationContext
+
+---
+
+Context object for comment annotations. Contains text editor configuration and any additional custom metadata.
+
+| Property           | Type                                      | Required | Description                                                |
+| ------------------ | ----------------------------------------- | -------- | ---------------------------------------------------------- |
+| `textEditorConfig` | [`TextEditorConfig`](#texteditorconfig-4) | No       | Text editor configuration auto-generated by the library.   |
+| `[key: string]`    | `unknown`                                 | No       | Any additional custom properties you want to attach.       |
+
+#### TextEditorConfig
+
+---
+
+Nested in `CommentAnnotationContext`.
+
+| Property     | Type     | Required | Description                                                 |
+| ------------ | -------- | -------- | ----------------------------------------------------------- |
+| `text`       | `string` | Yes      | The selected text content.                                  |
+| `occurrence` | `number` | Yes      | The 1-based occurrence index of the selected text in the document. |
+| `editorId`   | `string` | No       | The editor ID associated with this comment.                 |
+
+#### SelectionContext
+
+---
+
+Context extracted from the current Monaco editor selection.
+
+| Property     | Type           | Required | Description                                                |
+| ------------ | -------------- | -------- | ---------------------------------------------------------- |
+| `text`       | `string`       | Yes      | Selected text content.                                     |
+| `range`      | `monaco.IRange`| Yes      | Monaco range for the selection.                            |
+| `occurrence` | `number`       | Yes      | 1-based index of `text` among all matches in the document. |
+| `locationId` | `string`       | No       | Optional Velt location id.                                 |
+
+#### AnchorEntry
+
+---
+
+Internal anchor data tracked for Monaco comment rendering.
+
+| Property                  | Type      | Required | Description                                       |
+| ------------------------- | --------- | -------- | ------------------------------------------------- |
+| `decorationId`            | `string`  | Yes      | Monaco decoration ID used to track the anchor.    |
+| `text`                    | `string`  | Yes      | Anchor text.                                      |
+| `occurrence`              | `number`  | Yes      | 1-based occurrence index of the anchor text.      |
+| `multiThreadAnnotationId` | `string`  | No       | Velt annotation ID associated with the anchor.     |
+| `isSelected`              | `boolean` | Yes      | Whether the anchor is currently selected in Velt. |
+
+#### SyncAnchor
+
+---
+
+Resolved Monaco anchor data used while synchronizing Velt comment annotations to editor ranges.
+
+| Property                  | Type           | Required | Description                                       |
+| ------------------------- | -------------- | -------- | ------------------------------------------------- |
+| `id`                      | `string`       | Yes      | Anchor ID.                                        |
+| `range`                   | `monaco.IRange`| Yes      | Current Monaco range for the anchor.              |
+| `text`                    | `string`       | Yes      | Anchor text.                                      |
+| `occurrence`              | `number`       | Yes      | 1-based occurrence index of the anchor text.      |
+| `multiThreadAnnotationId` | `string`       | No       | Velt annotation ID associated with the anchor.     |
+| `isSelected`              | `boolean`      | Yes      | Whether the anchor is currently selected in Velt. |
+
+### SuperDoc
+
+#### AddCommentArgs
+
+---
+
+Request interface for the SuperDoc `addComment()` function.
+
+| Property   | Type               | Required | Description                         |
+| ---------- | ------------------ | -------- | ----------------------------------- |
+| `instance` | `SuperDocInstance` | Yes      | The SuperDoc editor instance.       |
+
+#### AddCommentResult
+
+---
+
+Return shape from SuperDoc `addComment()` when the call succeeds. The function returns `null` when no text is selected or Velt is not loaded.
+
+| Property           | Type                                      | Required | Description                                         |
+| ------------------ | ----------------------------------------- | -------- | --------------------------------------------------- |
+| `veltAnnotationId` | `string`                                  | Yes      | The Velt annotation id assigned by the SDK.         |
+| `textEditorConfig` | [`TextEditorConfig`](#texteditorconfig-5) | Yes      | The durable logical anchor stored on the annotation. |
+
+#### RenderCommentsArgs
+
+---
+
+Request interface for the SuperDoc `renderComments()` function.
+
+| Property             | Type                                       | Required | Description                       |
+| -------------------- | ------------------------------------------ | -------- | --------------------------------- |
+| `instance`           | `SuperDocInstance`                         | Yes      | The SuperDoc editor instance.     |
+| `commentAnnotations` | `CommentAnnotation[] \| null \| undefined` | Yes      | Annotations to render/highlight.  |
+
+For the CommentAnnotation model referenced above, see [CommentAnnotation](#commentannotation).
+
+#### SuperDocVeltCommentsConfig
+
+---
+
+Configuration options for `SuperDocVeltComments.configure()`.
+
+| Property                  | Type      | Required | Description                                                                |
+| ------------------------- | --------- | -------- | -------------------------------------------------------------------------- |
+| `editorId`                | `string`  | No       | Unique identifier for this editor instance. Default: `'superdoc'`.         |
+| `scrollToSelectedComment` | `boolean` | No       | Scroll a selected thread's text into view. Default: `true`.                |
+
+#### AttachedExtension
+
+---
+
+Handle returned by `SuperDocVeltComments.configure(...).attach(instance)`.
+
+| Property | Type         | Required | Description                                                        |
+| -------- | ------------ | -------- | ------------------------------------------------------------------ |
+| `detach` | `() => void` | Yes      | Removes every SuperDoc listener and clears per-instance state.      |
+
+#### TextEditorConfig
+
+---
+
+Logical anchor stored in `annotation.context.textEditorConfig`. Physical rectangles are re-derived at render time from the live document, so pixel coordinates and raw editor positions are not persisted.
+
+| Property     | Type     | Required | Description                                              |
+| ------------ | -------- | -------- | -------------------------------------------------------- |
+| `editorId`   | `string` | Yes      | The editor id associated with this comment.              |
+| `documentId` | `string` | No       | Optional host document id. Velt already scopes per doc.  |
+| `text`       | `string` | Yes      | The canonicalized selected text.                         |
+| `occurrence` | `number` | Yes      | 1-based count of this exact text in the document.        |
+
+### Nutrient
+
+<a id="nutrient-addcommentargs" />
+
+#### AddCommentArgs
+
+---
+
+Request interface for the Nutrient `addComment()` function.
+
+| Property   | Type               | Required | Description                         |
+| ---------- | ------------------ | -------- | ----------------------------------- |
+| `instance` | `NutrientInstance` | Yes      | The Nutrient viewer instance.       |
+
+<a id="nutrient-addcommentresult" />
+
+#### AddCommentResult
+
+---
+
+Return shape from Nutrient `addComment()` when the call succeeds. The function returns `null` when no text is selected or Velt is not loaded.
+
+| Property           | Type                                      | Required | Description                                         |
+| ------------------ | ----------------------------------------- | -------- | --------------------------------------------------- |
+| `veltAnnotationId` | `string`                                  | Yes      | The Velt annotation id assigned by the SDK.         |
+| `textEditorConfig` | [`TextEditorConfig`](#nutrient-texteditorconfig) | Yes      | The durable logical anchor stored on the annotation. |
+
+<a id="nutrient-rendercommentsargs" />
+
+#### RenderCommentsArgs
+
+---
+
+Request interface for the Nutrient `renderComments()` function.
+
+| Property             | Type                                       | Required | Description                       |
+| -------------------- | ------------------------------------------ | -------- | --------------------------------- |
+| `instance`           | `NutrientInstance`                         | Yes      | The Nutrient viewer instance.     |
+| `commentAnnotations` | `CommentAnnotation[] \| null \| undefined` | Yes      | Annotations to render/highlight.  |
+
+For the CommentAnnotation model referenced above, see [CommentAnnotation](#commentannotation).
+
+<a id="nutrient-nutrientveltcommentsconfig" />
+
+#### NutrientVeltCommentsConfig
+
+---
+
+Configuration options for `NutrientVeltComments.configure()`.
+
+| Property                  | Type      | Required | Description                                                               |
+| ------------------------- | --------- | -------- | ------------------------------------------------------------------------- |
+| `editorId`                | `string`  | No       | Unique identifier for this viewer instance. Default: `'nutrient'`.        |
+| `scrollToSelectedComment` | `boolean` | No       | Scroll a selected thread's text into view. Default: `true`.               |
+
+<a id="nutrient-attachedextension" />
+
+#### AttachedExtension
+
+---
+
+Handle returned by `NutrientVeltComments.configure(...).attach(instance)`.
+
+| Property | Type         | Required | Description                                                        |
+| -------- | ------------ | -------- | ------------------------------------------------------------------ |
+| `detach` | `() => void` | Yes      | Removes every Nutrient listener and clears per-instance state.      |
+
+<a id="nutrient-texteditorconfig" />
+
+#### TextEditorConfig
+
+---
+
+Logical anchor stored in `annotation.context.textEditorConfig`. Physical rectangles are re-derived at render time from the live PDF text, so pixel coordinates and raw viewer positions are not persisted.
+
+| Property     | Type     | Required | Description                                           |
+| ------------ | -------- | -------- | ----------------------------------------------------- |
+| `editorId`   | `string` | Yes      | The editor id associated with this comment.           |
+| `text`       | `string` | Yes      | The canonicalized selected text.                      |
+| `pageNumber` | `number` | Yes      | 1-based page number where the comment lives.          |
+| `occurrence` | `number` | Yes      | 1-based count of this exact text on the page.         |
+
+### SpreadJS
+
+<a id="spreadjs-addcommentargs" />
+
+#### AddCommentArgs
+
+---
+
+Request interface for the SpreadJS `addComment()` function.
+
+| Property   | Type             | Required | Description                         |
+| ---------- | ---------------- | -------- | ----------------------------------- |
+| `instance` | `SpreadInstance` | Yes      | The SpreadJS workbook instance.     |
+
+<a id="spreadjs-addcommentresult" />
+
+#### AddCommentResult
+
+---
+
+Return shape from SpreadJS `addComment()` when the call succeeds. The function returns `null` when no cell/range is selected or Velt is not loaded.
+
+| Property           | Type                                      | Required | Description                                         |
+| ------------------ | ----------------------------------------- | -------- | --------------------------------------------------- |
+| `veltAnnotationId` | `string`                                  | Yes      | The Velt annotation id assigned by the SDK.         |
+| `textEditorConfig` | [`TextEditorConfig`](#spreadjs-texteditorconfig) | Yes      | The durable logical anchor stored on the annotation. |
+
+<a id="spreadjs-rendercommentsargs" />
+
+#### RenderCommentsArgs
+
+---
+
+Request interface for the SpreadJS `renderComments()` function.
+
+| Property             | Type                                       | Required | Description                       |
+| -------------------- | ------------------------------------------ | -------- | --------------------------------- |
+| `instance`           | `SpreadInstance`                           | Yes      | The SpreadJS workbook instance.   |
+| `commentAnnotations` | `CommentAnnotation[] \| null \| undefined` | Yes      | Annotations to render/highlight.  |
+
+For the CommentAnnotation model referenced above, see [CommentAnnotation](#commentannotation).
+
+<a id="spreadjs-spreadjsveltcommentsconfig" />
+
+#### SpreadJSVeltCommentsConfig
+
+---
+
+Configuration options for `SpreadJSVeltComments.configure()`.
+
+| Property                  | Type      | Required | Description                                                                  |
+| ------------------------- | --------- | -------- | ---------------------------------------------------------------------------- |
+| `editorId`                | `string`  | No       | Unique identifier for this workbook instance. Default: `'spreadjs'`.         |
+| `scrollToSelectedComment` | `boolean` | No       | Activate a selected thread's sheet and scroll its cell into view. Default: `true`. |
+
+<a id="spreadjs-attachedextension" />
+
+#### AttachedExtension
+
+---
+
+Handle returned by `SpreadJSVeltComments.configure(...).attach(instance)`.
+
+| Property | Type         | Required | Description                                                        |
+| -------- | ------------ | -------- | ------------------------------------------------------------------ |
+| `detach` | `() => void` | Yes      | Removes every SpreadJS listener and clears per-instance state.      |
+
+<a id="spreadjs-texteditorconfig" />
+
+#### TextEditorConfig
+
+---
+
+Logical anchor stored in `annotation.context.textEditorConfig`. Physical rectangles are re-derived at render time with `Worksheet.getCellRect`, so pixel coordinates are not persisted.
+
+| Property     | Type     | Required | Description                                           |
+| ------------ | -------- | -------- | ----------------------------------------------------- |
+| `editorId`   | `string` | Yes      | The editor id associated with this comment.           |
+| `documentId` | `string` | No       | Optional host workbook/document id. Velt already scopes per document. |
+| `sheetName`  | `string` | Yes      | Authoritative sheet identity; survives sheet reordering. |
+| `sheetIndex` | `number` | No       | Sheet index hint only; `sheetName` wins on mismatch.  |
+| `row`        | `number` | Yes      | 0-based top-left row of the anchored cell/range.      |
+| `col`        | `number` | Yes      | 0-based top-left column of the anchored cell/range.   |
+| `rowCount`   | `number` | Yes      | Row span; `1` means a single cell.                    |
+| `colCount`   | `number` | Yes      | Column span; `1` means a single cell.                 |
 
 ### Messages
 
@@ -4955,6 +5600,43 @@ An enum that defines the different types of actions that can trigger resolver ev
 | `RECORDER_ANNOTATION_UPDATE` | `'recorder_annotation.update'` | Triggered when a recorder annotation is updated        |
 | `RECORDER_ANNOTATION_DELETE` | `'recorder_annotation.delete'` | Triggered when a recorder annotation is deleted        |
 
+#### CommentResolverSaveEvent
+
+---
+
+Non-core, annotation-level comment save events that customers can opt into receiving via [`ResolverConfig.additionalSaveEvents`](#resolverconfig), beyond the 4 core PII events. May appear as the `event` value on [`SaveCommentResolverRequest`](#savecommentresolverrequest).
+
+| Name                 | Value                                    | Description                                                       |
+| -------------------- | ---------------------------------------- | ---------------------------------------------------------------- |
+| `STATUS_CHANGE`      | `'comment_annotation.status_change'`     | Triggered when the annotation status changes                     |
+| `PRIORITY_CHANGE`    | `'comment_annotation.priority_change'`   | Triggered when the annotation priority changes                   |
+| `ASSIGN`             | `'comment_annotation.assign'`            | Triggered when the annotation is assigned                        |
+| `ACCESS_MODE_CHANGE` | `'comment_annotation.access_mode_change'`| Triggered when the annotation access mode changes                |
+| `CUSTOM_LIST_CHANGE` | `'comment_annotation.custom_list_change'`| Triggered when an annotation custom list value changes           |
+| `APPROVE`            | `'comment_annotation.approve'`           | Triggered when the annotation is approved                        |
+| `ACCEPT`             | `'comment.accept'`                       | Triggered when a comment suggestion is accepted                  |
+| `REJECT`             | `'comment.reject'`                       | Triggered when a comment suggestion is rejected                  |
+| `SUGGESTION_ACCEPT`  | `'comment_annotation.suggestion_accept'` | Triggered when an annotation suggestion is accepted              |
+| `SUGGESTION_REJECT`  | `'comment_annotation.suggestion_reject'` | Triggered when an annotation suggestion is rejected              |
+| `REACTION_ADD`       | `'comment.reaction_add'`                 | Triggered when a reaction is added to a comment                  |
+| `REACTION_DELETE`    | `'comment.reaction_delete'`              | Triggered when a reaction is removed from a comment              |
+| `SUBSCRIBE`          | `'comment_annotation.subscribe'`         | Triggered when a user subscribes to the annotation               |
+| `UNSUBSCRIBE`        | `'comment_annotation.unsubscribe'`       | Triggered when a user unsubscribes from the annotation           |
+
+<Note>
+  `CommentResolverSaveEvent.REACTION_ADD` (`'comment.reaction_add'`) and `CommentResolverSaveEvent.REACTION_DELETE` (`'comment.reaction_delete'`) are comment-level reaction events and are **distinct** from [`ResolverActions`](#resolveractions)`.REACTION_ADD` (`'reaction.add'`) and `ResolverActions.REACTION_DELETE` (`'reaction.delete'`), which belong to the reaction resolver — same member names, different values.
+</Note>
+
+#### AdditionalSaveEventConfig
+
+---
+
+Element type of [`ResolverConfig.additionalSaveEvents`](#resolverconfig).
+
+| Property | Type                                                    | Required | Description                                                                       |
+| -------- | ------------------------------------------------------- | -------- | --------------------------------------------------------------------------------- |
+| `event`  | [`CommentResolverSaveEvent`](#commentresolversaveevent) | Yes      | The non-core annotation-level event to opt into delivering to the save endpoint.  |
+
 #### UserResolverModuleName
 
 ---
@@ -5167,10 +5849,11 @@ _Introduced in `@veltdev/node` v1.0.2._ The SDK exposes `partialTargetTextRangeF
 
 Config-based resolver endpoint configuration. SDK handles HTTP requests, headers, and response formatting automatically.
 
-| Property  | Type                     | Required | Description                                 |
-| --------- | ------------------------ | -------- | ------------------------------------------- |
-| `url`     | `string`                 | Yes      | Backend endpoint URL for resolver operation |
-| `headers` | `Record<string, string>` | No       | Custom HTTP headers for the request         |
+| Property      | Type                                                                  | Required | Description                                                                                                                                                                                              |
+| ------------- | --------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `url`         | `string`                                                              | Yes      | Backend endpoint URL for resolver operation                                                                                                                                                             |
+| `headers`     | `Record<string, string> \| (() => Promise<Record<string, string>>)`  | No       | Static headers object (captured once) OR an async function resolved on every request — including each retry — so a short-lived per-request token is always fresh.                                        |
+| `credentials` | `'include' \| 'same-origin' \| 'omit'`                                | No       | Forwarded to `fetch()` for cookie/session auth on resolver endpoints. Omitted when unset (fetch keeps its `'same-origin'` default — byte-identical to prior behavior). Use `'include'` for cross-origin cookie/session auth. |
 
 #### ResolverConfig
 
@@ -5188,6 +5871,7 @@ Config-based resolver endpoint configuration. SDK handles HTTP requests, headers
 | `deleteConfig`    | `ResolverEndpointConfig` | No       | Config-based endpoint for delete operations    |
 | `additionalFields` | `string[]`              | No       | Custom fields copied to resolver payloads but retained in Velt's storage |
 | `fieldsToRemove`  | `string[]`              | No       | Fields stripped from Velt's storage before writing to your resolver endpoint |
+| `additionalSaveEvents` | [`AdditionalSaveEventConfig[]`](#additionalsaveeventconfig) | No | Opt-in list of additional (non-core) annotation-level save events delivered to the existing save endpoint, beyond the 4 core PII events. Absent/empty ⇒ no extra events (default, backward-compatible). |
 
 #### ResolverResponse
 
@@ -5240,6 +5924,18 @@ Generic response format for backend endpoints and data providers.
 | `save`   | `(request: SaveCommentResolverRequest) => Promise<ResolverResponse<T>>`                                       | No       | Function to save comment annotations   |
 | `delete` | `(request: DeleteCommentResolverRequest) => Promise<ResolverResponse<undefined>>`                             | No       | Function to delete comment annotations |
 | `config` | `ResolverConfig`                                                                                              | No       | Configuration for the data provider    |
+
+#### PartialCommentAnnotationResult
+
+---
+
+Resolver result payload for comment annotation data after PII stripping.
+
+| Property       | Type                                                                       | Required | Description                                               |
+| -------------- | -------------------------------------------------------------------------- | -------- | --------------------------------------------------------- |
+| `strippedData` | `Record<string, PartialCommentAnnotation> \| null`                         | Yes      | Annotation data with configured PII fields stripped       |
+| `originalData` | [`CommentAnnotation`](#commentannotation) \| `null`                        | Yes      | Original annotation data before PII stripping             |
+| `eventType`    | [`ResolverActions`](#resolveractions) \| [`CommentResolverSaveEvent`](#commentresolversaveevent) | No       | Resolver action or opted-in comment save event that produced this result |
 
 #### ReactionAnnotationDataProvider
 
@@ -6492,7 +7188,7 @@ Configuration interface for Permission Provider. Velt validates access requests 
 | `forceRefresh`     | `boolean`                           | No       | Set to `true` if access control changes frequently. Forces re-validation on each access check in the current session. Default: `false`                                                                     |
 | `revokeAccessOn`   | [RevokeAccessOn[]](#revokeaccesson) | No       | Configure automatic access revocation triggers. Revokes permissions when specified events occur (e.g., document unset or user logout).                                                                     |
 | `dev`              | `boolean`                           | No       | Opt-in: resolve permissions in the browser for local testing. Honored only for dev/test API keys; production keys always use the server-side provider. Default: `false`.                                   |
-| `endpointConfig`   | [ResolverEndpointConfig](#resolverendpointconfig) | No | URL resolver for the dev resolver. SDK POSTs `{ data: { requests:` [PermissionQuery[]](#permissionquery) `} }` to the URL. Takes precedence over `resolvePermissions`.                              |
+| `endpointConfig`   | [ResolverEndpointConfig](#resolverendpointconfig) | No | URL resolver for the dev resolver. SDK POSTs `{ data: { requests:` [PermissionQuery[]](#permissionquery) `} }` to the URL. Supports static or async headers and optional `credentials` through `ResolverEndpointConfig`. Takes precedence over `resolvePermissions`. |
 | `resolvePermissions` | `(request:` [PermissionResolverRequest](#permissionresolverrequest)`) => Promise<`[PermissionResult[]](#permissionresult) `\|` [ResolverResponse](#resolverresponse)`<PermissionResult[]>>` | No | In-browser callback resolver. Invoked with the same request envelope as the server-side provider. |
 | `resolveTimeout`   | `number`                            | No       | Per-call deadline in milliseconds for the dev resolver. Default: `60000`.                                                                                                                                  |
 
@@ -10792,6 +11488,61 @@ Request payload for `sdk.api.workspace.resetAuthToken`.
 |-------|------|----------|-------------|
 | `apiKey` | `string` | Yes | API key whose auth token should be rotated. |
 
+### `ResolverAuthConfig` (Node)
+
+The `resolverAuth` option on `VeltConfig`, configuring `sdk.selfHosting.verifyToken`. See [`verifyToken`](/backend-sdks/node#verifytoken).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `jwt` | [`ResolverAuthJwtConfig`](#resolverauthjwtconfig-node) | No | Built-in JWT/JWKS verification config. |
+| `verify` | [`ResolverAuthVerifyCallback`](#resolverauthverifycallback-node) | No | Custom verification callback. Takes priority over the built-in `jwt` path when both are configured. |
+| `header` | `string` | No | Header to read the token from. Default `'Authorization'`. |
+| `scheme` | `string` | No | Auth scheme prefix. Default `'Bearer'`. Set to `''` to read the raw header value. |
+
+### `ResolverAuthErrorCode` (Node)
+
+A union of the 9 machine-readable failure codes returned on [`VerifyTokenResult.errorCode`](#verifytokenresult-node). The same values are exported as the readonly `string[]` const `RESOLVER_AUTH_ERROR_CODES`.
+
+| Code | When |
+|------|------|
+| `NOT_CONFIGURED` | Neither `jwt` nor a `verify` callback is configured. |
+| `MISSING_TOKEN` | No token found in headers, or wrong scheme. |
+| `EXPIRED` | JWT `exp` claim has passed (beyond `leeway`). |
+| `INVALID_SIGNATURE` | Signature verification failed, or malformed token. |
+| `CLAIM_MISMATCH` | Configured `issuer`/`audience` wrong or absent; or a required claim is missing. |
+| `ALGORITHM_NOT_ALLOWED` | `alg=none`; algorithm outside the allowlist; mixed symmetric+asymmetric allowlist; missing allowlist. |
+| `KEY_RESOLUTION_FAILED` | No usable key; JWKS URL is not HTTPS; JWKS fetch failed or returned non-2xx; redirect downgrade detected. |
+| `DEPENDENCY_MISSING` | Built-in JWT path used but `jose` is not installed. |
+| `VERIFICATION_FAILED` | Custom callback threw or returned falsy; unexpected internal error (fail-closed catch-all). |
+
+### `ResolverAuthJwtConfig` (Node)
+
+Built-in JWT/JWKS verification config — the `jwt` field on [`ResolverAuthConfig`](#resolverauthconfig-node).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `algorithms` | `string[]` | Conditional | Algorithm allowlist (algorithm pinning). Required when using the built-in JWT verifier. |
+| `jwksUrl` | `string` | No | HTTPS JWKS endpoint (one of jwksUrl / publicKey / secret). |
+| `publicKey` | `string \| Record<string, unknown>` | No | Static PEM public key or JWK object. |
+| `secret` | `string \| Uint8Array` | No | HMAC secret for HS* algorithms. |
+| `issuer` | `string` | No | Expected `iss`; enforced when set. |
+| `audience` | `string \| string[]` | No | Expected `aud`; enforced when set. |
+| `leeway` | `number` | No | Clock tolerance in seconds. |
+| `require` | `string[]` | No | Required claims (e.g. `['exp']`). |
+
+### `ResolverAuthVerifyCallback` (Node)
+
+Custom verification callback — the `verify` field on [`ResolverAuthConfig`](#resolverauthconfig-node). Return an object to populate `claims`, a truthy non-object value to accept with `claims` undefined, or a falsy value to fail closed.
+
+```ts
+type ResolverAuthVerifyCallback = (
+  token: string,
+  headers?: Record<string, string | string[] | undefined> | Headers | Iterable<[string, string]>
+) => unknown | Promise<unknown>;
+```
+
+Returning falsy (or throwing) fails closed with [`errorCode`](#resolverautherrorcode-node) `VERIFICATION_FAILED`.
+
 ### `SaveActivitiesRequest` SH (Node)
 
 Request payload for `sdk.selfHosting.getActivities().saveActivities`.
@@ -11029,6 +11780,34 @@ Request payload for `sdk.api.workspace.updateWebhookConfig`.
 |-------|------|----------|-------------|
 | `useWebhookService` | `boolean` | Yes | Toggle the webhook service. |
 | `webhookServiceConfig` | `{ authToken: string; rawNotificationUrl?: string; processedNotificationUrl?: string }` | Yes | Webhook destinations and shared secret. |
+
+### `VeltConfig` (Node)
+
+Configuration passed to `VeltSDK.initialize`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `database` | `DatabaseConfig` | Yes | MongoDB connection config. In `@veltdev/node@1.0.7`, this is still validated during initialization, including when you only use `sdk.api.*` or `sdk.selfHosting.verifyToken`. |
+| `apiKey` | `string` | No | Velt API key. Falls back to `VELT_API_KEY`. |
+| `authToken` | `string` | No | Velt auth token. Falls back to `VELT_AUTH_TOKEN`. |
+| `workspaceId` | `string` | No | Workspace ID. Falls back to `VELT_WORKSPACE_ID`. |
+| `workspaceAuthToken` | `string` | No | Workspace auth token. Falls back to `VELT_WORKSPACE_AUTH_TOKEN`. |
+| `user_schema` | `Record<string, string \| string[]>` | No | User schema mapping. |
+| `collections` | `CollectionNames` | No | Custom collection names for self-hosting data. |
+| `aws` | `AwsConfig` | No | AWS S3 config for attachment storage. |
+| `environment` | `'prod' \| 'staging'` | No | SDK API environment. |
+| `resolverAuth` | [`ResolverAuthConfig`](#resolverauthconfig-node) | No | Token verification config for `sdk.selfHosting.verifyToken`. |
+
+### `VerifyTokenResult` (Node)
+
+Result returned by `sdk.selfHosting.verifyToken`. See [`verifyToken`](/backend-sdks/node#verifytoken).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `verified` | `boolean` | Yes | Whether the credential passed verification. |
+| `claims` | `Record<string, unknown>` | No | Decoded JWT payload; present when verified. |
+| `error` | `string` | No | Generic, code-based message — never contains the token or secret. |
+| `errorCode` | [`ResolverAuthErrorCode`](#resolverautherrorcode-node) | No | Machine-readable failure code. |
 
 ### `CreateAgentRequest` (Node)
 

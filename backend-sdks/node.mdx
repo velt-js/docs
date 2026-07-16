@@ -1,6 +1,6 @@
 ---
 title: "Node SDK for self-hosting and REST API calls"
-description: "Integrate the Velt Node SDK in Node.js or TypeScript to self-host data with MongoDB and S3, or call Velt's REST APIs without a database."
+description: "Integrate the Velt Node SDK in Node.js or TypeScript to self-host data with MongoDB and S3, or call Velt's REST APIs from your backend."
 ---
 
 ## Overview
@@ -10,7 +10,7 @@ The [Velt Node SDK](https://www.npmjs.com/package/@veltdev/node) exposes two ind
 | Backend | Namespace | Use case |
 |---------|-----------|----------|
 | Self-hosting | `sdk.selfHosting.*` | Store Velt data in your own MongoDB + AWS S3 |
-| REST API | `sdk.api.*` | Call Velt's REST APIs directly — no database required |
+| REST API | `sdk.api.*` | Call Velt's REST APIs directly from your backend |
 
 **Self-hosting backend** (`sdk.selfHosting.*`) simplifies backend implementation by **90%**. Instead of writing custom database queries and storage logic, you:
 
@@ -18,7 +18,13 @@ The [Velt Node SDK](https://www.npmjs.com/package/@veltdev/node) exposes two ind
 2. Call the relevant SDK method with the raw request payload
 3. Return the resulting response directly to the client
 
-**REST API backend** (`sdk.api.*`) provides parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2). 18 services, fully-typed TypeScript request objects, and raw Velt API responses. No database or AWS configuration needed.
+**REST API backend** (`sdk.api.*`) provides parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2). 18 services, fully-typed TypeScript request objects, and raw Velt API responses. API calls do not read or write MongoDB or AWS S3.
+
+<Note>
+  In `@veltdev/node@1.0.7`, `VeltSDK.initialize` still validates the top-level
+  `database` config. Pass your database config during initialization even when
+  you only call `sdk.api.*`; the REST API methods themselves do not use it.
+</Note>
 
 ## Installation
 
@@ -31,6 +37,7 @@ For self-hosting, also install the optional peer dependencies you plan to use:
 ```bash
 npm install mongodb              # required for self-hosting backend
 npm install @aws-sdk/client-s3   # required only if using S3 for attachments
+npm install jose@^5              # required only for the built-in JWT/JWKS verifyToken path
 ```
 
 ### Requirements
@@ -38,7 +45,7 @@ npm install @aws-sdk/client-s3   # required only if using S3 for attachments
 - Node.js 18+
 - TypeScript 5.x (optional — JavaScript is fully supported)
 - MongoDB 6+ (Percona Server or MongoDB Atlas) for self-hosting
-- `mongodb` ^6 and `@aws-sdk/client-s3` ^3 as optional peer dependencies
+- `mongodb` ^6, `@aws-sdk/client-s3` ^3, and `jose` ^5 (for [`verifyToken`](#verifytoken)) as optional peer dependencies
 
 ## Quick Start
 
@@ -68,12 +75,19 @@ const sdk = VeltSDK.initialize({
 </Tab>
 <Tab title="REST API">
 
-REST API-only initialization (no database needed):
+REST API service initialization:
 
 ```ts
 import { VeltSDK } from '@veltdev/node';
 
 const sdk = VeltSDK.initialize({
+  database: {
+    host: 'localhost:27017',
+    username: 'your-username',
+    password: 'your-password',
+    auth_database: 'admin',
+    database_name: 'velt-integration',
+  },
   apiKey: 'YOUR_VELT_API_KEY',
   authToken: 'YOUR_VELT_AUTH_TOKEN'
 });
@@ -82,7 +96,7 @@ const sdk = VeltSDK.initialize({
 const result = await sdk.api.organizations.getOrganizations({ organizationIds: ['org-123'] });
 ```
 
-The `database` section is optional when using only `sdk.api.*`. Set `VELT_API_KEY` and `VELT_AUTH_TOKEN` environment variables as an alternative to passing credentials in the config object.
+Set `VELT_API_KEY` and `VELT_AUTH_TOKEN` environment variables as an alternative to passing credentials in the config object.
 
 </Tab>
 </Tabs>
@@ -117,16 +131,11 @@ Configure MongoDB connection for storing comments, reactions, and user data.
 ```ts
 const sdk = VeltSDK.initialize({
   database: {
-    // Option 1: Connection string (recommended for MongoDB Atlas)
-    // Overrides host/username/password if provided
-    connection_string: 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
-
-    // Option 2: Individual components
-    // host: 'localhost:27017',
-    // username: 'your-username',
-    // password: 'your-password',
-    // auth_database: 'admin',
-    // database_name: 'velt-db',
+    host: 'localhost:27017',
+    username: 'your-username',
+    password: 'your-password',
+    auth_database: 'admin',
+    database_name: 'velt-db',
 
     // Optional fields:
     // type: 'mongodb',       // defaults to 'mongodb'
@@ -142,7 +151,13 @@ Configure AWS S3 for storing file attachments. Alternatively, set the AWS enviro
 
 ```ts
 const sdk = VeltSDK.initialize({
-  database: { connection_string: 'mongodb+srv://...' },
+  database: {
+    host: 'localhost:27017',
+    username: 'your-username',
+    password: 'your-password',
+    auth_database: 'admin',
+    database_name: 'velt-db',
+  },
   // AWS credentials can also be provided via environment variables
   apiKey: 'YOUR_VELT_API_KEY',
   authToken: 'YOUR_VELT_AUTH_TOKEN'
@@ -159,7 +174,11 @@ import { VeltSDK } from '@veltdev/node';
 
 const sdk = VeltSDK.initialize({
   database: {
-    connection_string: 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
+    host: 'localhost:27017',
+    username: 'your-username',
+    password: 'your-password',
+    auth_database: 'admin',
+    database_name: 'velt-db',
   },
   apiKey: 'YOUR_VELT_API_KEY',
   authToken: 'YOUR_VELT_AUTH_TOKEN'
@@ -169,6 +188,35 @@ const sdk = VeltSDK.initialize({
 process.on('SIGTERM', async () => {
   await sdk.close();
   process.exit(0);
+});
+```
+
+</Tab>
+<Tab title="Resolver Auth">
+
+Configure `resolverAuth` to verify the credential the Velt frontend forwards to endpoint-based resolvers. See [`verifyToken`](#verifytoken) for the full reference, error codes, and security guarantees.
+
+<Note>
+  In `@veltdev/node@1.0.7`, `VeltSDK.initialize` still validates the top-level
+  `database` config. Pass your self-hosting database config during
+  initialization; `verifyToken` itself does not open a database connection.
+</Note>
+
+```ts
+const sdk = VeltSDK.initialize({
+  database: {
+    host: 'localhost:27017',
+    username: 'your-username',
+    password: 'your-password',
+    auth_database: 'admin',
+    database_name: 'velt-db',
+  },
+  apiKey: 'YOUR_VELT_API_KEY',
+  authToken: 'YOUR_VELT_AUTH_TOKEN',
+  resolverAuth: {
+    jwt: { algorithms: ['RS256'], jwksUrl: 'https://your-idp.example.com/.well-known/jwks.json' },
+    // or: verify: async (token, headers) => claims
+  },
 });
 ```
 
@@ -232,6 +280,8 @@ const result = await commentsService.saveComments({
 ```ts
 { success: true, statusCode: 200, data: { saved: true } }
 ```
+
+> **Resolver contract:** When `saveComments` runs as a save-resolver handler, the inbound `event` may be a [`ResolverActions`](/api-reference/sdk/models/data-models#resolveractions) **or** a [`CommentResolverSaveEvent`](/api-reference/sdk/models/data-models#commentresolversaveevent) member (or a raw string), and the request may include `targetComment?: PartialComment` — the comment the action occurred on (request context only, never persisted). See [`SaveCommentResolverRequest`](/api-reference/sdk/models/data-models#savecommentresolverrequest).
 
 #### `deleteComment`
 
@@ -629,9 +679,153 @@ const token = (tokenResult.data as { token: string }).token;
 { success: true, statusCode: 200, data: { token: 'eyJhbGciOiJIUzI1NiIs...' } }
 ```
 
+### verifyToken
+
+`sdk.selfHosting.verifyToken` verifies the auth credential the Velt frontend forwards to endpoint-based resolvers. It is **database-free** (it does not open or query MongoDB), **fail-closed** (every error path returns `{ verified: false }`, never throws), and **authentication only** (claims are returned verbatim; it makes no authorization decision).
+
+<Note>
+  In `@veltdev/node@1.0.7`, `VeltSDK.initialize` still validates the top-level
+  `database` config before you can access `sdk.selfHosting`. Include your
+  self-hosting database config when initializing the SDK. The `verifyToken`
+  method itself remains database-free after initialization.
+</Note>
+
+> **Optional dependency:** `npm install jose@^5` (optional `peerDependency`, pinned `^5` for Node 18 — jose v6 needs the WebCrypto global absent on Node 18). If `jose` is missing and the built-in JWT path is used, `verifyToken` returns `{ verified: false, errorCode: 'DEPENDENCY_MISSING' }`. The custom `verify` callback path needs no dependency.
+
+#### Configuration
+
+Configure `resolverAuth` on `VeltSDK.initialize`. Provide the built-in `jwt` path, a custom `verify` callback, or both. When both are set, the custom callback takes priority.
+
+<Tabs>
+<Tab title="JWT / JWKS">
+
+```ts
+const sdk = VeltSDK.initialize({
+  database: {
+    host: 'localhost:27017',
+    username: 'your-username',
+    password: 'your-password',
+    auth_database: 'admin',
+    database_name: 'velt-db',
+  },
+  apiKey: 'YOUR_VELT_API_KEY',
+  authToken: 'YOUR_VELT_AUTH_TOKEN',
+  resolverAuth: {
+    jwt: {
+      algorithms: ['RS256'],        // REQUIRED — algorithm allowlist (pinning)
+      jwksUrl: 'https://your-idp.example.com/.well-known/jwks.json',
+      // publicKey: '-----BEGIN PUBLIC KEY-----\n...',  // OR a static PEM
+      // secret: 'hs256-shared-secret',                 // OR an HMAC secret for HS*
+      issuer: 'https://your-idp.example.com/',
+      audience: 'your-api-audience',
+      leeway: 5,                    // clock tolerance in seconds
+      require: ['exp'],             // required claims
+    },
+    header: 'Authorization',        // default
+    scheme: 'Bearer',              // default
+  },
+});
+```
+
+</Tab>
+<Tab title="Custom verify callback">
+
+```ts
+const sdk = VeltSDK.initialize({
+  database: {
+    host: 'localhost:27017',
+    username: 'your-username',
+    password: 'your-password',
+    auth_database: 'admin',
+    database_name: 'velt-db',
+  },
+  apiKey: 'YOUR_VELT_API_KEY',
+  authToken: 'YOUR_VELT_AUTH_TOKEN',
+  resolverAuth: {
+    verify: async (token, headers) => {
+      // Validate the token yourself; return the claims, or a falsy value to fail closed.
+      const claims = await myValidate(token);
+      return claims; // { sub: 'user-1', ... }
+    },
+    header: 'Authorization',
+    scheme: 'Bearer',
+  },
+});
+```
+
+</Tab>
+</Tabs>
+
+#### Usage
+
+Call `verifyToken` from your endpoint-based resolver route, then branch on `result.verified`.
+
+```ts
+const result = await sdk.selfHosting.verifyToken({ headers: request.headers });
+
+if (!result.verified) {
+  // result.error is a generic, code-based message; result.errorCode is machine-readable
+  return response.status(401).json({ error: result.error, code: result.errorCode });
+}
+
+const userId = result.claims?.sub;
+```
+
+Per-call `options` override the configured `resolverAuth` (the `jwt` block is deep-merged):
+
+```ts
+// Pass a raw token directly instead of headers
+await sdk.selfHosting.verifyToken({ token: rawToken });
+
+// Override a single jwt option for this call (deep-merged with configured jwt)
+await sdk.selfHosting.verifyToken({ headers: request.headers, jwt: { leeway: 30 } });
+```
+
+**Signature**
+
+```ts
+verifyToken(
+  options?: {
+    headers?: Record<string, string | string[] | undefined> | Headers | Iterable<[string, string]>;
+    token?: string;
+  } & Partial<ResolverAuthConfig>
+) => Promise<VerifyTokenResult>
+```
+
+- Params: inline options object with `headers`, `token`, and per-call [`ResolverAuthConfig`](/api-reference/sdk/models/data-models#resolverauthconfig-node) overrides. This parameter shape is not exported as a named SDK type.
+- Returns: [`VerifyTokenResult`](/api-reference/sdk/models/data-models#verifytokenresult-node)
+
+The verification logic is implemented by the `ResolverAuthService` class (also exported from `@veltdev/node`) for advanced callers who need to construct it directly; `sdk.selfHosting.verifyToken` is the standard entry point.
+
+#### Error codes
+
+On failure, `result.errorCode` is one of the [`ResolverAuthErrorCode`](/api-reference/sdk/models/data-models#resolverautherrorcode-node) values (also exported as the readonly `string[]` const `RESOLVER_AUTH_ERROR_CODES`).
+
+| Code | When |
+|------|------|
+| `NOT_CONFIGURED` | Neither `jwt` nor a `verify` callback is configured. |
+| `MISSING_TOKEN` | No token found in headers, or wrong scheme. |
+| `EXPIRED` | JWT `exp` claim has passed (beyond `leeway`). |
+| `INVALID_SIGNATURE` | Signature verification failed, or malformed token. |
+| `CLAIM_MISMATCH` | Configured `issuer`/`audience` wrong or absent; or a required claim is missing. |
+| `ALGORITHM_NOT_ALLOWED` | `alg=none`; algorithm outside the allowlist; mixed symmetric+asymmetric allowlist; missing allowlist. |
+| `KEY_RESOLUTION_FAILED` | No usable key; JWKS URL is not HTTPS; JWKS fetch failed or returned non-2xx; redirect downgrade detected. |
+| `DEPENDENCY_MISSING` | Built-in JWT path used but `jose` is not installed. |
+| `VERIFICATION_FAILED` | Custom callback threw or returned falsy; unexpected internal error (fail-closed catch-all). |
+
+#### Security guarantees
+
+- `alg=none` is always rejected, even if present in the allowlist.
+- Mixed symmetric+asymmetric allowlists are refused (prevents HS/RS confusion).
+- A PEM placed in `jwt.secret` is refused.
+- JWKS is fetched only over HTTPS — `http` is rejected pre-fetch, and a redirect downgrade is rejected.
+- JWKS responses are cached per URL with a 5-minute TTL (not per `kid`).
+- The token-header `alg` is checked against the allowlist before any JWKS fetch.
+- The `error` field is generic and code-based — it never contains the token or secret.
+
 ## REST API Backend
 
-The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 18 services. Each method takes a fully-typed TypeScript request object and returns the raw Velt API response. You only need `apiKey` and `authToken` — no database or AWS config.
+The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 18 services. Each method takes a fully-typed TypeScript request object and returns the raw Velt API response. API methods need `apiKey` and `authToken` and do not use MongoDB or AWS S3, although `@veltdev/node@1.0.7` still validates the top-level `database` config at initialization.
 
 Every `sdk.api.*` method requires an `organizationId` in its request payload. Velt enforces data isolation per-organization server-side.
 

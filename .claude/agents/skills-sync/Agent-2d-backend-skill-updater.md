@@ -59,6 +59,10 @@ These rules apply on top of the base process:
 - **`x-velt-api-key` header is mandatory.** Every server-to-Velt example must include this header. If you find an existing example missing it, that's a bug — fix it as part of the edit.
 - **Webhook event payload shapes are versioned (v1 vs v2).** The version is part of the event identity. Never silently upgrade an example from v1 to v2 prose. If the docs introduce a v2 payload for an existing v1 event, create a new rule (or a new section in the existing rule) rather than rewriting the v1 example.
 - **Python SDK is `velt-py`.** Imports look like `from velt import Velt` (or similar — match what docs show). Never invent a class or method name; only use identifiers the docs explicitly show.
+- **Visible REST endpoints and hidden SDK namespaces are different surfaces.** `/v2/agents/*` and `/v2/memory/*` docs belong in `velt-rest-apis-best-practices`. Do not document `sdk.api.agents` or `sdk.api.memory` as live Node/Python SDK namespaces when the SDK docs hide or comment those sections. It is valid to add a cautionary note that those SDK namespaces are hidden until published.
+- **Node SDK field filtering is opt-in and fail-open.** When `FieldFilterOptions`, `filterUnknownFields`, `pickKnownFields`, `filterRequest`, `FilterSpec`, or endpoint `*_SPEC` constants change, update the Node SDK rule and preserve the exact semantics: second argument, defaults to false, drops unknown keys before REST writes, and sends the original payload if filtering fails.
+- **Python field filtering belongs with self-hosting data / velt-py.** When Python docs mention `filter_unknown_fields` or `field_allowlists`, update the Python/self-hosting rule; do not translate Python snake_case into Node camelCase or vice versa.
+- **Metadata abstracts require the manual rewrite path.** If a service count or top-level SDK scope change makes `metadata.json.abstract` inaccurate, emit a decline or call out that the resulting PR needs `manual-skill-rewrite`; do not silently rewrite scope metadata without that label path.
 
 ## Output
 

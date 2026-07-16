@@ -1,0 +1,136 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# notify-docs-on-release-note.yml
+#
+# INSTALL TARGET: snippyly/internal-release-notes/.github/workflows/
+#
+# On changed release-note Markdown files under release-notes/**, fires one
+# repository_dispatch event per added/modified/renamed file to velt-js/docs.
+# Deletes do not run agents; they create a docs triage issue instead.
+#
+# Requires repo secret: DOCS_DISPATCH_PAT — a PAT with repo access to
+# velt-js/docs so it can dispatch workflows and create fallback issues.
+# ─────────────────────────────────────────────────────────────────────────────
+name: notify-docs-on-release-note
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'release-notes/**'
+
+  workflow_dispatch:
+    inputs:
+      path:
+        description: "Force-dispatch a specific note path for testing, e.g. release-notes/v6.0.0-beta.2.md"
+        required: false
+        type: string
+      change_type:
+        description: "Manual test change type."
+        required: false
+        default: added
+        type: choice
+        options:
+          - added
+          - modified
+          - renamed
+
+concurrency:
+  group: rn2docs-notify-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    name: Detect changed notes & dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (need history to diff)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute changed release notes
+        id: changed
+        run: |
+          set -euo pipefail
+          MANUAL="${{ inputs.path }}"
+          MANUAL_CHANGE_TYPE="${{ inputs.change_type || 'added' }}"
+
+          : > changed.tsv
+          : > deleted.tsv
+
+          if [ -n "$MANUAL" ]; then
+            printf '%s\t%s\n' "$MANUAL_CHANGE_TYPE" "$MANUAL" > changed.tsv
+          else
+            BEFORE="${{ github.event.before }}"
+            AFTER="${{ github.sha }}"
+
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              BEFORE="$(git hash-object -t tree /dev/null)"
+            fi
+
+            git diff --name-status --diff-filter=AMRD "$BEFORE" "$AFTER" -- \
+              'release-notes/*.md' \
+              'release-notes/**/*.md' \
+              | awk '
+                BEGIN { OFS="\t" }
+                $1 == "A" { print "added", $2; next }
+                $1 == "M" { print "modified", $2; next }
+                $1 ~ /^R/ { print "renamed", $3; next }
+                $1 == "D" { print "deleted", $2; next }
+              ' > all-changes.tsv
+
+            awk -F '\t' '$1 == "deleted" { print $0 }' all-changes.tsv > deleted.tsv
+            awk -F '\t' '$1 != "deleted" { print $0 }' all-changes.tsv > changed.tsv
+          fi
+
+          echo "Changed release notes:"
+          cat changed.tsv || true
+          echo "Deleted release notes:"
+          cat deleted.tsv || true
+
+          echo "changed_count=$(grep -c . changed.tsv || true)" >> "$GITHUB_OUTPUT"
+          echo "deleted_count=$(grep -c . deleted.tsv || true)" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch one event per changed note
+        if: steps.changed.outputs.changed_count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_DISPATCH_PAT }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          while IFS=$'\t' read -r change_type path; do
+            [ -z "${path:-}" ] && continue
+            echo "Dispatching $change_type release note: $path"
+            gh api repos/velt-js/docs/dispatches \
+              -f event_type=new-release-note \
+              -F "client_payload[path]=$path" \
+              -F "client_payload[sha]=$AFTER_SHA" \
+              -F "client_payload[change_type]=$change_type" \
+              -F "client_payload[source_repo]=snippyly/internal-release-notes" \
+              -F "client_payload[release_note_url]=https://github.com/snippyly/internal-release-notes/blob/$AFTER_SHA/$path"
+          done < changed.tsv
+
+      - name: Create triage issues for deleted notes
+        if: steps.changed.outputs.deleted_count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_DISPATCH_PAT }}
+          AFTER_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          while IFS=$'\t' read -r change_type path; do
+            [ -z "${path:-}" ] && continue
+            BODY="$(printf 'A release note was deleted in snippyly/internal-release-notes and was not sent through the agent pipeline.\n\n- Path: `%s`\n- Source SHA: `%s`\n- Source workflow run: %s\n\n@yoen-velt\n' "$path" "$AFTER_SHA" "$RUN_URL")"
+            gh issue create --repo velt-js/docs \
+              --title "release note deleted: $path" \
+              --label documentation \
+              --body "$BODY" || true
+          done < deleted.tsv
+
+      - name: No changed notes
+        if: steps.changed.outputs.changed_count == '0' && steps.changed.outputs.deleted_count == '0'
+        run: echo "No changed release-note Markdown files in this push."

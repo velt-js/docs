@@ -1,0 +1,311 @@
+---
+title: "SuperDoc Setup"
+---
+
+![](/gifs/Add-Text-Comments.gif)
+
+The SuperDoc integration renders Velt comment highlights as view-only overlay elements positioned over the commented text. It does not write Velt comment marks into your DOCX content. Comment anchors are stored as a durable text and occurrence pair, then resolved against the live SuperDoc document whenever comments render.
+
+## Setup
+
+#### Step 1: Add Comment components
+
+- Add the `Velt Comments` component to the root of your app.
+- This component is required to render comments in your app.
+- Set the `textMode` prop to `false` to hide the default text comment tool.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { VeltComments, VeltProvider } from '@veltdev/react';
+
+    <VeltProvider apiKey="API_KEY">
+      <VeltComments textMode={false} />
+    </VeltProvider>
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 2: Install the Velt SuperDoc extension
+
+```bash
+npm i @veltdev/superdoc-velt-comments @harbour-enterprises/superdoc
+```
+
+SuperDoc is browser-only because it touches `window` and the DOM. Import its stylesheet globally, then dynamically import the SuperDoc SDK and Velt extension inside a client-side effect.
+
+```tsx
+import '@harbour-enterprises/superdoc/style.css';
+```
+
+#### Step 3: Configure the SuperDoc editor with the Velt Comments extension
+
+Create the SuperDoc editor, disable SuperDoc's built-in comments, then attach `SuperDocVeltComments` from the editor's `onReady` callback.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect, useRef, useState } from 'react';
+    import { useCommentAnnotations } from '@veltdev/react';
+    import type {
+      AttachedExtension,
+      SuperDocInstance,
+    } from '@veltdev/superdoc-velt-comments';
+
+    const EDITOR_ID = 'my-doc';
+
+    function SuperDocEditor() {
+      const hostRef = useRef<HTMLDivElement | null>(null);
+      const superdocRef = useRef<SuperDocInstance | null>(null);
+      const extensionRef = useRef<AttachedExtension | null>(null);
+      const [instance, setInstance] = useState<SuperDocInstance | null>(null);
+      const annotations = useCommentAnnotations();
+
+      useEffect(() => {
+        if (!hostRef.current || superdocRef.current) return;
+
+        let cancelled = false;
+        const host = hostRef.current;
+
+        Promise.all([
+          import('@harbour-enterprises/superdoc'),
+          import('@veltdev/superdoc-velt-comments'),
+        ]).then(([{ SuperDoc }, wrapper]) => {
+          if (cancelled) return;
+
+          superdocRef.current = new SuperDoc({
+            selector: host,
+            toolbar: '#superdoc-toolbar',
+            document: '/sample.docx',
+            documentMode: 'editing',
+            modules: { comments: false },
+            onReady: () => {
+              if (cancelled || !superdocRef.current) return;
+
+              extensionRef.current = wrapper.SuperDocVeltComments
+                .configure({ editorId: EDITOR_ID })
+                .attach(superdocRef.current);
+              setInstance(superdocRef.current);
+            },
+          });
+        });
+
+        return () => {
+          cancelled = true;
+          extensionRef.current?.detach();
+          extensionRef.current = null;
+          superdocRef.current?.destroy();
+          superdocRef.current = null;
+          setInstance(null);
+        };
+      }, []);
+
+      useEffect(() => {
+        if (!instance) return;
+
+        import('@veltdev/superdoc-velt-comments').then(({ renderComments }) => {
+          renderComments({
+            instance,
+            commentAnnotations: annotations ?? [],
+          });
+        });
+      }, [instance, annotations]);
+
+      return (
+        <>
+          <div id="superdoc-toolbar" />
+          <div ref={hostRef} style={{ width: '100%', height: '100vh' }} />
+        </>
+      );
+    }
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 4: Add a comment button to your SuperDoc editor
+
+Add a button users can click after selecting text in the SuperDoc editor. Use `onMouseDown` with `preventDefault()` so clicking the button does not clear the current editor selection before `addComment` reads it. Keep the actual `addComment` call in `onClick`.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    const handleAddComment = async () => {
+      if (!instance) return;
+
+      const { addComment } = await import('@veltdev/superdoc-velt-comments');
+      const result = await addComment({ instance });
+
+      if (!result) {
+        console.warn('Select text in the document before adding a comment.');
+      }
+    };
+
+    <button
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={handleAddComment}
+    >
+      Add Comment
+    </button>
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 5: Call `addComment` to add a comment
+
+- Call this method to add a comment to selected text in the SuperDoc editor.
+- Params: [`AddCommentArgs`](/api-reference/sdk/models/data-models#addcommentargs-1). It has the following properties:
+  - `instance`: SuperDoc editor instance returned by `new SuperDoc(...)`.
+- Returns: [`Promise<AddCommentResult | null>`](/api-reference/sdk/models/data-models#addcommentresult-1). It returns `null` if no text is selected or Velt is not loaded.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from '@veltdev/superdoc-velt-comments';
+
+    const result = await addComment({ instance });
+    ```
+  </Tab>
+</Tabs>
+
+To scope comments to a specific editor on pages with multiple SuperDoc instances, pass an editor id when attaching the extension:
+
+```tsx
+SuperDocVeltComments.configure({ editorId: 'EDITOR_ID' }).attach(superdoc);
+```
+
+#### Step 6: Render comments in the SuperDoc editor
+
+- Get the comment data from Velt SDK and render it in the SuperDoc editor.
+- Params: [`RenderCommentsArgs`](/api-reference/sdk/models/data-models#rendercommentsargs-1). It has the following properties:
+  - `instance`: SuperDoc editor instance.
+  - `commentAnnotations`: Array of Comment Annotation objects.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect } from 'react';
+    import { useCommentAnnotations } from '@veltdev/react';
+    import { renderComments } from '@veltdev/superdoc-velt-comments';
+
+    const commentAnnotations = useCommentAnnotations();
+
+    useEffect(() => {
+      if (!instance) return;
+
+      renderComments({
+        instance,
+        commentAnnotations: commentAnnotations ?? [],
+      });
+    }, [instance, commentAnnotations]);
+    ```
+  </Tab>
+</Tabs>
+
+Highlights are view-only. The library re-derives each highlight from its [`TextEditorConfig`](/api-reference/sdk/models/data-models#texteditorconfig-5) anchor and remaps live ranges as the document changes. You do not need to call `renderComments` on every edit, scroll, zoom, or resize. Re-run it when Velt's annotation list changes.
+
+#### Step 7: Clean up the SuperDoc extension
+
+`SuperDocVeltComments.configure(...).attach(instance)` returns an [`AttachedExtension`](/api-reference/sdk/models/data-models#attachedextension-1). Call `detach()` in your effect cleanup to remove listeners, clear per-instance state, and remove overlay elements before destroying the editor.
+
+```tsx
+return () => {
+  extensionRef.current?.detach();
+  extensionRef.current = null;
+  superdocRef.current?.destroy();
+};
+```
+
+#### Step 8: Style the commented text
+
+- You can style commented text by adding CSS for the `velt-comment-text` element.
+- SuperDoc highlights are light-DOM overlay elements inside `div.velt-superdoc-overlay-root`, so a global stylesheet can reach them.
+- The default highlight rules use inline `!important` styles, so overrides should use `!important`.
+
+```css
+velt-comment-text {
+  background-color: rgba(255, 212, 0, 0.4) !important;
+  border-bottom: 2px solid #ffd400 !important;
+  cursor: pointer;
+}
+
+velt-comment-text:hover {
+  background-color: rgba(255, 212, 0, 0.6) !important;
+}
+
+velt-comment-text[comment-selected="true"],
+velt-comment-text.velt-comment-selected {
+  background-color: rgba(255, 212, 0, 0.7) !important;
+}
+```
+
+## Complete Example
+
+<Frame>
+  <iframe
+    src="https://sample-apps-superdoc-comments-demo.vercel.app/"
+    className="w-full"
+    height="500px"
+  ></iframe>
+</Frame>
+
+## APIs
+
+#### [SuperDocVeltComments](/api-reference/sdk/api/api-methods#superdocveltcomments)
+
+Creates the Velt Comments extension for a SuperDoc editor. Use `SuperDocVeltComments.configure(...).attach(instance)` to attach it to an editor instance.
+
+- Config: [`SuperDocVeltCommentsConfig`](/api-reference/sdk/models/data-models#superdocveltcommentsconfig)
+- Returns: `SuperDocVeltComments`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { SuperDocVeltComments } from '@veltdev/superdoc-velt-comments';
+
+    const attached = SuperDocVeltComments
+      .configure({ editorId: 'my-doc' })
+      .attach(superdoc);
+
+    attached.detach();
+    ```
+  </Tab>
+</Tabs>
+
+#### [addComment()](/api-reference/sdk/api/api-methods#addcomment-12)
+
+Creates a comment annotation for the currently selected text in the SuperDoc editor.
+
+- Signature: `async (args: AddCommentArgs) => Promise<AddCommentResult | null>`
+- Params: `args:` [`AddCommentArgs`](/api-reference/sdk/models/data-models#addcommentargs-1)
+- Returns: `Promise<AddCommentResult | null>`; see [`AddCommentResult`](/api-reference/sdk/models/data-models#addcommentresult-1).
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from '@veltdev/superdoc-velt-comments';
+
+    const result = await addComment({ instance });
+    ```
+  </Tab>
+</Tabs>
+
+#### [renderComments()](/api-reference/sdk/api/api-methods#rendercomments-12)
+
+Renders and updates Velt comment highlights in the SuperDoc editor.
+
+- Signature: `(args:` [`RenderCommentsArgs`](/api-reference/sdk/models/data-models#rendercommentsargs-1)`) => void`
+- Params: `args:` [`RenderCommentsArgs`](/api-reference/sdk/models/data-models#rendercommentsargs-1)
+- Returns: `void`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { renderComments } from '@veltdev/superdoc-velt-comments';
+
+    renderComments({
+      instance,
+      commentAnnotations: annotations ?? [],
+    });
+    ```
+  </Tab>
+</Tabs>

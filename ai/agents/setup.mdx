@@ -1,0 +1,199 @@
+---
+title: "Setup"
+description: "Build a review agent end to end: create, run, poll, and inspect findings."
+---
+
+This guide walks through the steps to get a review agent running and surfacing findings as comment annotations. Each step links to the full API reference for request and response details.
+
+## Step 1: (Optional) Refine your prompt
+
+If you have a one-line QA instruction and you're not sure it's specific enough to ship, run it through the prompt tools first.
+
+**Check completeness:** [Enhance Prompt](/api-reference/rest-apis/v2/agents/prompt/enhance) returns either "your prompt is sufficient" or a specific clarification request (with suggested options for the user to pick from).
+
+**Expand into a structured task:** [Validate Prompt](/api-reference/rest-apis/v2/agents/prompt/validate) takes a simple instruction and expands it into a comprehensive QA task with an analysis prompt, response descriptions, demo examples, and tool requirements.
+
+**Iterate on demo failures:** [Refine Prompt](/api-reference/rest-apis/v2/agents/prompt/refine) takes an existing analysis prompt and a list of demo failures (with feedback) and produces a refined prompt.
+
+**Resolve optimal config:** [Resolve Config](/api-reference/rest-apis/v2/agents/config/resolve) takes raw + processed instructions and recommends extraction strategies + execution strategy.
+
+These tools are optional. Skip straight to Step 2 if you already know what your agent should do.
+
+## Step 2: Create the agent
+
+Call [Create Agent](/api-reference/rest-apis/v2/agents/create) with a name, instructions, and a configuration block.
+
+The minimum viable agent is `name` + `instructions` + `contextGathering.strategies`:
+
+```JSON
+{
+  "data": {
+    "name": "Brand Color Checker",
+    "instructions": "Verify all CTAs use the primary brand color #1A73E8.",
+    "contextGathering": {
+      "strategies": ["web-page-text", "web-page-screenshot"]
+    }
+  }
+}
+```
+
+The engine creates the agent's main document and writes version 1 to its versions subcollection. The response returns `{ agentId }`.
+
+For a complete walkthrough of every config block (`execution`, `response`, `postProcess`, `input`, `scope`, `setup`, `metadata`), see the [Create Agent](/api-reference/rest-apis/v2/agents/create) reference.
+
+<Info>
+  Built-in agents (`spell-check`, `broken-links`, etc.) are pre-registered for every workspace. You don't need to create them; skip straight to Step 3 with one of the [built-in agent IDs](/ai/agents/overview#built-in-agents).
+</Info>
+
+<Warning>
+  `metadata` is free-form but the keys `type`, `category`, `internal`, and `apiKey` are **server-managed** and rejected if you send them. Use your own keys (e.g. `team`, `owner`).
+</Warning>
+
+## Step 3: Run an execution
+
+Call [Run Execution](/api-reference/rest-apis/v2/agents/execution/run) with `agentId` and `url`. Pass `organizationId` and `documentId` if you want findings to land as annotations on a specific document.
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456",
+    "url": "https://example.com/pricing",
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "deviceType": "desktop",
+    "ranBy": {
+      "userId": "user_123",
+      "name": "Jane Doe",
+      "email": "jane@example.com"
+    }
+  }
+}
+```
+
+The response returns immediately with `{ executionId }`. The engine creates an execution document, dispatches a Cloud Task, and starts processing asynchronously.
+
+- **Cross-page execution:** Set `crossPageExecute: true` and the engine crawls the seed URL and processes up to `maxUrlsToProcess` pages (default 50).
+- **Device emulation:** Set `deviceType: "mobile"` or `"desktop"` (default `"desktop"`) to control the viewport/user-agent used for context gathering and pin resolution.
+- **Workflow trigger:** Set `trigger: "workflow"` and pass `workflowExecutionId` when running an agent as part of an Approval Engine workflow node.
+
+## Step 4: Poll for results
+
+Call [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) with the `executionId` returned from Step 3. Poll until `execution.status !== "running"`.
+
+```JSON
+{
+  "data": {
+    "executionId": "exec_1711900000000_abc123def456"
+  }
+}
+```
+
+Terminal statuses:
+
+| Status    | Meaning                                                                      |
+| --------- | ---------------------------------------------------------------------------- |
+| `passed`  | Completed successfully: all URLs clean, no findings                          |
+| `failed`  | Completed with findings: all URLs processed cleanly                          |
+| `partial` | Some URLs succeeded and some failed (see `resultsSummary.erroredUrls`)         |
+| `error`   | Every URL failed, or a fatal error (see `execution.error.code` and `retryable`) |
+| `skipped` | Execution was skipped (precondition unmet)                                    |
+
+When the execution completes, `resultsSummary` contains aggregate counts:
+
+```JSON
+{
+  "totalFindings": 7,
+  "totalAnnotationsCreated": 5,
+  "urlsProcessed": 12,
+  "urlsWithFindings": 5,
+  "matchResult": {
+    "created": 5,
+    "skipped": 2,
+    "resolved": 1
+  }
+}
+```
+
+`matchResult` is populated when `postProcess.matchAndMerge.enabled` is true (the default). It tells you how many findings were new (`created`), already existed as annotations (`skipped`), or were resolved because the previous finding is no longer detected (`resolved`).
+
+## Step 5: Fetch per-URL findings
+
+Set `includeResults: true` on Get Execution to fetch the full findings array per URL:
+
+```JSON
+{
+  "data": {
+    "executionId": "exec_1711900000000_abc123def456",
+    "includeResults": true
+  }
+}
+```
+
+The response includes a `results` array alongside `execution`. Each entry has the URL, its findings, and per-URL counts:
+
+```JSON
+{
+  "results": [
+    {
+      "url": "https://example.com/pricing",
+      "urlHash": "a1b2c3d4e5f6",
+      "findings": [
+        {
+          "id": "finding-1",
+          "title": "CTA uses non-brand color",
+          "description": "The 'Buy now' button uses #FF5722 instead of #1A73E8",
+          "severity": "high",
+          "category": "color",
+          "targetText": "Buy now",
+          "suggestion": "Change background-color to #1A73E8",
+          "htmlSelector": "a.cta-primary",
+          "isPageLevel": false,
+          "issueType": "brand-color",
+          "confidence": 95
+        }
+      ],
+      "findingCount": 1,
+      "annotationsCreated": 1,
+      "processedAt": 1711900050000
+    }
+  ]
+}
+```
+
+Findings are also written to the document as comment annotations (when `postProcess.annotations.enabled` is true and `organizationId` + `documentId` were provided on dispatch). Authors of these annotations are flagged with the system agent user.
+
+## Listing and counting executions
+
+- **List executions** for an agent or document with pagination: [List Executions](/api-reference/rest-apis/v2/agents/execution/list).
+- **Count executions** (e.g. a live "N running" counter) with [Count Executions](/api-reference/rest-apis/v2/agents/execution/count).
+
+## Iterating on the agent
+
+Behavioral edits create a new version. Identity edits do not.
+
+- **Edit identity (`name`, `description`, `enabled`):** [Update Agent](/api-reference/rest-apis/v2/agents/update). No new version; the root doc is updated in place.
+- **Edit behavior (`instructions`, `contextGathering`, `execution`, `postProcess`, `input`, `scope`, `setup`):** [Update Agent Version](/api-reference/rest-apis/v2/agents/version/update). Creates version `N+1` and bumps the agent's `version` pointer. In-flight executions stay pinned to whatever version they started on.
+- **List versions:** [List Versions](/api-reference/rest-apis/v2/agents/versions/list). Each version contains the full behavioral snapshot.
+- **Roll back the most recent change:** [Restore Version](/api-reference/rest-apis/v2/agents/versions/restore). Single-step undo; call repeatedly to walk backward. Cannot go below version 1.
+
+## Organizing agents
+
+Use [Agent Groups](/api-reference/rest-apis/v2/agents/groups/create) to bundle related agents together (e.g. "Brand QA"). Agents stay independent documents; groups just store an `agentIds` array. An agent can belong to multiple groups; deleting an agent removes it from every group automatically.
+
+When listing agents with [Get Agent(s)](/api-reference/rest-apis/v2/agents/get), pass `groupId` to filter to a single group's members.
+
+## Track usage
+
+[Get Agent Analytics](/api-reference/rest-apis/v2/agents/analytics/get) returns per-agent, per-model, per-month token consumption plus execution counts. Filter by `agentId`, `year`, `month`, or `model`.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="code" href="/api-reference/rest-apis/v2/agents/create">
+    All endpoints organized into Agents, Execution, Versioning, Prompt Tools, Analytics, and Groups, with full request and response schemas.
+  </Card>
+
+  <Card title="Overview" icon="book-open" href="/ai/agents/overview">
+    What agents are, the pipeline phases, built-in vs custom agents, and the full enum vocabulary.
+  </Card>
+</CardGroup>

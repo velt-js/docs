@@ -1,0 +1,247 @@
+---
+title: "Get Agent(s)"
+api: "POST https://api.velt.dev/v2/agents/get"
+---
+
+Use this API to fetch a single agent or list agents in your workspace. The endpoint behaves differently based on the provided fields:
+
+- **`agentId` provided:** returns a single agent. For custom agents, the response merges identity + behavioral fields from the version subcollection. For built-in agents, only sanitized public fields are returned.
+- **`agentId` omitted:** returns a list of agents with identity-only fields. Optionally filter by `filter` (default vs custom) and/or `groupId` (members of an agent group).
+
+Built-in agents flagged `metadata.internal: true` (e.g. `crawler`, `screenshot`) are excluded from list responses but can still be fetched individually.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/get`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="agentId" type="string">
+      Min 1 char. Agent ID. When provided, returns a single agent. When omitted, returns a list.
+    </ParamField>
+
+    <ParamField body="filter" type="string">
+      `"defaultOnly"` (built-in only) or `"customOnly"` (user-created only). Ignored when `agentId` is provided.
+    </ParamField>
+
+    <ParamField body="groupId" type="string">
+      Min 1 char. Agent group id. When provided (and `agentId` omitted), returns only agents that are members of the group, ordered by the group's `agentIds` array. Compatible with `filter`. Unknown group ids return `NOT_FOUND`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## **Example Requests**
+
+#### 1. Get a single custom agent
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456"
+  }
+}
+```
+
+#### 2. Get a single built-in agent
+
+```JSON
+{
+  "data": {
+    "agentId": "spell-check"
+  }
+}
+```
+
+#### 3. List all agents (no filter)
+
+```JSON
+{
+  "data": {}
+}
+```
+
+#### 4. List only custom agents
+
+```JSON
+{
+  "data": {
+    "filter": "customOnly"
+  }
+}
+```
+
+#### 5. List agents in a group
+
+```JSON
+{
+  "data": {
+    "groupId": "grp_brand_qa"
+  }
+}
+```
+
+# Response
+
+#### Success Response (single custom agent)
+
+Custom agents return the full configuration including behavioral fields from the version subcollection:
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Agent fetched successfully",
+    "data": {
+      "agent": {
+        "id": "abc123def456",
+        "name": "Brand Consistency Checker",
+        "description": "Validates brand colors and typography",
+        "enabled": true,
+        "version": 3,
+        "managedBy": "customer",
+        "rawInstructions": "Check that all headings use the brand font 'Inter'...",
+        "instructions": "Check that all headings use the brand font 'Inter'...",
+        "contextGathering": {
+          "strategies": ["web-page-text", "web-page-screenshot"]
+        },
+        "execution": {
+          "executionStrategy": "ai",
+          "responseDescriptions": { "title": "Short name for the brand inconsistency" },
+          "knowledge": { "useMemory": true, "maxChunks": 10 }
+        },
+        "response": { "useAiFormatting": false },
+        "postProcess": {
+          "guardrails": { "enabled": true },
+          "matchAndMerge": { "enabled": true },
+          "annotations": { "enabled": true, "strategy": "findings" }
+        },
+        "input": {
+          "inputRequirements": { "requires": ["url"] },
+          "userContextFields": [
+            { "id": "brand_color", "title": "Primary brand color?", "type": "string", "required": true }
+          ]
+        },
+        "scope": {
+          "pageScope": ["https://example.com/*"],
+          "crossPage": { "enabled": true, "targetProperty": "brandConsistency", "pageDiscovery": "auto" }
+        },
+        "metadata": { "team": "growth", "owner": "jane", "apiKey": "ak_xxx" },
+        "executionCount": 5,
+        "lastExecutedAt": 1711900000000
+      }
+    }
+  }
+}
+```
+
+<Note>
+  Any auth secrets are returned as `"__redacted__"`; they are never sent back in plaintext. This applies to both `rest-api` strategy secrets stored in `contextGathering.strategyOptions` and `mcp-tools` server secrets stored in `execution.mcpServers[].auth`.
+</Note>
+
+#### Success Response (single built-in agent, sanitized)
+
+Built-in agents return only public fields. Internal implementation fields (`instructions`, `contextGathering`, `execution`, `postProcess`, `response`, `payloadSchema`, `supportedVariables`) are stripped.
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Agent fetched successfully",
+    "data": {
+      "agent": {
+        "id": "spell-check",
+        "name": "Spell Check",
+        "description": "Finds spelling mistakes and typos in page content using AI analysis",
+        "enabled": true,
+        "managedBy": "velt",
+        "metadata": { "type": "system", "category": "quality" },
+        "system": true,
+        "inputRequirements": { "requires": ["url"] },
+        "userContextFields": [],
+        "executionCount": 142,
+        "lastExecutedAt": 1711900000000
+      }
+    }
+  }
+}
+```
+
+#### Success Response (list)
+
+List rows are identity-only. Built-in agents include `system: true`; internal agents (`crawler`, `screenshot`) are omitted.
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Agents fetched successfully",
+    "data": {
+      "agents": [
+        {
+          "id": "spell-check",
+          "name": "Spell Check",
+          "description": "Finds spelling mistakes and typos",
+          "system": true,
+          "enabled": true,
+          "managedBy": "velt",
+          "metadata": { "type": "system", "category": "quality" },
+          "executionCount": 142,
+          "lastExecutedAt": 1711900000000
+        },
+        {
+          "id": "abc123def456",
+          "name": "Brand Consistency Checker",
+          "description": "Validates brand colors and typography",
+          "enabled": true,
+          "managedBy": "customer",
+          "version": 3,
+          "metadata": { "team": "growth", "owner": "jane" },
+          "executionCount": 5,
+          "lastExecutedAt": 1711900000000
+        }
+      ]
+    }
+  }
+}
+```
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "NOT_FOUND"
+  }
+}
+```
+
+**Errors:** `NOT_FOUND` (agent or group not found) / `INVALID_ARGUMENT` (invalid `filter` value).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Agents fetched successfully",
+    "data": {
+      "agents": []
+    }
+  }
+}
+```
+</ResponseExample>

@@ -260,6 +260,10 @@ Prefer configuring dropdowns through `minimalFilters` as shown above. If you nee
 </Tab>
 </Tabs>
 
+<Note>
+The `all`, `unread`, `read`, `open`, and `assignedToMe` presets hide terminal statuses, such as Resolved, by default. If you explicitly select a terminal status in a status field filter, that selection overrides the preset and the matching comments appear.
+</Note>
+
 #### filterOperator
 - Control how active selections across different filter sections combine.
 - Options: `and` or `or`
@@ -319,6 +323,7 @@ Default: `dropdown`
 
 #### filterCount
 - Show per-option facet counts. Disabling improves performance.
+- Counts use the same page-mode boundary and client/system filters as the visible comment list, so selecting an option cannot produce an empty result from a non-zero count.
 
 Default: `true`
 
@@ -487,22 +492,6 @@ const filtered = commentElement.applyCommentSidebarClientFilters(annotations, fi
 </Tab>
 </Tabs>
 
-#### sortData
-- Provide a custom-field sort path used when sorting by a custom field.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-<VeltCommentsSidebarV2 sortData="comments.createdAt" />
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<velt-comments-sidebar-v2 sort-data="comments.createdAt"></velt-comments-sidebar-v2>
-```
-</Tab>
-</Tabs>
-
 # Grouping
 
 #### groupConfig
@@ -527,54 +516,73 @@ const filtered = commentElement.applyCommentSidebarClientFilters(annotations, fi
 
 # Navigation
 
-#### onCommentClick
-- Listen for click events on comments in the sidebar to trigger actions like navigation.
-- The event callback provides access to the clicked comment's annotation object, which includes `location` and `context` data.
+#### commentClick
+- Subscribe to the `commentClick` event to listen for click events on comments in the sidebar list, to trigger actions like navigation.
+- Payload is [`CommentClickEvent`](/api-reference/sdk/models/data-models#commentclickevent), which exposes the clicked `annotation`, `documentId`, `location`, `targetElementId`, and `context`.
 
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
-<VeltCommentsSidebarV2 onCommentClick={onCommentClick} />
+import { useCommentEventCallback } from '@veltdev/react';
+import { useEffect } from 'react';
 
-const onCommentClick = (event) => {
-  const { pageId } = event.location;
-  yourNavigateToPageMethod(pageId);
-};
+const commentClick = useCommentEventCallback('commentClick');
+useEffect(() => {
+  if (commentClick) {
+    console.log(commentClick.annotation, commentClick.documentId, commentClick.targetElementId);
+    const pageId = commentClick.location?.pageId;
+    if (pageId) {
+      yourNavigateToPageMethod(pageId);
+    }
+  }
+}, [commentClick]);
 ```
 </Tab>
 <Tab title="Other Frameworks">
 ```js
-const onCommentClick = (event) => {
-  const { pageId } = event.detail.location;
-  yourNavigateToPageMethod(pageId);
-};
-
-const commentElement = document.querySelector('velt-comments-sidebar-v2');
-commentElement.addEventListener('onCommentClick', onCommentClick);
+const commentElement = Velt.getCommentElement();
+commentElement.on('commentClick').subscribe((event) => {
+  console.log(event?.annotation, event?.documentId, event?.targetElementId);
+  const pageId = event?.location?.pageId;
+  if (pageId) {
+    yourNavigateToPageMethod(pageId);
+  }
+});
 ```
 </Tab>
 </Tabs>
 
-#### onCommentNavigationButtonClick
-- Triggered when the navigation button in the comment dialog in the sidebar is clicked.
-- Use this event to implement custom navigation logic.
+#### commentNavigationButtonClick
+- Subscribe to the `commentNavigationButtonClick` event, triggered when the navigation ("go to") button on a sidebar comment is clicked.
+- Use this event to implement custom navigation logic. Payload is [`CommentNavigationButtonClickEvent`](/api-reference/sdk/models/data-models#commentnavigationbuttonclickevent), which exposes the same fields as [`CommentClickEvent`](/api-reference/sdk/models/data-models#commentclickevent) (`annotation`, `documentId`, `location`, `targetElementId`, `context`).
 
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
-<VeltCommentsSidebarV2 onCommentNavigationButtonClick={onCommentNavigationButtonClick} />
+import { useCommentEventCallback } from '@veltdev/react';
+import { useEffect } from 'react';
 
-const onCommentNavigationButtonClick = (event) => {
-  const { pageId } = event.location;
-  yourNavigateToPageMethod(pageId);
-};
+const commentNav = useCommentEventCallback('commentNavigationButtonClick');
+useEffect(() => {
+  if (commentNav) {
+    console.log(commentNav.annotation, commentNav.documentId, commentNav.targetElementId);
+    const pageId = commentNav.location?.pageId;
+    if (pageId) {
+      yourNavigateToPageMethod(pageId);
+    }
+  }
+}, [commentNav]);
 ```
 </Tab>
 <Tab title="Other Frameworks">
 ```js
-const commentSidebarElement = document.querySelector('velt-comments-sidebar-v2');
-commentSidebarElement.addEventListener('onCommentNavigationButtonClick', (event) => {
-  console.log('onCommentNavigationButtonClick', event.detail);
+const commentElement = Velt.getCommentElement();
+commentElement.on('commentNavigationButtonClick').subscribe((event) => {
+  console.log(event?.annotation, event?.documentId, event?.targetElementId);
+  const pageId = event?.location?.pageId;
+  if (pageId) {
+    yourNavigateToPageMethod(pageId);
+  }
 });
 ```
 </Tab>
@@ -605,10 +613,6 @@ commentElement.disableSidebarUrlNavigation();
 ```
 </Tab>
 </Tabs>
-
-<Note>
-`enableUrlNavigation` is a deprecated alias for `urlNavigation`. Prefer `urlNavigation`.
-</Note>
 
 #### queryParamsComments
 - Sync the selected comment to URL query params.
@@ -1133,36 +1137,56 @@ Defaults: `measuredSize` = `220`, `minBufferPx` = `1000`, `maxBufferPx` = `2000`
 
 # Events
 
-#### onSidebarOpen
-- Callback fired when the sidebar opens.
+#### sidebarOpen
+- Subscribe to the `sidebarOpen` event, fired when the sidebar opens. Payload is [`SidebarOpenEvent`](/api-reference/sdk/models/data-models#sidebaropenevent).
 
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
-<VeltCommentsSidebarV2 onSidebarOpen={(data) => console.log('opened', data)} />
+import { useCommentEventCallback } from '@veltdev/react';
+import { useEffect } from 'react';
+
+const sidebarOpen = useCommentEventCallback('sidebarOpen');
+useEffect(() => {
+  if (sidebarOpen) {
+    console.log('opened', sidebarOpen);
+  }
+}, [sidebarOpen]);
 ```
 </Tab>
 <Tab title="Other Frameworks">
 ```js
-const sidebar = document.querySelector('velt-comments-sidebar-v2');
-sidebar.addEventListener('onSidebarOpen', (e) => console.log('opened', e.detail));
+const commentElement = Velt.getCommentElement();
+commentElement.on('sidebarOpen').subscribe((event) => {
+  console.log('opened', event);
+});
 ```
 </Tab>
 </Tabs>
 
-#### onSidebarClose
-- Callback fired when the sidebar closes.
+#### sidebarClose
+- Subscribe to the `sidebarClose` event, fired when the sidebar closes. Payload is [`SidebarCloseEvent`](/api-reference/sdk/models/data-models#sidebarcloseevent).
 
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
-<VeltCommentsSidebarV2 onSidebarClose={(data) => console.log('closed', data)} />
+import { useCommentEventCallback } from '@veltdev/react';
+import { useEffect } from 'react';
+
+const sidebarClose = useCommentEventCallback('sidebarClose');
+useEffect(() => {
+  if (sidebarClose) {
+    console.log('closed', sidebarClose);
+  }
+}, [sidebarClose]);
 ```
 </Tab>
 <Tab title="Other Frameworks">
 ```js
-const sidebar = document.querySelector('velt-comments-sidebar-v2');
-sidebar.addEventListener('onSidebarClose', (e) => console.log('closed', e.detail));
+const commentElement = Velt.getCommentElement();
+commentElement.on('sidebarClose').subscribe((event) => {
+  console.log('closed', event);
+});
 ```
 </Tab>
 </Tabs>

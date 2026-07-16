@@ -15,7 +15,7 @@ There are three filter surfaces, each driven by its own input:
 #### filters
 - Define the Main Filter panel sections.
 - Pass an array of [`FilterField`](/api-reference/sdk/models/data-models#filterfield) to define sections. Built-in fields are referenced by `field` id; custom fields use `valuePath`.
-- When passed an object keyed by field (e.g. `{ status: ['open'] }`) instead of `FilterField[]`, it is treated as a set of active filter selections and applied directly.
+- When passed a [`CommentSidebarFilters`](/api-reference/sdk/models/data-models#commentsidebarfilters) object (e.g. `{ status: ['OPEN'] }`) instead of `FilterField[]`, it is treated as active filter selections. Included keys replace their current selections, omitted keys are preserved, and **Reset** clears all selections. A present-but-empty array clears just that field; an empty object `{}` clears all selections.
 
 Default: `[]`
 
@@ -46,12 +46,17 @@ const filters = [
 </Tab>
 </Tabs>
 
-**Active-selections object form** — pass an object keyed by field instead of a `FilterField[]` to apply active filter selections directly:
+**Active-selections object form** — pass a [`CommentSidebarFilters`](/api-reference/sdk/models/data-models#commentsidebarfilters) object instead of a `FilterField[]` to apply active filter selections. The values render as checked options in the filter panel and are cleared by **Reset**:
 
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
-<VeltCommentsSidebarV2 filters={{ status: ['open'], people: ['1.1', '2.3'] }} />
+<VeltCommentsSidebarV2
+  filters={{
+    status: ['OPEN'],
+    people: [{ userId: '1.1' }, { userId: '2.3' }],
+  }}
+/>
 ```
 </Tab>
 <Tab title="Other Frameworks">
@@ -59,11 +64,97 @@ const filters = [
 <velt-comments-sidebar-v2></velt-comments-sidebar-v2>
 <script>
   const sidebar = document.querySelector('velt-comments-sidebar-v2');
-  sidebar.filters = { status: ['open'], people: ['1.1', '2.3'] };
+  sidebar.filters = {
+    status: ['OPEN'],
+    people: [{ userId: '1.1' }, { userId: '2.3' }],
+  };
 </script>
 ```
 </Tab>
 </Tabs>
+
+#### default status selection
+
+On first load, the Status field starts with **Open** and every **In Progress** status selected, so the sidebar shows active comments by default. These selections appear as checked options in the Main Filter panel, and users can clear them like any other filter.
+
+The sidebar skips this default selection when:
+
+- Filter state was restored from `sessionStorage`.
+- You supplied a status selection through [`setCommentSidebarFilters()`](#setcommentsidebarfilters).
+- The user has already changed the Status selection.
+
+<Note>
+If the status catalog loads after the sidebar renders and the user hasn't touched the Status field, the default selection refreshes to match the catalog's current Open and In Progress statuses.
+</Note>
+
+To show resolved and terminal comments, select **All**, clear the Status field, or use **Reset**. Clearing other fields doesn't affect resolved-comment visibility, and Reset doesn't re-apply the default statuses.
+
+#### priority "Not set" option
+
+The default Priority field includes a **Not set** option for comments without a priority. A custom [`FilterField`](/api-reference/sdk/models/data-models#filterfield) with `includeUnset: false` omits this option.
+
+#### setCommentSidebarFilters
+
+Use `setCommentSidebarFilters()` to apply client-provided values as selected options in the sidebar. Each call replaces selections for keys it includes and preserves omitted keys:
+
+- Pass an empty array to clear one field.
+- Pass an empty object (`{}`) to clear every selected field.
+- Use **Reset** in the Main Filter panel to clear client-provided selections.
+
+Facet counts remain absolute within the page-scoped annotation set instead of shrinking around the client-provided selections. The Main Filter badge includes these selections. A non-empty selection also filters when its field is not displayed in the panel; empty undeclared fields are ignored, and declared fields are not duplicated.
+
+Values are normalized as follows:
+
+- `location`: by `id`, falling back to `locationName`
+- `people`, `assigned`, `tagged`, and `involved`: by `userId`, falling back to `email`
+- `status`, `priority`, and `category`: by the provided values without normalization
+- `accessModes`: by comment visibility (`'public'` or `'private'`)
+- `version`: by `id`
+- Custom fields: string values or objects containing `id` and `name`
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+import { useVeltClient } from '@veltdev/react';
+
+const { client } = useVeltClient();
+const commentElement = client.getCommentElement();
+
+commentElement.setCommentSidebarFilters({
+  status: ['OPEN'],
+  involved: [{ userId: 'user-123' }],
+  location: [{ locationName: 'Home' }],
+});
+
+commentElement.setCommentSidebarFilters({ location: [] }); // Clear one field
+commentElement.setCommentSidebarFilters({}); // Clear all fields
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+
+commentElement.setCommentSidebarFilters({
+  status: ['OPEN'],
+  involved: [{ userId: 'user-123' }],
+  location: [{ locationName: 'Home' }],
+});
+
+commentElement.setCommentSidebarFilters({ location: [] }); // Clear one field
+commentElement.setCommentSidebarFilters({}); // Clear all fields
+```
+</Tab>
+</Tabs>
+
+#### location identity
+
+The sidebar identifies a location by its `id`, falling back to `locationName` when the id is `null`, `undefined`, or an empty string. An id of `0` remains valid, numeric annotation ids compare with equivalent string filter values, and `id` takes precedence when both fields are present.
+
+This identity is used consistently by grouping, location filter options and matching, page mode, and client filters. Comments without any location context appear in the **Others** group.
+
+#### people filter identity
+
+People, Involved, Assigned, and Tagged options are keyed by `userId` and use the person's name as the label, with an email fallback. Records containing only an email do not create filter options, preventing duplicate options when another record for the same person contains a `userId`.
 
 #### miniFilters
 - Render a single header funnel dropdown with one section per field.
@@ -260,9 +351,14 @@ Prefer configuring dropdowns through `minimalFilters` as shown above. If you nee
 </Tab>
 </Tabs>
 
+<Note>
+The `all`, `unread`, `read`, `open`, and `assignedToMe` presets hide terminal statuses, such as Resolved, by default. If you explicitly select a terminal status in a status field filter, that selection overrides the preset and the matching comments appear.
+</Note>
+
 #### filterOperator
 - Control how active selections across different filter sections combine.
 - Options: `and` or `or`
+- This directly configures the Comment Sidebar V2 filter engine. The shared `systemFiltersOperator` input and API update the same effective operator.
 
 Default: `and`
 
@@ -318,7 +414,7 @@ Default: `dropdown`
 </Tabs>
 
 #### filterCount
-- Show per-option facet counts. Disabling improves performance.
+- Show per-option facet counts. Counts remain absolute within the current page-scoped annotation set and do not shrink around selections supplied through `setCommentSidebarFilters()`. Disabling improves performance.
 
 Default: `true`
 
@@ -336,7 +432,9 @@ Default: `true`
 </Tabs>
 
 #### systemFiltersOperator
-- Specify whether system filters are combined with an `and` or `or` operator.
+- Specify whether different filter fields are combined with an `and` or `or` operator in the sidebar filter engine. Values within a single field always match with OR.
+- Applies to client filters set via [`setCommentSidebarFilters()`](#setcommentsidebarfilters) as well, including a value set before the sidebar initializes and changes made at runtime.
+- An explicit `filterOperator` set during initialization is preserved instead of being overwritten by the shared operator's initial default value.
 
 Default: `and`
 
@@ -355,6 +453,10 @@ commentElement.setSystemFiltersOperator('or');
 <Tab title="Other Frameworks">
 ```html
 <velt-comments-sidebar-v2 system-filters-operator="or"></velt-comments-sidebar-v2>
+```
+```js
+const commentElement = Velt.getCommentElement();
+commentElement.setSystemFiltersOperator('or');
 ```
 </Tab>
 </Tabs>
@@ -487,26 +589,14 @@ const filtered = commentElement.applyCommentSidebarClientFilters(annotations, fi
 </Tab>
 </Tabs>
 
-#### sortData
-- Provide a custom-field sort path used when sorting by a custom field.
-
-<Tabs>
-<Tab title="React / Next.js">
-```jsx
-<VeltCommentsSidebarV2 sortData="comments.createdAt" />
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<velt-comments-sidebar-v2 sort-data="comments.createdAt"></velt-comments-sidebar-v2>
-```
-</Tab>
-</Tabs>
-
 # Grouping
 
 #### groupConfig
 - Configure grouping in the sidebar. Grouping defaults to by-location when enabled.
+- For location grouping, the current and additional-location groups start expanded while other location groups start collapsed. For document grouping, the current document starts expanded while other documents start collapsed.
+- Status, priority, and custom-field groups start expanded.
+- Explicit user expansion takes precedence over explicit collapse, which takes precedence over the grouping default. Both overrides persist in `sessionStorage`.
+- A real location change resets the overrides so the new current group expands. The initial location emitted during a reload preserves restored overrides.
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -527,54 +617,73 @@ const filtered = commentElement.applyCommentSidebarClientFilters(annotations, fi
 
 # Navigation
 
-#### onCommentClick
-- Listen for click events on comments in the sidebar to trigger actions like navigation.
-- The event callback provides access to the clicked comment's annotation object, which includes `location` and `context` data.
+#### commentClick
+- Subscribe to the `commentClick` event to listen for click events on comments in the sidebar list, to trigger actions like navigation.
+- Payload is [`CommentClickEvent`](/api-reference/sdk/models/data-models#commentclickevent), which exposes the clicked `annotation`, `documentId`, `location`, `targetElementId`, and `context`.
 
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
-<VeltCommentsSidebarV2 onCommentClick={onCommentClick} />
+import { useCommentEventCallback } from '@veltdev/react';
+import { useEffect } from 'react';
 
-const onCommentClick = (event) => {
-  const { pageId } = event.location;
-  yourNavigateToPageMethod(pageId);
-};
+const commentClick = useCommentEventCallback('commentClick');
+useEffect(() => {
+  if (commentClick) {
+    console.log(commentClick.annotation, commentClick.documentId, commentClick.targetElementId);
+    const pageId = commentClick.location?.pageId;
+    if (pageId) {
+      yourNavigateToPageMethod(pageId);
+    }
+  }
+}, [commentClick]);
 ```
 </Tab>
 <Tab title="Other Frameworks">
 ```js
-const onCommentClick = (event) => {
-  const { pageId } = event.detail.location;
-  yourNavigateToPageMethod(pageId);
-};
-
-const commentElement = document.querySelector('velt-comments-sidebar-v2');
-commentElement.addEventListener('onCommentClick', onCommentClick);
+const commentElement = Velt.getCommentElement();
+commentElement.on('commentClick').subscribe((event) => {
+  console.log(event?.annotation, event?.documentId, event?.targetElementId);
+  const pageId = event?.location?.pageId;
+  if (pageId) {
+    yourNavigateToPageMethod(pageId);
+  }
+});
 ```
 </Tab>
 </Tabs>
 
-#### onCommentNavigationButtonClick
-- Triggered when the navigation button in the comment dialog in the sidebar is clicked.
-- Use this event to implement custom navigation logic.
+#### commentNavigationButtonClick
+- Subscribe to the `commentNavigationButtonClick` event, triggered when the navigation ("go to") button on a sidebar comment is clicked.
+- Use this event to implement custom navigation logic. Payload is [`CommentNavigationButtonClickEvent`](/api-reference/sdk/models/data-models#commentnavigationbuttonclickevent), which exposes the same fields as [`CommentClickEvent`](/api-reference/sdk/models/data-models#commentclickevent) (`annotation`, `documentId`, `location`, `targetElementId`, `context`).
 
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
-<VeltCommentsSidebarV2 onCommentNavigationButtonClick={onCommentNavigationButtonClick} />
+import { useCommentEventCallback } from '@veltdev/react';
+import { useEffect } from 'react';
 
-const onCommentNavigationButtonClick = (event) => {
-  const { pageId } = event.location;
-  yourNavigateToPageMethod(pageId);
-};
+const commentNav = useCommentEventCallback('commentNavigationButtonClick');
+useEffect(() => {
+  if (commentNav) {
+    console.log(commentNav.annotation, commentNav.documentId, commentNav.targetElementId);
+    const pageId = commentNav.location?.pageId;
+    if (pageId) {
+      yourNavigateToPageMethod(pageId);
+    }
+  }
+}, [commentNav]);
 ```
 </Tab>
 <Tab title="Other Frameworks">
 ```js
-const commentSidebarElement = document.querySelector('velt-comments-sidebar-v2');
-commentSidebarElement.addEventListener('onCommentNavigationButtonClick', (event) => {
-  console.log('onCommentNavigationButtonClick', event.detail);
+const commentElement = Velt.getCommentElement();
+commentElement.on('commentNavigationButtonClick').subscribe((event) => {
+  console.log(event?.annotation, event?.documentId, event?.targetElementId);
+  const pageId = event?.location?.pageId;
+  if (pageId) {
+    yourNavigateToPageMethod(pageId);
+  }
 });
 ```
 </Tab>
@@ -606,10 +715,6 @@ commentElement.disableSidebarUrlNavigation();
 </Tab>
 </Tabs>
 
-<Note>
-`enableUrlNavigation` is a deprecated alias for `urlNavigation`. Prefer `urlNavigation`.
-</Note>
-
 #### queryParamsComments
 - Sync the selected comment to URL query params.
 
@@ -632,6 +737,7 @@ Default: `false`
 
 #### pageMode
 - Adds a composer in the sidebar where users can add comments without attaching them to any specific element.
+- The list is scoped using the current [location identity](#location-identity), so a location with only `locationName` behaves the same as an id-based location.
 
 Default: `false`
 
@@ -862,7 +968,7 @@ This does not affect embed mode sidebar.
 
 #### fullScreen
 - Add a fullscreen toggle button to the header. In fullscreen mode the sidebar expands to fill the viewport.
-- Observe state changes with the `onFullscreenClick` event.
+- Observe state changes with the component-level `onFullscreenClick` output or the [`fullscreenClick`](#fullscreenclick) event API.
 
 Default: `false`
 
@@ -926,7 +1032,7 @@ Default: `false`
 </Tabs>
 
 #### currentLocationSuffix
-- Adds a "(this page)" suffix to the group name when the current location matches the group's location.
+- Adds a "(This page)" suffix to the group name when the current location matches the group's location.
 
 Default: `false`
 
@@ -1073,7 +1179,9 @@ Default: `Search comments`
 #### sidebarButtonCountType
 - Change what the sidebar button count reflects.
   - `default`: total count of comments in open and in-progress states.
-  - `filter`: count of filtered comments.
+  - `filter`: count of the sidebar's filtered comments, including `0` for an empty result. The count updates when comments are deleted.
+- When [`filterCommentsOnDom`](/async-collaboration/comments/customize-behavior#filtercommentsondom) is enabled, the same filtered list controls which pins appear on the page.
+- The current filtered result is preserved while the sidebar is loading. It is cleared when the sidebar is destroyed so a removed sidebar no longer gates the badge or on-page pins.
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -1090,6 +1198,10 @@ commentElement.setSidebarButtonCountType('filter');
 <Tab title="Other Frameworks">
 ```html
 <velt-comments-sidebar-v2 sidebar-button-count-type="filter"></velt-comments-sidebar-v2>
+```
+```js
+const commentElement = Velt.getCommentElement();
+commentElement.setSidebarButtonCountType('filter');
 ```
 </Tab>
 </Tabs>
@@ -1115,6 +1227,7 @@ commentSidebarElement?.setAttribute('context', JSON.stringify({ jobId: 'job-page
 
 #### Virtual scrolling
 - The V2 list uses virtual scrolling. Tune it with `measuredSize` (estimated row size in px), `minBufferPx`, and `maxBufferPx`.
+- Rows wider than the viewport are clipped to the sidebar width instead of creating a horizontal scrollbar.
 
 Defaults: `measuredSize` = `220`, `minBufferPx` = `1000`, `maxBufferPx` = `2000`
 
@@ -1133,36 +1246,81 @@ Defaults: `measuredSize` = `220`, `minBufferPx` = `1000`, `maxBufferPx` = `2000`
 
 # Events
 
-#### onSidebarOpen
-- Callback fired when the sidebar opens.
+#### sidebarOpen
+- Subscribe to the `sidebarOpen` event, fired when the sidebar opens. Payload is [`SidebarOpenEvent`](/api-reference/sdk/models/data-models#sidebaropenevent).
 
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
-<VeltCommentsSidebarV2 onSidebarOpen={(data) => console.log('opened', data)} />
+import { useCommentEventCallback } from '@veltdev/react';
+import { useEffect } from 'react';
+
+const sidebarOpen = useCommentEventCallback('sidebarOpen');
+useEffect(() => {
+  if (sidebarOpen) {
+    console.log('opened', sidebarOpen);
+  }
+}, [sidebarOpen]);
 ```
 </Tab>
 <Tab title="Other Frameworks">
 ```js
-const sidebar = document.querySelector('velt-comments-sidebar-v2');
-sidebar.addEventListener('onSidebarOpen', (e) => console.log('opened', e.detail));
+const commentElement = Velt.getCommentElement();
+commentElement.on('sidebarOpen').subscribe((event) => {
+  console.log('opened', event);
+});
 ```
 </Tab>
 </Tabs>
 
-#### onSidebarClose
-- Callback fired when the sidebar closes.
+#### sidebarClose
+- Subscribe to the `sidebarClose` event, fired when the sidebar closes. Payload is [`SidebarCloseEvent`](/api-reference/sdk/models/data-models#sidebarcloseevent).
 
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
-<VeltCommentsSidebarV2 onSidebarClose={(data) => console.log('closed', data)} />
+import { useCommentEventCallback } from '@veltdev/react';
+import { useEffect } from 'react';
+
+const sidebarClose = useCommentEventCallback('sidebarClose');
+useEffect(() => {
+  if (sidebarClose) {
+    console.log('closed', sidebarClose);
+  }
+}, [sidebarClose]);
 ```
 </Tab>
 <Tab title="Other Frameworks">
 ```js
-const sidebar = document.querySelector('velt-comments-sidebar-v2');
-sidebar.addEventListener('onSidebarClose', (e) => console.log('closed', e.detail));
+const commentElement = Velt.getCommentElement();
+commentElement.on('sidebarClose').subscribe((event) => {
+  console.log('closed', event);
+});
+```
+</Tab>
+</Tabs>
+
+#### fullscreenClick
+- Emitted when the fullscreen toggle in the sidebar header is clicked. Provides a [`FullscreenClickEvent`](/api-reference/sdk/models/data-models#fullscreenclickevent) whose `fullScreen` is the new state after the toggle.
+- Use this event to react to fullscreen toggles through the standard event API, without wiring up the component-level `onFullscreenClick` output.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const fullscreenEvent = useCommentEventCallback('fullscreenClick');
+useEffect(() => {
+  if (fullscreenEvent) {
+    console.log(fullscreenEvent.fullScreen); // true = now fullscreen
+  }
+}, [fullscreenEvent]);
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+commentElement.on('fullscreenClick').subscribe((event) => {
+  console.log(event.fullScreen); // true = now fullscreen
+});
 ```
 </Tab>
 </Tabs>
@@ -1192,5 +1350,5 @@ commentElement.toggleCommentSidebar();
 </Tabs>
 
 <Note>
-For V2 wireframe and primitive customization, see [Comment Sidebar V2 Structure](/ui-customization/features/async/comments/comment-sidebar-structure-v2) and [Comment Sidebar V2 Primitives](/ui-customization/features/async/comments/comment-sidebar/comment-sidebar-v2-primitives). The sidebar is shadow-DOM isolated by default.
+For V2 customization, see [Comment Sidebar V2 Wireframes](/ui-customization/features/async/comments/comment-sidebar/comment-sidebar-v2-wireframes) and [Comment Sidebar V2 Primitives](/ui-customization/features/async/comments/comment-sidebar/comment-sidebar-v2-primitives). The sidebar is shadow-DOM isolated by default.
 </Note>

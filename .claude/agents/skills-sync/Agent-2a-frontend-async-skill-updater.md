@@ -57,6 +57,10 @@ These rules apply on top of the base process for skills in this variant:
 - **Code fence languages.** Use `jsx` for React component examples, `html` for HTML web-component usage, `typescript` for types and SDK method signatures.
 - **Recorder modes** are a trichotomy (audio / video / screen). When editing a recorder rule, preserve this distinction in examples — don't collapse modes.
 - **Notification preferences and delivery channels are paired.** Notification preference rules in `rules/shared/permissions/` (or similar) usually have a matching delivery-channel rule (in-app / email / webhook). Touching one preference rule typically requires considering the matching delivery rule. If you only update one and not the other, explain why in your `outputs/changes.json` rationale.
+- **Removed identifiers are removal work, not additive work.** If the ticket marks a component, prop, or setup option as removed, remove or negate stale recommendations in the affected rule. Do not leave removed APIs in `**Correct:**` examples. In particular, `VeltCommentsSidebar version="2"` must not remain recommended when docs require `VeltCommentsSidebarV2` / `<velt-comments-sidebar-v2>`.
+- **Apryse WebViewer is a comments setup surface.** Apryse / WebViewer comments changes belong in a comments setup or editor-integration rule. Preserve the exact docs identifiers (`ApryseVeltComments`, `AddCommentArgs`, `RenderCommentsArgs`, `AttachedExtension`, `TextEditorConfig`) when the docs expose them.
+- **Comment-dialog primitive names must match public vs wireframe docs.** Public primitive subproperties are `VeltCommentDialogMoreReply.Count` and `VeltCommentDialogMoreReply.Text`. Only wireframe rules may reference `VeltCommentDialogWireframe.MoreReply.Count` or `.Text`.
+- **Collapsed replies preview has both behavior and UI coverage.** When `collapsedRepliesPreview` changes, update the behavior/API rule and any matching primitive/wireframe rule that exposes the preview affordance. If you update only one surface, explain why in `outputs/changes.json`.
 
 ## Output
 

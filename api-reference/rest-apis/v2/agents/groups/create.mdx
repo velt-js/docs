@@ -1,0 +1,151 @@
+---
+title: "Create Agent Group"
+api: "POST https://api.velt.dev/v2/agents/groups/create"
+---
+
+Use this API to create an agent group. Groups let you bundle custom and/or built-in agents together and filter execution/list responses by group. Agents remain independent documents; a group only stores an `agentIds` array that references them, and an agent can belong to multiple groups.
+
+<Note>
+  Groups are stored at the Firestore path `apiKey/{apiKey}/agentGroup/{groupId}`. A workspace may have at most **50 groups** (`MAX_GROUPS_PER_API_KEY`), and each group may contain at most **100 agents** (`MAX_AGENTS_PER_GROUP`).
+</Note>
+
+<Warning>
+  `metadata` is **immutable after creation**. There is no way to modify it later; the update endpoint only changes `name`/`description`. If you need document or organization context on a group, embed it inside the `metadata` object you send here. The workspace `apiKey` is always merged into `metadata.apiKey` server-side.
+</Warning>
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/groups/create`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="name" type="string" required>
+      Human-readable group name. Trimmed, min 1 char, max 200 chars.
+    </ParamField>
+
+    <ParamField body="description" type="string">
+      Optional description. Trimmed, max 2000 chars.
+    </ParamField>
+
+    <ParamField body="agentIds" type="string[]">
+      Initial members. Each id must be min 1 char. Deduped server-side and capped at 100. Unknown custom-agent ids return `NOT_FOUND`; built-in agent ids (e.g. `spell-check`) are accepted without a lookup.
+    </ParamField>
+
+    <ParamField body="metadata" type="object">
+      Free-form key/value metadata. Persisted verbatim with the workspace `apiKey` merged in as `metadata.apiKey`. Immutable after creation.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+Unknown top-level fields are rejected (`.strict()`).
+
+## **Example Requests**
+
+```JSON
+{
+  "data": {
+    "name": "Brand QA",
+    "description": "All brand-quality agents",
+    "agentIds": ["abc123def456", "spell-check"],
+    "metadata": {
+      "organizationId": "server_org_001",
+      "documentId": "server_doc_001",
+      "clientOrganizationId": "org_001",
+      "clientDocumentId": "doc_001"
+    }
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Agent group created successfully",
+    "data": {
+      "group": {
+        "id": "grp_9f3ac2",
+        "name": "Brand QA",
+        "description": "All brand-quality agents",
+        "agentIds": ["abc123def456", "spell-check"],
+        "metadata": {
+          "apiKey": "ak_xxx",
+          "organizationId": "server_org_001",
+          "documentId": "server_doc_001",
+          "clientOrganizationId": "org_001",
+          "clientDocumentId": "doc_001"
+        },
+        "createdAt": 1711900000000,
+        "updatedAt": 1711900000000
+      }
+    }
+  }
+}
+```
+
+| Field                | Type     | Description                                              |
+| -------------------- | -------- | -------------------------------------------------------- |
+| `group.id`           | string   | Server-generated group id.                               |
+| `group.name`         | string   | Group name.                                              |
+| `group.description`  | string   | Group description (omitted if not provided).             |
+| `group.agentIds`     | string[] | Member agent ids (deduped).                              |
+| `group.metadata`     | object   | Stored metadata, including the merged `apiKey`.          |
+| `group.createdAt`    | number   | Epoch ms creation timestamp.                             |
+| `group.updatedAt`    | number   | Epoch ms last-updated timestamp.                         |
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "RESOURCE_EXHAUSTED"
+  }
+}
+```
+
+**Errors:**
+
+- `RESOURCE_EXHAUSTED`: workspace already has `MAX_GROUPS_PER_API_KEY` (50) groups.
+- `RESOURCE_EXHAUSTED`: initial `agentIds` exceeds `MAX_AGENTS_PER_GROUP` (100).
+- `NOT_FOUND`: one of the initial `agentIds` does not exist.
+- `INVALID_ARGUMENT`: validation failure (missing/empty `name`, unknown fields, over-length values).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Agent group created successfully",
+    "data": {
+      "group": {
+        "id": "grp_9f3ac2",
+        "name": "Brand QA",
+        "agentIds": ["abc123def456", "spell-check"],
+        "metadata": { "apiKey": "ak_xxx" },
+        "createdAt": 1711900000000,
+        "updatedAt": 1711900000000
+      }
+    }
+  }
+}
+```
+</ResponseExample>

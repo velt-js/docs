@@ -1,0 +1,177 @@
+---
+title: "List Executions"
+api: "POST https://api.velt.dev/v2/agents/execution/list"
+---
+
+Use this API to fetch a paginated page of execution documents for the workspace, always ordered by `startedAt` descending (newest first). Designed for Console / Portal listing pages.
+
+[Get Execution](/api-reference/rest-apis/v2/agents/execution/get) remains the only way to fetch a single execution's per-URL `results` subcollection; `list` never includes results. Each row is identical to the `execution` object from `Get Execution` (without `includeResults`), passed through metadata-stripping.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/execution/list`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+<Info>
+  **Filter combinations (whitelist).** Exactly one of these three shapes is accepted. Every other combination, including `{}`, `{ organizationId }` alone, `{ documentId }` alone, `{ agentId, organizationId }` (no docId), and `{ agentId, documentId }` (no orgId), is rejected with `INVALID_ARGUMENT`.
+
+  1. `{ agentId }`: all executions of a single agent across the workspace.
+  2. `{ organizationId, documentId }`: all executions on a single document (any agent).
+  3. `{ agentId, organizationId, documentId }`: executions of a single agent on a single document.
+</Info>
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="agentId" type="string">
+      Non-empty, non-whitespace. Required in combos #1 and #3; forbidden in combo #2.
+    </ParamField>
+
+    <ParamField body="organizationId" type="string">
+      Non-empty, non-whitespace. Required in combos #2 and #3; forbidden in combo #1. Server-hashed before the query.
+    </ParamField>
+
+    <ParamField body="documentId" type="string">
+      Non-empty, non-whitespace. Required in combos #2 and #3; forbidden in combo #1. Server-hashed before the query.
+    </ParamField>
+
+    <ParamField body="pageSize" type="number">
+      Integer `1..100`. Default `20`. `> 100` is rejected.
+    </ParamField>
+
+    <ParamField body="pageToken" type="string">
+      Opaque cursor returned as `data.nextPageToken` on a prior call. Continues strictly after the cursor execution in `startedAt`-desc order.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## **Example Requests**
+
+#### 1. Org + doc, first page (combo #2)
+
+```JSON
+{
+  "data": {
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "pageSize": 20
+  }
+}
+```
+
+#### 2. Next page via cursor
+
+```JSON
+{
+  "data": {
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "pageSize": 20,
+    "pageToken": "<opaque-token-from-previous-response>"
+  }
+}
+```
+
+#### 3. Agent only (combo #1)
+
+```JSON
+{
+  "data": {
+    "agentId": "agent_brand_check"
+  }
+}
+```
+
+#### 4. All three (combo #3)
+
+```JSON
+{
+  "data": {
+    "agentId": "agent_brand_check",
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "pageSize": 50
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Executions listed successfully",
+    "data": {
+      "executions": [
+        {
+          "id": "exec_1711900000000_abc123def456",
+          "agentId": "agent_brand_check",
+          "agentName": "Brand Consistency Checker",
+          "agentVersion": 3,
+          "config": { "seedUrl": "https://example.com", "crossPageExecute": true, "maxUrlsToProcess": 25 },
+          "status": "passed",
+          "startedAt": 1711900000000,
+          "completedAt": 1711900150000,
+          "durationMs": 150000,
+          "trigger": "standalone",
+          "ranBy": { "userId": "user_123", "name": "Jane Doe", "email": "jane@example.com" },
+          "resultsSummary": { "totalFindings": 7, "totalAnnotationsCreated": 5, "urlsProcessed": 12, "urlsWithFindings": 5 },
+          "llmModel": "claude/claude-sonnet-4-6",
+          "tokenUsage": { "promptTokens": 12500, "completionTokens": 3200, "totalTokens": 15700 }
+        }
+      ],
+      "nextPageToken": "<opaque-token>"
+    }
+  }
+}
+```
+
+| Field                 | Type     | Description                                                                                       |
+| --------------------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `data.executions`     | object[] | Page of execution documents (same shape as [Get Execution](/api-reference/rest-apis/v2/agents/execution/get), without results). |
+| `data.nextPageToken`  | string   | Opaque cursor for the next page. **Omitted entirely** (key absent) when the result set is fully consumed. |
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+**Errors:**
+
+- `INVALID_ARGUMENT`: filter combo violates the 3-shape whitelist; `pageSize` out of range; `pageToken` empty/malformed/undecryptable; or `pageToken` references a now-deleted execution.
+- `NOT_FOUND`: workspace store database could not be resolved.
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Executions listed successfully",
+    "data": {
+      "executions": []
+    }
+  }
+}
+```
+</ResponseExample>

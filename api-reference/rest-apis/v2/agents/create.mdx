@@ -1,0 +1,499 @@
+---
+title: "Create Agent"
+api: "POST https://api.velt.dev/v2/agents/create"
+---
+
+Use this API to create a new custom agent configuration. The engine stores the agent in Firestore and writes version 1 to the agent's versions subcollection. The schema uses `.passthrough()`, so any additional behavioral fields are forwarded to the service layer.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/create`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="name" type="string" required>
+      Min 1 char. Agent display name.
+    </ParamField>
+
+    <ParamField body="description" type="string">
+      Human-readable description of what the agent does.
+    </ParamField>
+
+    <ParamField body="rawInstructions" type="string">
+      Original user-provided instructions (before enhancement).
+    </ParamField>
+
+    <ParamField body="instructions" type="string">
+      Processed/enhanced instructions used by the AI execution.
+    </ParamField>
+
+    <ParamField body="enabled" type="boolean">
+      Whether the agent is active. Defaults to `true`.
+    </ParamField>
+
+    <ParamField body="metadata" type="object">
+      Arbitrary client metadata (e.g. `{ "team": "growth", "owner": "jane" }`). The reserved keys `type`, `category`, `internal`, and `apiKey` are **server-managed** and rejected if present ([see below](#server-managed-fields)).
+    </ParamField>
+
+    <ParamField body="contextGathering" type="object">
+      Context gathering configuration.
+
+      | Field             | Type     | Required | Description                                                                              |
+      | ----------------- | -------- | -------- | ---------------------------------------------------------------------------------------- |
+      | `strategies`      | string[] | no       | Min 1 if provided. See [context gathering strategies](#context-gathering-strategies).    |
+      | `strategyOptions` | object   | no       | Per-strategy option overrides, keyed by strategy name ([see below](#context-gathering-strategy-options)). When `strategies` includes `"rest-api"`, `strategyOptions["rest-api"]` is required ([see below](#rest-api-strategy-options)). |
+      | `aiConfig`        | object   | no       | AI provider/model override for the gather phase ([see below](#ai-config-provider--model)). |
+    </ParamField>
+
+    <ParamField body="execution" type="object">
+      Execution configuration.
+
+      | Field                  | Type     | Required | Description                                                                                                     |
+      | ---------------------- | -------- | -------- | --------------------------------------------------------------------------------------------------------------- |
+      | `executionStrategy`    | string   | no       | `"ai"` (default), `"service"`, `"service+ai"`, `"stagehand-agent"`, or `"mcp-tools"`.                           |
+      | `serviceId`            | string   | no       | Required when `executionStrategy` is `"service"` or `"service+ai"`. Values: `"broken-links"`, `"crawler"`, `"screenshot"`. |
+      | `aiConfig`             | object   | no       | AI provider/model override for the execute phase ([see below](#ai-config-provider--model)).                     |
+      | `mcpServers`           | object[] | no       | Required (≥1) when `executionStrategy` is `"mcp-tools"`. Remote MCP servers the model may call during the tool loop ([see below](#mcp-servers-mcp-tools-strategy)). |
+      | `responseDescriptions` | object   | no       | Per-field descriptions guiding AI response shaping ([see below](#response-descriptions)).                        |
+      | `strategyOptions`      | object   | no       | Per-strategy option overrides. See [execution strategy options](#execution-strategy-options).                    |
+      | `knowledge`            | object   | no       | Memory-RAG knowledge integration ([see below](#knowledge-memory-rag)).                                          |
+    </ParamField>
+
+    <ParamField body="response" type="object">
+      Response formatting configuration.
+
+      | Field              | Type    | Required | Description                                                                          |
+      | ------------------ | ------- | -------- | ------------------------------------------------------------------------------------ |
+      | `useAiFormatting`  | boolean | no       | Whether to use AI for response formatting.                                           |
+      | `formattingPrompt` | string  | no       | Custom prompt for AI formatting.                                                     |
+      | `responseAdapter`  | string  | no       | Adapter name: `"broken-links-response"`, `"crawler-response"`, `"screenshot-response"`. |
+    </ParamField>
+
+    <ParamField body="postProcess" type="object">
+      Post-processing pipeline configuration. All stages default to **enabled** when omitted or when `enabled` is not explicitly `false`.
+
+      | Field                       | Type     | Required | Description                                                                          |
+      | --------------------------- | -------- | -------- | ------------------------------------------------------------------------------------ |
+      | `guardrails`                | object   | no       | `{ enabled?: boolean }`: confidence-based filtering. Findings below 50% are suppressed. |
+      | `deletePreviousSuggestions` | object   | no       | `{ enabled?: boolean }`: per-URL delete-and-recreate that clears the prior run's suggestions for the URL before writing the new ones. This is the active dedup mechanism. |
+      | `pinResolution`             | object   | no       | `{ enabled?: boolean }`: anchor pin resolution for visual annotations.              |
+      | `annotations`               | object   | no       | `{ enabled?: boolean, strategy?: string }`: strategy is `"findings"`, `"word-level"`, `"page-level"`, or `"none"`. |
+      | `analytics`                 | object   | no       | `{ enabled?: boolean }`: analytics event tracking.                                  |
+      | `matchAndMerge`             | object   | no       | **Deprecated / ignored.** `{ enabled?: boolean }`: replaced by `deletePreviousSuggestions`. Still accepted for backward compatibility but has no effect. |
+      | `customProcessors`          | string[] | no       | Custom post-processor names.                                                         |
+    </ParamField>
+
+    <ParamField body="input" type="object">
+      Input declaration configuration.
+
+      | Field                | Type     | Required | Description                                                                              |
+      | -------------------- | -------- | -------- | ---------------------------------------------------------------------------------------- |
+      | `variableKeys`       | string[] | no       | Variable names the agent expects in `payload.variables`.                                 |
+      | `userContextFields`  | object[] | no       | User-context field definitions (`{ id, title, type, required?, example?, defaultValue? }`). |
+      | `inputRequirements`  | object   | no       | `{ requires?: string[], requiresOneOf?: string[] }`.                                     |
+      | `supportedVariables` | string[] | no       | Template variables the agent's prompt/config can reference (e.g. `{{restApiData}}`, `{{memoryContext}}`). |
+
+      Each `userContextFields[]` entry: `id` (min 1), `title` (min 1), `type` (`"string"` / `"number"` / `"boolean"`), optional `required` (boolean), optional `example` (string; sample value surfaced in setup UIs), optional `defaultValue` (string / number / boolean).
+    </ParamField>
+
+    <ParamField body="scope" type="object">
+      Scope and targeting configuration.
+
+      | Field                 | Type     | Required | Description                                                                |
+      | --------------------- | -------- | -------- | -------------------------------------------------------------------------- |
+      | `pageScope`           | string[] | no       | URL glob patterns the agent runs on.                                       |
+      | `pageScopeExclude`    | string[] | no       | URL glob patterns to exclude.                                              |
+      | `contentTypes`        | string[] | no       | Content types the agent handles.                                           |
+      | `crossPage`           | object   | no       | Cross-page execution config (`enabled`, `targetProperty`, `pageDiscovery`, optional `pages[]`, `sourceOfTruthKnowledgeSourceId`). |
+    </ParamField>
+
+    <ParamField body="setup" type="object">
+      Tooling metadata for the setup assistant and checklist-to-agent converter. Not consumed by the agent pipeline at runtime.
+
+      Fields: `setupSamples[]`, `checklistOrigin`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+#### Server-managed fields
+
+The following fields are **owned by the server** and are **rejected** with a `400 INVALID_ARGUMENT` if present on the create or [update-version](/api-reference/rest-apis/v2/agents/version/update) payload:
+
+| Field               | Why it is server-managed                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------------------- |
+| `managedBy`         | Always derived server-side: `"customer"` for every API-created agent.                          |
+| `metadata.type`     | Marks built-in / system agents.                                                                |
+| `metadata.category` | Marks built-in / system agents.                                                                |
+| `metadata.internal` | `true` hides an agent from **all** list responses; allowing a client to set it would forge a hidden agent. |
+| `metadata.apiKey`   | The tenant key; merged in server-side.                                                          |
+
+`id`, `version`, `createdAt`, and `updatedAt` are likewise server-generated. Sending a reserved key returns one error per offending key, e.g. `metadata.internal is a server-managed field and cannot be set via the API.`
+
+#### Context gathering strategies
+
+| Strategy                 | What it returns                                                       |
+| ------------------------ | --------------------------------------------------------------------- |
+| `web-page-text`          | Visible text extracted via Puppeteer                                  |
+| `web-page-screenshot`    | Full-page screenshot as image (multimodal input)                      |
+| `web-page-html`          | Cleaned HTML content                                                  |
+| `web-page-css`           | Cleaned CSS content from stylesheets                                  |
+| `web-page-links`         | All hyperlinks, classified internal/external                          |
+| `web-page-accessibility` | Accessibility issues (Pa11y / HTML_CodeSniffer)                       |
+| `computed-styles`        | Browser-resolved computed CSS for specific selectors                  |
+| `robots-txt`             | Fetched `robots.txt`                                                   |
+| `sitemap-data`           | Discovered and parsed XML sitemaps                                    |
+| `lighthouse`             | Google Lighthouse audit (performance / a11y / best-practices / SEO)   |
+| `rest-api`               | Customer-configured REST endpoints fetched at runtime ([see below](#rest-api-strategy-options)) |
+| `none`                   | No context gathering (for service-only or text-only agents)           |
+
+#### Context gathering strategy options
+
+Per-strategy overrides are supplied under `contextGathering.strategyOptions["<strategy>"]`. All are optional unless noted.
+
+| Strategy               | Option               | Type     | Description                                                              |
+| ---------------------- | -------------------- | -------- | ------------------------------------------------------------------------ |
+| `web-page-text`        | `deviceType`         | string   | `"mobile"` / `"desktop"` (default `"desktop"`).                          |
+|                        | `excludeIframes`     | boolean  | Exclude iframe content. Default `false`.                                 |
+| `web-page-screenshot`  | `scrollBeforeCapture`| boolean  | Scroll the full page before capture.                                     |
+|                        | `maxPageHeightPx`    | number   | Cap the captured page height.                                            |
+|                        | `waitUntil`          | string   | Puppeteer wait condition.                                                |
+|                        | `deviceType`         | string   | `"mobile"` / `"desktop"`.                                                |
+| `web-page-html`        | `includeHead`        | boolean  | Include `<head>`. Default `true`.                                        |
+|                        | `includeBody`        | boolean  | Include `<body>`. Default `true`.                                        |
+|                        | `excludeIframes`     | boolean  | Default `false`.                                                         |
+|                        | `waitUntil`          | string   | Puppeteer wait condition.                                                |
+| `web-page-css`         | `includeInlineStyles`| boolean  | Include inline `<style>` content.                                        |
+| `computed-styles`      | `selectors`          | string[] | **Required**: CSS selectors to inspect.                                 |
+|                        | `properties`         | string[] | Override the curated default property list.                             |
+| `sitemap-data`         | `maxEntries`         | number   | Max sitemap entries. Default `500`.                                      |
+| `lighthouse`           | `categories`         | string[] | Lighthouse categories to run.                                            |
+|                        | `formFactor`         | string   | `"mobile"` / `"desktop"`.                                                |
+| `rest-api`             | *(see below)*        | object   | **Required** when `rest-api` is selected: [`rest-api` strategy options](#rest-api-strategy-options). |
+
+#### `rest-api` strategy options
+
+Required when `strategies` includes `"rest-api"`. Each configured endpoint is fetched at execution time and the resolved URL + description + JSON-stringified response is injected into the prompt via the `{{restApiData}}` template variable.
+
+| Field              | Type                | Required | Description                                                            |
+| ------------------ | ------------------- | -------- | ---------------------------------------------------------------------- |
+| `endpoints`        | `RestApiEndpoint[]` | yes      | 1–10 endpoints to fetch.                                               |
+| `maxResponseBytes` | number              | no       | Per-endpoint response-body cap. Default `1000000`, hard-capped `5000000`. |
+
+**`RestApiEndpoint` fields:**
+
+| Field             | Type                                              | Required | Description                                                                                              |
+| ----------------- | ------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------- |
+| `description`     | string                                            | yes      | What this endpoint is about; surfaced in the prompt alongside the URL + response.                        |
+| `url`             | string                                            | yes      | Endpoint URL. Supports `{{variable}}` templating. SSRF-validated at fetch time (no internal/loopback/link-local hosts). |
+| `method`          | `"GET"`\|`"POST"`\|`"PUT"`\|`"PATCH"`\|`"DELETE"` | no       | Default `"GET"`.                                                                                         |
+| `id`              | string                                            | no       | Stable endpoint identifier.                                                                              |
+| `name`            | string                                            | no       | Human label.                                                                                             |
+| `headers`         | object                                            | no       | Non-secret headers (templated).                                                                          |
+| `query`           | object                                            | no       | Query params (templated).                                                                                |
+| `body`            | object \| string                                  | no       | Request body for write methods (templated).                                                              |
+| `auth`            | object                                            | no       | Discriminated union (`none`\|`bearer`\|`basic`\|`header`). Secret fields are encrypted at rest and redacted on read. |
+| `cacheTtlSeconds` | number                                            | no       | In-process per-instance cache TTL. Default `0` (always fresh). Max `86400`.                              |
+| `timeoutMs`       | number                                            | no       | Per-request timeout. Default `10000`, hard-capped `30000`.                                               |
+| `responsePath`    | string                                            | no       | Dot-path to extract a sub-field of the JSON response.                                                    |
+
+**`auth` shapes:**
+
+```JSON
+{ "type": "none" }
+{ "type": "bearer", "token": "<secret>" }
+{ "type": "basic", "username": "user", "password": "<secret>" }
+{ "type": "header", "headers": { "X-Api-Key": "<secret>" } }
+```
+
+<Note>
+  **Auth secret handling (redaction-on-read):** `token`, `password`, and `header` values are encrypted before the Firestore write and are never returned to clients. On read (Get / List Agents), encrypted secret fields are replaced with `"__redacted__"`. To rotate a secret, send the new plaintext value on update; to keep an existing secret, omit the field.
+</Note>
+
+#### MCP servers (`mcp-tools` strategy)
+
+When `execution.executionStrategy` is `"mcp-tools"`, the agent runs a model-driven tool loop: at execution time the engine connects to each remote [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server declared in `execution.mcpServers`, lists its tools, exposes them to the model, and runs a multi-turn call→tool→call loop until the model emits a final structured response. This is how the built-in docs code-verification agent checks snippets live against the Velt docs MCP instead of a pre-ingested corpus.
+
+<Note>
+  The `"mcp-tools"` strategy is **provider-agnostic** (works on both Claude and Gemini) and **requires** a non-empty top-level `instructions` field **and** at least one entry in `execution.mcpServers`. Omitting either fails validation.
+</Note>
+
+`execution.mcpServers` is an array of **1–5** server objects (`MCP_MAX_SERVERS = 5`). Each server object is strictly validated (unknown keys rejected):
+
+| Field          | Type     | Required | Description                                                                                                          |
+| -------------- | -------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
+| `id`           | string   | yes      | Min 1 char. Stable identifier for the server (used in logs + findings).                                              |
+| `url`          | string   | yes      | Remote MCP server URL. Must start with `http(s)://` or contain a `{{template}}` that resolves to one. SSRF-validated at connect time (no internal/loopback/link-local hosts; redirects re-validated, max 3 hops). |
+| `name`         | string   | no       | Human-readable label.                                                                                                |
+| `description`  | string   | no       | What this server provides (e.g. `"Velt docs MCP"`).                                                                  |
+| `transport`    | string   | no       | Transport type. Only `"http"` is supported (Streamable HTTP with SSE fallback). Defaults to `"http"`.                |
+| `auth`         | object   | no       | Auth config. Discriminated union (`none` \| `bearer` \| `basic` \| `header`); same shape as the `rest-api` strategy. Secret fields are encrypted at rest and redacted on read. |
+| `allowedTools` | string[] | no       | Allowlist of tool names. When set, only these tools are exposed/callable. Up to 64 tools per server are exposed (`MCP_MAX_TOOLS`). |
+| `timeoutMs`    | number   | no       | Per-request timeout (ms) for connect/listTools/callTool. Default `30000`, hard-capped `120000`.                      |
+
+**`auth` shapes** (identical to the `rest-api` strategy):
+
+```JSON
+{ "type": "none" }
+{ "type": "bearer", "token": "<secret>" }
+{ "type": "basic", "username": "user", "password": "<secret>" }
+{ "type": "header", "headers": { "X-Api-Key": "<secret>" } }
+```
+
+<Note>
+  **Auth secret handling (redaction-on-read):** MCP `token`, `password`, and `header` values are encrypted before the Firestore write (using an MCP-specific encryption salt) and are never returned to clients. On read (Get / List Agents, List Versions), encrypted secret fields are replaced with `"__redacted__"`. To rotate a secret, send the new plaintext value on a [version update](/api-reference/rest-apis/v2/agents/version/update); to keep an existing secret, omit the field.
+</Note>
+
+#### AI config (provider / model)
+
+Both `execution.aiConfig` and `contextGathering.aiConfig` accept the same strictly-validated object, letting an agent override the AI provider/model used for that phase. Unknown keys are rejected.
+
+| Field              | Type   | Description                                                                                     |
+| ------------------ | ------ | ----------------------------------------------------------------------------------------------- |
+| `provider`         | string | LLM provider: `"gemini"`, `"claude"`, or `"openai"`. Defaults to the platform default when omitted. |
+| `model`            | string | Model name for the chosen provider (e.g. `"gemini-3-flash-preview"`, `"claude-sonnet-4-6"`).    |
+| `responseMimeType` | string | Requested response MIME type (e.g. `"application/json"`).                                        |
+| `maxToolTurns`     | number | Tool-loop turn budget for the `mcp-tools` strategy. Positive integer, hard-capped at runtime.   |
+
+#### Execution strategy options
+
+`execution.strategyOptions["<strategy>"]` carries per-strategy runtime overrides. The `stagehand-agent` strategy accepts:
+
+| Option                | Type    | Default              | Description                                                       |
+| --------------------- | ------- | -------------------- | ----------------------------------------------------------------- |
+| `mode`                | string  | `"hybrid"`           | `"dom"` / `"hybrid"` / `"cua"`.                                   |
+| `maxSteps`            | number  | `25`                 | Max autonomous steps.                                             |
+| `model`               | string  | inherited            | Model override for the agent loop.                                |
+| `systemPrompt`        | string  |                      | System prompt for the agent.                                      |
+| `useStructuredOutput` | boolean | `true`               | Return structured output.                                         |
+| `waitUntil`           | string  | `"networkidle2"`     | `"domcontentloaded"` / `"load"` / `"networkidle2"`.               |
+| `navigationTimeout`   | number  | `30000`              | Navigation timeout in ms.                                         |
+
+<Note>
+  When using `stagehand-agent`, set `contextGathering.strategies: ["none"]`; the agent handles navigation, interaction, and extraction itself.
+</Note>
+
+#### Knowledge (Memory-RAG)
+
+`execution.knowledge` pulls workspace knowledge from Velt Memory into the prompt. Strictly validated. Only these four fields are accepted:
+
+| Field           | Type    | Range | Description                                                                          |
+| --------------- | ------- | ----- | ------------------------------------------------------------------------------------ |
+| `useMemory`     | boolean |       | When `true`, retrieves knowledge/patterns/activities and injects them as `{{memoryContext}}`. |
+| `maxChunks`     | number  | 1–20  | Max knowledge chunks to retrieve.                                                    |
+| `maxPatterns`   | number  | 1–20  | Max learned patterns to retrieve.                                                    |
+| `maxActivities` | number  | 1–20  | Max recent activities to retrieve.                                                   |
+
+<Warning>
+  The legacy `sourceIds` field has been **removed** and `maxChunks` is now capped at **20** (previously 50). Sending `sourceIds` or any other extra key inside `knowledge` returns a `400 INVALID_ARGUMENT`.
+</Warning>
+
+#### Response Descriptions
+
+All fields are optional strings that instruct the AI on how to populate each finding field:
+
+| Field          | Description                                                                       |
+| -------------- | --------------------------------------------------------------------------------- |
+| `summary`      | Summary text of the overall analysis.                                             |
+| `title`        | Short title of the finding.                                                       |
+| `description`  | Detailed description of the finding.                                              |
+| `severity`     | Severity level. Values: `critical`, `high`, `medium`, `low`, `info`.              |
+| `targetText`   | The exact text on the page this finding refers to.                                |
+| `suggestion`   | Suggested fix or recommendation.                                                  |
+| `isPageLevel`  | `"true"` for visual/layout findings; `"false"` when targetText is real DOM text.  |
+| `issueType`    | Issue type for match-and-merge keying (short, lowercase, hyphenated).             |
+| `confidence`   | Confidence score from 0 to 100.                                                   |
+| `htmlSelector` | CSS selector of the DOM element.                                                  |
+| `findingType`  | Finding type classification.                                                      |
+
+## **Example Requests**
+
+#### 1. Minimal agent
+
+```JSON
+{
+  "data": {
+    "name": "Simple Content Checker",
+    "instructions": "Check for broken images and missing alt text on the page.",
+    "contextGathering": {
+      "strategies": ["web-page-html"]
+    }
+  }
+}
+```
+
+#### 2. Full custom agent with cross-page execution and Memory-RAG
+
+```JSON
+{
+  "data": {
+    "name": "Brand Consistency Checker",
+    "description": "Validates brand colors, logos, and typography across pages",
+    "rawInstructions": "Check that all headings use the brand font 'Inter'. Verify the primary color #1A73E8 is used for CTAs.",
+    "instructions": "Check that all headings use the brand font 'Inter'. Verify the primary color #1A73E8 is used for CTAs.",
+    "enabled": true,
+    "metadata": { "team": "growth", "owner": "jane" },
+    "contextGathering": {
+      "strategies": ["web-page-screenshot", "web-page-text", "web-page-html"],
+      "strategyOptions": {
+        "web-page-screenshot": { "scrollBeforeCapture": true }
+      }
+    },
+    "execution": {
+      "executionStrategy": "ai",
+      "responseDescriptions": {
+        "title": "Short name for the brand inconsistency",
+        "severity": "One of: critical, high, medium, low",
+        "suggestion": "Specific CSS or design fix",
+        "issueType": "One of: brand-color, brand-font, brand-logo"
+      },
+      "knowledge": {
+        "useMemory": true,
+        "maxChunks": 10,
+        "maxPatterns": 5,
+        "maxActivities": 5
+      }
+    },
+    "postProcess": {
+      "guardrails": { "enabled": true },
+      "matchAndMerge": { "enabled": true },
+      "annotations": { "enabled": true, "strategy": "findings" },
+      "analytics": { "enabled": true }
+    },
+    "input": {
+      "inputRequirements": { "requires": ["url"] },
+      "userContextFields": [
+        { "id": "brand_color", "title": "Primary brand color?", "type": "string", "required": true },
+        { "id": "brand_font", "title": "Heading font family?", "type": "string" }
+      ]
+    },
+    "scope": {
+      "pageScope": ["https://example.com/*"],
+      "pageScopeExclude": ["https://example.com/admin/*"],
+      "crossPage": {
+        "enabled": true,
+        "targetProperty": "brandConsistency",
+        "pageDiscovery": "auto"
+      }
+    }
+  }
+}
+```
+
+#### 3. Agent with live REST API context
+
+```JSON
+{
+  "data": {
+    "name": "Pricing Parity Checker",
+    "instructions": "Compare the price shown on the page with the price returned by the billing API and flag any mismatch.",
+    "contextGathering": {
+      "strategies": ["web-page-text", "rest-api"],
+      "strategyOptions": {
+        "rest-api": {
+          "endpoints": [
+            {
+              "name": "Plan pricing",
+              "description": "Canonical plan prices from the billing service",
+              "url": "https://api.example.com/plans/{{variables.planId}}",
+              "method": "GET",
+              "headers": { "Accept": "application/json" },
+              "auth": { "type": "bearer", "token": "sk_live_xxx" },
+              "cacheTtlSeconds": 60,
+              "responsePath": "data.plan"
+            }
+          ]
+        }
+      }
+    },
+    "input": { "variableKeys": ["planId"] }
+  }
+}
+```
+
+#### 4. Agent that verifies content against an MCP server (`mcp-tools`)
+
+```JSON
+{
+  "data": {
+    "name": "Docs Code Verifier",
+    "instructions": "For every code snippet on the page, use the documentation MCP tools to find the matching feature and verify the snippet is correct and up to date. Flag any snippet that does not match the docs.",
+    "contextGathering": {
+      "strategies": ["web-page-html"]
+    },
+    "execution": {
+      "executionStrategy": "mcp-tools",
+      "mcpServers": [
+        {
+          "id": "velt-docs",
+          "name": "Velt Docs MCP",
+          "description": "Live Velt documentation MCP server",
+          "url": "https://velt.dev/docs/mcp",
+          "transport": "http",
+          "auth": { "type": "none" }
+        }
+      ]
+    }
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Agent created successfully",
+    "data": {
+      "agentId": "abc123def456"
+    }
+  }
+}
+```
+
+| Field          | Type   | Description                            |
+| -------------- | ------ | -------------------------------------- |
+| `data.agentId` | string | Firestore document ID of the new agent |
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+**Errors:** `INVALID_ARGUMENT` (Zod validation failure, e.g. missing `name`, missing `apiKey`, a server-managed field, an unknown key inside `knowledge`, an invalid `userContextFields.type`, missing `instructions` for an AI/`stagehand-agent`/`mcp-tools` strategy, or missing/invalid `execution.mcpServers` when `executionStrategy` is `"mcp-tools"`) / `RESOURCE_EXHAUSTED` (workspace already has the maximum number of custom agents).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Agent created successfully",
+    "data": {
+      "agentId": "abc123def456"
+    }
+  }
+}
+```
+</ResponseExample>

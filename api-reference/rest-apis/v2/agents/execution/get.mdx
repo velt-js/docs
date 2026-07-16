@@ -1,0 +1,265 @@
+---
+title: "Get Execution"
+api: "POST https://api.velt.dev/v2/agents/execution/get"
+---
+
+Use this API to fetch an execution document by ID. This is the polling endpoint: poll until `execution.status !== "running"`. Set `includeResults: true` to also fetch the per-URL findings subcollection.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/execution/get`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="executionId" type="string" required>
+      Min 1 char. Execution ID returned from [Run Execution](/api-reference/rest-apis/v2/agents/execution/run).
+    </ParamField>
+
+    <ParamField body="includeResults" type="boolean">
+      Include the full per-URL results subcollection. Default: `false`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## **Example Requests**
+
+#### 1. Poll status only
+
+```JSON
+{
+  "data": {
+    "executionId": "exec_1711900000000_abc123def456"
+  }
+}
+```
+
+#### 2. Fetch with full results
+
+```JSON
+{
+  "data": {
+    "executionId": "exec_1711900000000_abc123def456",
+    "includeResults": true
+  }
+}
+```
+
+# Response
+
+#### Success Response (execution document)
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Execution fetched successfully",
+    "data": {
+      "execution": {
+        "id": "exec_1711900000000_abc123def456",
+        "agentId": "abc123def456",
+        "agentName": "Brand Consistency Checker",
+        "agentVersion": 3,
+        "metadata": {
+          "clientOrganizationId": "org_001",
+          "clientDocumentId": "doc_001"
+        },
+        "config": {
+          "seedUrl": "https://example.com",
+          "crossPageExecute": true,
+          "maxUrlsToProcess": 25,
+          "deviceType": "desktop",
+          "crawlerConfig": { "maxPages": 100, "timeout": 300000, "maxDepth": 0 }
+        },
+        "status": "passed",
+        "startedAt": 1711900000000,
+        "completedAt": 1711900150000,
+        "durationMs": 150000,
+        "trigger": "standalone",
+        "workflowExecutionId": null,
+        "previousExecutionId": null,
+        "ranBy": { "userId": "user_123", "name": "Jane Doe", "email": "jane@example.com" },
+        "resultsSummary": {
+          "totalFindings": 7,
+          "totalAnnotationsCreated": 5,
+          "urlsProcessed": 12,
+          "urlsWithFindings": 5,
+          "issuesCreated": 7,
+          "summary": "Found 7 issues across 12 pages. 5 annotations created, 2 matched existing.",
+          "matchResult": { "created": 5, "skipped": 2, "resolved": 1 }
+        },
+        "crawlerResults": { "status": "completed", "totalUrlsFound": 12, "duration": 45000, "pagesVisited": 12 },
+        "llmModel": "claude/claude-sonnet-4-6",
+        "tokenUsage": { "promptTokens": 12500, "completionTokens": 3200, "thoughtsTokens": 0, "totalTokens": 15700 }
+      }
+    }
+  }
+}
+```
+
+**Execution document field reference:**
+
+| Field                                    | Type                | Description                                                                                                    |
+| ---------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `id`                                     | string              | Execution ID (Firestore doc ID).                                                                               |
+| `agentId`                                | string              | Agent that was executed.                                                                                       |
+| `agentName`                              | string              | Denormalized agent display name.                                                                               |
+| `agentVersion`                           | number              | Agent config version at execution time (pinned).                                                               |
+| `metadata.clientOrganizationId`          | string              | Client-provided organization ID.                                                                               |
+| `metadata.clientDocumentId`              | string              | Client-provided document ID.                                                                                   |
+| `config.seedUrl`                         | string              | The seed URL provided by the user.                                                                             |
+| `config.crossPageExecute`                | boolean             | Whether cross-page mode was used.                                                                              |
+| `config.maxUrlsToProcess`                | number              | Max URLs limit.                                                                                                |
+| `config.deviceType`                      | string              | Device mode emulated for this execution: `"mobile"` or `"desktop"`. Default: `"desktop"`.                       |
+| `config.crawlerConfig`                   | object \| undefined | Crawler config (only when `crossPageExecute: true`).                                                           |
+| `status`                                 | string              | `"running"`, `"passed"`, `"failed"`, `"partial"`, `"error"`, or `"skipped"`. See [statuses](/ai/agents/overview#execution-statuses). |
+| `startedAt`                              | number              | Epoch ms when execution started.                                                                               |
+| `completedAt`                            | number \| null      | Epoch ms when completed. Null while running.                                                                   |
+| `durationMs`                             | number \| null      | Total duration in ms. Null while running.                                                                      |
+| `error`                                  | object \| undefined | Populated when any URL/batch failed: on `"error"` or `"partial"` (and may co-exist with `"failed"`).           |
+| `error.code`                             | string              | Error code (`TIMEOUT`, `LLM_ERROR`, `LLM_RATE_LIMITED`, `MALFORMED_RESPONSE`, `CRAWLER_ERROR`, `EXTRACTION_ERROR`, `POST_PROCESS_ERROR`, `INTERNAL`). |
+| `error.message`                          | string              | Human-readable error description.                                                                              |
+| `error.advisoryComment`                  | string \| undefined | Advisory comment text posted to the document.                                                                  |
+| `error.retryable`                        | boolean             | Whether this error can be retried.                                                                             |
+| `error.occurredAt`                       | number              | Epoch ms when the error occurred.                                                                              |
+| `trigger`                                | string              | `"standalone"` or `"workflow"`.                                                                                |
+| `workflowExecutionId`                    | string \| null      | Parent workflow execution ID (if workflow-triggered).                                                          |
+| `previousExecutionId`                    | string \| null      | Previous execution ID (for match-and-merge reruns).                                                            |
+| `ranBy`                                  | object              | `{ userId, name, email }` of who triggered.                                                                    |
+| `resultsSummary.totalFindings`           | number              | Total findings (after guardrails filtering).                                                                   |
+| `resultsSummary.totalAnnotationsCreated` | number              | Annotations created (after match-and-merge dedup).                                                             |
+| `resultsSummary.urlsProcessed`           | number              | URLs that were processed.                                                                                      |
+| `resultsSummary.urlsWithFindings`        | number              | URLs that had at least one finding.                                                                            |
+| `resultsSummary.urlsErrored`             | number \| undefined | URLs whose agent run failed. `0 < urlsErrored < urlsProcessed` → `partial`; `urlsErrored >= urlsProcessed` (≥1 processed) → `error`. |
+| `resultsSummary.erroredUrls`             | array \| undefined  | Bounded sample (≤50) of `{ url, message }` for failing URLs.                                                    |
+| `resultsSummary.issuesCreated`           | number              | Equals `totalFindings` (backwards compat).                                                                     |
+| `resultsSummary.summary`                 | string \| null      | Human-readable summary. Null while running.                                                                    |
+| `resultsSummary.matchResult`             | object \| undefined | Match-and-merge outcome: `{ created, skipped, resolved }`.                                                     |
+| `crawlerResults`                         | object \| undefined | Only populated when `crossPageExecute: true`.                                                                  |
+| `llmModel`                               | string \| undefined | LLM model used (e.g. `"claude/claude-sonnet-4-6"`, `"gemini/gemini-3-flash-preview"`).                          |
+| `tokenUsage`                             | object              | `{ promptTokens, completionTokens, thoughtsTokens, totalTokens }`.                                             |
+
+<Note>
+  The legacy execution-document fields `knowledgeRetrieved` / `knowledgeCached` / `degraded` have been **removed**. Memory-RAG runtime signals now live only on the in-memory execution result and are consumed internally by the guardrails processor; they are not persisted on the execution document.
+</Note>
+
+#### Success Response (with results, `includeResults: true`)
+
+When `includeResults` is true, a `results` array is included alongside `execution`:
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Execution fetched successfully",
+    "data": {
+      "execution": { "...same as above..." },
+      "results": [
+        {
+          "url": "https://example.com",
+          "urlHash": "a1b2c3d4e5f6",
+          "findings": [
+            {
+              "id": "finding-1",
+              "title": "Heading uses wrong font",
+              "description": "The h1 element uses 'Arial' instead of the brand font 'Inter'",
+              "severity": "high",
+              "category": "typography",
+              "targetText": "Welcome to Example",
+              "occurrence": 1,
+              "sourceUrl": "https://example.com",
+              "suggestion": "Change font-family to 'Inter' for the h1 element",
+              "htmlSelector": "h1.hero-title",
+              "htmlXpath": "/html/body/main/section[1]/h1",
+              "isPageLevel": false,
+              "issueType": "brand-font",
+              "confidence": 92
+            }
+          ],
+          "findingCount": 1,
+          "annotationsCreated": 1,
+          "processedAt": 1711900050000
+        }
+      ]
+    }
+  }
+}
+```
+
+**Per-URL result fields:**
+
+| Field                | Type     | Description                                 |
+| -------------------- | -------- | ------------------------------------------- |
+| `url`                | string   | The URL that was analyzed.                  |
+| `urlHash`            | string   | MD5 hash of the URL (Firestore doc ID).     |
+| `findings`           | object[] | Array of `AgentFinding` objects (see below).|
+| `findingCount`       | number   | Number of findings for this URL.            |
+| `annotationsCreated` | number   | Annotations created for this URL.           |
+| `processedAt`        | number   | Epoch ms when this URL was processed.       |
+
+**Finding fields (`AgentFinding`):**
+
+| Field          | Type    | Description                                                              |
+| -------------- | ------- | ------------------------------------------------------------------------ |
+| `id`           | string  | Unique finding ID (e.g. `"finding-1"`).                                  |
+| `title`        | string  | Short title/summary.                                                     |
+| `description`  | string  | Detailed description.                                                    |
+| `severity`     | string  | `"critical"`, `"high"`, `"medium"`, `"low"`, `"info"`.                   |
+| `category`     | string  | Grouping tag (e.g. `"accessibility"`, `"seo"`, `"content"`, `"layout"`). |
+| `targetText`   | string  | Exact DOM text. Empty string for image/non-text findings.                |
+| `occurrence`   | number  | 1-based occurrence index of `targetText` on the page.                    |
+| `sourceUrl`    | string  | URL where the finding was detected.                                      |
+| `suggestion`   | string  | Suggested fix.                                                           |
+| `htmlSelector` | string  | CSS selector of the DOM element.                                         |
+| `htmlXpath`    | string  | XPath of the DOM element.                                                |
+| `isPageLevel`  | boolean | `true` for visual/layout findings; `false` when `targetText` matches DOM text. |
+| `issueType`    | string  | Match-and-merge key (e.g. `"casing"`, `"pii"`, `"spelling"`, `"broken-link"`). |
+| `confidence`   | number  | 0–100 confidence score. Below 50 may be suppressed by guardrails.        |
+| `commentId`    | string  | Comment annotation ID (populated after annotation creation).             |
+| `source`       | string  | `"instructions"` or `"knowledge"`.                                       |
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "NOT_FOUND"
+  }
+}
+```
+
+**Errors:** `NOT_FOUND` (`Execution not found: {executionId}` or `Store database not found`).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Execution fetched successfully",
+    "data": {
+      "execution": {
+        "id": "exec_1711900000000_abc123def456",
+        "status": "running",
+        "startedAt": 1711900000000,
+        "completedAt": null,
+        "durationMs": null
+      }
+    }
+  }
+}
+```
+</ResponseExample>

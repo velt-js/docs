@@ -1,0 +1,204 @@
+---
+title: "Run Execution"
+api: "POST https://api.velt.dev/v2/agents/execution/run"
+---
+
+Use this API to start an asynchronous agent execution. The engine creates an execution document in Firestore and dispatches a Cloud Task for processing. The response returns immediately with the `executionId`. Poll [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) to track progress and fetch findings.
+
+The `apiKey` is injected from request headers. Pass `organizationId` and `documentId` at the top level of the body if you want findings to land as comment annotations on a specific document. Cross-page execution is controlled via the `crossPageExecute` boolean; there is no separate endpoint.
+
+The schema uses `.passthrough()` so any additional fields are forwarded.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/execution/run`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="agentId" type="string" required>
+      Min 1 char. Agent ID to execute.
+    </ParamField>
+
+    <ParamField body="url" type="string" required>
+      Valid URL. The seed URL to process.
+    </ParamField>
+
+    <ParamField body="crossPageExecute" type="boolean">
+      When true, the engine crawls the seed URL and processes up to `maxUrlsToProcess` pages. Default: `false`.
+    </ParamField>
+
+    <ParamField body="maxUrlsToProcess" type="number">
+      Max URLs to process when `crossPageExecute: true`. Positive integer. Default: 50.
+    </ParamField>
+
+    <ParamField body="deviceType" type="string">
+      Device mode to emulate for this execution: `"mobile"` or `"desktop"`. Default: `"desktop"`. Drives the Puppeteer viewport/user-agent used by all context-gathering strategies and pin resolution, and sets `pageInfo.deviceInfo.deviceType` on every annotation the execution creates.
+    </ParamField>
+
+    <ParamField body="organizationId" type="string">
+      Client organization ID. Required for findings to be persisted as comment annotations.
+    </ParamField>
+
+    <ParamField body="documentId" type="string">
+      Client document ID. Required for findings to be persisted as comment annotations.
+    </ParamField>
+
+    <ParamField body="trigger" type="string">
+      `"standalone"` (default) or `"workflow"`. Use `"workflow"` when running an agent as part of an Approval Engine workflow node.
+    </ParamField>
+
+    <ParamField body="workflowExecutionId" type="string">
+      Parent workflow execution ID. Pair with `trigger: "workflow"`.
+    </ParamField>
+
+    <ParamField body="ranBy" type="object">
+      User who triggered the execution.
+
+      | Field    | Type   | Required        | Description                  |
+      | -------- | ------ | --------------- | ---------------------------- |
+      | `userId` | string | yes (if ranBy)  | User ID                      |
+      | `name`   | string | no              | Display name. Default: `""`. |
+      | `email`  | string | no              | Email. Default: `""`.        |
+    </ParamField>
+
+    <ParamField body="userContext" type="object">
+      Runtime values for the agent's `userContextFields`. Keys must match the field IDs declared in the agent's `input.userContextFields`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## **Example Requests**
+
+#### 1. Single page execution
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456",
+    "url": "https://example.com/pricing",
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "deviceType": "desktop",
+    "ranBy": {
+      "userId": "user_123",
+      "name": "Jane Doe",
+      "email": "jane@example.com"
+    }
+  }
+}
+```
+
+#### 2. Cross-page execution with user context (mobile)
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456",
+    "url": "https://example.com",
+    "crossPageExecute": true,
+    "maxUrlsToProcess": 25,
+    "deviceType": "mobile",
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "trigger": "standalone",
+    "userContext": {
+      "brand_color": "#1A73E8",
+      "brand_font": "Inter",
+      "check_images": true
+    },
+    "ranBy": {
+      "userId": "user_123",
+      "name": "Jane Doe",
+      "email": "jane@example.com"
+    }
+  }
+}
+```
+
+#### 3. Workflow-triggered execution
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456",
+    "url": "https://example.com",
+    "trigger": "workflow",
+    "workflowExecutionId": "wf_exec_789",
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "ranBy": { "userId": "user_123" }
+  }
+}
+```
+
+#### 4. Minimal request
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456",
+    "url": "https://example.com"
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Agent execution created successfully",
+    "data": {
+      "executionId": "exec_1711900000000_abc123def456"
+    }
+  }
+}
+```
+
+| Field              | Type   | Description                                                                                              |
+| ------------------ | ------ | ------------------------------------------------------------------------------------------------------- |
+| `data.executionId` | string | Unique execution ID. Use to poll via [Get Execution](/api-reference/rest-apis/v2/agents/execution/get). |
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+**Errors:** `INVALID_ARGUMENT` (invalid URL, missing required fields, invalid `trigger` or `deviceType`) / `NOT_FOUND` (agent does not exist) / `FAILED_PRECONDITION` (agent is disabled, store database not found, or an active execution already exists for this document).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Agent execution created successfully",
+    "data": {
+      "executionId": "exec_1711900000000_abc123def456"
+    }
+  }
+}
+```
+</ResponseExample>

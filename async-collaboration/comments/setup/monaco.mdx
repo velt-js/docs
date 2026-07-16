@@ -1,0 +1,680 @@
+---
+title: "Monaco Setup"
+description: "Add Velt text comments to a Monaco editor with the Velt Monaco comments package."
+---
+
+![Add text comments in an editor](/gifs/Add-Text-Comments.gif)
+
+The Monaco integration renders comment highlights as view-only overlay elements positioned over the commented text. It does not modify your Monaco model, undo history, or saved source code.
+
+## Setup
+
+#### Step 1: Add Comment components
+
+- Add the `Velt Comments` component to the root of your app. This component is required to create and render comments in your app.
+- Authenticate the user with `authProvider` and set the Velt document before users add comments.
+- Set the `textMode` prop to `false` to hide the default Velt text comment tool. Monaco selections are handled by `@veltdev/monaco-velt-comments`.
+- Add `VeltCommentsSidebar` if you want a Google Docs-style comment sidebar.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { VeltComments, VeltCommentsSidebar, VeltProvider, useSetDocument } from '@veltdev/react';
+
+    const user = {
+      userId: 'user-1',
+      organizationId: 'org-1',
+      name: 'User One',
+      email: 'user@example.com',
+    };
+
+    function VeltSetup() {
+      useSetDocument('document-id', { documentName: 'Document name' });
+      return null;
+    }
+
+    function App() {
+      return (
+        <VeltProvider apiKey="API_KEY" authProvider={{ user }}>
+          <VeltSetup />
+          <VeltComments textMode={false} />
+          <VeltCommentsSidebar />
+          {/* Your app content */}
+        </VeltProvider>
+      );
+    }
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```html
+    <body>
+      <velt-comments text-mode="false"></velt-comments>
+    </body>
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 2: Install the Velt Monaco extension
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```bash
+    npm i @veltdev/monaco-velt-comments monaco-editor @monaco-editor/react
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```bash
+    npm i @veltdev/monaco-velt-comments monaco-editor @veltdev/client
+    ```
+  </Tab>
+</Tabs>
+
+`monaco-editor` is a peer dependency and must be provided by your Monaco app. The package uses the Monaco editor instance your app creates and does not bundle Monaco at runtime.
+
+#### Step 3: Register the Monaco editor with Velt Comments
+
+Register the integration on the Monaco editor instance returned by `monaco.editor.create` or by `@monaco-editor/react`'s `onMount`. Keep the returned handle so you can dispose it on teardown.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect, useRef, useState } from 'react';
+    import { Editor as MonacoReact, loader } from '@monaco-editor/react';
+    import { useCommentAnnotations } from '@veltdev/react';
+    import * as monaco from 'monaco-editor';
+    import {
+      registerVeltComments,
+      renderComments,
+      type MonacoEditor,
+      type VeltCommentsHandle,
+    } from '@veltdev/monaco-velt-comments';
+
+    loader.config({ monaco });
+
+    const EDITOR_ID = 'my-editor';
+
+    function MonacoTextEditor() {
+      const [editor, setEditor] = useState<MonacoEditor | null>(null);
+      const handleRef = useRef<VeltCommentsHandle | null>(null);
+      const commentAnnotations = useCommentAnnotations();
+
+      useEffect(() => {
+        if (!editor) return;
+
+        renderComments({
+          editor,
+          editorId: EDITOR_ID,
+          commentAnnotations: commentAnnotations ?? [],
+        });
+      }, [editor, commentAnnotations]);
+
+      useEffect(() => {
+        return () => handleRef.current?.dispose();
+      }, []);
+
+      return (
+        <MonacoReact
+          height="480px"
+          defaultLanguage="typescript"
+          defaultValue={'const greeting = "hello world";\n'}
+          options={{ automaticLayout: true, wordWrap: 'on' }}
+          onMount={(mountedEditor) => {
+            setEditor(mountedEditor);
+            handleRef.current = registerVeltComments(mountedEditor, {
+              editorId: EDITOR_ID,
+            });
+          }}
+        />
+      );
+    }
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```ts
+    import * as monaco from 'monaco-editor';
+    import { registerVeltComments } from '@veltdev/monaco-velt-comments';
+
+    const editor = monaco.editor.create(document.querySelector('#editor'), {
+      value: 'const greeting = "hello world";\n',
+      language: 'typescript',
+      automaticLayout: true,
+      wordWrap: 'on',
+    });
+
+    const handle = registerVeltComments(editor, {
+      editorId: 'my-editor',
+    });
+
+    // Later, for example during teardown:
+    handle.dispose();
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 4: Add a comment button to your Monaco editor
+
+Add a button that users can click to add comments after selecting text in the Monaco editor.
+
+**Important:** Use `onMouseDown` with `preventDefault()` so the browser does not move focus away from Monaco before `addComment` reads the current selection. Keep the actual `addComment` call in `onClick`.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from '@veltdev/monaco-velt-comments';
+
+    const handleAddComment = () => {
+      if (!editor) return;
+
+      void addComment({
+        editor,
+        editorId: EDITOR_ID,
+      });
+    };
+
+    <button
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={handleAddComment}
+    >
+      Add Comment
+    </button>
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```html
+    <button id="add-comment">Add Comment</button>
+    <div id="editor"></div>
+    ```
+
+    ```ts
+    import { addComment } from '@veltdev/monaco-velt-comments';
+
+    const addCommentButton = document.querySelector('#add-comment');
+
+    addCommentButton.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+    });
+
+    addCommentButton.addEventListener('click', () => {
+      void addComment({ editor, editorId: 'my-editor' });
+    });
+    ```
+  </Tab>
+</Tabs>
+
+Registering the integration also adds an **Add Comment** Monaco editor action in the command palette and right-click menu. The action is enabled only when there is a non-empty editor selection.
+
+#### Step 5: Call `addComment` to add a comment
+
+- Call this method to add a comment to selected text in the Monaco editor.
+- Params: [`AddCommentRequest`](/api-reference/sdk/models/data-models#addcommentrequest-10). It has the following properties:
+  - `editor`: Monaco `IStandaloneCodeEditor` instance.
+  - `editorId`: Id of the editor. Use this if you have multiple Monaco editors on the same page. (optional)
+  - `context`: Add custom metadata to the Comment Annotation. [Learn more](/async-collaboration/comments/customize-behavior#metadata). (optional)
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from '@veltdev/monaco-velt-comments';
+
+    const addCommentRequest = {
+      editor,
+      editorId: 'EDITOR_ID',
+      context: {
+        fileId: 'file-123',
+        language: 'typescript',
+      },
+    };
+
+    void addComment(addCommentRequest);
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```ts
+    import { addComment } from '@veltdev/monaco-velt-comments';
+
+    const addCommentRequest = {
+      editor,
+      editorId: 'EDITOR_ID',
+      context: {
+        fileId: 'file-123',
+        language: 'typescript',
+      },
+    };
+
+    void addComment(addCommentRequest);
+    ```
+  </Tab>
+</Tabs>
+
+The library automatically writes `context.textEditorConfig` with the selected text, its 1-based occurrence index in the document, and the editor ID when one is provided.
+
+#### Step 6: Render comments in Monaco editor
+
+- Get the comment data from Velt SDK and render it in the Monaco editor.
+- Params: [`RenderCommentsRequest`](/api-reference/sdk/models/data-models#rendercommentsrequest-10). It has the following properties:
+  - `editor`: Monaco `IStandaloneCodeEditor` instance.
+  - `editorId`: Id of the editor. Use this if you have multiple Monaco editors on the same page. (optional)
+  - `commentAnnotations`: Array of Comment Annotation objects.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect } from 'react';
+    import { useCommentAnnotations } from '@veltdev/react';
+    import { renderComments } from '@veltdev/monaco-velt-comments';
+
+    const commentAnnotations = useCommentAnnotations();
+
+    useEffect(() => {
+      if (!editor) return;
+
+      renderComments({
+        editor,
+        editorId: 'EDITOR_ID',
+        commentAnnotations: commentAnnotations ?? [],
+      });
+    }, [editor, commentAnnotations]);
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```ts
+    import { renderComments } from '@veltdev/monaco-velt-comments';
+
+    const commentElement = Velt.getCommentElement();
+    commentElement.getAllCommentAnnotations().subscribe((annotations) => {
+      renderComments({
+        editor,
+        editorId: 'EDITOR_ID',
+        commentAnnotations: annotations,
+      });
+    });
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 7: Re-apply Monaco comment highlights (optional)
+
+- Monaco renders comment highlights as view-only overlay elements.
+- The integration does not write Velt comment marks into your Monaco model or saved source code.
+- Save your Monaco model value normally. After you call `model.setValue(...)`, `editor.setModel(...)`, or load saved content, call `renderComments` again.
+
+```ts
+const value = editor.getValue();
+// Save value to your backend.
+
+renderComments({
+  editor,
+  editorId: 'EDITOR_ID',
+  commentAnnotations,
+});
+```
+
+#### Step 8: Style the commented text
+
+- You can style the commented text by adding CSS for the `velt-comment-text` element.
+- Monaco highlights are rendered as overlay elements in the outer document, so broad `velt-comment-text` styles are appropriate for this integration.
+
+```css
+velt-comment-text {
+  background-color: rgba(255, 212, 0, 0.4);
+  border-bottom: 2px solid #ffd400;
+  cursor: pointer;
+}
+
+velt-comment-text:hover,
+velt-comment-text[comment-selected="true"],
+velt-comment-text.velt-comment-selected {
+  background-color: rgba(255, 212, 0, 0.7);
+}
+```
+
+### Multiple Monaco editors
+
+When using multiple Monaco editors on the same page, provide unique `editorId` values. The library stores `editorId` in `context.textEditorConfig.editorId` and filters annotations by that value when rendering.
+
+```tsx
+const editor1Handle = registerVeltComments(editor1, { editorId: 'editor-1' });
+const editor2Handle = registerVeltComments(editor2, { editorId: 'editor-2' });
+
+await addComment({
+  editor: editor1,
+  editorId: 'editor-1',
+});
+
+renderComments({
+  editor: editor2,
+  editorId: 'editor-2',
+  commentAnnotations,
+});
+
+editor1Handle.dispose();
+editor2Handle.dispose();
+```
+
+### TypeScript support
+
+The package includes full TypeScript definitions.
+
+```ts
+import type {
+  AddCommentRequest,
+  AnchorEntry,
+  CommentAnnotation,
+  CommentAnnotationContext,
+  MonacoEditor,
+  MonacoVeltCommentsConfig,
+  RenderCommentsRequest,
+  SelectionContext,
+  SyncAnchor,
+  VeltCommentsHandle,
+} from '@veltdev/monaco-velt-comments';
+```
+
+## Complete Example
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useCallback, useEffect, useRef, useState } from 'react';
+    import { Editor as MonacoReact, loader } from '@monaco-editor/react';
+    import {
+      VeltComments,
+      VeltCommentsSidebar,
+      VeltCommentsSidebarButton,
+      VeltPresence,
+      VeltProvider,
+      useCommentAnnotations,
+      useSetDocument,
+    } from '@veltdev/react';
+    import * as monaco from 'monaco-editor';
+    import {
+      addComment,
+      registerVeltComments,
+      renderComments,
+      type MonacoEditor,
+      type VeltCommentsHandle,
+    } from '@veltdev/monaco-velt-comments';
+
+    loader.config({ monaco });
+
+    const EDITOR_ID = 'main-editor';
+
+    function InitializeDocument() {
+      useSetDocument('monaco-comments-doc', {
+        documentName: 'Monaco Comments Document',
+      });
+
+      return null;
+    }
+
+    function MyEditor() {
+      const [editor, setEditor] = useState<MonacoEditor | null>(null);
+      const handleRef = useRef<VeltCommentsHandle | null>(null);
+      const commentAnnotations = useCommentAnnotations();
+
+      useEffect(() => {
+        if (!editor) return;
+
+        renderComments({
+          editor,
+          editorId: EDITOR_ID,
+          commentAnnotations: commentAnnotations ?? [],
+        });
+      }, [editor, commentAnnotations]);
+
+      useEffect(() => {
+        return () => handleRef.current?.dispose();
+      }, []);
+
+      const handleAddComment = useCallback(() => {
+        if (!editor) return;
+
+        void addComment({
+          editor,
+          editorId: EDITOR_ID,
+          context: { source: 'monaco-editor' },
+        });
+      }, [editor]);
+
+      return (
+        <div>
+          <div>
+            <VeltPresence />
+            <VeltCommentsSidebarButton />
+            <button
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={handleAddComment}
+            >
+              Add Comment
+            </button>
+          </div>
+
+          <MonacoReact
+            height="480px"
+            defaultLanguage="typescript"
+            defaultValue={'const greeting = "hello world";\n'}
+            options={{
+              automaticLayout: true,
+              wordWrap: 'on',
+              scrollBeyondLastLine: false,
+            }}
+            onMount={(mountedEditor) => {
+              setEditor(mountedEditor);
+              handleRef.current = registerVeltComments(mountedEditor, {
+                editorId: EDITOR_ID,
+              });
+            }}
+          />
+        </div>
+      );
+    }
+
+    const user = {
+      userId: 'user-1',
+      organizationId: 'org-1',
+      name: 'User One',
+      email: 'user@example.com',
+    };
+
+    export default function App() {
+      return (
+        <VeltProvider apiKey="API_KEY" authProvider={{ user }}>
+          <InitializeDocument />
+          <VeltComments textMode={false} />
+          <MyEditor />
+          <VeltCommentsSidebar />
+        </VeltProvider>
+      );
+    }
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```ts
+    import { initVelt } from '@veltdev/client';
+    import * as monaco from 'monaco-editor';
+    import {
+      addComment,
+      registerVeltComments,
+      renderComments,
+    } from '@veltdev/monaco-velt-comments';
+
+    const client = await initVelt('API_KEY');
+    await client.identify({
+      userId: 'user-1',
+      organizationId: 'org-1',
+      name: 'User One',
+      email: 'user@example.com',
+    });
+
+    client.setDocument('monaco-comments-doc', {
+      documentName: 'Monaco Comments Document',
+    });
+
+    const editor = monaco.editor.create(document.querySelector('#editor'), {
+      value: 'const greeting = "hello world";\n',
+      language: 'typescript',
+      automaticLayout: true,
+      wordWrap: 'on',
+    });
+
+    const editorId = 'main-editor';
+    const handle = registerVeltComments(editor, { editorId });
+    const commentElement = Velt.getCommentElement();
+
+    commentElement.getAllCommentAnnotations().subscribe((commentAnnotations) => {
+      renderComments({
+        editor,
+        editorId,
+        commentAnnotations,
+      });
+    });
+
+    const addCommentButton = document.querySelector('#add-comment');
+    addCommentButton.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+    });
+    addCommentButton.addEventListener('click', () => {
+      void addComment({ editor, editorId });
+    });
+
+    window.addEventListener('beforeunload', () => {
+      handle.dispose();
+      editor.dispose();
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## APIs
+
+#### [registerVeltComments()](/api-reference/sdk/api/api-methods#registerveltcomments)
+
+Registers the Velt comments integration on a Monaco editor instance. The call is idempotent per editor and returns a handle that tears down editor listeners, tracking decorations, overlay elements, renderer state, and local selected-comment subscriber cleanup.
+
+- Params:
+  - `editor`: Monaco `IStandaloneCodeEditor` instance.
+  - `config`: [`MonacoVeltCommentsConfig`](/api-reference/sdk/models/data-models#monacoveltcommentsconfig). (optional)
+- Returns: [`VeltCommentsHandle`](/api-reference/sdk/models/data-models#veltcommentshandle)
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { registerVeltComments } from '@veltdev/monaco-velt-comments';
+
+    const handle = registerVeltComments(editor, {
+      editorId: 'my-editor',
+    });
+
+    handle.dispose();
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```ts
+    import { registerVeltComments } from '@veltdev/monaco-velt-comments';
+
+    const handle = registerVeltComments(editor, {
+      editorId: 'my-editor',
+    });
+
+    handle.dispose();
+    ```
+  </Tab>
+</Tabs>
+
+#### [addComment()](/api-reference/sdk/api/api-methods#addcomment-11)
+
+Creates a Velt comment annotation for the currently selected Monaco text. The selected text and its occurrence index are stored in `annotation.context.textEditorConfig`; the document content is not modified.
+
+- Params: [`AddCommentRequest`](/api-reference/sdk/models/data-models#addcommentrequest-10)
+- Returns: `Promise<void>`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from '@veltdev/monaco-velt-comments';
+
+    await addComment({
+      editor,
+      editorId: 'my-editor',
+      context: {
+        fileId: 'file-123',
+        language: 'typescript',
+      },
+    });
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```ts
+    import { addComment } from '@veltdev/monaco-velt-comments';
+
+    await addComment({
+      editor,
+      editorId: 'my-editor',
+      context: {
+        fileId: 'file-123',
+        language: 'typescript',
+      },
+    });
+    ```
+  </Tab>
+</Tabs>
+
+#### [renderComments()](/api-reference/sdk/api/api-methods#rendercomments-11)
+
+Resolves Velt comment annotations to Monaco ranges and renders them as stable `<velt-comment-text>` overlay elements positioned over the commented text.
+
+- Params: [`RenderCommentsRequest`](/api-reference/sdk/models/data-models#rendercommentsrequest-10)
+- Returns: `void`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { renderComments } from '@veltdev/monaco-velt-comments';
+
+    renderComments({
+      editor,
+      editorId: 'my-editor',
+      commentAnnotations: commentAnnotations ?? [],
+    });
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```ts
+    import { renderComments } from '@veltdev/monaco-velt-comments';
+
+    renderComments({
+      editor,
+      editorId: 'my-editor',
+      commentAnnotations,
+    });
+    ```
+  </Tab>
+</Tabs>
+
+#### [isVeltAvailable()](/api-reference/sdk/api/api-methods#isveltavailable)
+
+Checks whether the Velt SDK is loaded on `window.Velt`.
+
+- Params: none
+- Returns: `boolean`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { isVeltAvailable, renderComments } from '@veltdev/monaco-velt-comments';
+
+    if (isVeltAvailable()) {
+      renderComments({ editor, editorId: 'my-editor', commentAnnotations });
+    }
+    ```
+  </Tab>
+  <Tab title="Other Frameworks">
+    ```ts
+    import { isVeltAvailable, renderComments } from '@veltdev/monaco-velt-comments';
+
+    if (isVeltAvailable()) {
+      renderComments({ editor, editorId: 'my-editor', commentAnnotations });
+    }
+    ```
+  </Tab>
+</Tabs>

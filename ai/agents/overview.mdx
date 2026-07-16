@@ -6,93 +6,90 @@ description: "Build review agents for your product that review web pages, data, 
 
 ## What are Review Agents?
 
-Build review agents for your product. A review agent analyzes whatever you point it at and surfaces findings as comment annotations: web pages, entire sites, data, charts, or anything else you can surface via an API or MCP server. The `rest-api` context strategy pulls data from any REST endpoint you configure, and the `mcp-tools` execution strategy lets the model query your MCP servers during the review. You configure what an agent looks for; the platform handles context gathering, LLM invocation, post-processing, deduplication, and annotation creation.
+Build review agents for your product. Point an agent at a URL, and it reviews the content and posts findings as comment annotations.
 
-Build any review you want by writing a prompt and selecting a few configuration options: brand consistency, accessibility, SEO, broken links, spelling, custom domain rules, or validations against your own live data. No need to run your own browser pool, prompt your own model, or wire up annotation creation.
+Review agents can review anything you can surface:
 
-You define an **agent configuration** once, then call **Run Execution** with a URL. Results are persisted as a versioned execution document plus per-URL findings, and annotations are automatically posted to the document via the Comments API.
+- **Web pages and sites**: text, screenshots, HTML, CSS, links, accessibility tree, Lighthouse.
+- **Your data**: pull any REST endpoint into the review with the `rest-api` strategy.
+- **Charts, dashboards, and more**: anything you can expose via an API or MCP server.
+
+You write a prompt and pick a few config options. The platform handles context gathering, LLM invocation, post-processing, deduplication, and annotation creation.
 
 ## What you get
 
-- **Built-in and custom agents.** Use ready-made agents (spell-check, grammar-check, broken-links, PII detection, profanity, sensitive-data, Lighthouse, accessibility, OG-image, and more; see [Built-in agents](#built-in-agents)) or define your own custom agents from a prompt.
+- **Built-in and custom agents.** Ready-made agents (spell-check, broken-links, PII, Lighthouse, accessibility, [and more](#built-in-agents)), or your own from a prompt.
 
-- **Pluggable context gathering.** Stack one or more strategies (page text, screenshots, HTML, CSS, links, accessibility tree, computed styles, robots.txt, sitemap, Lighthouse, and live REST API data) and the engine extracts everything.
+- **Pluggable context gathering.** Stack strategies: page text, screenshots, HTML, CSS, links, accessibility tree, computed styles, robots.txt, sitemap, Lighthouse, live REST API data.
 
-- **Live REST API context.** The `rest-api` strategy fetches your own endpoints (CRM, inventory, feature flags, user profiles) at execution time and injects the responses into the prompt. Auth secrets are encrypted at rest and redacted on read.
+- **Live REST API context.** The `rest-api` strategy fetches your endpoints at execution time and injects the responses into the prompt. Secrets are encrypted at rest and redacted on read.
 
-- **MCP tool use.** The `mcp-tools` execution strategy connects to remote [MCP (Model Context Protocol)](https://modelcontextprotocol.io) servers, exposes their tools to the model, and runs a multi-turn tool loop, e.g. verifying on-page code snippets live against a documentation MCP. Provider-agnostic (Claude + Gemini); server auth secrets are encrypted at rest and redacted on read.
+- **MCP tool use.** The `mcp-tools` strategy runs a multi-turn tool loop against your remote [MCP](https://modelcontextprotocol.io) servers. Works with Claude and Gemini.
 
-- **Versioned configurations.** Every behavioral edit creates a new version. In-flight executions stay pinned to the version they started on. One-click restore rolls back the most recent change.
+- **Versioned configurations.** Every behavioral edit creates a new version; one-click restore rolls back.
 
-- **Async execution with polling.** `Run Execution` returns an `executionId` immediately and dispatches a Cloud Task. Poll `Get Execution` until `status !== "running"`.
+- **Async execution.** `Run Execution` returns an `executionId` immediately; poll `Get Execution` until `status !== "running"`.
 
-- **Cross-page execution.** Set `crossPageExecute: true` and the engine crawls the seed URL, processes up to `maxUrlsToProcess` pages, and aggregates findings across the site.
+- **Cross-page execution.** Set `crossPageExecute: true` to crawl the seed URL and review up to `maxUrlsToProcess` pages.
 
-- **Device emulation.** Set `deviceType: "mobile"` or `"desktop"` per execution to control the Puppeteer viewport/user-agent used for context gathering and pin resolution.
+- **Device emulation.** Run each execution as `"mobile"` or `"desktop"`.
 
-- **Re-run deduplication.** Re-running an agent against the same document does not pile up duplicate annotations. The active `deletePreviousSuggestions` post-processor clears the prior run's suggestions for each URL before writing the new ones. (The legacy `matchAndMerge` processor is deprecated and ignored.)
+- **Re-run deduplication.** Re-running an agent replaces the prior run's suggestions instead of piling up duplicates.
 
-- **Token usage analytics.** Per-agent, per-model, per-month token consumption tracked automatically in Firestore and exposed via the Analytics endpoint.
+- **Token usage analytics.** Per-agent, per-model, per-month token usage via the Analytics endpoint.
 
-- **Agent groups.** Organize related agents into named groups (e.g. "Brand QA") and filter list responses by group.
+- **Agent groups.** Bundle related agents (e.g. "Brand QA") and filter lists by group.
 
 ## Use cases
 
 <CardGroup cols={2}>
   <Card title="Brand consistency" icon="palette">
-    A custom agent verifies brand colors, typography, and logo placement across your marketing pages. Re-run on every deploy.
+    Verify brand colors, typography, and logo placement across your marketing pages. Re-run on every deploy.
   </Card>
 
   <Card title="Pre-launch QA" icon="rocket">
-    Spell-check, broken-links, and accessibility agents run before a release. Findings appear as comment annotations on the staging document.
+    Run spell-check, broken-links, and accessibility agents before a release. Findings land on the staging document.
   </Card>
 
   <Card title="Content moderation" icon="shield-halved">
-    PII detection and profanity filter agents flag sensitive content on user-generated pages. Pair with Approval Engine for human review.
+    Flag PII and profanity on user-generated pages. Pair with Approval Engine for human review.
   </Card>
 
   <Card title="Cross-page audit" icon="sitemap">
-    Run a brand consistency agent in `crossPageExecute: true` mode against a marketing site. The crawler discovers internal links, then the agent checks each one.
+    Set `crossPageExecute: true` and the crawler discovers internal links, then reviews each page.
   </Card>
 
   <Card title="Data-enriched checks" icon="database">
-    Use the `rest-api` context strategy to pull live business data into the prompt, e.g. validate that on-page pricing matches your billing API.
+    Pull live business data into the prompt with `rest-api`, e.g. validate on-page pricing against your billing API.
   </Card>
 
   <Card title="Workflow integration" icon="diagram-project">
-    Trigger an agent execution from an Approval Engine workflow node. The engine handles parking the workflow on the agent's findings.
+    Trigger an agent from an Approval Engine workflow node and park the workflow on its findings.
   </Card>
 </CardGroup>
 
 ## How it works
 
-1. **Define the agent.** Call [Create Agent](/api-reference/rest-apis/v2/agents/create) with a name, instructions, and a configuration block (context gathering strategies, execution strategy, post-processing options). The engine creates version 1 in the agent's versions subcollection.
-2. **Run an execution.** Call [Run Execution](/api-reference/rest-apis/v2/agents/execution/run) with `agentId` and `url`. The engine creates an execution document, dispatches a Cloud Task, and returns an `executionId`.
-3. **The pipeline runs.** Context gathering → LLM execution → post-processing (guardrails, match-and-merge, annotation creation, analytics) → response shaping. Every phase is bounded by a per-phase timeout.
-4. **Poll for results.** Call [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) until `status !== "running"`. Set `includeResults: true` to fetch per-URL findings.
-5. **Findings appear as annotations.** When `postProcess.annotations.enabled` is true (default), each finding becomes a comment annotation on the document referenced by `organizationId` / `documentId`.
+1. **Define the agent.** Call [Create Agent](/api-reference/rest-apis/v2/agents/create) with a name, instructions, and config (context gathering, execution strategy, post-processing).
+2. **Run an execution.** Call [Run Execution](/api-reference/rest-apis/v2/agents/execution/run) with `agentId` and `url`. Returns an `executionId` immediately.
+3. **Poll for results.** Call [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) until `status !== "running"`. Set `includeResults: true` for per-URL findings.
+4. **Findings appear as annotations.** Each finding becomes a comment annotation on the document referenced by `organizationId` / `documentId` (on by default).
 
 ## Mental model
 
-### Agent
+| Concept | Meaning |
+| ------- | ------- |
+| **Agent** | Reusable review configuration: identity (`name`, `description`, `enabled`) plus behavior (instructions, context gathering, execution, post-processing). Behavioral edits create a new version. |
+| **Execution** | One run of an agent against a seed URL. Pins the agent `version` at dispatch, so in-flight runs ignore mid-run config changes. |
+| **Finding** | One issue on one URL: severity, category, target text, suggestion, HTML selector, confidence. Low-confidence findings are suppressed by guardrails. |
 
-An **agent** is a reusable QA configuration. Each agent has an identity (`name`, `description`, `enabled`) plus a behavioral configuration (instructions, context gathering, execution, post-processing). Identity edits update the root document; behavioral edits create a new version.
-
-### Execution
-
-An **execution** is one run of an agent against a seed URL. It pins the agent's `version` at dispatch time, so in-flight runs are immune to mid-run config changes.
-
-**Lifecycle:**
+**Execution lifecycle:**
 
 ```
 running → passed | failed | partial | error | skipped
 ```
 
-### Finding
-
-A **finding** is one issue the agent surfaced on one URL. Findings carry severity, category, target text, suggestion, HTML selector, and confidence. Findings below the guardrails confidence floor are suppressed unless explicitly disabled.
-
-### Pipeline phases
+## Pipeline phases
 
 Each agent run executes sequential phases:
 

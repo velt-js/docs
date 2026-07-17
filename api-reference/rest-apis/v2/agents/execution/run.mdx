@@ -5,7 +5,7 @@ api: "POST https://api.velt.dev/v2/agents/execution/run"
 
 Use this API to start an asynchronous agent execution. The engine creates an execution document in Firestore and dispatches a Cloud Task for processing. The response returns immediately with the `executionId`. Poll [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) to track progress and fetch findings.
 
-The `apiKey` is injected from request headers. Pass `organizationId` and `documentId` at the top level of the body if you want findings to land as comment annotations on a specific document. Cross-page execution is controlled via the `crossPageExecute` boolean; there is no separate endpoint.
+The `apiKey` is injected from request headers. `organizationId` and `documentId` are required and identify the document the execution runs against — the document must already exist, and findings are persisted to it as comment annotations. Cross-page execution is controlled via the `crossPageExecute` boolean; there is no separate endpoint.
 
 The schema uses `.passthrough()` so any additional fields are forwarded.
 
@@ -49,12 +49,12 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
       Device mode to emulate for this execution: `"mobile"` or `"desktop"`. Default: `"desktop"`. Drives the Puppeteer viewport/user-agent used by all context-gathering strategies and pin resolution, and sets `pageInfo.deviceInfo.deviceType` on every annotation the execution creates.
     </ParamField>
 
-    <ParamField body="organizationId" type="string">
-      Client organization ID. Required for findings to be persisted as comment annotations.
+    <ParamField body="organizationId" type="string" required>
+      Organization ID. Identifies the organization the execution runs against; findings are persisted to it as comment annotations.
     </ParamField>
 
-    <ParamField body="documentId" type="string">
-      Client document ID. Required for findings to be persisted as comment annotations.
+    <ParamField body="documentId" type="string" required>
+      Document ID. The document must already exist (unknown documents return `NOT_FOUND`); findings are persisted to it as comment annotations.
     </ParamField>
 
     <ParamField body="trigger" type="string">
@@ -151,7 +151,9 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 {
   "data": {
     "agentId": "abc123def456",
-    "url": "https://example.com"
+    "url": "https://example.com",
+    "organizationId": "org_001",
+    "documentId": "doc_001"
   }
 }
 ```
@@ -187,7 +189,7 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 }
 ```
 
-**Errors:** `INVALID_ARGUMENT` (invalid URL, missing required fields, invalid `trigger` or `deviceType`) / `NOT_FOUND` (agent does not exist) / `FAILED_PRECONDITION` (agent is disabled, store database not found, or an active execution already exists for this document).
+**Errors:** `INVALID_ARGUMENT` (invalid URL; missing `agentId`, `organizationId`, or `documentId`; invalid `trigger` or `deviceType`) / `NOT_FOUND` (store database not found, or the target document does not exist) / `ALREADY_EXISTS` (an execution is already running for this agent + document combination; the error message includes the running execution's ID) / `RESOURCE_EXHAUSTED` (the workspace's AI credits are exhausted).
 
 <ResponseExample>
 ```js

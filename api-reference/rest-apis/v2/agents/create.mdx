@@ -29,8 +29,8 @@ Use this API to create a new custom agent configuration. The engine stores the a
       Min 1 char. Agent display name.
     </ParamField>
 
-    <ParamField body="description" type="string">
-      Human-readable description of what the agent does.
+    <ParamField body="description" type="string" required>
+      Min 1 char. Human-readable description of what the agent does.
     </ParamField>
 
     <ParamField body="rawInstructions" type="string">
@@ -38,34 +38,34 @@ Use this API to create a new custom agent configuration. The engine stores the a
     </ParamField>
 
     <ParamField body="instructions" type="string">
-      Processed/enhanced instructions used by the AI execution.
+      Processed/enhanced instructions used by the AI execution. Required whenever the execution strategy consumes a prompt — `"ai"` (the default), `"service+ai"`, `"stagehand-agent"`, and `"mcp-tools"`. Only pure `"service"` agents may omit it.
     </ParamField>
 
-    <ParamField body="enabled" type="boolean">
-      Whether the agent is active. Defaults to `true`.
+    <ParamField body="enabled" type="boolean" required>
+      Whether the agent is active.
     </ParamField>
 
     <ParamField body="metadata" type="object">
       Arbitrary client metadata (e.g. `{ "team": "growth", "owner": "jane" }`). The reserved keys `type`, `category`, `internal`, and `apiKey` are **server-managed** and rejected if present ([see below](#server-managed-fields)).
     </ParamField>
 
-    <ParamField body="contextGathering" type="object">
+    <ParamField body="contextGathering" type="object" required>
       Context gathering configuration.
 
       | Field             | Type     | Required | Description                                                                              |
       | ----------------- | -------- | -------- | ---------------------------------------------------------------------------------------- |
-      | `strategies`      | string[] | no       | Min 1 if provided. See [context gathering strategies](#context-gathering-strategies).    |
+      | `strategies`      | string[] | yes      | Min 1 strategy. See [context gathering strategies](#context-gathering-strategies).       |
       | `strategyOptions` | object   | no       | Per-strategy option overrides, keyed by strategy name ([see below](#context-gathering-strategy-options)). When `strategies` includes `"rest-api"`, `strategyOptions["rest-api"]` is required ([see below](#rest-api-strategy-options)). |
       | `aiConfig`        | object   | no       | AI provider/model override for the gather phase ([see below](#ai-config-provider--model)). |
     </ParamField>
 
-    <ParamField body="execution" type="object">
-      Execution configuration.
+    <ParamField body="execution" type="object" required>
+      Execution configuration. Send `{}` to accept the defaults (the `"ai"` strategy).
 
       | Field                  | Type     | Required | Description                                                                                                     |
       | ---------------------- | -------- | -------- | --------------------------------------------------------------------------------------------------------------- |
       | `executionStrategy`    | string   | no       | `"ai"` (default), `"service"`, `"service+ai"`, `"stagehand-agent"`, or `"mcp-tools"`.                           |
-      | `serviceId`            | string   | no       | Required when `executionStrategy` is `"service"` or `"service+ai"`. Values: `"broken-links"`, `"crawler"`, `"screenshot"`. |
+      | `serviceId`            | string   | no       | Required when `executionStrategy` is `"service"` or `"service+ai"`. Values: `"broken-links"`, `"crawler"`, `"screenshot"`, `"accessibility-checker"`, `"og-image-checker"`. |
       | `aiConfig`             | object   | no       | AI provider/model override for the execute phase ([see below](#ai-config-provider--model)).                     |
       | `mcpServers`           | object[] | no       | Required (≥1) when `executionStrategy` is `"mcp-tools"`. Remote MCP servers the model may call during the tool loop ([see below](#mcp-servers-mcp-tools-strategy)). |
       | `responseDescriptions` | object   | no       | Per-field descriptions guiding AI response shaping ([see below](#response-descriptions)).                        |
@@ -80,7 +80,7 @@ Use this API to create a new custom agent configuration. The engine stores the a
       | ------------------ | ------- | -------- | ------------------------------------------------------------------------------------ |
       | `useAiFormatting`  | boolean | no       | Whether to use AI for response formatting.                                           |
       | `formattingPrompt` | string  | no       | Custom prompt for AI formatting.                                                     |
-      | `responseAdapter`  | string  | no       | Adapter name: `"broken-links-response"`, `"crawler-response"`, `"screenshot-response"`. |
+      | `responseAdapter`  | string  | no       | Adapter name: `"broken-links-response"`, `"crawler-response"`, `"screenshot-response"`, `"accessibility-checker-response"`, `"og-image-checker-response"`. |
     </ParamField>
 
     <ParamField body="postProcess" type="object">
@@ -88,13 +88,14 @@ Use this API to create a new custom agent configuration. The engine stores the a
 
       | Field                       | Type     | Required | Description                                                                          |
       | --------------------------- | -------- | -------- | ------------------------------------------------------------------------------------ |
-      | `guardrails`                | object   | no       | `{ enabled?: boolean }`: confidence-based filtering. Findings below 50% are suppressed. |
+      | `guardrails`                | object   | no       | `{ enabled?: boolean }`: finding quality pipeline — deduplicates findings (identical source URL + target text + occurrence + issue type) and sanitizes HTML/XSS from all text fields. |
       | `deletePreviousSuggestions` | object   | no       | `{ enabled?: boolean }`: per-URL delete-and-recreate that clears the prior run's suggestions for the URL before writing the new ones. This is the active dedup mechanism. |
-      | `pinResolution`             | object   | no       | `{ enabled?: boolean }`: anchor pin resolution for visual annotations.              |
       | `annotations`               | object   | no       | `{ enabled?: boolean, strategy?: string }`: strategy is `"findings"`, `"word-level"`, `"page-level"`, or `"none"`. |
       | `analytics`                 | object   | no       | `{ enabled?: boolean }`: analytics event tracking.                                  |
       | `matchAndMerge`             | object   | no       | **Deprecated / ignored.** `{ enabled?: boolean }`: replaced by `deletePreviousSuggestions`. Still accepted for backward compatibility but has no effect. |
       | `customProcessors`          | string[] | no       | Custom post-processor names.                                                         |
+
+      Unknown keys inside `postProcess` are rejected. Pin resolution (anchoring visual findings to element coordinates) always runs as part of the pipeline and is not configurable via this field.
     </ParamField>
 
     <ParamField body="input" type="object">
@@ -266,7 +267,7 @@ Both `execution.aiConfig` and `contextGathering.aiConfig` accept the same strict
 | `provider`         | string | LLM provider: `"gemini"`, `"claude"`, or `"openai"`. Defaults to the platform default when omitted. |
 | `model`            | string | Model name for the chosen provider (e.g. `"gemini-3-flash-preview"`, `"claude-sonnet-4-6"`).    |
 | `responseMimeType` | string | Requested response MIME type (e.g. `"application/json"`).                                        |
-| `maxToolTurns`     | number | Tool-loop turn budget for the `mcp-tools` strategy. Positive integer, hard-capped at runtime.   |
+| `maxToolTurns`     | number | Tool-loop turn budget for the `mcp-tools` strategy. Integer `1..16`; out-of-range values are rejected at config time. Default: `8`. |
 
 #### Execution strategy options
 
@@ -314,7 +315,7 @@ All fields are optional strings that instruct the AI on how to populate each fin
 | `targetText`   | The exact text on the page this finding refers to.                                |
 | `suggestion`   | Suggested fix or recommendation.                                                  |
 | `isPageLevel`  | `"true"` for visual/layout findings; `"false"` when targetText is real DOM text.  |
-| `issueType`    | Issue type for match-and-merge keying (short, lowercase, hyphenated).             |
+| `issueType`    | Issue classification tag (short, lowercase, hyphenated).                          |
 | `confidence`   | Confidence score from 0 to 100.                                                   |
 | `htmlSelector` | CSS selector of the DOM element.                                                  |
 | `findingType`  | Finding type classification.                                                      |
@@ -327,10 +328,13 @@ All fields are optional strings that instruct the AI on how to populate each fin
 {
   "data": {
     "name": "Simple Content Checker",
+    "description": "Checks for broken images and missing alt text",
+    "enabled": true,
     "instructions": "Check for broken images and missing alt text on the page.",
     "contextGathering": {
       "strategies": ["web-page-html"]
-    }
+    },
+    "execution": {}
   }
 }
 ```
@@ -369,7 +373,7 @@ All fields are optional strings that instruct the AI on how to populate each fin
     },
     "postProcess": {
       "guardrails": { "enabled": true },
-      "matchAndMerge": { "enabled": true },
+      "deletePreviousSuggestions": { "enabled": true },
       "annotations": { "enabled": true, "strategy": "findings" },
       "analytics": { "enabled": true }
     },
@@ -399,7 +403,10 @@ All fields are optional strings that instruct the AI on how to populate each fin
 {
   "data": {
     "name": "Pricing Parity Checker",
+    "description": "Compares on-page prices with the billing API",
+    "enabled": true,
     "instructions": "Compare the price shown on the page with the price returned by the billing API and flag any mismatch.",
+    "execution": {},
     "contextGathering": {
       "strategies": ["web-page-text", "rest-api"],
       "strategyOptions": {
@@ -430,6 +437,8 @@ All fields are optional strings that instruct the AI on how to populate each fin
 {
   "data": {
     "name": "Docs Code Verifier",
+    "description": "Verifies on-page code snippets against the docs MCP",
+    "enabled": true,
     "instructions": "For every code snippet on the page, use the documentation MCP tools to find the matching feature and verify the snippet is correct and up to date. Flag any snippet that does not match the docs.",
     "contextGathering": {
       "strategies": ["web-page-html"]
@@ -482,7 +491,7 @@ All fields are optional strings that instruct the AI on how to populate each fin
 }
 ```
 
-**Errors:** `INVALID_ARGUMENT` (Zod validation failure, e.g. missing `name`, missing `apiKey`, a server-managed field, an unknown key inside `knowledge`, an invalid `userContextFields.type`, missing `instructions` for an AI/`stagehand-agent`/`mcp-tools` strategy, or missing/invalid `execution.mcpServers` when `executionStrategy` is `"mcp-tools"`) / `RESOURCE_EXHAUSTED` (workspace already has the maximum number of custom agents).
+**Errors:** `INVALID_ARGUMENT` (Zod validation failure, e.g. missing `name`, `description`, `enabled`, `contextGathering.strategies`, or `execution`; a server-managed field; an unknown key inside `knowledge` or `postProcess`; an invalid `userContextFields.type`; missing `instructions` for an AI/`stagehand-agent`/`mcp-tools` strategy; or missing/invalid `execution.mcpServers` when `executionStrategy` is `"mcp-tools"`) / `RESOURCE_EXHAUSTED` (workspace already has the maximum number of custom agents).
 
 <ResponseExample>
 ```js

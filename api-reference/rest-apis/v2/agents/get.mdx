@@ -5,10 +5,9 @@ api: "POST https://api.velt.dev/v2/agents/get"
 
 Use this API to fetch a single agent or list agents in your workspace. The endpoint behaves differently based on the provided fields:
 
-- **`agentId` provided:** returns a single agent. For custom agents, the response merges identity + behavioral fields from the version subcollection. For built-in agents, only sanitized public fields are returned.
+- **`agentId` provided:** returns a single agent. For custom agents, the response merges identity + behavioral fields from the version subcollection. For built-in agents, the response contains the agent's identity fields.
 - **`agentId` omitted:** returns a list of agents with identity-only fields. Optionally filter by `filter` (default vs custom) and/or `groupId` (members of an agent group).
 
-Built-in agents flagged `metadata.internal: true` (e.g. `crawler`, `screenshot`) are excluded from list responses but can still be fetched individually.
 
 # Endpoint
 
@@ -126,7 +125,7 @@ Custom agents return the full configuration including behavioral fields from the
         "response": { "useAiFormatting": false },
         "postProcess": {
           "guardrails": { "enabled": true },
-          "matchAndMerge": { "enabled": true },
+          "deletePreviousSuggestions": { "enabled": true },
           "annotations": { "enabled": true, "strategy": "findings" }
         },
         "input": {
@@ -138,10 +137,7 @@ Custom agents return the full configuration including behavioral fields from the
         "scope": {
           "pageScope": ["https://example.com/*"],
           "crossPage": { "enabled": true, "targetProperty": "brandConsistency", "pageDiscovery": "auto" }
-        },
-        "metadata": { "team": "growth", "owner": "jane", "apiKey": "ak_xxx" },
-        "executionCount": 5,
-        "lastExecutedAt": 1711900000000
+        }
       }
     }
   }
@@ -150,11 +146,13 @@ Custom agents return the full configuration including behavioral fields from the
 
 <Note>
   Any auth secrets are returned as `"__redacted__"`; they are never sent back in plaintext. This applies to both `rest-api` strategy secrets stored in `contextGathering.strategyOptions` and `mcp-tools` server secrets stored in `execution.mcpServers[].auth`.
+
+  `executionCount` / `lastExecutedAt` are returned only on **list** responses, not on single-agent fetches.
 </Note>
 
-#### Success Response (single built-in agent, sanitized)
+#### Success Response (single built-in agent)
 
-Built-in agents return only public fields. Internal implementation fields (`instructions`, `contextGathering`, `execution`, `postProcess`, `response`, `payloadSchema`, `supportedVariables`) are stripped.
+Built-in agents return their identity fields: `id`, `name`, `description`, `enabled`, `managedBy`, `system`, and `input` when the agent declares one.
 
 ```JSON
 {
@@ -168,12 +166,7 @@ Built-in agents return only public fields. Internal implementation fields (`inst
         "description": "Finds spelling mistakes and typos in page content using AI analysis",
         "enabled": true,
         "managedBy": "velt",
-        "metadata": { "type": "system", "category": "quality" },
-        "system": true,
-        "inputRequirements": { "requires": ["url"] },
-        "userContextFields": [],
-        "executionCount": 142,
-        "lastExecutedAt": 1711900000000
+        "system": true
       }
     }
   }
@@ -182,7 +175,7 @@ Built-in agents return only public fields. Internal implementation fields (`inst
 
 #### Success Response (list)
 
-List rows are identity-only. Built-in agents include `system: true`; internal agents (`crawler`, `screenshot`) are omitted.
+List rows are identity-only. Built-in agents include `system: true`.
 
 ```JSON
 {
@@ -198,7 +191,6 @@ List rows are identity-only. Built-in agents include `system: true`; internal ag
           "system": true,
           "enabled": true,
           "managedBy": "velt",
-          "metadata": { "type": "system", "category": "quality" },
           "executionCount": 142,
           "lastExecutedAt": 1711900000000
         },
@@ -209,7 +201,6 @@ List rows are identity-only. Built-in agents include `system: true`; internal ag
           "enabled": true,
           "managedBy": "customer",
           "version": 3,
-          "metadata": { "team": "growth", "owner": "jane" },
           "executionCount": 5,
           "lastExecutedAt": 1711900000000
         }

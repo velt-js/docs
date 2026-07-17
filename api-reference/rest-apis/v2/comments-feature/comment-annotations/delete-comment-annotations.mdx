@@ -4,7 +4,7 @@ api: "POST https://api.velt.dev/v2/commentannotations/delete"
 ---
 
 Use this API to delete comment annotations from a document within an organization.
-Additional filters can be applied using location IDs, annotation IDs, or user IDs.
+Additional filters can be applied using location IDs, annotation IDs, or user IDs — plus the agent filters (`agentId`, `agentSuggestions`, `agentUrls`) to scope the delete to agent-authored annotations.
 
 # Endpoint
 
@@ -45,8 +45,26 @@ Additional filters can be applied using location IDs, annotation IDs, or user ID
     <ParamField body="userIds" type="string[]">
       Array of User IDs
     </ParamField>
+
+    <ParamField body="agentId" type="string">
+      Narrows the delete to annotations authored by this agent. Non-empty when provided.
+    </ParamField>
+
+    <ParamField body="agentSuggestions" type="boolean">
+      When `true`, narrows the delete to fresh (still-pending) agent suggestions only. Accepted suggestions are not matched.
+    </ParamField>
+
+    <ParamField body="agentUrls" type="string[]">
+      Non-empty array of page URLs. Narrows the delete to agent annotations stamped for any of the supplied pages (annotations created before URL stamping existed are never matched).
+    </ParamField>
   </Expandable>
 </ParamField>
+
+<Note>
+  **Agent filters (V2 only, combinable).** Unlike the [Get Comment Annotations](/api-reference/rest-apis/v2/comments-feature/comment-annotations/get-comment-annotations-v2) agent filters (one per request), the delete filters are **AND-combined**: `agentId` + `agentSuggestions` + `agentUrls` deletes only that agent's still-pending suggestions on those page(s); each alone deletes all suggestions / all of that agent's annotations / all agent annotations for those pages respectively. They also intersect with `annotationIds` when both are supplied.
+
+  Agent filters require the workspace to have advanced queries enabled — otherwise the request fails with `NOT_FOUND` (`Advanced queries are not enabled...`) rather than falling back to a document-wide delete. If none of the supplied `agentUrls` resolve to a valid page (e.g. blank or fragment-only URLs), the request fails with `INVALID_ARGUMENT` instead of widening the delete scope.
+</Note>
 
 ## **Example Requests**
 
@@ -217,6 +235,24 @@ Additional filters can be applied using location IDs, annotation IDs, or user ID
     "annotationIds": [
       "yourAnnotationId1",
       "yourAnnotationId2"
+    ]
+  }
+}
+```
+
+#### 13. Delete an agent's still-pending suggestions for specific pages
+
+Combines the agent filters (AND semantics): only annotations authored by `spell-check` that are still pending suggestions and stamped for one of the listed pages are deleted.
+
+```JSON
+{
+  "data": {
+    "organizationId": "yourOrganizationId",
+    "documentId": "yourDocumentId",
+    "agentId": "spell-check",
+    "agentSuggestions": true,
+    "agentUrls": [
+      "https://example.com/pricing"
     ]
   }
 }

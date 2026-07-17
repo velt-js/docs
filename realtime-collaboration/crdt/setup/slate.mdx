@@ -1,0 +1,821 @@
+---
+title: Slate Editor
+description: Setup Multiplayer Editing for Slate Editor.
+---
+
+The `@veltdev/slate-crdt` library enables real-time collaborative editing on Slate Editors. The collaboration editing engine is built on top of [Yjs](https://docs.yjs.dev/), `@slate-yjs/core`, and Velt SDK.
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- React (v18 or higher)
+- A Velt account with an API key ([sign up](https://console.velt.dev/))
+- Optional: TypeScript for type safety
+
+## Setup
+
+### Step 1: Install Dependencies
+
+Install the required packages:
+
+```bash
+npm install @veltdev/slate-crdt @veltdev/crdt @veltdev/client @veltdev/react react slate slate-react @slate-yjs/core @slate-yjs/react yjs y-protocols
+```
+
+
+### Step 2: Setup Velt
+
+Initialize the Velt client by following the [Velt Setup Docs](/get-started/quickstart). This is required for the collaboration engine to work.
+
+
+### Step 3: Initialize Collaborative Editor
+
+- Create and own the Slate editor in your application. The collaboration library enhances the editor you pass in.
+- Pass an `editorId` to uniquely identify each editor instance you have in your app.
+- Use Slate `Descendant[]` nodes for `initialContent`, not an HTML string.
+
+<Tabs>
+<Tab title="React Hook">
+
+Use `useCollaboration()` to manage Velt readiness, manager initialization, reactive status, versions, and cleanup.
+
+```tsx
+import { useMemo } from 'react';
+import { createEditor } from 'slate';
+import { Editable, Slate, withReact } from 'slate-react';
+import { useCollaboration } from '@veltdev/slate-crdt';
+
+type ParagraphElement = {
+  type: 'paragraph';
+  children: Array<{ text: string }>;
+};
+
+const INITIAL_CONTENT: ParagraphElement[] = [
+  { type: 'paragraph', children: [{ text: 'Start writing...' }] },
+];
+
+function CollaborativeEditor() {
+  const rawEditor = useMemo(() => withReact(createEditor()), []);
+
+  const {
+    manager,
+    isLoading,
+    isSynced,
+    status,
+    error,
+  } = useCollaboration({
+    editorId: 'my-slate-editor',
+    editor: rawEditor,
+    initialContent: INITIAL_CONTENT,
+    cursorData: {
+      name: 'Michael Scott',
+      color: '#2563eb',
+      colorLight: 'rgba(37, 99, 235, 0.2)',
+    },
+    onError: (err) => console.error('Collaboration error:', err),
+  });
+
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <div>
+      <div>Status: {status} | Synced: {isSynced ? 'Yes' : 'No'}</div>
+      <Slate
+        editor={rawEditor}
+        initialValue={INITIAL_CONTENT}
+        onChange={() => manager?.sendCursorPosition(rawEditor.selection)}
+      >
+        <Editable readOnly={isLoading} placeholder="Start typing..." />
+      </Slate>
+    </div>
+  );
+}
+```
+
+</Tab>
+<Tab title="Imperative API">
+
+Use `createCollaboration()` when you want to manage the lifecycle yourself. Initialize Velt, identify the user, set the document, and wait for the SDK before creating the manager.
+
+```tsx
+import { createEditor } from 'slate';
+import { withReact } from 'slate-react';
+import { createCollaboration } from '@veltdev/slate-crdt';
+
+type ParagraphElement = {
+  type: 'paragraph';
+  children: Array<{ text: string }>;
+};
+
+const editor = withReact(createEditor());
+const initialContent: ParagraphElement[] = [
+  { type: 'paragraph', children: [{ text: 'Start writing...' }] },
+];
+
+const manager = await createCollaboration({
+  editorId: 'my-slate-editor',
+  editor,
+  veltClient: client,
+  initialContent,
+  onError: (error) => console.error('Collaboration error:', error),
+});
+
+const enhancedEditor = manager.getEditor();
+```
+
+</Tab>
+</Tabs>
+
+<Note>The manager applies `withYjs`, `withYHistory`, and—unless disabled—`withCursors` to the consumer-owned editor. Create the editor once with `useMemo()` so the manager is not recreated on every render.</Note>
+
+
+### Step 4: Status Monitoring (Optional)
+
+The React hook returns reactive `status`, `isSynced`, and `error` state. For event-style subscriptions, use the manager:
+
+```tsx
+useEffect(() => {
+  if (!manager) return;
+
+  const offStatus = manager.onStatusChange((nextStatus) => {
+    console.log('Status:', nextStatus);
+  });
+  const offSynced = manager.onSynced((synced) => {
+    console.log('Synced:', synced);
+  });
+
+  return () => {
+    offStatus();
+    offSynced();
+  };
+}, [manager]);
+```
+
+You can also read the current values directly:
+
+```tsx
+console.log(manager.status);
+console.log(manager.synced);
+console.log(manager.initialized);
+```
+
+
+### Step 5: Version Management (Optional)
+
+Save and restore named snapshots of the document. The React hook keeps `versions` in state and provides convenience methods.
+
+```tsx
+const {
+  versions,
+  saveVersion,
+  restoreVersion,
+  refreshVersions,
+} = useCollaboration({
+  editorId: 'my-slate-editor',
+  editor: rawEditor,
+});
+
+const versionId = await saveVersion('Before major edit');
+const latestVersions = await refreshVersions();
+await restoreVersion(versionId);
+```
+
+The same methods are available on the manager:
+
+```tsx
+const versionId = await manager.saveVersion('Draft v1');
+const versions = await manager.getVersions();
+await manager.restoreVersion(versionId);
+```
+
+
+### Step 6: Force Reset Initial Content (Optional)
+
+By default, `initialContent` is applied exactly once when the shared document is brand new. Pass Slate `Descendant[]` nodes to `initialContent`.
+
+```tsx
+useCollaboration({
+  editorId: 'my-slate-editor',
+  editor: rawEditor,
+  initialContent: [
+    { type: 'paragraph', children: [{ text: 'Fresh start' }] },
+  ] as ParagraphElement[],
+  forceResetInitialContent: true,
+});
+```
+
+<Warning>Use `forceResetInitialContent` only for deliberate reset workflows. It clears the current shared Slate content for every connected user.</Warning>
+
+
+### Step 7: Configure Remote Cursors (Optional)
+
+Slate cursor state is shared through Yjs awareness by `withCursors`. Pass local cursor metadata through `cursorData`, publish selection changes, and use `@slate-yjs/react` decorations to render remote cursors.
+
+```tsx
+import { useDecorateRemoteCursors } from '@slate-yjs/react';
+
+function CursorEditable({ readOnly }: { readOnly: boolean }) {
+  const decorate = useDecorateRemoteCursors({ carets: true });
+
+  return (
+    <Editable
+      readOnly={readOnly}
+      decorate={decorate}
+      placeholder="Start typing..."
+    />
+  );
+}
+```
+
+```tsx
+<Slate
+  editor={rawEditor}
+  initialValue={INITIAL_CONTENT}
+  onChange={() => manager?.sendCursorPosition(rawEditor.selection)}
+>
+  <CursorEditable readOnly={isLoading} />
+</Slate>
+```
+
+Update or inspect awareness-backed cursor data through the manager:
+
+```tsx
+manager.updateCursorData({
+  name: 'Michael Scott',
+  color: '#2563eb',
+  colorLight: 'rgba(37, 99, 235, 0.2)',
+});
+
+manager.sendCursorPosition(rawEditor.selection);
+const cursorStates = manager.getCursorStates();
+```
+
+Set `enableCursors: false` when your application does not need awareness-backed remote selections.
+
+
+### Step 8: CRDT Event Subscription (Optional)
+
+Listen for real-time CRDT data events using `getCrdtElement().on()` from the Velt client.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+import { useEffect } from 'react';
+import { useVeltClient } from '@veltdev/react';
+
+const { client } = useVeltClient();
+
+useEffect(() => {
+  if (!client) return;
+
+  const subscription = client.getCrdtElement().on('updateData').subscribe((event) => {
+    if (event) console.log('CRDT update:', event);
+  });
+
+  return () => subscription?.unsubscribe?.();
+}, [client]);
+```
+
+</Tab>
+<Tab title="Imperative API">
+
+```js
+const subscription = client.getCrdtElement().on('updateData').subscribe((event) => {
+  if (event) console.log('CRDT update:', event);
+});
+
+// Clean up when the editor is destroyed.
+subscription.unsubscribe();
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 9: Custom Encryption (Optional)
+
+Encrypt CRDT data before it is stored in Velt by registering a custom encryption provider. For CRDT methods, input data is of type `Uint8Array | number[]`.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+const encryptionProvider = {
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+};
+
+<VeltProvider apiKey="YOUR_API_KEY" encryptionProvider={encryptionProvider}>
+  ...
+</VeltProvider>
+```
+
+</Tab>
+<Tab title="Imperative API">
+
+```js
+const encryptionProvider = {
+  encrypt: async (config) => config.data.map((n) => n.toString()).join('__'),
+  decrypt: async (config) => config.data.split('__').map((s) => parseInt(s, 10)),
+};
+
+client.setEncryptionProvider(encryptionProvider);
+```
+
+</Tab>
+</Tabs>
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+ · [EncryptConfig](/api-reference/sdk/models/data-models#encryptconfig)
+ · [DecryptConfig](/api-reference/sdk/models/data-models#decryptconfig)
+
+
+### Step 10: Error Handling (Optional)
+
+Pass an `onError` callback to handle initialization or runtime errors. The React hook also exposes a reactive `error` state.
+
+```tsx
+const collab = useCollaboration({
+  editorId: 'my-slate-editor',
+  editor: rawEditor,
+  onError: (error) => console.error('Collaboration error:', error),
+});
+
+if (collab.error) {
+  return <div>Error: {collab.error.message}</div>;
+}
+```
+
+
+### Step 11: Access Yjs Internals (Advanced)
+
+The manager exposes escape hatches for direct Yjs manipulation when needed.
+
+```tsx
+const enhancedEditor = manager.getEditor();
+const doc = manager.getDoc();
+const xmlText = manager.getXmlText();
+const provider = manager.getProvider();
+const awareness = manager.getAwareness();
+const undoManager = manager.getUndoManager();
+const store = manager.getStore();
+```
+
+
+### Step 12: Cleanup
+
+The React hook destroys the manager automatically when the component unmounts or when the `editorId`, editor, or Velt client changes. It also returns a `destroy()` method for early cleanup.
+
+```tsx
+const { destroy } = useCollaboration({
+  editorId: 'my-slate-editor',
+  editor: rawEditor,
+});
+
+// Optional early teardown
+destroy();
+```
+
+When using the imperative API, call `manager.destroy()` during cleanup:
+
+```tsx
+return () => {
+  manager.destroy();
+};
+```
+
+
+## Notes
+
+- **Consumer-owned editor**: Create the Slate editor once and pass it to the hook or manager.
+- **Plugin order**: The manager applies `withYjs`, `withYHistory`, and `withCursors` before the store hydrates remote data.
+- **Initial content shape**: Pass Slate `Descendant[]` nodes, not HTML.
+- **Enhanced editor**: `manager.getEditor()` returns the editor after collaboration plugins are applied.
+- **Remote cursors**: Publish selection changes and render remote cursor decorations with `@slate-yjs/react`.
+- **Unique editorId**: Users must share the same Velt document context and `editorId` to collaborate.
+- **Production authentication**: Do not expose privileged server tokens in browser code; use Velt's recommended server-backed authentication flow.
+
+
+## Testing and Debugging
+
+**To test collaboration:**
+1. Log in as two unique users in two separate browser profiles and open the same Velt document and Slate `editorId` in both.
+2. Edit text or formatting in one window and verify the changes and remote cursor appear in the other.
+3. Make concurrent edits and verify the Slate-Yjs binding merges them without data loss.
+4. Reload both windows and verify the shared document persists.
+
+**Common issues:**
+- Editor recreated repeatedly: Wrap `withReact(createEditor())` in `useMemo()`.
+- Editor not loading: Confirm the Velt client is initialized and the user is authenticated before creating the manager.
+- Cursors not appearing: Pass `cursorData`, publish the current selection, and use `useDecorateRemoteCursors()`.
+- Initial content not rendering: Pass a valid Slate `Descendant[]` value.
+- Changes not syncing: Confirm both users have the same Velt document context and `editorId`.
+
+<Tip>
+Enable browser console warnings to see detailed debugging information. You can also use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setup/core#veltcrdtstoremap) to inspect and monitor your CRDT stores in real time.
+</Tip>
+
+
+## Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+
+A complete collaborative Slate editor with user login, cursor decorations, status display, and version management.
+
+```tsx Complete App.tsx expandable lines
+import { useMemo, useState } from 'react';
+import { createEditor } from 'slate';
+import { Editable, Slate, withReact } from 'slate-react';
+import { useDecorateRemoteCursors } from '@slate-yjs/react';
+import {
+  VeltProvider,
+  useCurrentUser,
+  useSetDocument,
+  useVeltClient,
+} from '@veltdev/react';
+import { useCollaboration } from '@veltdev/slate-crdt';
+
+const DOCUMENT_ID = 'slate-crdt-demo-doc-1';
+type ParagraphElement = {
+  type: 'paragraph';
+  children: Array<{ text: string }>;
+};
+
+const INITIAL_CONTENT: ParagraphElement[] = [
+  { type: 'paragraph', children: [{ text: 'Hello Slate CRDT!' }] },
+];
+
+const USERS = {
+  michael: {
+    userId: 'michael',
+    name: 'Michael Scott',
+    email: 'michael.scott@dundermifflin.com',
+    organizationId: 'my-org-id',
+    color: '#2563eb',
+  },
+  jim: {
+    userId: 'jim',
+    name: 'Jim Halpert',
+    email: 'jim.halpert@dundermifflin.com',
+    organizationId: 'my-org-id',
+    color: '#0f766e',
+  },
+};
+
+function Header() {
+  const { client } = useVeltClient();
+  const veltUser = useCurrentUser();
+
+  if (veltUser) {
+    return (
+      <header>
+        <span>Welcome, {veltUser.name}</span>
+        <button onClick={() => client?.signOutUser()}>Logout</button>
+      </header>
+    );
+  }
+
+  return (
+    <header>
+      {Object.values(USERS).map((user) => (
+        <button key={user.userId} onClick={() => client?.identify(user)}>
+          Login as {user.name}
+        </button>
+      ))}
+    </header>
+  );
+}
+
+function CursorEditable({ readOnly }: { readOnly: boolean }) {
+  const decorate = useDecorateRemoteCursors({ carets: true });
+  return <Editable readOnly={readOnly} decorate={decorate} placeholder="Start typing..." />;
+}
+
+function EditorComponent() {
+  const veltUser = useCurrentUser();
+  const rawEditor = useMemo(() => withReact(createEditor()), []);
+  const [versionName, setVersionName] = useState('');
+
+  const {
+    manager,
+    isLoading,
+    isSynced,
+    status,
+    error,
+    versions,
+    saveVersion,
+    restoreVersion,
+  } = useCollaboration({
+    editorId: DOCUMENT_ID,
+    editor: rawEditor,
+    initialContent: INITIAL_CONTENT,
+    cursorData: veltUser
+      ? {
+          name: veltUser.name,
+          color: veltUser.color,
+          colorLight: 'rgba(250, 204, 21, 0.4)',
+        }
+      : undefined,
+    onError: (err) => console.error('Collaboration error:', err),
+  });
+
+  const handleSaveVersion = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!versionName.trim()) return;
+    await saveVersion(versionName.trim());
+    setVersionName('');
+  };
+
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <main>
+      <div>Status: {status} | Synced: {isSynced ? 'Yes' : 'No'}</div>
+
+      <Slate
+        editor={rawEditor}
+        initialValue={INITIAL_CONTENT}
+        onChange={() => manager?.sendCursorPosition(rawEditor.selection)}
+      >
+        <CursorEditable readOnly={isLoading} />
+      </Slate>
+
+      <section>
+        <h3>Versions</h3>
+        <form onSubmit={handleSaveVersion}>
+          <input
+            value={versionName}
+            onChange={(event) => setVersionName(event.target.value)}
+            placeholder="Version name..."
+          />
+          <button type="submit">Save Version</button>
+        </form>
+        <ul>
+          {versions.map((version) => (
+            <li key={version.versionId}>
+              <span>{version.versionName}</span>
+              <button onClick={() => restoreVersion(version.versionId)}>
+                Restore
+              </button>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </main>
+  );
+}
+
+function AppContent() {
+  const veltUser = useCurrentUser();
+  useSetDocument(DOCUMENT_ID, { documentName: 'Slate CRDT Demo' });
+
+  return (
+    <div>
+      <Header />
+      <EditorComponent key={veltUser?.userId || '__none__'} />
+    </div>
+  );
+}
+
+export const App = () => (
+  <VeltProvider apiKey="YOUR_API_KEY">
+    <AppContent />
+  </VeltProvider>
+);
+```
+
+</Tab>
+</Tabs>
+
+
+## How It Works
+
+1. **Your application creates the Slate editor** and composes its normal React plugins.
+2. **`useCollaboration` or `createCollaboration`** receives that editor and creates a Velt CRDT store backed by a Yjs document and shared `Y.XmlText`.
+3. **The manager applies `withYjs`, `withYHistory`, and `withCursors`** before remote data hydrates, so no remote update is missed.
+4. **Local Slate operations** flow into the shared `Y.XmlText`, and remote operations flow back into the enhanced editor through `@slate-yjs/core`.
+5. **Remote cursors and selections** use Yjs awareness and render through `@slate-yjs/react` decorations.
+6. **Initial content** is applied only for a brand-new document unless force reset is enabled.
+7. **Version management** saves and restores named Yjs snapshots for all connected users.
+8. **Cleanup** disconnects the Slate-Yjs binding, destroys the undo manager, clears awareness, and destroys the store.
+
+
+## APIs
+
+### React: useCollaboration()
+
+React lifecycle wrapper around `createCollaboration()`. Alias: `useSlateCollaboration`.
+
+- Signature: `useCollaboration(config: UseCollaborationConfig): UseCollaborationReturn`
+- Params:
+  - `editorId`: Unique identifier for the collaborative editor.
+  - `editor`: Consumer-owned Slate editor to enhance.
+  - `veltClient`: Optional explicit Velt client. Falls back to `VeltProvider` context.
+  - `initialContent`: Slate `Descendant[]` applied to a brand-new document.
+  - `cursorData`: Local cursor name, colors, and custom awareness fields.
+  - `yjsOptions`: Options forwarded to `withYjs`.
+  - `undoManagerOptions`: Options forwarded to `withYHistory`.
+  - `cursorOptions`: Options forwarded to `withCursors`.
+  - `enableCursors`: Set to `false` to skip cursor integration. Default: `true`.
+  - `autoConnect`: Set to `false` to leave the Yjs editor disconnected after initialization. Default: `true`.
+  - `debounceMs`: Throttle interval in milliseconds for backend writes. Default: `0`.
+  - `forceResetInitialContent`: Replace existing shared content during initialization. Default: `false`.
+  - `onError`: Callback for non-fatal collaboration errors.
+- Returns:
+  - `editor`: Enhanced Slate editor, or `null` while loading.
+  - `manager`: Underlying `CollaborationManager`, or `null` while loading.
+  - `isLoading`: `true` until initialization completes.
+  - `synced`: `true` after initial backend sync completes.
+  - `isSynced`: Alias of `synced`.
+  - `status`: `'connecting'`, `'connected'`, or `'disconnected'`.
+  - `error`: Most recent error, or `null`.
+  - `versions`: Reactive saved-version list.
+  - `saveVersion`: Save a named version and refresh the list.
+  - `restoreVersion`: Restore a version by ID.
+  - `refreshVersions`: Refresh the saved-version list.
+  - `destroy`: Destroy collaboration early.
+
+
+### Imperative: createCollaboration()
+
+Creates and initializes a manager. It reports failures through `onError` and resolves with a degraded manager rather than intentionally throwing into consumer code.
+
+- Signature: `createCollaboration(config: CollaborationConfig): Promise<CollaborationManager>`
+
+```tsx
+const manager = await createCollaboration({
+  editorId: 'my-slate-editor',
+  editor,
+  veltClient: client,
+});
+```
+
+
+### EnhancedSlateEditor
+
+The consumer-owned Slate `Editor` after `YjsEditor`, `YHistoryEditor`, and `CursorEditor` capabilities are applied.
+
+
+### SlateCursorData
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | `string` | Display name for the remote cursor. |
+| `color` | `string` | Caret and label color. |
+| `colorLight` | `string` | Remote selection highlight color. |
+| Additional fields | `unknown` | Custom awareness metadata. |
+
+
+### Version
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `versionId` | `string` | Unique version identifier. |
+| `versionName` | `string` | Human-readable version name. |
+| `timestamp` | `number` | Time the version was saved, in epoch milliseconds. |
+| `state` | `Uint8Array \| number[]` | Encoded Yjs document state. |
+
+
+### CollaborationManager Methods
+
+#### manager.getEditor()
+
+Get the enhanced Slate editor.
+
+- Returns: `EnhancedSlateEditor | null`
+
+#### manager.onStatusChange()
+
+Subscribe to connection status changes.
+
+- Signature: `manager.onStatusChange(callback: (status: SyncStatus) => void): Unsubscribe`
+
+#### manager.onSynced()
+
+Subscribe to initial sync state changes.
+
+- Signature: `manager.onSynced(callback: (synced: boolean) => void): Unsubscribe`
+
+#### manager.initialized
+
+Whether initialization has completed.
+
+- Returns: `boolean`
+
+#### manager.synced
+
+Whether initial backend sync has completed.
+
+- Returns: `boolean`
+
+#### manager.status
+
+Current connection status.
+
+- Returns: `SyncStatus` (`'connecting' | 'connected' | 'disconnected'`)
+
+#### manager.updateCursorData()
+
+Update the local user's awareness metadata.
+
+- Signature: `manager.updateCursorData(data: SlateCursorData): void`
+
+#### manager.sendCursorPosition()
+
+Publish the current Slate selection through awareness.
+
+- Signature: `manager.sendCursorPosition(range?: Range | null): void`
+
+#### manager.getCursorStates()
+
+Read remote cursor states keyed by Yjs client ID.
+
+- Returns: `Record<string, unknown>`
+
+#### manager.saveVersion()
+
+Save a named snapshot and return its version ID.
+
+- Signature: `manager.saveVersion(name: string): Promise<string>`
+
+#### manager.getVersions()
+
+List all saved versions.
+
+- Returns: `Promise<Version[]>`
+
+#### manager.getVersionById()
+
+Get one version by ID.
+
+- Signature: `manager.getVersionById(versionId: string): Promise<Version | null>`
+
+#### manager.restoreVersion()
+
+Restore a version for all connected users.
+
+- Signature: `manager.restoreVersion(versionId: string): Promise<boolean>`
+
+#### manager.setStateFromVersion()
+
+Apply a `Version` object's state to the shared document.
+
+- Signature: `manager.setStateFromVersion(version: Version): Promise<void>`
+
+#### manager.getDoc()
+
+Get the underlying Yjs document.
+
+- Returns: `Y.Doc | null`
+
+#### manager.getXmlText()
+
+Get the shared `Y.XmlText` bound to Slate content.
+
+- Returns: `Y.XmlText | null`
+
+#### manager.getProvider()
+
+Get the Velt sync provider.
+
+- Returns: `SyncProvider | null`
+
+#### manager.getAwareness()
+
+Get the Yjs awareness instance.
+
+- Returns: `Awareness | null`
+
+#### manager.getUndoManager()
+
+Get the collaborative undo manager created by `withYHistory`.
+
+- Returns: `Y.UndoManager | null`
+
+#### manager.getStore()
+
+Get the underlying Velt CRDT store.
+
+- Returns: `Store<string> | null`
+
+#### manager.destroy()
+
+Disconnect the Slate-Yjs binding, destroy the undo manager, clear awareness, remove listeners, and destroy the store.
+
+- Returns: `void`
+
+
+### Advanced Content Helpers
+
+`@veltdev/slate-crdt` exports two helpers for advanced initial-content flows:
+
+- `normalizeInitialContent(initialContent?: Descendant[]): Descendant[]` returns a valid Slate document when input is missing or invalid.
+- `applyInitialContent(doc, xmlText, initialContent?, force?): boolean` idempotently writes initial Slate nodes to the shared `Y.XmlText`.
+
+
+### Custom Encryption
+
+Encrypt CRDT data before it is stored in Velt by registering a custom encryption provider on `VeltProvider` or the imperative Velt client.

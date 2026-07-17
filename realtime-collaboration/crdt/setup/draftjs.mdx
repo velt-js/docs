@@ -1,0 +1,881 @@
+---
+title: Draft.js Editor
+description: Setup Multiplayer Editing for Draft.js Editor.
+---
+
+The `@veltdev/draftjs-crdt` library enables real-time collaborative editing on controlled Draft.js Editors. The collaboration editing engine is built on top of [Yjs](https://docs.yjs.dev/) and Velt SDK.
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- React (v18 or higher)
+- A Velt account with an API key ([sign up](https://console.velt.dev/))
+- Optional: TypeScript for type safety
+
+## Setup
+
+### Step 1: Install Dependencies
+
+Install the required packages:
+
+```bash
+npm install @veltdev/draftjs-crdt @veltdev/crdt @veltdev/client @veltdev/react draft-js immutable yjs y-protocols react react-dom
+```
+
+Import the Draft.js stylesheet in your application entry point:
+
+```tsx
+import 'draft-js/dist/Draft.css';
+```
+
+
+### Step 2: Setup Velt
+
+Initialize the Velt client by following the [Velt Setup Docs](/get-started/quickstart). This is required for the collaboration engine to work.
+
+
+### Step 3: Initialize Collaborative Editor
+
+- Keep Draft.js `EditorState` in your application because Draft.js is a controlled editor.
+- Pass `getEditorState` and `setEditorState` accessors to the collaboration hook or manager.
+- Route every Draft.js `onChange` value through `handleChange()`.
+- Pass an `editorId` to uniquely identify each editor instance you have in your app.
+
+<Tabs>
+<Tab title="React Hook">
+
+Use `useCollaboration()` to manage Velt readiness, manager initialization, reactive status, versions, and cleanup.
+
+```tsx
+import { useCallback, useRef, useState } from 'react';
+import { Editor, EditorState } from 'draft-js';
+import { useCollaboration } from '@veltdev/draftjs-crdt';
+
+function CollaborativeEditor() {
+  const [editorState, setEditorStateValue] = useState(() => EditorState.createEmpty());
+  const editorStateRef = useRef(editorState);
+
+  const setEditorState = useCallback((nextState: EditorState) => {
+    editorStateRef.current = nextState;
+    setEditorStateValue(nextState);
+  }, []);
+
+  const getEditorState = useCallback(() => editorStateRef.current, []);
+
+  const {
+    handleChange,
+    manager,
+    isLoading,
+    isSynced,
+    status,
+    error,
+  } = useCollaboration({
+    editorId: 'my-draftjs-editor',
+    getEditorState,
+    setEditorState,
+    initialContent: 'Hello Draft.js CRDT!',
+    onError: (err) => console.error('Collaboration error:', err),
+  });
+
+  const onEditorChange = useCallback((nextState: EditorState) => {
+    setEditorState(handleChange(nextState));
+  }, [handleChange, setEditorState]);
+
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <div>
+      <div>Status: {isLoading ? 'loading' : status} | Synced: {isSynced ? 'Yes' : 'No'}</div>
+      <Editor editorState={editorState} onChange={onEditorChange} />
+    </div>
+  );
+}
+```
+
+<Warning>Route every local Draft.js change through the returned `handleChange()` function before updating your controlled state. Bypassing it prevents the change from reaching the CRDT document.</Warning>
+
+</Tab>
+<Tab title="Imperative API">
+
+Use `createCollaboration()` when you want to manage the lifecycle yourself.
+
+```tsx
+import { createCollaboration } from '@veltdev/draftjs-crdt';
+
+const manager = await createCollaboration({
+  editorId: 'my-draftjs-editor',
+  veltClient: client,
+  getEditorState: () => editorStateRef.current,
+  setEditorState,
+  initialContent: 'Hello Draft.js CRDT!',
+  onError: (error) => console.error('Collaboration error:', error),
+});
+
+const onEditorChange = (nextState: EditorState) => {
+  setEditorState(manager.handleChange(nextState));
+};
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 4: Preserve the Controlled Editor Pattern
+
+Keep a ref synchronized with the latest `EditorState`. This prevents stale closures in asynchronous manager callbacks.
+
+```tsx
+const [editorState, setEditorStateValue] = useState(() => EditorState.createEmpty());
+const editorStateRef = useRef(editorState);
+
+const setEditorState = useCallback((nextState: EditorState) => {
+  editorStateRef.current = nextState;
+  setEditorStateValue(nextState);
+}, []);
+
+const getEditorState = useCallback(() => editorStateRef.current, []);
+```
+
+Use normal Draft.js formatting utilities, but route their result through the same change handler:
+
+```tsx
+import { RichUtils } from 'draft-js';
+
+const toggleBold = () => {
+  onEditorChange(RichUtils.toggleInlineStyle(editorStateRef.current, 'BOLD'));
+};
+
+const toggleHeading = () => {
+  onEditorChange(RichUtils.toggleBlockType(editorStateRef.current, 'header-one'));
+};
+```
+
+Bold, italic, block types, list types, and entity ranges are preserved in the Draft raw-content snapshot.
+
+
+### Step 5: Status Monitoring (Optional)
+
+The React hook returns reactive `status`, `isSynced`, and `error` state. For event-style subscriptions, use the manager:
+
+```tsx
+useEffect(() => {
+  if (!manager) return;
+
+  const offStatus = manager.onStatusChange((nextStatus) => {
+    console.log('Status:', nextStatus);
+  });
+  const offSynced = manager.onSynced((synced) => {
+    console.log('Synced:', synced);
+  });
+
+  return () => {
+    offStatus();
+    offSynced();
+  };
+}, [manager]);
+```
+
+<Note>Use connection status for UI feedback. Do not block local typing only because the status is `connecting`; local edits still apply and sync when the provider reconnects.</Note>
+
+
+### Step 6: Version Management (Optional)
+
+The React hook keeps `versions` in state and provides convenience methods:
+
+```tsx
+const {
+  versions,
+  saveVersion,
+  restoreVersion,
+  refreshVersions,
+} = useCollaboration({
+  editorId: 'my-draftjs-editor',
+  getEditorState,
+  setEditorState,
+});
+
+const versionId = await saveVersion('Before major edit');
+const latestVersions = await refreshVersions();
+await restoreVersion(versionId);
+```
+
+The same methods are available on the manager. After restore, the manager hydrates the controlled Draft.js state.
+
+
+### Step 7: Force Reset Initial Content (Optional)
+
+`initialContent` can be a plain string or Draft.js `RawDraftContentState`. It is applied exactly once for a brand-new shared document.
+
+```tsx
+useCollaboration({
+  editorId: 'my-draftjs-editor',
+  getEditorState,
+  setEditorState,
+  initialContent: {
+    blocks: [
+      {
+        key: 'intro',
+        text: 'Start writing here',
+        type: 'unstyled',
+        depth: 0,
+        inlineStyleRanges: [],
+        entityRanges: [],
+        data: {},
+      },
+    ],
+    entityMap: {},
+  },
+  forceResetInitialContent: true,
+});
+```
+
+<Warning>Use `forceResetInitialContent` only for deliberate reset workflows. It replaces the existing shared Draft.js snapshot and clears current user edits.</Warning>
+
+To migrate existing Draft.js content, preserve its native raw representation:
+
+```tsx
+import { convertToRaw } from 'draft-js';
+
+const initialContent = convertToRaw(editorState.getCurrentContent());
+```
+
+Validate persisted raw JSON before passing it to the manager. Avoid converting through HTML because Draft raw content preserves editor semantics more accurately.
+
+
+### Step 8: Configure Remote Cursors (Optional)
+
+The manager publishes Draft.js selections through Yjs awareness but intentionally does not inject cursor DOM. Pass identity through `cursorData`, subscribe to remote cursor changes, and render the cursor UI in your application.
+
+```tsx
+const collab = useCollaboration({
+  editorId: 'my-draftjs-editor',
+  getEditorState,
+  setEditorState,
+  cursorData: {
+    name: currentUser.name,
+    color: currentUser.color,
+  },
+});
+```
+
+```tsx
+useEffect(() => {
+  if (!manager) return;
+
+  return manager.onRemoteCursorsChange((cursors) => {
+    setRemoteCursors(cursors);
+  });
+}, [manager]);
+```
+
+Publish the current selection when focus changes:
+
+```tsx
+<Editor
+  editorState={editorState}
+  onChange={onEditorChange}
+  onFocus={() => manager?.sendCursorPosition()}
+  onBlur={() => manager?.sendCursorPosition()}
+/>
+```
+
+Each `RemoteDraftCursor` contains the awareness client ID and can include the Velt user, custom cursor data, and serialized Draft selection.
+
+
+### Step 9: CRDT Event Subscription (Optional)
+
+Listen for real-time CRDT data events using `getCrdtElement().on()` from the Velt client.
+
+```tsx
+import { useEffect } from 'react';
+import { useVeltClient } from '@veltdev/react';
+
+const { client } = useVeltClient();
+
+useEffect(() => {
+  if (!client) return;
+
+  const subscription = client.getCrdtElement().on('updateData').subscribe((event) => {
+    if (event) console.log('CRDT update:', event);
+  });
+
+  return () => subscription?.unsubscribe?.();
+}, [client]);
+```
+
+
+### Step 10: Custom Encryption (Optional)
+
+Encrypt CRDT data before it is stored in Velt by registering a custom encryption provider. For CRDT methods, input data is of type `Uint8Array | number[]`.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+const encryptionProvider = {
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+};
+
+<VeltProvider apiKey="YOUR_API_KEY" encryptionProvider={encryptionProvider}>
+  ...
+</VeltProvider>
+```
+
+</Tab>
+<Tab title="Imperative API">
+
+```tsx
+client.setEncryptionProvider({
+  encrypt: async (config) => config.data.map((n) => n.toString()).join('__'),
+  decrypt: async (config) => config.data.split('__').map((s) => parseInt(s, 10)),
+});
+```
+
+</Tab>
+</Tabs>
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+ · [EncryptConfig](/api-reference/sdk/models/data-models#encryptconfig)
+ · [DecryptConfig](/api-reference/sdk/models/data-models#decryptconfig)
+
+
+### Step 11: Error Handling (Optional)
+
+Pass an `onError` callback to handle non-fatal initialization and runtime errors. The manager returns safe defaults from getters and version methods when data is unavailable.
+
+```tsx
+const collab = useCollaboration({
+  editorId: 'my-draftjs-editor',
+  getEditorState,
+  setEditorState,
+  onError: (error) => console.error('Collaboration error:', error),
+});
+
+if (collab.error) {
+  return <div>Error: {collab.error.message}</div>;
+}
+```
+
+
+### Step 12: Access Yjs Internals (Advanced)
+
+The manager exposes escape hatches for advanced integrations.
+
+```tsx
+const doc = manager.getDoc();
+const xmlFragment = manager.getXmlFragment();
+const firstBlockText = manager.getXmlText();
+const provider = manager.getProvider();
+const awareness = manager.getAwareness();
+const undoManager = manager.getUndoManager();
+const store = manager.getStore();
+```
+
+
+### Step 13: Cleanup
+
+The React hook destroys the manager automatically when the component unmounts or the `editorId` changes. It also returns a `destroy()` method for early cleanup.
+
+```tsx
+const { destroy } = useCollaboration({
+  editorId: 'my-draftjs-editor',
+  getEditorState,
+  setEditorState,
+});
+
+// Optional early teardown
+destroy();
+```
+
+When using the imperative API, call `manager.destroy()` during cleanup. Calling it more than once is safe.
+
+
+## Notes
+
+- **Controlled state**: Keep one owner for `EditorState` and synchronize a ref with the latest state.
+- **Required change pipeline**: Route every Draft.js `onChange` through `handleChange()`.
+- **Unique editorId**: Users must share the same Velt document context and `editorId` to collaborate.
+- **Initial content**: Pass plain text or `RawDraftContentState`; avoid converting existing Draft content through HTML.
+- **Cursor rendering**: The package publishes awareness data but leaves cursor DOM and positioning to the host application.
+- **Connection state**: Do not disable local editing only because the provider is connecting.
+- **Lifecycle**: The hook waits for Velt initialization and an authenticated user before creating the manager.
+- **Production authentication**: Do not expose privileged server tokens in browser code; use Velt's recommended server-backed authentication flow.
+
+
+## Testing and Debugging
+
+**To test collaboration:**
+1. Log in as two unique users in two separate browser profiles and open the same Velt document and Draft.js `editorId` in both.
+2. Edit text, formatting, headings, or lists in one window and verify the updated snapshot appears in the other.
+3. Verify awareness cursor data arrives and your application renders the expected remote-user UI.
+4. Reload both windows and verify the shared document persists.
+
+**Common issues:**
+- Changes not syncing: Confirm every `Editor` `onChange` value passes through `handleChange()`.
+- Stale remote state: Keep `getEditorState()` backed by a ref containing the latest controlled state.
+- Editor not loading: Confirm the Velt client is initialized, the document is set, and the user is identified.
+- Cursors not appearing: Subscribe to `onRemoteCursorsChange()` and render the returned cursor data in your app.
+- Initial content overwriting edits: Do not enable `forceResetInitialContent` during normal page loads.
+
+<Tip>
+Enable browser console warnings to see detailed debugging information. You can also use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setup/core#veltcrdtstoremap) to inspect and monitor your CRDT stores in real time.
+</Tip>
+
+
+## Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+
+A complete collaborative Draft.js editor with controlled state, user login, status display, remote-user awareness, formatting, and version management.
+
+```tsx Complete App.tsx expandable lines
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Editor, EditorState, RichUtils } from 'draft-js';
+import type { RemoteDraftCursor } from '@veltdev/draftjs-crdt';
+import { useCollaboration } from '@veltdev/draftjs-crdt';
+import {
+  VeltProvider,
+  useCurrentUser,
+  useSetDocument,
+  useVeltClient,
+} from '@veltdev/react';
+import 'draft-js/dist/Draft.css';
+
+const DOCUMENT_ID = 'draftjs-crdt-demo-doc-1';
+
+const USERS = {
+  michael: {
+    userId: 'michael',
+    name: 'Michael Scott',
+    email: 'michael.scott@dundermifflin.com',
+    organizationId: 'my-org-id',
+    color: '#2563eb',
+  },
+  jim: {
+    userId: 'jim',
+    name: 'Jim Halpert',
+    email: 'jim.halpert@dundermifflin.com',
+    organizationId: 'my-org-id',
+    color: '#0f766e',
+  },
+};
+
+function Header() {
+  const { client } = useVeltClient();
+  const veltUser = useCurrentUser();
+
+  if (veltUser) {
+    return (
+      <header>
+        <span>Welcome, {veltUser.name}</span>
+        <button onClick={() => client?.signOutUser()}>Logout</button>
+      </header>
+    );
+  }
+
+  return (
+    <header>
+      {Object.values(USERS).map((user) => (
+        <button key={user.userId} onClick={() => client?.identify(user)}>
+          Login as {user.name}
+        </button>
+      ))}
+    </header>
+  );
+}
+
+function EditorComponent() {
+  const currentUser = useCurrentUser();
+  const [editorState, setEditorStateValue] = useState(() => EditorState.createEmpty());
+  const editorStateRef = useRef(editorState);
+  const [remoteCursors, setRemoteCursors] = useState<RemoteDraftCursor[]>([]);
+  const [versionName, setVersionName] = useState('');
+
+  const setEditorState = useCallback((nextState: EditorState) => {
+    editorStateRef.current = nextState;
+    setEditorStateValue(nextState);
+  }, []);
+
+  const getEditorState = useCallback(() => editorStateRef.current, []);
+
+  const {
+    handleChange,
+    manager,
+    isLoading,
+    isSynced,
+    status,
+    error,
+    versions,
+    saveVersion,
+    restoreVersion,
+  } = useCollaboration({
+    editorId: DOCUMENT_ID,
+    getEditorState,
+    setEditorState,
+    initialContent: 'Hello Draft.js CRDT!',
+    cursorData: currentUser
+      ? { name: currentUser.name, color: currentUser.color }
+      : undefined,
+    onError: (err) => console.error('Collaboration error:', err),
+  });
+
+  const onEditorChange = useCallback((nextState: EditorState) => {
+    setEditorState(handleChange(nextState));
+  }, [handleChange, setEditorState]);
+
+  useEffect(() => {
+    if (!manager) return;
+    return manager.onRemoteCursorsChange(setRemoteCursors);
+  }, [manager]);
+
+  const toggleBold = () => {
+    onEditorChange(RichUtils.toggleInlineStyle(editorStateRef.current, 'BOLD'));
+  };
+
+  const handleSaveVersion = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!versionName.trim()) return;
+    await saveVersion(versionName.trim());
+    setVersionName('');
+  };
+
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <main>
+      <div>Status: {isLoading ? 'loading' : status} | Synced: {isSynced ? 'Yes' : 'No'}</div>
+
+      <button type="button" onClick={toggleBold}>Bold</button>
+      <Editor
+        editorState={editorState}
+        onChange={onEditorChange}
+        onFocus={() => manager?.sendCursorPosition()}
+        onBlur={() => manager?.sendCursorPosition()}
+        placeholder="Start typing..."
+      />
+
+      <aside>
+        <h3>Remote users</h3>
+        <ul>
+          {remoteCursors.map((cursor) => (
+            <li key={cursor.clientId}>
+              {String(cursor.cursorData?.name || cursor.user?.name || cursor.clientId)}
+            </li>
+          ))}
+        </ul>
+      </aside>
+
+      <section>
+        <h3>Versions</h3>
+        <form onSubmit={handleSaveVersion}>
+          <input
+            value={versionName}
+            onChange={(event) => setVersionName(event.target.value)}
+            placeholder="Version name..."
+          />
+          <button type="submit">Save Version</button>
+        </form>
+        <ul>
+          {versions.map((version) => (
+            <li key={version.versionId}>
+              <span>{version.versionName}</span>
+              <button onClick={() => restoreVersion(version.versionId)}>
+                Restore
+              </button>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </main>
+  );
+}
+
+function AppContent() {
+  const veltUser = useCurrentUser();
+  useSetDocument(DOCUMENT_ID, { documentName: 'Draft.js CRDT Demo' });
+
+  return (
+    <div>
+      <Header />
+      <EditorComponent key={veltUser?.userId || '__none__'} />
+    </div>
+  );
+}
+
+export const App = () => (
+  <VeltProvider apiKey="YOUR_API_KEY">
+    <AppContent />
+  </VeltProvider>
+);
+```
+
+</Tab>
+</Tabs>
+
+
+## How It Works
+
+1. **Your application owns `EditorState`** and provides current-state and update accessors to the collaboration hook or manager.
+2. **The collaboration manager** creates a Velt XML CRDT store, sync provider, Yjs document, awareness instance, and undo manager.
+3. **`handleChange()` serializes Draft raw content** into the shared XML snapshot and returns the resolved controlled state.
+4. **Remote and restored snapshots** are converted back into `EditorState` and applied through `setEditorState`.
+5. **Formatting and entities** round-trip through Draft's `RawDraftContentState` representation.
+6. **Selections** are published through awareness, while the host application controls cursor rendering and placement.
+7. **Version management** saves and restores named Yjs snapshots for every connected user.
+8. **Cleanup** removes listeners, clears awareness, and destroys the underlying store.
+
+
+## APIs
+
+### React: useCollaboration()
+
+React lifecycle wrapper around `createCollaboration()`. Alias: `useDraftJsCollaboration`.
+
+- Signature: `useCollaboration(config: UseCollaborationConfig): UseCollaborationReturn`
+- Params:
+  - `editorId`: Unique identifier for the collaborative editor.
+  - `getEditorState`: Returns the latest controlled `EditorState`.
+  - `setEditorState`: Applies remote, restored, or initial `EditorState`.
+  - `veltClient`: Optional explicit Velt client. Falls back to `VeltProvider` context.
+  - `initialContent`: Plain text or `RawDraftContentState` for a brand-new document.
+  - `restContentKey`: XML key used to bridge REST-created content. Default: `'document-store'`.
+  - `cursorData`: Name, color, avatar, and custom awareness fields.
+  - `debounceMs`: Throttle interval in milliseconds for backend writes.
+  - `forceResetInitialContent`: Replace existing shared content during initialization. Default: `false`.
+  - `onError`: Callback for non-fatal collaboration errors.
+- Returns:
+  - `handleChange`: Route every Draft.js change through this function.
+  - `manager`: Underlying `CollaborationManager`, or `null` while loading.
+  - `isLoading`: `true` until initialization completes.
+  - `synced`: `true` after initial backend sync completes.
+  - `isSynced`: Alias of `synced`.
+  - `status`: `'connecting'`, `'connected'`, or `'disconnected'`.
+  - `error`: Most recent error, or `null`.
+  - `versions`: Reactive saved-version list.
+  - `saveVersion`: Save a named version and refresh the list.
+  - `restoreVersion`: Restore a version by ID.
+  - `refreshVersions`: Refresh the saved-version list.
+  - `destroy`: Destroy collaboration early.
+
+
+### Imperative: createCollaboration()
+
+Creates and initializes a manager. The promise resolves even when the manager enters a degraded state; non-fatal failures are reported through `onError`.
+
+- Signature: `createCollaboration(config: CollaborationConfig): Promise<CollaborationManager>`
+
+```tsx
+const manager = await createCollaboration({
+  editorId: 'my-draftjs-editor',
+  veltClient: client,
+  getEditorState,
+  setEditorState,
+});
+```
+
+
+### DraftCursorData
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | `string` | Remote user display name. |
+| `color` | `string` | Cursor color. |
+| `avatarUrl` | `string` | Optional avatar URL. |
+| Additional fields | `unknown` | Custom awareness metadata. |
+
+
+### RemoteDraftCursor
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `clientId` | `number` | Yjs awareness client ID. |
+| `user` | `Record<string, unknown>` | Velt user data, when available. |
+| `cursorData` | `DraftCursorData` | Custom cursor metadata. |
+| `selection` | `DraftCursorSelection` | Serialized Draft.js selection. |
+
+
+### VersionChangeEvent
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `revision` | `string` | Event revision identifier. |
+| `reason` | `'save' \| 'restore' \| 'set-state'` | Operation that changed the version state. |
+| `versionId` | `string` | Affected version ID, when available. |
+| `versionName` | `string` | Affected version name, when available. |
+| `userId` | `string` | User responsible for the change, when available. |
+| `timestamp` | `number` | Event time in epoch milliseconds. |
+
+
+### Version
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `versionId` | `string` | Unique version identifier. |
+| `versionName` | `string` | Human-readable version name. |
+| `timestamp` | `number` | Time the version was saved, in epoch milliseconds. |
+
+
+### CollaborationManager Methods
+
+#### manager.handleChange()
+
+Serialize a local Draft.js change into the CRDT document and return the resolved controlled state.
+
+- Signature: `manager.handleChange(nextState: EditorState): EditorState`
+
+#### manager.sendCursorPosition()
+
+Publish a Draft.js selection through awareness. When omitted, the manager uses the current editor selection.
+
+- Signature: `manager.sendCursorPosition(selection?: SelectionState | null): void`
+
+#### manager.getRemoteCursors()
+
+Read the current remote awareness cursors.
+
+- Returns: `RemoteDraftCursor[]`
+
+#### manager.onRemoteCursorsChange()
+
+Subscribe to remote cursor changes.
+
+- Signature: `manager.onRemoteCursorsChange(callback: (cursors: RemoteDraftCursor[]) => void): Unsubscribe`
+
+#### manager.onStatusChange()
+
+Subscribe to connection status changes.
+
+- Signature: `manager.onStatusChange(callback: (status: SyncStatus) => void): Unsubscribe`
+
+#### manager.onSynced()
+
+Subscribe to initial sync state changes.
+
+- Signature: `manager.onSynced(callback: (synced: boolean) => void): Unsubscribe`
+
+#### manager.initialized
+
+Whether initialization has completed.
+
+- Returns: `boolean`
+
+#### manager.synced
+
+Whether initial backend sync has completed.
+
+- Returns: `boolean`
+
+#### manager.status
+
+Current connection status.
+
+- Returns: `SyncStatus` (`'connecting' | 'connected' | 'disconnected'`)
+
+#### manager.saveVersion()
+
+Save a named snapshot and return its version ID.
+
+- Signature: `manager.saveVersion(name: string): Promise<string>`
+
+#### manager.getVersions()
+
+List all saved versions.
+
+- Returns: `Promise<Version[]>`
+
+#### manager.restoreVersion()
+
+Restore a version and hydrate the controlled Draft.js state.
+
+- Signature: `manager.restoreVersion(versionId: string): Promise<boolean>`
+
+#### manager.setStateFromVersion()
+
+Apply a `Version` object's state to the shared document and Draft.js editor.
+
+- Signature: `manager.setStateFromVersion(version: Version): Promise<void>`
+
+#### manager.onVersionsChange()
+
+Subscribe to save, restore, and direct version-state events.
+
+- Signature: `manager.onVersionsChange(callback: (event: VersionChangeEvent) => void): Unsubscribe`
+
+#### manager.getDoc()
+
+Get the underlying Yjs document.
+
+- Returns: `Y.Doc | null`
+
+#### manager.getXmlFragment()
+
+Get the shared Draft.js XML fragment.
+
+- Returns: `Y.XmlFragment | null`
+
+#### manager.getXmlText()
+
+Get the first Draft block's shared `Y.XmlText`, when available.
+
+- Returns: `Y.XmlText | null`
+
+#### manager.getProvider()
+
+Get the Velt sync provider.
+
+- Returns: `SyncProvider | null`
+
+#### manager.getAwareness()
+
+Get the Yjs awareness instance.
+
+- Returns: `Awareness | null`
+
+#### manager.getUndoManager()
+
+Get the Yjs undo manager.
+
+- Returns: `Y.UndoManager | null`
+
+#### manager.getStore()
+
+Get the underlying Velt CRDT store.
+
+- Returns: `Store<string> | null`
+
+#### manager.destroy()
+
+Remove listeners, clear awareness, and destroy the store. Safe to call more than once.
+
+- Returns: `void`
+
+
+### Custom Encryption
+
+Encrypt CRDT data before it is stored in Velt by registering a custom encryption provider on `VeltProvider` or the imperative Velt client.
+
+
+## REST API Compatibility
+
+- The wrapper uses a Velt CRDT store of type `xml` with source `draftjs`.
+- The primary Draft.js content key is `draftjs`.
+- Full Draft raw JSON is stored in XML metadata, and each block also has a readable XML representation.
+- The manager watches a second XML fragment for content created through the Velt CRDT REST API. Configure this with `restContentKey`; the default is `'document-store'`.
+- REST-created content is bridged into the Draft.js editor, and local edits are mirrored back so REST reads stay current.
+- Send Yjs-compatible XML state through CRDT REST endpoints; do not send raw Draft JSON unless the endpoint explicitly expects application data.
+
+
+## Concurrency and Data Model
+
+Draft.js does not have a maintained operation-level Yjs binding. This wrapper therefore uses snapshot reconciliation:
+
+- The shared root is a `Y.XmlFragment` keyed as `draftjs`.
+- A `draftjs-meta` node stores the full raw Draft JSON for exact fidelity.
+- Each Draft block is also represented as a `draftjs-block` element with a child `Y.XmlText`.
+- Online changes sync quickly, and formatting and block data round-trip through raw content.
+- Offline changes converge after reconnect, but when two offline users edit the same old snapshot, one snapshot can supersede the other.
+
+For character-level offline merging, use an editor with a maintained operation-level Yjs binding, such as Lexical or Slate.

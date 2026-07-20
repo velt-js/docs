@@ -1,5 +1,6 @@
 ---
 title: "Add Comment Annotations"
+description: "Create V2 comment annotations via REST — plain comments, agent findings, suggestions with a proposed-change payload, and private annotations."
 api: "POST https://api.velt.dev/v2/commentannotations/add"
 ---
 
@@ -301,6 +302,32 @@ Use this API to add comment annotations to a document within an organization.
           Annotation kind. Must be one of: `comment` or `suggestion`. This is the source of truth for the suggestion classification; agent-produced findings should set `suggestion`. Defaults to `comment` when omitted.
         </ParamField>
 
+        <ParamField body="suggestion" type="object">
+          Proposed-change payload for `type: "suggestion"` annotations. Persisted verbatim so reviewers (and your app's accept handler) can round-trip the target and the old/new values. Ignored when `type` is not `suggestion`.
+
+          The schema is open — any additional custom fields you include are stored as-is alongside the fields below. `status` is server-owned: any caller-supplied value is dropped and the server stamps `pending` at create time (and `accepted` / `rejected` on the corresponding lifecycle action).
+          <Expandable title="properties">
+            <ParamField body="targetId" type="string">
+              Stable ID of the thing being changed (for example, the record or field ID the suggestion applies to). Your accept handler uses this to locate what to update.
+            </ParamField>
+            <ParamField body="targetType" type="string">
+              Kind of target the suggestion applies to (for example, `custom`, `text`, or a value your app defines).
+            </ParamField>
+            <ParamField body="oldValue" type="any">
+              The value at the time the suggestion was created. Can be any JSON-serializable value.
+            </ParamField>
+            <ParamField body="newValue" type="any">
+              The proposed new value. Can be any JSON-serializable value. Your app writes this into its own state or backend when the suggestion is accepted.
+            </ParamField>
+            <ParamField body="summary" type="string">
+              Optional human-readable summary of the change (for example, `"row.123: 205 → 305"`).
+            </ParamField>
+            <ParamField body="driftDetected" type="boolean">
+              Set to `true` when the live target value at accept time differs from `oldValue`. Informational — it does not block the accept.
+            </ParamField>
+          </Expandable>
+        </ParamField>
+
         <ParamField body="commentType" type="string">
           Caller-driven comment classification. Must be one of: `manual` or `chart`. Defaults to `manual` when omitted.
 
@@ -564,6 +591,42 @@ To attach a finding from an agent run through your own framework, use `agentSour
                 "severity": "high",
                 "findingType": "pin"
               }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### Add a suggestion with a proposed-change payload
+
+Set `type: "suggestion"` and attach a `suggestion` object describing what should change. The server persists the payload verbatim and stamps `suggestion.status: "pending"`; any caller-supplied `status` is dropped. Additional custom fields inside `suggestion` are stored as-is.
+
+```JSON
+{
+  "data": {
+    "organizationId": "acme-corp",
+    "documentId": "design-mockup-v2",
+    "commentAnnotations": [
+      {
+        "type": "suggestion",
+        "suggestion": {
+          "targetId": "row.123",
+          "targetType": "custom",
+          "oldValue": { "x": 205 },
+          "newValue": { "x": 305 },
+          "summary": "row.123: 205 → 305",
+          "driftDetected": false,
+          "myCustomField": "kept as-is"
+        },
+        "commentData": [
+          {
+            "commentText": "Bump x from 205 to 305 to match the spec.",
+            "from": {
+              "userId": "user_sarah_chen",
+              "name": "Sarah Chen"
             }
           }
         ]

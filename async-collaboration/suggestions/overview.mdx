@@ -188,11 +188,43 @@ suggestionElement.isSuggestionModeEnabled$().subscribe((isEnabled) => {
 
 #### 3. Capture Edits as Suggestions
 
-When a user finishes an edit, you decide how it becomes a suggestion. There are three ways, from simplest to most control. Use one per target; only one of them handles any given edit.
+When a user finishes an edit, you decide how it becomes a suggestion. There are four ways, from simplest to most control. Use one per target; only one of them handles any given edit.
 
-**Option 1: Auto-commit with `onTargetEditCommit` (simplest)**
+**Option 1: Zero-config auto-commit (default)**
 
-Pass `onTargetEditCommit` when you enable suggestion mode. The SDK calls it with the old and new values every time a user finishes an edit. Return an object and the SDK creates the suggestion right away, using your `summary` and `metadata`. This is the path most apps want. (`onTargetEditStart` fires when editing begins; it's informational in v1 and its return value is reserved for future use.)
+The simplest setup: enable suggestion mode with no handler at all. Every detected edit on a tagged target is committed automatically, using the SDK's default diff summary. This is controlled by the new `autoCommit` flag on [`EnableSuggestionModeConfig`](/api-reference/sdk/models/data-models#enablesuggestionmodeconfig), which **defaults to `true`**. Pass `autoCommit: false` for detect-only mode — the `targetEditCommit` event still fires, but nothing is created until you call the event's `commitSuggestion` builder (see Option 3).
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const { enableSuggestionMode } = useEnableSuggestionMode();
+
+// Zero-config: edits on tagged targets auto-commit as suggestions.
+enableSuggestionMode();
+
+// Detect-only: events fire, but nothing commits until you call the builder.
+enableSuggestionMode({ autoCommit: false });
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+// Zero-config: edits on tagged targets auto-commit as suggestions.
+suggestionElement.enableSuggestionMode();
+
+// Detect-only: events fire, but nothing commits until you call the builder.
+suggestionElement.enableSuggestionMode({ autoCommit: false });
+```
+</Tab>
+</Tabs>
+
+<Note>
+`autoCommit` is ignored when you pass `onTargetEditCommit` (Option 2) — the handler always wins, including its `null`-return deferral contract. The flag is cleared by `disableSuggestionMode()`; re-enabling without it resets to the default.
+</Note>
+
+**Option 2: Auto-commit with `onTargetEditCommit`**
+
+Pass `onTargetEditCommit` when you enable suggestion mode. The SDK calls it with the old and new values every time a user finishes an edit. Return an object and the SDK creates the suggestion right away, using your `summary`, `summaryHtml`, and `metadata`. Use this when you want per-edit control over the suggestion body without falling all the way back to the event stream. (`onTargetEditStart` fires when editing begins; it's informational in v1 and its return value is reserved for future use.)
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -232,7 +264,7 @@ suggestionElement.enableSuggestionMode({
 Don't want every edit to become a suggestion automatically? Return `null` (or leave out `onTargetEditCommit`) and handle the edit yourself with the `targetEditCommit` event below, for example to validate the value or ask the user to confirm first.
 </Tip>
 
-**Option 2: Decide per edit with the `targetEditCommit` event**
+**Option 3: Decide per edit with the `targetEditCommit` event**
 
 If you skip `onTargetEditCommit`, subscribe to the `targetEditCommit` event instead. The event gives you the edit details plus a `commitSuggestion` function that's already tied to that edit. Call it to create the suggestion (you can override `summary` / `metadata`), or don't call it to discard the edit. Nothing is created until you call it.
 
@@ -271,7 +303,7 @@ suggestionElement.on('targetEditCommit').subscribe(({ details, commitSuggestion 
 </Tab>
 </Tabs>
 
-**Option 3: Create suggestions manually with `startSuggestion` / `commitSuggestion`**
+**Option 4: Create suggestions manually with `startSuggestion` / `commitSuggestion`**
 
 When there's no input for the SDK to watch (a custom widget, a canvas element, or an "AI proposes a change" button), create the suggestion yourself. Call `startSuggestion(targetId)` to capture the current value as `oldValue`, then `commitSuggestion(config)` with the `newValue` to create it.
 
@@ -316,6 +348,40 @@ const { id } = await suggestionElement.commitSuggestion({
 
 <Note>
 `commitSuggestion` only works while suggestion mode is on and the `targetId` is known to the SDK (tagged in the DOM or registered via `registerTarget`). It also creates nothing when `newValue` is identical to the captured `oldValue`.
+</Note>
+
+##### Rich HTML summaries with `summaryHtml`
+
+The suggestion card renders a seeded first comment using the `summary` you provide. Pass an optional `summaryHtml` alongside `summary` (on either `commitSuggestion(config)` or the `onTargetEditCommit` / event-builder return value) to render a formatted body — for example, a color-coded before/after diff. `summaryHtml` becomes the comment's `commentHtml`; plain `summary` (or the SDK's default diff text) stays in `commentText` as the fallback.
+
+If you provide neither, the SDK renders a default styled HTML diff (old value in red italic, new value in green italic).
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+await commitSuggestion({
+  targetId: 'price-field',
+  newValue: 6000,
+  summary: 'Price: $5,000 → $6,000',
+  summaryHtml: '<p>Price: <s>$5,000</s> <b>$6,000</b></p>',
+});
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+await suggestionElement.commitSuggestion({
+  targetId: 'price-field',
+  newValue: 6000,
+  summary: 'Price: $5,000 -> $6,000',
+  summaryHtml: '<p>Price: <s>$5,000</s> <b>$6,000</b></p>',
+});
+```
+</Tab>
+</Tabs>
+
+<Note>
+`summaryHtml` is sanitized with DOMPurify at render time — `<script>` tags and event-handler attributes are stripped. Inline `style` attributes are preserved, so rich diff styling survives.
 </Note>
 
 #### 4. Apply Accepted Suggestions

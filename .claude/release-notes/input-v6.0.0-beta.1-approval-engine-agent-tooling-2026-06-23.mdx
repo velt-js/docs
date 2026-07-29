@@ -1,0 +1,158 @@
+Release - 23 Jun 2026 - Approval Engine & Agent Tooling
+(shared-firebase-function / Cloud Functions backend; to be appended to the v6.0.0-beta.1 release note)
+
+=========================================================
+BREAKING CHANGES
+=========================================================
+What: Removed the onReject per-human-node shorthand and the authored loops[] array from the Approval Engine contract. All workflow transitions — approve routing, reject routing, group fan-out/in, and loop-backs — are now expressed as a single unified edges[] array. Human nodes no longer carry any rejection config; their reject path is expressed purely by outgoing edges.
+
+Why: The prior model had two ways to express rejection (per-node onReject shorthand + top-level loops[]) that desugared at write time into a canonical form consumers never saw. This created a mismatch between what callers POSTed and what the GET echoed back. The unified edge model closes the round-trip symmetry gap: POST.edges === GET.edges.
+
+Impact: Any definition that uses HumanNodeConfig.onReject (either routeToNodeId or loopBack) or a top-level loops[] array will now be rejected at write time with INVALID_ARGUMENT. These callers must migrate to the equivalent edges[] form before writing new definitions. Existing in-flight executions and already-stored definitions are unaffected — the runtime still consumes compiled edges + derived loops unchanged.
+
+Migration:
+Old form -> New edge equivalent
+  "onReject": { "routeToNodeId": "rework-notice" }
+    -> { "from": "human-review", "to": "rework-notice", "on": "reject" }
+  "onReject": { "loopBack": { "toNodeId": "agent-draft", "maxIterations": 3 } }
+    -> { "from": "human-review", "to": "agent-draft", "on": "reject", "loop": { "maxIterations": 3 } }
+  "loops": [{ "loopId": "...", "entryNodeId": "agent-draft", "bodyNodeIds": [...], "maxIterations": 3 }]
+    -> { "from": "human-review", "to": "agent-draft", "on": "reject", "loop": { "maxIterations": 3 } }
+  onReject.loopBack.onExhausted.routeToNodeId
+    -> sibling { "from": "human-review", "to": "escalate", "on": "exhausted" } edge
+
+New EdgeSchema fields:
+  from   EdgeEndpoint   yes   Bare string or { kind:"node", nodeId } or { kind:"group", groupId }
+  to     EdgeEndpoint   yes   Same
+  on     "approve" | "reject" | "always" | "exhausted" | "custom"   no (default "always")   Semantic role; approve/reject auto-compile their predicates
+  when   JSON-AST string   only for on:"custom"   Custom predicate. Invalid on any other edge.
+  loop   { maxIterations: 1–20 }   only on on:"reject" back-edge   Marks the reject edge as a loop-back; server derives the loop region.
+
+New compileGraph error keys (all INVALID_ARGUMENT):
+  APPROVAL_EDGE_CUSTOM_REQUIRES_WHEN              on:"custom" without a non-empty when
+  APPROVAL_EDGE_WHEN_ONLY_FOR_CUSTOM             when supplied on a non-custom edge
+  APPROVAL_EDGE_LOOP_REQUIRES_REJECT            loop on a non-reject edge
+  APPROVAL_EDGE_LOOP_TARGET_NOT_ANCESTOR       reject+loop whose to is not an ancestor of from
+  APPROVAL_EDGE_REJECT_CYCLE_REQUIRES_LOOP     on:"reject" to an ancestor without loop (unmarked cycle)
+  APPROVAL_EDGE_EXHAUSTED_REQUIRES_LOOP_SIBLING  on:"exhausted" with no sibling reject+loop from the same from
+  APPROVAL_HUMAN_NODE_REQUIRES_REJECT_PATH     Human node with no outgoing on:"reject" edge
+  APPROVAL_EDGE_GROUP_TO_GROUP_FORBIDDEN       Both endpoints are group containers
+  APPROVAL_GROUP_FROM_REJECT_REQUIRES_LOOP     Forward on:"reject" from a joinOnQuorum/cancelOnQuorum group (dead edge — those policies fan out only on approval-quorum)
+  APPROVAL_GROUP_FROM_LOOP_REQUIRES_JOINONQUORUM  reject+loop back-edge from a non-joinOnQuorum group
+
+=========================================================
+NEW FEATURES
+=========================================================
+1. compileGraph / DefinitionView.compiled
+What: Added compileGraph to ApprovalDefinitionService, exposing a read-only compiled block on every DefinitionView (create / get / list rows). compiled.forwardEdges is the runtime forward edge list the engine actually drives execution from (group endpoints expanded, on roles compiled to whenAst). compiled.loops is the derived loop region list. The authored edges still echo sourceEdges byte-for-byte.
+Why: Clients previously had to re-implement the compiler client-side to render a visual graph or understand the runtime behavior. compiled removes that burden.
+Impact: Any client rendering a workflow graph can read DefinitionView.compiled.forwardEdges directly — per-member compiled edges tagged with fromGroupId/toGroupId to collapse at group boundaries — instead of re-implementing group expansion. compiled.loops exposes server-derived loop regions. Both are additive and read-only.
+
+interface CompiledGraph {
+  forwardEdges: Array<{
+    from: string;          // resolved node id
+    to: string;            // resolved node id
+    role: "approve" | "reject" | "always" | "exhausted" | "custom";
+    when: JsonAst | null;  // deterministic predicate AST; null for "always"
+    fromGroupId?: string;  // set when the authored `from` was a group
+    toGroupId?: string;    // set when the authored `to` was a group
+  }>;
+  loops: Array<{
+    loopId: string;
+    entryNodeId: string;
+    bodyNodeIds: string[];
+    maxIterations: number;
+    onExhausted: { routeToNodeId: string } | null;
+  }>;
+}
+
+2. waitAll / cancelOnQuorum groups as edge sources
+What: waitAll groups can now be edge sources (from: { kind:"group", groupId }), giving them a collective approve/reject fan-out with unanimity decision logic. cancelOnQuorum groups can also be edge sources (collective approve fan-out on quorum). Group-to-node fan-out (to: { kind:"group", groupId }) is accepted for all quorum policies.
+Why: Before this release, joinOnQuorum was the only policy that could fire a single collective successor. waitAll had no collective branch — callers had to rely on per-member fan-out, which fires N times. The unanimity model lets a workflow express "all reviewers must finish, then take one approve path or one reject path as a unit."
+Impact:
+- waitAll edge-source: all members must terminate; collective decision is unanimity — approve if every member approved, else reject. Authors can provide both an on:"approve" and an on:"reject" branch; exactly one fires. Successor step ID: group_<groupId>__to__<childNodeId>.
+- cancelOnQuorum edge-source: fires one collective approve-successor on approval-quorum (same as joinOnQuorum). Forward on:"reject" from a cancelOnQuorum group is rejected (dead edge).
+- to: group fan-out expands to one compiled edge per group member for all policies.
+- Terminal status is deterministic: when a waitAll edge-source group's collective-reject branch fires and its successor completes, the execution rolls up to completed — a routed collective reject is NOT a failed run. A member step whose rejection is handled by the group's collective edge is surfaced as completed with output.decision="reject", never as failed.
+
+3. Node cosmetic name / description
+What: Nodes now accept optional cosmetic name (1–200 chars) and description (max 2000 chars) fields, echoed verbatim in NodeView.
+Why: Clients building visual graph editors needed a stable label per node that survives round-trips.
+Impact: Any workflow definition can now attach human-readable labels to nodes without affecting runtime behavior. Both fields are additive and schema-validated.
+
+4. "rest-api" context-gathering strategy for custom agents
+What: When configured, the agent fetches a list of customer-defined REST endpoints at execution time and injects the results into the prompt via the {{restApiData}} template variable.
+Why: Agents previously could only gather context from the page being analyzed (web-page-text, screenshot, etc.). Many use cases require pulling live data from a customer's own APIs — user profiles, CRM records, billing status — before the AI executes.
+Impact: Custom agents can now be configured with up to 10 REST endpoints per execution. Endpoint auth secrets are encrypted at rest using ApiKeySecretCipher and redacted on every read path. Templating ({{variable}}, {{userContext.X}}, {{variables.X}}) is supported in url, headers, query, and body. SSRF-guarded via assertSafeOutboundUrl (blocks internal/loopback/link-local hosts).
+strategyOptions["rest-api"] shape:
+  endpoints         RestApiEndpoint[]   yes   1–10 endpoints
+  maxResponseBytes  number              no    Per-endpoint cap. Default 1 000 000, max 5 000 000.
+RestApiEndpoint fields:
+  url              string   yes   SSRF-validated, supports {{variable}} templating
+  description      string   yes   Surfaced in the prompt alongside URL + response
+  method           "GET"|"POST"|"PUT"|"PATCH"|"DELETE"   no   Default "GET"
+  auth             RestApiAuthConfig   no   none|bearer|basic|header. Secret fields encrypted at rest, redacted on read.
+  cacheTtlSeconds  number   no   In-process cache TTL per Cloud Function instance. Default 0 (always fresh). Max 86400.
+  timeoutMs        number   no   Per-request timeout. Default 10 000, max 30 000.
+  responsePath     string   no   Dot-path to extract a sub-field of the JSON response
+
+5. "mcp-tools" execution strategy for custom agents
+What: The agent connects to one or more customer-configured MCP servers (remote HTTP/Streamable HTTP transport), runs a multi-turn tool-calling loop, and returns a structured CommonAgentResponse.
+Why: The previous ai execution strategy was single-shot — one LLM call, no tool loop. The MCP strategy lets agents query external tools (search, fetch, execute) across multiple turns before producing a final structured answer, enabling more complex reasoning patterns like the Docs Code Verifier agent.
+Impact: Custom agents can now declare execution.executionStrategy: "mcp-tools" with execution.mcpServers[] config. MCP auth headers are encrypted at rest via ApiKeySecretCipher and redacted on read. Per-server tool allowlists, per-turn redaction, and a max-turn cap prevent runaway loops. Both Claude (stop_reason: "tool_use" loop) and Gemini (response.functionCalls() loop) provider adapters are implemented via the new ILlmProvider.askAIWithTools interface.
+execution.mcpServers[] shape:
+[
+  {
+    "url": "https://docs.example.com/mcp",
+    "auth": { "type": "header", "headers": { "X-Api-Key": "sk_xxx" } },
+    "allowedTools": ["search_docs", "fetch_page"]
+  }
+]
+
+6. docs-code-comparison built-in agent
+What: Added docs-code-comparison built-in agent config. Uses the MCP tool loop to verify code snippets on a landing page against the docs site, reporting any mismatches as annotations.
+Why: The built-in agent suite previously had no documentation-verification capability.
+Impact: Available as a built-in agent (DOCS_CODE_COMPARISON_CONFIG). Uses web-page-text context gathering (with includeCodeBlocks: true) + mcp-tools execution against a remote docs MCP server. Provider-agnostic (works with Claude and Gemini).
+
+7. ApiKeySecretCipher extraction  [INTERNAL REFACTOR — no public API surface]
+What: Extracted ApiKeySecretCipher into core/crypto/api-key-secret-cipher.ts. Centralizes the ${apiKey}:${salt} AES-GCM encrypt/decrypt pattern previously duplicated across ProviderApiKeyService and RestApiConfigService.
+Why: The pattern was independently implemented multiple times with no shared contract.
+Impact: All callers delegate to ApiKeySecretCipher.encrypt / .decrypt. Per-feature salt strings caller-supplied and byte-stable (INV-005). Any non-constants.ts change under core/ triggers DEPLOY_ALL=true. CryptoUtil moved from shared/utils/ into core/crypto/ to satisfy the core → shared layering constraint.
+
+8. ProviderApiKeyService  [INTERNAL REFACTOR — no public API surface]
+What: Added ProviderApiKeyService to shared/ai/, extracting customer LLM API-key lookup/decryption from RewriterService into a reusable shared service.
+Why: With agents and the MCP strategy needing customer provider keys, the logic needed to be shared.
+Impact: RewriterService, agents, and future LLM consumers call ProviderApiKeyService.getCustomerAiKey() with { provider, workspaceObject }. Fallback logic unchanged.
+
+=========================================================
+IMPROVEMENTS
+=========================================================
+1. compileGraph-vs-linter split enforced  [INTERNAL — validation categorization]
+Structural validations dependent on authored edge provenance run in compileGraph BEFORE loop extraction; DAG-integrity and group/loop-shape checks run in the linter on the compiled forward-only graph. Validation errors are now reliably categorized: authored-provenance errors from compileGraph (new APPROVAL_EDGE_* constants), graph-structure errors from the linter. No behavior change for definitions that pass validation.
+
+2. ILlmProvider.askAIWithTools (Claude + Gemini)  [INTERNAL — provider adapter]
+Both ClaudeProvider and GeminiProvider now implement askAIWithTools(request, executor), running a capped multi-turn tool loop. Usage metadata accumulated across turns. askAIWithTools is optional on ILlmProvider — callers check presence and fail with AI_TOOLS_NOT_SUPPORTED. Claude uses stop_reason:"tool_use"/tool_result loop; Gemini uses response.functionCalls()/functionResponse parts. Both cap turns, force a tool-free finishing turn at cap, forward tool errors back to the model.
+
+3. Deep merge + redactConfigSecrets  [PARTLY DEVELOPER-VISIBLE: security redaction]
+CustomAgentFirestoreService.updateAgentConfig now performs a deep merge instead of shallow merge. McpConfigService and RestApiConfigService expose static redactConfigSecrets used by AgentsServiceV2.listVersions and getAgentConfig to strip encrypted auth ciphertext ({ __enc }) before returning version snapshots. Why: shallow merge overwrote nested config fields (e.g. execution.mcpServers); version snapshots contained raw { __enc } ciphertext (security gap F1, AC-004). Impact: partial updateAgentConfig preserves nested fields; listVersions redacts all encrypted secrets (fail-closed — rethrows if redaction throws).
+
+4. CustomAgentConfigValidator rejects server-managed fields  [DEVELOPER-VISIBLE validation]
+Now rejects server-managed fields (managedBy, metadata.type, metadata.category, metadata.internal, metadata.apiKey) in create and update-version payloads with a per-key 400 INVALID_ARGUMENT. Defense-in-depth strip at the Firestore write layer (stripServerManagedMetadata). Why: clients could set metadata.internal=true to hide an agent, or spoof managedBy:"velt" — privilege escalations. Existing agents unaffected.
+
+5. McpClientService improvements  [INTERNAL-ish]
+Improved error handling, structured logging, per-tool allowlist enforcement, client metadata header (mcp-client-name, mcp-client-version) on every connection. Tools not in allowedTools excluded from listTools sent to the model. Tool-call errors forwarded as is_error:true instead of throwing.
+
+6. CRDT service CryptoUtil import  [INTERNAL REFACTOR — no runtime change]
+api/crdt/crdt.service.ts imports CryptoUtil directly from core/crypto/crypto-util instead of the shared barrel, completing the CryptoUtil migration off shared/utils/. crypto-util.ts no longer exported from the shared barrel.
+
+=========================================================
+BUG FIXES
+=========================================================
+1. Email digest project-card count non-determinism  [Velt-hosted digest feature; touches /v2/memory/ask usage]
+Fixed by (1) running the structured /v2/memory/ask call at temperature:0 (ASK_TEMPERATURE), (2) anchoring the recencyDays window to UTC-day boundaries ([today − recencyDays, today)) rather than Date.now(), and (3) rewriting the grounding gate in SummaryService.fetchActionItems to key only on deterministic signals (recordsSearched >= 1 AND parsedBullets.length >= 1), removing the confidence float entirely. OI-010 closed: confidence threshold removed, not re-tuned. Impact: two digest runs within the same UTC day over identical Firestore data now produce identical topProjects.length and card names. confidence logged for diagnostics only. streamAskNLQuery retains STREAM_ASK_TEMPERATURE=1 (unchanged).
+
+2. validateInstructionsForStrategy  [DEVELOPER-VISIBLE validation]
+Fixed CustomAgentConfigValidator.validateInstructionsForStrategy to correctly identify strategies that require instructions (ai, service+ai, stagehand-agent) using a STRATEGIES_REQUIRING_INSTRUCTIONS set. Agent create/update for strategies that require instructions now correctly return 400 INVALID_ARGUMENT when instructions are missing/empty.
+
+3. listVersions secret redaction (fail-closed)  [DEVELOPER-VISIBLE security]
+Fixed AgentsServiceV2.listVersions to apply AgentApiService.redactAgentSecretsForApi to every version snapshot before returning. If redaction throws, the call rethrows (fail-closed) rather than returning unredacted ciphertext (self-verify finding F1, AC-004). No { __enc } wrapper survives the listVersions read path; encrypted fields replaced with redacted placeholders ("__redacted__").

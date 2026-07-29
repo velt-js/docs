@@ -30,6 +30,27 @@ These take priority over all convention rules. Use for cross-cutting files where
 | `api-reference/sdk/models/data-models.mdx` | route by model family (see §Model-family routing) |
 | `webhooks/basic.mdx`, `webhooks/advanced.mdx` | route by event family (see §Webhook routing) |
 
+## Nested feature namespace routing
+
+These routes take priority over the generic `ui-customization/features/<feature>/**` convention. The first folder under `features/` is a namespace (`async` or `realtime`), not the owning feature.
+
+| Docs path prefix | Target skill |
+|---|---|
+| `ui-customization/features/async/comments/**` | `velt-comments-best-practices` |
+| `ui-customization/features/async/comments-sidebar/**` | `velt-comments-best-practices` |
+| `ui-customization/features/async/notifications/**` | `velt-notifications-best-practices` |
+| `ui-customization/features/async/activity/**` | `velt-activity-best-practices` |
+| `ui-customization/features/async/recorder/**` | `velt-recorder-best-practices` |
+| `ui-customization/features/async/reactions/**` | `velt-reactions-best-practices` |
+| `ui-customization/features/async/arrows/**` | `velt-arrows-best-practices` |
+| `ui-customization/features/async/area/**` | `velt-area-best-practices` |
+| `ui-customization/features/async/view-analytics/**` | `velt-view-analytics-best-practices` |
+| `ui-customization/features/realtime/presence/**` | `velt-presence-best-practices` |
+| `ui-customization/features/realtime/cursors/**` | `velt-cursors-best-practices` |
+| `ui-customization/features/realtime/huddle/**` | `velt-huddle-best-practices` |
+| `ui-customization/features/realtime/crdt/**` | `velt-crdt-best-practices`, `yjs-best-practices` |
+| `ui-customization/features/realtime/single-editor-mode/**` | `velt-single-editor-mode-best-practices` |
+
 ## Folder conventions
 
 These rules derive the target skill from the path structure. They cover entire directory trees so new subfolders and files are handled automatically without updating this document.
@@ -100,6 +121,22 @@ When a file cannot be routed to any skill:
 | `BaseMetadata`, `User`, `UserContact` | (cross-cutting — route to skill matching the changed section's heading context) |
 
 If a type name doesn't match any prefix above, check the `#### <TypeName>` heading's enclosing section in the diff for context clues (e.g., if it appears under "Permission Models", route to `velt-setup-best-practices`). Do **not** send to `unmapped` unless you've exhausted both the prefix table and the heading context.
+
+## Identifier routing overrides
+
+Use this table when an API reference, SDK, UI-customization, or cross-cutting docs hunk includes one of these identifiers. Identifier routing is especially important when a single docs file covers multiple feature families.
+
+| Identifier / signal | Target skill | Notes |
+|---|---|---|
+| `setPageInfo`, `clearPageInfo`, `useSetPageInfo`, `useClearPageInfo`, `PageInfo`, `options.documentId` | `velt-setup-best-practices` | `options.documentId` is reserved for future per-document scope unless the docs explicitly say otherwise. Do not present it as current scoped behavior. |
+| `ApryseVeltComments`, `Apryse`, `WebViewer`, `AddCommentArgs`, `RenderCommentsArgs`, `AttachedExtension`, `TextEditorConfig` | `velt-comments-best-practices` | Apryse WebViewer comments are a comments setup/editor-integration surface. |
+| `VeltCommentsSidebarV2`, `<velt-comments-sidebar-v2>`, removed `VeltCommentsSidebar version="2"` usage | `velt-comments-best-practices` | Removed identifiers must remove or negate stale guidance; do not leave old usage in a recommended example. |
+| `collapsedRepliesPreview`, `enableCollapsedRepliesPreview`, `disableCollapsedRepliesPreview`, `VeltCommentDialogMoreReply.Count`, `VeltCommentDialogMoreReply.Text` | `velt-comments-best-practices` | Public primitive subproperties use `VeltCommentDialogMoreReply.*`; reserve `VeltCommentDialogWireframe.MoreReply.*` for wireframe rules. |
+| `FieldFilterOptions`, `filterUnknownFields`, `pickKnownFields`, `filterRequest`, `FilterSpec`, `*_SPEC` | `velt-node-sdk-best-practices` | Node SDK allowlist behavior. Python `filter_unknown_fields` belongs to `velt-self-hosting-data-best-practices`. |
+| `filter_unknown_fields`, `field_allowlists` | `velt-self-hosting-data-best-practices` | Python SDK self-hosting / velt-py allowlist behavior. |
+| `/v2/agents/*`, `/v2/agents/execution/list`, `/v2/memory/*` | `velt-rest-apis-best-practices` | REST API docs are authoritative for Agents and Memory. Do not infer visible Node/Python SDK namespaces from commented or hidden SDK sections. |
+| `sdk.api.agents`, `sdk.api.memory` in hidden/commented Node or Python SDK sections | no SDK ticket unless visible in published docs | If the docs say the sections are hidden/commented, the corresponding SDK skills should only warn not to document those namespaces as live. |
+| Approval Engine inbound webhook, raw JSON ingress, `Authorization: Bearer`, signed callback token, SSRF guard | `velt-approval-engine-best-practices` | Inbound webhook handler is distinct from outbound webhook delivery and deferred `node.type === "webhook"` nodes. |
 
 ## Webhook routing
 

@@ -1,0 +1,928 @@
+---
+title: Nutrient Web SDK
+description: Setup Multiplayer Collaboration for Nutrient Web SDK.
+---
+
+The `@veltdev/nutrient-crdt-react` and `@veltdev/nutrient-crdt` libraries synchronize Nutrient Instant JSON through a Velt CRDT Store backed by [Yjs](https://docs.yjs.dev/). The PDF remains a viewer resource; annotations, comments, form values, and transient page selections are the collaborative state.
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- A Nutrient Web SDK license for production use, when required by your Nutrient account
+- A Velt account with an API key ([sign up](https://console.velt.dev/))
+- React (v18 or higher) when using the React wrapper
+- A PDF URL, `Blob`, `ArrayBuffer`, or another document input supported by Nutrient
+- Optional: TypeScript for type safety
+
+## Setup
+
+### Step 1: Install Dependencies
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```bash
+npm install @veltdev/nutrient-crdt-react @veltdev/nutrient-crdt @nutrient-sdk/viewer @veltdev/react @veltdev/types react react-dom
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```bash
+npm install @veltdev/nutrient-crdt @nutrient-sdk/viewer @veltdev/client @veltdev/crdt yjs y-protocols
+```
+
+</Tab>
+</Tabs>
+
+The current base wrapper peer range targets `@nutrient-sdk/viewer@^1.17.0`. Keep one compatible copy of the viewer and one copy of Yjs in the final application bundle.
+
+
+### Step 2: Create and Load the Viewer
+
+The viewer host must have non-zero dimensions and remain mounted while collaboration is active. `position: relative` keeps remote overlays aligned with the host.
+
+```html
+<div id="nutrient-viewer" class="nutrient-host"></div>
+```
+
+```css
+.nutrient-host {
+  width: 100%;
+  height: 720px;
+  min-height: 520px;
+  position: relative;
+}
+```
+
+<Tabs>
+<Tab title="React / Next.js">
+
+`NutrientCrdtEditor` can create the host and load the viewer. When using `useCollaboration()`, create the viewer yourself:
+
+```tsx
+import { useEffect, useRef, useState } from 'react';
+import NutrientViewer from '@nutrient-sdk/viewer';
+import type { NutrientViewerInstance } from '@veltdev/nutrient-crdt-react';
+
+const hostRef = useRef<HTMLDivElement | null>(null);
+const [instance, setInstance] = useState<NutrientViewerInstance | null>(null);
+const viewerAcceptedRef = useRef(false);
+
+useEffect(() => {
+  const host = hostRef.current;
+  if (!host) return;
+  let active = true;
+
+  void NutrientViewer.load({
+    container: host,
+    document: '/documents/contract.pdf',
+    useCDN: true,
+    licenseKey: 'YOUR_NUTRIENT_LICENSE_KEY',
+  }).then((viewer) => {
+    if (!active) {
+      NutrientViewer.unload(host);
+      return;
+    }
+    viewerAcceptedRef.current = true;
+    setInstance(viewer);
+  });
+
+  return () => {
+    active = false;
+  };
+}, []);
+```
+
+This effect unloads only when `load()` resolves after teardown. Once a viewer has been accepted into `instance`, leave normal cleanup to the coordinated manager-first teardown in Step 14 so the viewer is unloaded exactly once after collaboration releases its listeners.
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Create the viewer before Velt collaboration:
+
+```ts
+import NutrientViewer from '@nutrient-sdk/viewer';
+
+const host = document.querySelector<HTMLElement>('#nutrient-viewer')!;
+const instance = await NutrientViewer.load({
+  container: host,
+  document: '/documents/contract.pdf',
+  useCDN: true,
+  licenseKey: 'YOUR_NUTRIENT_LICENSE_KEY',
+});
+```
+
+</Tab>
+</Tabs>
+
+Use `useCDN: true` for the package-manager setup. If you self-host Nutrient assets, supply the asset/base URL options required by your Nutrient deployment instead. The collaboration wrapper never calls `NutrientViewer.load()` in the Other Frameworks path.
+
+
+### Step 3: Setup Velt
+
+Authenticate a user and set a stable document context before creating collaboration. Follow the [Velt Setup Docs](/get-started/quickstart) for the server token endpoint used by `authProvider`.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+import { useEffect, useState } from 'react';
+import {
+  VeltProvider,
+  useCurrentUser,
+  useSetDocuments,
+} from '@veltdev/react';
+
+const DOCUMENT_ID = 'nutrient-review-123';
+const USER = {
+  userId: 'ada',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  organizationId: 'my-org-id',
+};
+
+const authProvider = {
+  user: USER,
+  retryConfig: { retryCount: 3, retryDelay: 1000 },
+  generateToken: async () => {
+    const response = await fetch('/api/velt/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(USER),
+    });
+    const { token } = await response.json();
+    return token;
+  },
+};
+
+function DocumentScope() {
+  const user = useCurrentUser();
+  const { setDocuments } = useSetDocuments();
+  const [documentReady, setDocumentReady] = useState(false);
+
+  useEffect(() => {
+    if (!user) {
+      setDocumentReady(false);
+      return;
+    }
+    setDocuments([{
+      id: DOCUMENT_ID,
+      metadata: { documentName: 'Nutrient review' },
+    }]);
+    setDocumentReady(true);
+  }, [user, setDocuments]);
+
+  return user && documentReady
+    ? <CollaborativeDocument />
+    : <p>Preparing collaboration...</p>;
+}
+
+<VeltProvider apiKey="YOUR_VELT_API_KEY" authProvider={authProvider}>
+  <DocumentScope />
+</VeltProvider>
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+import { initVelt } from '@veltdev/client';
+
+const DOCUMENT_ID = 'nutrient-review-123';
+const client = await initVelt('YOUR_VELT_API_KEY');
+
+await client.identify({
+  userId: 'ada',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  organizationId: 'my-org-id',
+});
+
+await client.setDocument(DOCUMENT_ID, {
+  documentName: 'Nutrient review',
+});
+
+let resolveVeltReady!: () => void;
+const veltReady = new Promise<void>((resolve) => {
+  resolveVeltReady = resolve;
+});
+const initSubscription = client.getVeltInitState().subscribe((isReady) => {
+  if (isReady) resolveVeltReady();
+});
+await veltReady;
+initSubscription.unsubscribe();
+```
+
+</Tab>
+</Tabs>
+
+Every collaborator opening the same PDF must use the same Velt document ID and wrapper `editorId`.
+
+
+### Step 4: Initialize Collaboration
+
+Pass the viewer host as `overlayContainer` so the manager can render page-rectangle selections above the viewer.
+
+<Tabs>
+<Tab title="React Component">
+
+`NutrientCrdtEditor` creates the host, loads Nutrient, attaches collaboration, and unloads viewers that it created:
+
+```tsx
+import {
+  INSTANT_JSON_FORMAT,
+  NutrientCrdtEditor,
+} from '@veltdev/nutrient-crdt-react';
+
+const initialContent = {
+  format: INSTANT_JSON_FORMAT,
+  annotations: [],
+  comments: [],
+  formFieldValues: { customer: 'Acme Corp' },
+};
+
+function CollaborativeDocument() {
+  return (
+    <NutrientCrdtEditor
+      documentId="nutrient-review-123"
+      document="/documents/contract.pdf"
+      licenseKey="YOUR_NUTRIENT_LICENSE_KEY"
+      useCDN
+      initialContent={initialContent}
+      className="nutrient-host"
+      onError={(error) => console.error('Collaboration error:', error)}
+    >
+      {(collaboration) => (
+        <span>{collaboration.synced ? 'Synced' : collaboration.status}</span>
+      )}
+    </NutrientCrdtEditor>
+  );
+}
+```
+
+</Tab>
+<Tab title="React Hook">
+
+Use the hook when your app owns the viewer. It waits for Velt initialization, an authenticated user, and `instance`. It does not explicitly wait for document context, so set the document before rendering this component.
+
+```tsx
+import { useCollaboration } from '@veltdev/nutrient-crdt-react';
+
+const collaboration = useCollaboration({
+  editorId: 'nutrient-review-123',
+  instance,
+  initialContent,
+  overlayContainer: hostRef.current,
+  debounceMs: 120,
+  onError: (error) => console.error('Collaboration error:', error),
+});
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+import { createCollaboration } from '@veltdev/nutrient-crdt';
+
+const manager = await createCollaboration({
+  editorId: DOCUMENT_ID,
+  veltClient: client,
+  instance,
+  overlayContainer: host,
+  initialContent: {
+    format: 'https://pspdfkit.com/instant-json/v1',
+    annotations: [],
+    comments: [],
+    formFieldValues: { customer: 'Acme Corp' },
+  },
+  debounceMs: 120,
+  onError: (error) => console.error('Nutrient collaboration:', error),
+});
+```
+
+Passing `instance` here performs the binding. Do not call `attachInstance(instance)` afterward.
+
+</Tab>
+</Tabs>
+
+#### React Context Provider (Optional)
+
+React applications can expose the same hook value through context:
+
+```tsx
+import { NutrientCrdtProvider } from '@veltdev/nutrient-crdt-react';
+
+<NutrientCrdtProvider
+  config={{
+    editorId: 'nutrient-review-123',
+    instance,
+    initialContent,
+    overlayContainer: hostRef.current,
+  }}
+>
+  {(collaboration) => <span>{collaboration.status}</span>}
+</NutrientCrdtProvider>
+```
+
+`CollaborationProvider` is an alias of `NutrientCrdtProvider`. Use this instead of calling `useCollaboration()` in multiple descendants for the same viewer.
+
+
+### Step 5: Monitor Status and Sync
+
+<Tabs>
+<Tab title="React / Next.js">
+
+The hook and component expose reactive `status`, `synced`, `error`, and `stats` values. Subscribe through the manager only when an additional callback is needed:
+
+```tsx
+useEffect(() => {
+  if (!collaboration.manager) return;
+  const offStatus = collaboration.manager.onStatusChange(console.log);
+  const offSynced = collaboration.manager.onSynced(console.log);
+  const offDocument = collaboration.manager.onDocumentChange((event) => {
+    console.log('Document changed:', event.reason, event.source);
+  });
+  return () => {
+    offStatus();
+    offSynced();
+    offDocument();
+  };
+}, [collaboration.manager]);
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const offStatus = manager.onStatusChange((status) => {
+  document.querySelector('#status')!.textContent = status;
+});
+const offSynced = manager.onSynced((synced) => {
+  document.querySelector('#synced')!.textContent = synced ? 'Yes' : 'No';
+});
+const offSelections = manager.onRemoteSelectionsChange((selections) => {
+  console.log('Remote selections:', selections);
+});
+const offDocument = manager.onDocumentChange((event) => {
+  console.log('Document changed:', event.reason, event.source);
+});
+```
+
+`onRemoteSelectionsChange()` invokes its callback immediately with the current remote-selection snapshot, then again whenever awareness changes.
+
+</Tab>
+</Tabs>
+
+
+### Step 6: Initial Instant JSON and Reset Behavior
+
+`initialContent` is seed data for a new, empty collaborative Store. A client joining an existing document receives persisted Instant JSON instead of overwriting it. The manager strips `pdfId` before persistence because that identifier is local to a particular PDF load.
+
+```ts
+const initialContent = {
+  format: 'https://pspdfkit.com/instant-json/v1',
+  annotations: [],
+  comments: [],
+  formFieldValues: { customer: 'Acme Corp' },
+};
+```
+
+Use an explicit reset only for an administrator action, test setup, or another destructive workflow:
+
+```ts
+await manager.forceReset(initialContent);
+```
+
+<Warning>`forceResetInitialContent` and `forceReset()` replace shared annotations, comments, and form values for every collaborator. Do not enable them during normal routing.</Warning>
+
+
+### Step 7: Flush Viewer Changes
+
+Viewer events schedule debounced `exportInstantJSON()` calls. Request an immediate flush after a multi-step custom viewer operation or before navigation when your app must wait for persistence:
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+await collaboration.flushInstanceToStore('before-navigation', true);
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+await manager.flushInstanceToStore('before-navigation', true);
+```
+
+</Tab>
+</Tabs>
+
+The default debounce is 120 ms. `manager.getStats().lastFlushReason` exposes the most recent reason for diagnostics.
+
+
+### Step 8: Work with Document State
+
+```ts
+await manager.setFormFieldValue('customer', 'Dunder Mifflin');
+await manager.addHighlight({
+  pageIndex: 0,
+  bbox: [72, 150, 220, 30],
+  color: '#fff59d',
+  text: 'Payment terms',
+});
+await manager.addComment({
+  pageIndex: 0,
+  text: 'Needs legal review',
+});
+```
+
+Use `applyInstantJson(nextInstantJson, 'import')` for a full import. Use `getInstantJson()` or `getDocumentState()` to read the current normalized snapshot.
+
+
+### Step 9: Publish and Render Remote Selections
+
+The manager automatically listens for supported Nutrient selection events. For custom viewer tools, publish page-relative rectangles explicitly:
+
+```ts
+manager.setLocalSelection({
+  pageIndex: 0,
+  rects: [{
+    left: 72,
+    top: 150,
+    width: 220,
+    height: 30,
+    pageIndex: 0,
+  }],
+  text: 'Selected text',
+});
+
+manager.renderRemoteSelections(host);
+```
+
+Selections are awareness data: they are transient, disappear when a peer leaves, and are not included in Instant JSON or versions. Map rectangle coordinates through the current page, zoom, and scroll transform when your viewer reports a different coordinate space.
+
+
+### Step 10: Save and Restore Versions
+
+```ts
+const versionId = await manager.saveVersion('Before approval');
+const versions = await manager.getVersions();
+await manager.restoreVersion(versionId);
+```
+
+Saving flushes the current viewer first. Restoring reapplies the complete stored Instant JSON to the attached viewer.
+
+
+### Step 11: Subscribe to CRDT Events
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+import { useVeltClient } from '@veltdev/react';
+
+const { client } = useVeltClient();
+
+useEffect(() => {
+  if (!client) return;
+  const subscription = client.getCrdtElement()
+    .on('updateData')
+    .subscribe((event) => console.log('CRDT update:', event));
+  return () => subscription.unsubscribe();
+}, [client]);
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const crdtSubscription = client.getCrdtElement()
+  .on('updateData')
+  .subscribe((event) => console.log('CRDT update:', event));
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 12: Attach or Replace a Viewer (Alternative)
+
+Initialize without a viewer only when the Store must outlive the viewer:
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+const collaboration = useCollaboration({
+  editorId: 'nutrient-review-123',
+  initializeWithoutInstance: true,
+});
+
+collaboration.attachInstance(instance, { applyRemoteState: true });
+collaboration.detachInstance();
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const manager = await createCollaboration({
+  editorId: DOCUMENT_ID,
+  veltClient: client,
+  overlayContainer: host,
+});
+
+manager.attachInstance(instance, { applyRemoteState: true });
+manager.detachInstance();
+```
+
+</Tab>
+</Tabs>
+
+This is an alternative to passing `instance` to the factory. Never use both attachment paths for the same viewer.
+
+
+### Step 13: Custom Encryption (Optional)
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+<VeltProvider
+  apiKey="YOUR_VELT_API_KEY"
+  authProvider={authProvider}
+  encryptionProvider={encryptionProvider}
+>
+  <DocumentScope />
+</VeltProvider>
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+client.setEncryptionProvider(encryptionProvider);
+```
+
+</Tab>
+</Tabs>
+
+See [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider) and [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider).
+
+
+### Step 14: Clean Up
+
+<Tabs>
+<Tab title="React / Next.js">
+
+`useCollaboration()` unsubscribes its listeners and destroys its manager on unmount. `NutrientCrdtEditor` also unloads a viewer that it created, but never unloads an external `instance`. When your application owns the viewer, release collaboration before unloading the host:
+
+```tsx
+useEffect(() => {
+  const host = hostRef.current;
+  return () => {
+    collaboration.destroy();
+    if (host && viewerAcceptedRef.current) {
+      NutrientViewer.unload(host);
+      viewerAcceptedRef.current = false;
+    }
+  };
+}, [collaboration.destroy]);
+```
+
+`viewerAcceptedRef` comes from the loading step. It prevents the coordinated cleanup from unloading a viewer whose pending `load()` promise will instead be handled by the late-load race branch.
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Unsubscribe first, destroy the manager so it releases viewer listeners and overlays, then unload Nutrient with the host element:
+
+```ts
+offStatus();
+offSynced();
+offSelections();
+offDocument();
+crdtSubscription.unsubscribe();
+manager.destroy();
+NutrientViewer.unload(host);
+```
+
+</Tab>
+</Tabs>
+
+
+## Notes
+
+- **Snapshot model**: Nutrient Instant JSON is synchronized as snapshots, not character-level PDF operations.
+- **Store identity**: The manager uses a `map` Store with content key `document` and source metadata `nutrient`.
+- **Overlay container**: Supply a stable, positioned viewer host so remote page rectangles render in the correct stacking and coordinate context.
+- **Viewer capability**: Full synchronization requires `exportInstantJSON()` and an Instant JSON application method supported by the viewer.
+- **One manager**: Keep one manager per viewer/document pair.
+- **Stable IDs**: All collaborators must share the same document ID and editor ID.
+- **Yjs ownership**: Use `getDoc()`, `getMap()`, `getProvider()`, and `getAwareness()` only as advanced escape hatches. Do not create a second Y.Doc or provider for the same viewer.
+- **Production authentication**: Use a server-backed React `authProvider` and never expose privileged server tokens in browser code.
+
+
+## Testing and Debugging
+
+1. Open the same PDF, Velt document, and Nutrient `editorId` as two different authenticated users in separate browser profiles.
+2. Add annotations, comments, highlights, and form values from both clients.
+3. Verify remote selection overlays, version restore, reconnection, and persistence after reload.
+4. Flush before navigation, then confirm the last local operation persists.
+5. Destroy and reload the viewer, and separately test the attach-later lifecycle.
+
+Common issues:
+
+- Viewer does not load: verify the document URL, license, CDN/asset configuration, and host height.
+- Collaboration remains loading: confirm Velt initialization, an authenticated user, and a viewer instance, or use `initializeWithoutInstance`.
+- Overlay position is wrong: render into the positioned viewer host and transform coordinates for the current page/zoom/scroll state.
+- Existing data resets: remove `forceResetInitialContent` from normal loads.
+
+<Tip>
+Use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setup/core#veltcrdtstoremap) to inspect Instant JSON state and provider status.
+</Tip>
+
+
+## Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx Complete App.tsx expandable lines
+import { useEffect, useMemo, useState } from 'react';
+import {
+  VeltProvider,
+  useCurrentUser,
+  useSetDocuments,
+} from '@veltdev/react';
+import {
+  INSTANT_JSON_FORMAT,
+  NutrientCrdtEditor,
+  type CollaborationManager,
+  type InstantJson,
+} from '@veltdev/nutrient-crdt-react';
+import './styles.css';
+
+const DOCUMENT_ID = 'nutrient-review-123';
+const USER = {
+  userId: 'ada',
+  organizationId: 'my-org-id',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+};
+
+const initialContent: InstantJson = {
+  format: INSTANT_JSON_FORMAT,
+  annotations: [],
+  comments: [],
+  formFieldValues: { customer: 'Acme Corp' },
+};
+
+function CollaborativeDocument() {
+  const user = useCurrentUser();
+  const { setDocuments } = useSetDocuments();
+  const [manager, setManager] = useState<CollaborationManager | null>(null);
+  const [documentReady, setDocumentReady] = useState(false);
+
+  useEffect(() => {
+    if (!user) {
+      setDocumentReady(false);
+      return;
+    }
+    setDocuments([{
+      id: DOCUMENT_ID,
+      metadata: { documentName: 'Nutrient review' },
+    }]);
+    setDocumentReady(true);
+  }, [user, setDocuments]);
+
+  if (!user || !documentReady) return <p>Preparing collaboration...</p>;
+
+  return (
+    <main>
+      <button onClick={() => manager?.saveVersion('Manual checkpoint')}>
+        Save version
+      </button>
+      <NutrientCrdtEditor
+        documentId={DOCUMENT_ID}
+        document="/documents/contract.pdf"
+        licenseKey="YOUR_NUTRIENT_LICENSE_KEY"
+        useCDN
+        initialContent={initialContent}
+        className="nutrient-host"
+        onManagerReady={setManager}
+        onStatusChange={(status) => console.log('Status:', status)}
+        onError={console.error}
+      >
+        {(collaboration) => (
+          <p>{collaboration.status} · {collaboration.synced ? 'Synced' : 'Syncing'}</p>
+        )}
+      </NutrientCrdtEditor>
+    </main>
+  );
+}
+
+export default function App() {
+  const authProvider = useMemo(() => ({
+    user: USER,
+    retryConfig: { retryCount: 3, retryDelay: 1000 },
+    generateToken: async () => {
+      const response = await fetch('/api/velt/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(USER),
+      });
+      const { token } = await response.json();
+      return token;
+    },
+  }), []);
+
+  return (
+    <VeltProvider apiKey="YOUR_VELT_API_KEY" authProvider={authProvider}>
+      <CollaborativeDocument />
+    </VeltProvider>
+  );
+}
+```
+
+```css Complete styles.css expandable lines
+.nutrient-host {
+  width: 100%;
+  height: 720px;
+  min-height: 520px;
+  position: relative;
+}
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```html Complete index.html expandable lines
+<p>Status: <span id="status">connecting</span></p>
+<p>Synced: <span id="synced">No</span></p>
+<button id="save-version">Save version</button>
+<div id="nutrient-viewer" class="nutrient-host"></div>
+```
+
+```ts Complete app.ts expandable lines
+import NutrientViewer from '@nutrient-sdk/viewer';
+import { initVelt } from '@veltdev/client';
+import {
+  createCollaboration,
+  type CollaborationManager,
+} from '@veltdev/nutrient-crdt';
+import './styles.css';
+
+const DOCUMENT_ID = 'nutrient-review-123';
+const host = document.querySelector<HTMLElement>('#nutrient-viewer')!;
+
+let manager: CollaborationManager | null = null;
+let offStatus: (() => void) | null = null;
+let offSynced: (() => void) | null = null;
+let offSelections: (() => void) | null = null;
+let crdtSubscription: { unsubscribe(): void } | null = null;
+let cleanedUp = false;
+
+const instance = await NutrientViewer.load({
+  container: host,
+  document: '/documents/contract.pdf',
+  useCDN: true,
+  licenseKey: 'YOUR_NUTRIENT_LICENSE_KEY',
+});
+
+const client = await initVelt('YOUR_VELT_API_KEY');
+await client.identify({
+  userId: 'ada',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  organizationId: 'my-org-id',
+});
+await client.setDocument(DOCUMENT_ID, {
+  documentName: 'Nutrient review',
+});
+
+let resolveVeltReady!: () => void;
+const veltReady = new Promise<void>((resolve) => {
+  resolveVeltReady = resolve;
+});
+const initSubscription = client.getVeltInitState().subscribe((isReady) => {
+  if (isReady) resolveVeltReady();
+});
+await veltReady;
+initSubscription.unsubscribe();
+
+manager = await createCollaboration({
+  editorId: DOCUMENT_ID,
+  veltClient: client,
+  instance,
+  overlayContainer: host,
+  initialContent: {
+    format: 'https://pspdfkit.com/instant-json/v1',
+    annotations: [],
+    comments: [],
+    formFieldValues: { customer: 'Acme Corp' },
+  },
+  debounceMs: 120,
+  onError: console.error,
+});
+
+offStatus = manager.onStatusChange((status) => {
+  document.querySelector('#status')!.textContent = status;
+});
+offSynced = manager.onSynced((synced) => {
+  document.querySelector('#synced')!.textContent = synced ? 'Yes' : 'No';
+});
+offSelections = manager.onRemoteSelectionsChange(() => {
+  manager?.renderRemoteSelections(host);
+});
+crdtSubscription = client.getCrdtElement()
+  .on('updateData')
+  .subscribe((event) => console.log('CRDT update:', event));
+
+document.querySelector('#save-version')!.addEventListener('click', () => {
+  void manager?.saveVersion('Manual checkpoint');
+});
+
+async function cleanup() {
+  if (cleanedUp) return;
+  cleanedUp = true;
+  await manager?.flushInstanceToStore('before-unload', true);
+  offStatus?.();
+  offSynced?.();
+  offSelections?.();
+  crdtSubscription?.unsubscribe();
+  manager?.destroy();
+  manager = null;
+  NutrientViewer.unload(host);
+}
+
+window.addEventListener('pagehide', () => {
+  void cleanup();
+}, { once: true });
+```
+
+```css Complete styles.css expandable lines
+.nutrient-host {
+  width: 100%;
+  height: 720px;
+  min-height: 520px;
+  position: relative;
+}
+```
+
+</Tab>
+</Tabs>
+
+
+## How It Works
+
+1. The host application loads Nutrient, initializes Velt, authenticates a user, and sets stable document identity.
+2. The manager creates one Velt Store, Y.Doc, Y.Map, provider, and awareness instance for the viewer.
+3. Local viewer changes are exported as debounced Instant JSON snapshots; remote snapshots are applied to the attached viewer.
+4. Awareness carries page rectangles and user metadata for transient overlay rendering.
+5. Version operations flush and restore the complete normalized Instant JSON state.
+6. Cleanup releases collaboration listeners and overlays before Nutrient unloads the host.
+
+
+## APIs
+
+### React: NutrientCrdtEditor
+
+| Prop group | Important props |
+|---|---|
+| Collaboration | `editorId`, `documentId`, `initialContent`, `forceResetInitialContent`, `debounceMs`, `userColor`, `initializeWithoutInstance` |
+| Viewer | `instance`, `document`, `licenseKey`, `useCDN`, `viewerOptions`, `viewerModule`, `createInstance` |
+| UI | `overlayContainer`, `className`, `style`, `children` |
+| Lifecycle | `onInstanceReady`, `prepareInitialContent`, `onManagerReady`, `onStatusChange`, `onError` |
+
+### React: useCollaboration()
+
+| Return group | Fields and methods |
+|---|---|
+| Lifecycle | `manager`, `instance`, `isLoading`, `synced`, `status`, `error`, `destroy()` |
+| Snapshots | `documentState`, `instantJson`, `stats`, `remoteSelections`, `refreshSnapshots()` |
+| Viewer | `attachInstance()`, `detachInstance()`, `flushInstanceToStore()` |
+| Content | `forceReset()`, `applyInstantJson()`, `addHighlight()`, `addComment()`, `setFormFieldValue()` |
+| Awareness | `publishCurrentSelection()`, `setLocalSelection()`, `renderRemoteSelections()`, `clearRemoteSelectionOverlays()` |
+| Versions | `saveVersion()`, `getVersions()`, `getVersionById()`, `refreshVersions()`, `restoreVersion()`, `setStateFromVersion()` |
+
+### CollaborationManager Methods
+
+| Method group | Methods |
+|---|---|
+| Lifecycle | `initialize()`, `destroy()`, `attachInstance()`, `detachInstance()` |
+| Status | `initialized`, `synced`, `status`, `onStatusChange()`, `onSynced()`, `getStats()` |
+| Document | `getDocumentState()`, `getInstantJson()`, `applyInstantJson()`, `flushInstanceToStore()`, `forceReset()` |
+| Changes | `addHighlight()`, `addComment()`, `setFormFieldValue()`, `onDocumentChange()` |
+| Awareness | `publishCurrentSelection()`, `setLocalSelection()`, `getRemoteSelections()`, `renderRemoteSelections()`, `clearRemoteSelectionOverlays()` |
+| Versions | `saveVersion()`, `getVersions()`, `getVersionById()`, `restoreVersion()`, `setStateFromVersion()` |
+| Advanced | `getDoc()`, `getMap()`, `getProvider()`, `getAwareness()`, `getStore()`, `getInstance()` |
+
+### Exported Types and Helpers
+
+- `CollaborationConfig`, `AttachInstanceOptions`, `CollaborationManager`, `CollaborationStats`
+- `InstantJson`, `NutrientDocumentState`, `NutrientViewerInstance`, `NutrientStore`
+- `AwarenessSelection`, `RemoteSelection`, `SelectionRect`
+- `NutrientHighlightInput`, `NutrientCommentInput`, `DocumentChangeEvent`
+- `INSTANT_JSON_FORMAT`, `createCollaboration()`, `stripPdfId()`, and the Instant JSON helper functions

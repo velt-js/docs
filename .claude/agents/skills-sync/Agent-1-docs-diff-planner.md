@@ -37,7 +37,16 @@ You convert a raw docs diff into a structured work plan for the skills-sync pipe
 
    For ambiguous cases, read the full hunk *and* the current state of the file (`docs/<path>`) before deciding. Do not guess.
 
-3. **Map each file to skill(s)** using `mapping.md`. A single file may map to multiple skills (e.g., CRDT docs touch both `velt-crdt-best-practices` and `yjs-best-practices`). For `webhooks/basic.mdx` and `webhooks/advanced.mdx`, examine the hunk for event-name prefixes and route per the webhook routing table in `mapping.md`.
+3. **Map each file to skill(s)** using `mapping.md`. A single file may map to multiple skills (e.g., CRDT docs touch both `velt-crdt-best-practices` and `yjs-best-practices`). Apply explicit path overrides first, then nested feature namespace routing, then identifier routing overrides, then folder conventions. For `webhooks/basic.mdx` and `webhooks/advanced.mdx`, examine the hunk for event-name prefixes and route per the webhook routing table in `mapping.md`.
+
+   High-confidence identifier routes must be honored even when the path is broad:
+   - `ui-customization/features/async/comments/**` routes to `velt-comments-best-practices`, not `velt-async-best-practices`.
+   - `setPageInfo`, `clearPageInfo`, `useSetPageInfo`, `useClearPageInfo`, `PageInfo`, and `options.documentId` route to `velt-setup-best-practices`.
+   - Apryse / WebViewer comments identifiers route to `velt-comments-best-practices`.
+   - `collapsedRepliesPreview` and comment-dialog MoreReply primitives route to `velt-comments-best-practices`.
+   - `FieldFilterOptions`, `filterUnknownFields`, `pickKnownFields`, `filterRequest`, and `FilterSpec` route to `velt-node-sdk-best-practices`; Python `filter_unknown_fields` routes to `velt-self-hosting-data-best-practices`.
+   - REST `/v2/agents/*` and `/v2/memory/*` routes to `velt-rest-apis-best-practices`.
+   - Approval Engine inbound webhook handler changes route to `velt-approval-engine-best-practices`.
 
 4. **For unmapped paths** that aren't in the out-of-scope list, record them in `unmapped`. Suggested slug comes from `mapping.md` "Unmapped feature paths" table. If the path isn't in that table either, generate a slug as `velt-<kebab-case-feature-name>-best-practices` and flag it for human review (`needs_human_review: true` on the unmapped entry).
 
@@ -52,6 +61,12 @@ You convert a raw docs diff into a structured work plan for the skills-sync pipe
    - For `new-component` / `new-hook` / `new-method`: prefer extending an existing rule unless the new identifier is a genuinely new feature category — in which case propose a new rule file path.
    - For `new-endpoint`: hint a new file under `rules/shared/rest/`.
    - For `new-webhook-event`: hint a new or existing file under `rules/shared/events/`.
+
+7. **Preserve semantic intent in ticket rationale.** Some docs changes require removal or restraint, not more coverage:
+   - If the hunk removes an identifier or setup option, the ticket must say whether stale skill guidance should be removed or explicitly marked obsolete. Example: removed `VeltCommentsSidebar version="2"` must not remain as recommended usage.
+   - If the docs mark a field as reserved/future, the ticket must preserve that status. Example: `options.documentId` for `setPageInfo` / `clearPageInfo` is reserved for future per-document scope unless the current docs explicitly say it ships.
+   - If Node/Python SDK content is hidden, commented, or explicitly not published, do not create live SDK guidance from it. Route visible REST endpoints to REST skills, and only add SDK notes warning against premature `sdk.api.agents` / `sdk.api.memory` usage when the docs support that warning.
+   - For comment-dialog primitives, distinguish public primitive names from wireframe tree names. `VeltCommentDialogMoreReply.Count` / `.Text` are public primitive subproperties; `VeltCommentDialogWireframe.MoreReply.Count` / `.Text` belongs only in wireframe rules.
 
 ## Output
 
@@ -108,5 +123,7 @@ Field semantics:
 - [ ] Every entry in `diff.json` appears exactly once in either `tickets[].files`, `noops`, or `unmapped[].paths`, or was dropped as out-of-scope (in which case it appears nowhere).
 - [ ] No skill name appears in `tickets[].skill` that isn't present in `skill-inventory.json`.
 - [ ] Every `target_rule_hint` either points to an existing rule file path or is clearly marked as a new-file proposal in `rationale`.
+- [ ] Removed identifiers have an explicit stale-guidance action in `rationale` (remove, replace, or mark obsolete).
+- [ ] Hidden/commented SDK sections do not become live SDK method tickets.
 - [ ] No `tickets[]` entry has zero `changes[]` — that would be a phantom ticket.
 - [ ] `version_bump` values are exactly `patch`, `minor`, or `major`.

@@ -7,7 +7,7 @@ tools: Read, Edit, Write, Glob, Grep, Bash
 
 # Skill Updater — AI / Productivity
 
-You apply the changes described in a single ticket to a single skill. You preserve the skill's authored style exactly. This variant owns: `velt-rewriter-best-practices`. Future AI/productivity skills (e.g. AI summarization, AI autocomplete, AI translation, smart compose) will join this variant rather than being absorbed into the comments or recorder variants — the API surfaces (`RewriterElement`, future `*Element` clients) are distinct enough from comments / recorder to warrant a dedicated home.
+You apply the changes described in a single ticket to a single skill. You preserve the skill's authored style exactly. This variant owns: `velt-rewriter-best-practices` and `velt-approval-engine-best-practices`. Future AI/productivity skills (e.g. AI summarization, AI autocomplete, AI translation, smart compose) will join this variant rather than being absorbed into the comments or recorder variants — the API surfaces (`RewriterElement`, workflow REST endpoints, future `*Element` clients) are distinct enough from comments / recorder to warrant a dedicated home.
 
 ## Inputs
 
@@ -30,7 +30,7 @@ You apply the changes described in a single ticket to a single skill. You preser
    - Bump `version` per the ticket's `version_bump`.
    - Append new docs URLs to `references` at the end; do not modify `abstract`, `organization`, or `date` unless a major scope change occurred.
 4. **Update `rules/shared/_sections.md`** only if you added a new category.
-5. **`SKILL.md`:** Edit the `description` field only if a new top-level capability was added (e.g. a new client-side method namespace, a new model provider).
+5. **`SKILL.md`:** Edit the `description` field only if a new top-level capability was added (e.g. a new client-side method namespace, a new model provider, a new Approval Engine workflow surface).
 6. **Do not touch:** `AGENTS.md`, `AGENTS.full.md`, `README.md` (unless contributor instructions changed), `evals/**`, the sibling skill in this variant.
 
 ## Hard rules
@@ -65,6 +65,13 @@ These rules apply on top of the base process.
 - **New model providers:** add new model identifiers to the `AiModel` rule's enumerated list (in the prose / verification checklist); do not introduce a parallel enum.
 - **Custom UI override rules:** group under `rules/shared/ui/` (create if not present).
 - **Decline if scope drifts into a sibling AI feature** that warrants its own library (e.g. AI translation, AI summarization at document scope) — file a manual decision item instead.
+
+### When editing `velt-approval-engine-best-practices`
+
+- **Inbound and outbound webhooks are distinct.** Inbound webhook handler guidance covers raw JSON ingress from external systems into the Approval Engine. Outbound delivery guidance covers Velt sending workflow events to customer endpoints. Do not merge these into one generic webhook rule.
+- **Inbound handler security requirements travel together.** If the docs add or change inbound webhook guidance, include bearer-token auth, signed callback tokens when present, rate/body-size limits, and SSRF URL guard language when the docs mention them. Do not document a public unauthenticated ingress endpoint.
+- **Webhook node type is deferred execution, not ingress.** `node.type === "webhook"` inside a workflow definition is not the same thing as an inbound webhook handler URL. Keep that distinction in examples and verification checklists.
+- **REST endpoint identity is verbatim.** Approval Engine REST rules must preserve `/v2/workflow/*` endpoint paths exactly and keep workflow definitions, executions, steps, and event recovery in their existing categories unless the ticket clearly adds a new category.
 
 ## Output
 

@@ -1,0 +1,132 @@
+---
+title: "Refine Prompt"
+api: "POST https://api.velt.dev/v2/agents/prompt/refine"
+---
+
+Use this API to refine an existing analysis prompt based on feedback from demo runs. You provide the current prompt and a list of demos with the user's feedback on what went wrong; the engine returns a refined analysis prompt and updated response descriptions.
+
+This is the iteration step in the prompt-design loop: run [Validate Prompt](/api-reference/rest-apis/v2/agents/prompt/validate) to expand a simple instruction, run the demos against the resulting prompt, then refine when the demos don't pass.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/prompt/refine`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="analysisPrompt" type="string" required>
+      Min 1 char. The current analysis prompt to refine. Typically the `analysis_prompt` returned by [Validate Prompt](/api-reference/rest-apis/v2/agents/prompt/validate).
+    </ParamField>
+
+    <ParamField body="demoFeedback" type="object[]" required>
+      Min 1 entry. Demo feedback items.
+
+      Each entry:
+
+      | Field          | Type   | Required | Description                                                       |
+      | -------------- | ------ | -------- | ----------------------------------------------------------------- |
+      | `demoId`       | string | yes      | Min 1 char. Stable demo identifier.                               |
+      | `demoTitle`    | string | yes      | Min 1 char. Human-readable demo title.                            |
+      | `demoHtml`     | string | yes      | Min 1 char. HTML content the demo was run against.                |
+      | `demoExpected` | string | yes      | Min 1 char. The expected outcome for this demo.                   |
+      | `feedback`     | string | yes      | Min 1 char. Free-form feedback explaining what was wrong.         |
+    </ParamField>
+
+    <ParamField body="provider" type="string">
+      LLM provider override: `"gemini"` or `"claude"`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## **Example Requests**
+
+#### Refine after a missed detection
+
+```JSON
+{
+  "data": {
+    "analysisPrompt": "## Objective\nIdentify all broken links on the page.\n\n## Detection Logic\nCheck HTTP status codes for non-2xx responses.",
+    "demoFeedback": [
+      {
+        "demoId": "demo-1",
+        "demoTitle": "Mailto link with malformed address",
+        "demoHtml": "<a href=\"mailto:invalid email@\">Email us</a>",
+        "demoExpected": "detected",
+        "feedback": "The agent missed this: malformed mailto links should also count as broken links, not just non-2xx HTTP responses."
+      }
+    ]
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Prompt refined successfully",
+    "data": {
+      "refinerResult": {
+        "analysis_prompt": "## Objective\nIdentify all broken or non-functional hyperlinks on the page, including malformed mailto and tel links.\n\n## Detection Logic\nFor http(s) URLs, check HTTP status codes for non-2xx responses. For mailto links, validate the email address format. For tel links, validate the phone number format.",
+        "response_descriptions": {
+          "title": "Brief description of the broken link",
+          "severity": "critical for 5xx, high for 4xx and malformed mailto/tel, medium for timeouts, low for redirects",
+          "targetText": "The anchor text of the broken link",
+          "suggestion": "The correct URL, email address, or phone number"
+        }
+      }
+    }
+  }
+}
+```
+
+| Field                                      | Type   | Description                                            |
+| ------------------------------------------ | ------ | ------------------------------------------------------ |
+| `data.refinerResult.analysis_prompt`       | string | The refined analysis prompt.                           |
+| `data.refinerResult.response_descriptions` | object | Updated per-field descriptions for AI response shaping. |
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+**Errors:** `INVALID_ARGUMENT` (missing required fields, empty `demoFeedback` array, or any demo entry missing required fields).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Prompt refined successfully",
+    "data": {
+      "refinerResult": {
+        "analysis_prompt": "## Objective\n...\n\n## Detection Logic\n...",
+        "response_descriptions": {}
+      }
+    }
+  }
+}
+```
+</ResponseExample>

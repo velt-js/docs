@@ -1,0 +1,1388 @@
+---
+title: SuperDoc Editor
+description: Setup Multiplayer Editing for SuperDoc Editor.
+---
+
+The `@veltdev/superdoc-crdt-react` and `@veltdev/superdoc-crdt` libraries enable real-time collaborative editing on SuperDoc Editors. The collaboration editing engine is built on top of [Yjs](https://docs.yjs.dev/) and Velt SDK.
+
+## Prerequisites
+
+- Node.js (v14 or higher)
+- A Velt account with an API key ([sign up](https://console.velt.dev/))
+- React (v18 or higher) when using the React wrapper
+- Optional: TypeScript for type safety
+
+## Setup
+
+### Step 1: Install Dependencies
+
+Install the required packages:
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```bash
+npm install @veltdev/superdoc-crdt-react @veltdev/superdoc-crdt @veltdev/react superdoc yjs y-protocols @hocuspocus/provider pdfjs-dist y-prosemirror prosemirror-model prosemirror-state prosemirror-transform prosemirror-view
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```bash
+npm install @veltdev/superdoc-crdt @veltdev/client superdoc yjs y-protocols @hocuspocus/provider pdfjs-dist y-prosemirror prosemirror-model prosemirror-state prosemirror-transform prosemirror-view
+```
+
+If SuperDoc's internal dependency graph requires React in your bundler, also install `react`. Keep one copy of `yjs` and `superdoc` in the final bundle; Vite applications can add both packages to `resolve.dedupe` when necessary.
+
+</Tab>
+</Tabs>
+
+
+### Step 2: Setup Velt
+
+Initialize Velt, authenticate a user, and set a stable document context before collaboration starts. Follow the [Velt Setup Docs](/get-started/quickstart) for the production token endpoint used by `authProvider`.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+Wrap the app with an authenticated `VeltProvider`, then set the document after the current user is available:
+
+```tsx
+import { useEffect, useState } from 'react';
+import {
+  VeltProvider,
+  useCurrentUser,
+  useSetDocuments,
+} from '@veltdev/react';
+
+const DOCUMENT_ID = 'contract-2026-06';
+const USER = {
+  userId: 'user-1',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  organizationId: 'org-1',
+};
+
+const authProvider = {
+  user: USER,
+  retryConfig: { retryCount: 3, retryDelay: 1000 },
+  generateToken: async () => {
+    const response = await fetch('/api/velt/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(USER),
+    });
+    const { token } = await response.json();
+    return token;
+  },
+};
+
+function CollaborationScope() {
+  const user = useCurrentUser();
+  const { setDocuments } = useSetDocuments();
+  const [documentReady, setDocumentReady] = useState(false);
+
+  useEffect(() => {
+    if (!user) {
+      setDocumentReady(false);
+      return;
+    }
+    setDocuments([{
+      id: DOCUMENT_ID,
+      metadata: { documentName: 'Contract June 2026' },
+    }]);
+    setDocumentReady(true);
+  }, [user, setDocuments]);
+
+  return user && documentReady
+    ? <SuperDocEditor />
+    : <p>Preparing collaboration...</p>;
+}
+
+<VeltProvider apiKey="YOUR_API_KEY" authProvider={authProvider}>
+  <CollaborationScope />
+</VeltProvider>
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Initialize one Velt client for the browser session, set the document, identify the user, and wait for Velt readiness before creating the editor:
+
+```ts
+import { initVelt } from '@veltdev/client';
+
+const DOCUMENT_ID = 'contract-2026-06';
+const client = await initVelt('YOUR_API_KEY');
+
+client.setDocument(DOCUMENT_ID, {
+  documentName: 'Contract June 2026',
+});
+
+await client.identify({
+  userId: 'user-1',
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  organizationId: 'org-1',
+});
+
+const initSubscription = client.getVeltInitState().subscribe((isReady) => {
+  if (isReady) void initializeSuperDoc(client);
+});
+```
+
+Use a stable document ID for the shared file. Every collaborator who should edit the same file must use the same document and editor IDs.
+
+Wait until authentication completes before calling `createCollaboration()`. If no user is available yet, the wrapper falls back to an `anonymous` user.
+
+</Tab>
+</Tabs>
+
+
+### Step 3: Initialize Collaborative Editor
+
+- Initialize the collaboration manager and use the returned collaboration config to create the SuperDoc editor.
+- Pass an `editorId` to uniquely identify each editor instance you have in your app. This is especially important when you have multiple editors in your app.
+- Users with the same Velt document context and `editorId` edit the same shared document.
+
+<Tabs>
+<Tab title="React Hook">
+
+Use the `useCollaboration` hook to manage the entire CRDT lifecycle. It creates a `CollaborationManager`, initializes the CRDT store, and returns the `collaboration` config expected by SuperDoc.
+
+```tsx
+import { useEffect, useRef } from 'react';
+import { useCollaboration } from '@veltdev/superdoc-crdt-react';
+import { SuperDoc } from 'superdoc';
+import 'superdoc/style.css';
+
+function SuperDocEditor() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const superdocRef = useRef<SuperDoc | null>(null);
+
+  const {
+    collaboration,
+    isLoading,
+    isSynced,
+    status,
+    error,
+    manager,
+  } = useCollaboration({
+    editorId: DOCUMENT_ID,
+    onError: (err) => console.error('Collaboration error:', err),
+  });
+
+  useEffect(() => {
+    if (!collaboration || !containerRef.current || superdocRef.current) return;
+
+    const superdoc = new SuperDoc({
+      selector: containerRef.current,
+      superdocId: DOCUMENT_ID,
+      documentMode: 'editing',
+      documents: [
+        {
+          id: DOCUMENT_ID,
+          type: 'docx',
+          ...collaboration,
+        },
+      ],
+      modules: {
+        collaboration,
+      },
+      layoutEngineOptions: { presence: { enabled: true } },
+      user: {
+        id: 'user-1',
+        name: 'Ada Lovelace',
+        email: 'ada@example.com',
+      },
+      users: [],
+      role: 'editor',
+    });
+
+    superdocRef.current = superdoc;
+
+    return () => {
+      superdoc.destroy?.();
+      superdocRef.current = null;
+    };
+  }, [collaboration]);
+
+  if (error) return <div>Error: {error.message}</div>;
+  if (isLoading || !collaboration) return <div>Connecting...</div>;
+
+  return (
+    <div>
+      <div>Status: {status} | Synced: {isSynced ? 'Yes' : 'No'}</div>
+      <div ref={containerRef} className="superdoc-container" />
+    </div>
+  );
+}
+```
+
+<Note>Pass the same `collaboration` object to both the SuperDoc document entry and `modules.collaboration`. It contains the Velt-backed `Y.Doc` and sync provider that SuperDoc uses for collaborative editing.</Note>
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Use `createCollaboration()` from `@veltdev/superdoc-crdt` after the Other Frameworks Velt setup completes. Create the manager first, obtain its Y.Doc and provider, and then construct SuperDoc with that exact collaboration configuration.
+
+```ts
+import { createCollaboration } from '@veltdev/superdoc-crdt';
+import { SuperDoc } from 'superdoc';
+import 'superdoc/style.css';
+
+async function initializeSuperDoc(client) {
+  const manager = await createCollaboration({
+    editorId: DOCUMENT_ID,
+    veltClient: client,
+    onError: (error) => console.error('Collaboration error:', error),
+  });
+
+  const collaboration = manager.getCollaborationConfig();
+  if (!collaboration) {
+    manager.destroy();
+    console.error('Collaboration did not initialize');
+    return;
+  }
+
+  const superdoc = new SuperDoc({
+    selector: '#superdoc',
+    superdocId: DOCUMENT_ID,
+    documentMode: 'editing',
+    documents: [{
+      id: DOCUMENT_ID,
+      type: 'docx',
+      ydoc: collaboration.ydoc,
+      provider: collaboration.provider,
+    }],
+    modules: {
+      collaboration: {
+        ydoc: collaboration.ydoc,
+        provider: collaboration.provider,
+      },
+    },
+    layoutEngineOptions: { presence: { enabled: false } },
+    user: {
+      id: 'user-1',
+      name: 'Ada Lovelace',
+      email: 'ada@example.com',
+    },
+    users: [],
+  });
+
+  return () => {
+    superdoc.destroy();
+    manager.destroy();
+  };
+}
+```
+
+Do not create another Y.Doc or provider. SuperDoc must receive the instances returned by `getCollaborationConfig()` in both `documents[]` and `modules.collaboration`.
+
+</Tab>
+</Tabs>
+
+
+### Step 4: Status Monitoring (Optional)
+
+<Tabs>
+<Tab title="React / Next.js">
+
+The hook returns reactive `status`, `isSynced`, and `error` state:
+
+```tsx
+const { isLoading, isSynced, status, error } = useCollaboration({
+  editorId: DOCUMENT_ID,
+});
+
+if (error) return <div>Error: {error.message}</div>;
+if (isLoading) return <div>Connecting...</div>;
+
+// In your JSX
+<div>Status: {status} | Synced: {isSynced ? 'Yes' : 'No'}</div>
+```
+
+For event-style subscriptions, use the manager:
+
+```tsx
+useEffect(() => {
+  if (!manager) return;
+
+  const offStatus = manager.onStatusChange((nextStatus) => {
+    console.log('Status:', nextStatus);
+  });
+  const offSynced = manager.onSynced((synced) => {
+    console.log('Synced:', synced);
+  });
+
+  return () => {
+    offStatus();
+    offSynced();
+  };
+}, [manager]);
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Read the current values from the manager and retain the returned unsubscribe functions:
+
+```ts
+renderStatus(manager.status, manager.synced);
+
+const offStatus = manager.onStatusChange((status) => {
+  renderStatus(status, manager.synced);
+});
+
+const offSynced = manager.onSynced((synced) => {
+  renderStatus(manager.status, synced);
+});
+
+// During teardown
+offStatus();
+offSynced();
+```
+
+Typical status values are `connecting`, `connected`, and `disconnected`. Use `synced` when the UI must wait for the initial shared document to load.
+
+</Tab>
+</Tabs>
+
+
+### Step 5: Version Management (Optional)
+
+Save and restore named snapshots of the document state. Restored versions are applied to every connected user in real time.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+const {
+  versions,
+  saveVersion,
+  restoreVersion,
+  refreshVersions,
+} = useCollaboration({
+  editorId: DOCUMENT_ID,
+});
+
+// Save a version. Returns the version ID, or an empty string on failure.
+const versionId = await saveVersion('Before major edit');
+
+// Refresh the version list and update the reactive `versions` value.
+const latestVersions = await refreshVersions();
+
+// Restore a version. Returns false on failure.
+await restoreVersion(versionId);
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Use the same version APIs directly on the manager:
+
+```ts
+const versionId = await manager.saveVersion('Before major edit');
+const versions = await manager.getVersions();
+await manager.restoreVersion(versionId);
+
+if (versions[0]) {
+  await manager.setStateFromVersion(versions[0]);
+}
+```
+
+</Tab>
+</Tabs>
+
+
+### Step 6: Force Reset Initial Content (Optional)
+
+By default, `initialContent` is applied only when the shared document is brand new. Pass `forceResetInitialContent: true` to clear the existing shared SuperDoc state during initialization and reapply the initial-content flow.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+const collab = useCollaboration({
+  editorId: DOCUMENT_ID,
+  initialContent,
+  forceResetInitialContent: true,
+});
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+SuperDoc receives actual DOCX data through its own configuration. The manager's `initialContent` is an application-level marker:
+
+```ts
+const manager = await createCollaboration({
+  editorId: DOCUMENT_ID,
+  veltClient: client,
+  initialContent: { kind: 'blank-superdoc' },
+  forceResetInitialContent: true,
+});
+```
+
+</Tab>
+</Tabs>
+
+<Warning>Use `forceResetInitialContent` only for deliberate reset-to-template workflows. Do not toggle it during normal re-renders because it clears the current shared document state.</Warning>
+
+
+### Step 7: Configure Remote Cursors
+
+<Tabs>
+<Tab title="React / Next.js">
+
+SuperDoc's paginated presentation layer renders remote cursors from the shared awareness state. Hide the embedded y-prosemirror cursor decorations to avoid duplicate cursor labels for the same user:
+
+```css
+.ProseMirror-yjs-cursor {
+  display: none;
+}
+
+.ProseMirror-yjs-selection {
+  background: transparent !important;
+}
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+The source integration disables the presentation-layer overlay so the y-prosemirror cursor plugin is the only renderer:
+
+```ts
+const superdoc = new SuperDoc({
+  // ...documents and modules.collaboration
+  layoutEngineOptions: {
+    presence: { enabled: false },
+  },
+});
+```
+
+With this configuration, keep the y-prosemirror cursor decorations visible. Do not apply the CSS from the React tab that hides them.
+
+</Tab>
+</Tabs>
+
+The raw awareness handle is available from `primitives.awareness` or `manager.getAwareness()` when you need to build custom presence UI.
+
+
+### Step 8: CRDT Event Subscription (Optional)
+
+Listen for real-time CRDT data events through the optional `getCrdtElement()` accessor on the Velt client.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+import { useEffect } from 'react';
+import { useVeltClient } from '@veltdev/react';
+
+const { client } = useVeltClient();
+
+useEffect(() => {
+  if (!client) return;
+
+  const crdtElement = client.getCrdtElement?.();
+  if (!crdtElement) return;
+
+  const subscription = crdtElement.on('updateData').subscribe((event) => {
+    if (event) console.log('CRDT update:', event);
+  });
+
+  return () => subscription?.unsubscribe?.();
+}, [client]);
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const crdtElement = client.getCrdtElement?.();
+const crdtSubscription = crdtElement
+  ?.on('updateData')
+  .subscribe((event) => {
+    if (event) console.log('CRDT update:', event);
+  });
+
+// During teardown
+crdtSubscription?.unsubscribe();
+```
+
+Use this event for diagnostics or analytics. Let SuperDoc and the collaboration manager own document writes.
+
+</Tab>
+</Tabs>
+
+
+### Step 9: Custom Encryption (Optional)
+
+Encrypt CRDT data before it is stored in Velt by registering a custom encryption provider. For CRDT methods, input data is of type `Uint8Array | number[]`.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+const encryptionProvider = {
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+};
+
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  authProvider={authProvider}
+  encryptionProvider={encryptionProvider}
+>
+  ...
+</VeltProvider>
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Register encryption before creating the collaboration manager:
+
+```ts
+client.setEncryptionProvider({
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+});
+```
+
+</Tab>
+</Tabs>
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+ · [EncryptConfig](/api-reference/sdk/models/data-models#encryptconfig)
+ · [DecryptConfig](/api-reference/sdk/models/data-models#decryptconfig)
+
+
+### Step 10: Error Handling (Optional)
+
+Pass an `onError` callback to handle initialization or runtime errors. The reactive `error` state is also available for rendering.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+const collab = useCollaboration({
+  editorId: DOCUMENT_ID,
+  onError: (error) => console.error('Collaboration error:', error),
+});
+
+if (collab.error) {
+  return <div>Error: {collab.error.message}</div>;
+}
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const manager = await createCollaboration({
+  editorId: DOCUMENT_ID,
+  veltClient: client,
+  onError: (error) => {
+    console.error('SuperDoc collaboration error:', error);
+  },
+});
+
+if (!manager.getCollaborationConfig()) {
+  manager.destroy();
+  console.error('SuperDoc collaboration did not initialize');
+  return;
+}
+```
+
+The factory reports initialization failures through `onError` and can return a manager in a degraded state, so verify the collaboration config before constructing SuperDoc.
+
+</Tab>
+</Tabs>
+
+
+### Step 11: Access Yjs Internals (Advanced)
+
+The hook and manager expose escape hatches for direct Yjs manipulation when needed.
+
+<Tabs>
+<Tab title="React / Next.js">
+
+```tsx
+const { primitives, manager } = useCollaboration({
+  editorId: DOCUMENT_ID,
+});
+
+const doc = primitives?.ydoc;
+const xml = primitives?.xmlFragment;
+const provider = primitives?.provider;
+const awareness = primitives?.awareness;
+const store = primitives?.store;
+
+// The same handles are available from the manager.
+manager?.getDoc();
+manager?.getYDoc(); // Alias of getDoc()
+manager?.getXmlFragment();
+manager?.getYXmlFragment(); // Alias of getXmlFragment()
+manager?.getProvider();
+manager?.getAwareness();
+manager?.getStore();
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+```ts
+const primitives = manager.getCollaborationPrimitives();
+const doc = manager.getDoc();
+const sameDoc = manager.getYDoc();
+const xml = manager.getXmlFragment();
+const sameXml = manager.getYXmlFragment();
+const provider = manager.getProvider();
+const awareness = manager.getAwareness();
+const store = manager.getStore();
+```
+
+</Tab>
+</Tabs>
+
+Do not write directly to SuperDoc's `supereditor` fragment or clear its `parts`, `meta`, or `media` maps while users are editing. Use `resetSuperDocState()` only for a deliberate shared reset.
+
+
+### Step 12: Cleanup
+
+<Tabs>
+<Tab title="React / Next.js">
+
+The hook destroys the manager automatically when the component unmounts or when the `editorId` or Velt client changes. Destroy the SuperDoc instance in the same effect that creates it.
+
+```tsx
+useEffect(() => {
+  if (!collaboration || !containerRef.current) return;
+
+  const superdoc = new SuperDoc({
+    selector: containerRef.current,
+    superdocId: DOCUMENT_ID,
+    documentMode: 'editing',
+    documents: [{ id: DOCUMENT_ID, type: 'docx', ...collaboration }],
+    modules: { collaboration },
+    layoutEngineOptions: { presence: { enabled: true } },
+    user: {
+      id: 'user-1',
+      name: 'Ada Lovelace',
+      email: 'ada@example.com',
+    },
+    users: [],
+    role: 'editor',
+  });
+
+  return () => {
+    superdoc.destroy?.();
+  };
+}, [collaboration]);
+```
+
+Set `enabled: false` to tear down collaboration early while keeping the React component mounted.
+
+</Tab>
+<Tab title="Other Frameworks">
+
+Unsubscribe all callbacks, destroy SuperDoc while it still owns the collaboration config, and destroy the manager last:
+
+```ts
+crdtSubscription.unsubscribe();
+offStatus();
+offSynced();
+initSubscription.unsubscribe();
+
+superdoc.destroy();
+manager.destroy();
+```
+
+Create a new manager and SuperDoc instance when the application opens another collaborative document.
+
+</Tab>
+</Tabs>
+
+
+## Notes
+
+- **Unique editorId**: Use a unique `editorId` per editor instance.
+- **Document context**: Users must share both the same Velt document context and `editorId` to collaborate.
+- **SuperDoc config**: Pass `collaboration` to both the collaborative document entry and `modules.collaboration`.
+- **Authenticated user**: The hook waits for the Velt client to initialize and for a user to be identified before creating the collaboration manager.
+- **React remote cursors**: Keep SuperDoc's presentation cursor overlay enabled and hide the embedded y-prosemirror cursor decorations to avoid duplicate labels.
+- **Other Frameworks remote cursors**: Disable SuperDoc's presentation presence overlay and keep the y-prosemirror cursor decorations visible. Use exactly one cursor renderer per integration.
+- **Lifecycle**: The hook reinitializes collaboration when the `editorId` or Velt client changes and destroys the previous manager.
+- **Other Frameworks lifecycle**: Unsubscribe listeners, destroy SuperDoc, and then destroy the manager.
+- **Yjs dependency**: Keep a single copy of `yjs` and compatible SuperDoc/wrapper versions in the application bundle.
+- **Production authentication**: Do not expose privileged server tokens in browser code; use Velt's recommended server-backed authentication flow.
+
+
+## Testing and Debugging
+
+**To test collaboration:**
+1. Log in as two unique users in two separate browser profiles and open the same Velt document and SuperDoc `editorId` in both.
+2. Edit text or formatting in one window and verify the changes and remote cursor appear in the other.
+3. Reload both windows and verify the shared document persists.
+
+**Common issues:**
+- Editor not loading: Confirm the Velt client is initialized, the user is authenticated, and `collaboration` is available before creating SuperDoc.
+- Changes not syncing: Confirm both users have the same Velt document context and `editorId`.
+- Duplicate cursor labels in React: Hide `.ProseMirror-yjs-cursor` and `.ProseMirror-yjs-selection` while leaving SuperDoc's presentation cursor overlay enabled.
+- Duplicate cursor labels in Other Frameworks: Disable `layoutEngineOptions.presence` in SuperDoc and leave the y-prosemirror cursor decorations visible.
+- Stale editor after changing documents: Destroy the existing SuperDoc instance and let the hook reinitialize with the new `editorId`.
+
+<Tip>
+Enable browser console warnings to see detailed debugging information. You can also use the [VeltCrdtStoreMap debugging interface](/realtime-collaboration/crdt/setup/core#veltcrdtstoremap) to inspect and monitor your CRDT stores in real time.
+</Tip>
+
+
+## Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+
+A complete collaborative SuperDoc editor with Velt setup, user login, status display, remote-cursor styling, and version management.
+
+```tsx Complete App.tsx expandable lines
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  VeltProvider,
+  useCurrentUser,
+  useSetDocuments,
+} from '@veltdev/react';
+import { useCollaboration } from '@veltdev/superdoc-crdt-react';
+import { SuperDoc } from 'superdoc';
+import 'superdoc/style.css';
+
+const API_KEY = 'YOUR_API_KEY';
+const DOCUMENT_ID = 'superdoc-crdt-react-demo-doc-1';
+
+const USER = {
+  userId: 'michael',
+  name: 'Michael Scott',
+  email: 'michael.scott@dundermifflin.com',
+  organizationId: 'my-org-id',
+};
+
+function EditorComponent() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const superdocRef = useRef<SuperDoc | null>(null);
+  const [versionName, setVersionName] = useState('');
+
+  const {
+    collaboration,
+    isLoading,
+    isSynced,
+    status,
+    error,
+    versions,
+    saveVersion,
+    restoreVersion,
+  } = useCollaboration({
+    editorId: DOCUMENT_ID,
+    onError: (err) => console.error('Collaboration error:', err),
+  });
+
+  useEffect(() => {
+    if (!collaboration || !containerRef.current || superdocRef.current) return;
+
+    const superdoc = new SuperDoc({
+      selector: containerRef.current,
+      superdocId: DOCUMENT_ID,
+      documentMode: 'editing',
+      documents: [
+        {
+          id: DOCUMENT_ID,
+          type: 'docx',
+          ...collaboration,
+        },
+      ],
+      modules: {
+        collaboration,
+      },
+      layoutEngineOptions: { presence: { enabled: true } },
+      user: {
+        id: USER.userId,
+        name: USER.name,
+        email: USER.email,
+      },
+      users: [],
+      role: 'editor',
+    });
+
+    superdocRef.current = superdoc;
+
+    return () => {
+      superdoc.destroy?.();
+      superdocRef.current = null;
+    };
+  }, [collaboration]);
+
+  const handleSaveVersion = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!versionName.trim()) return;
+    await saveVersion(versionName.trim());
+    setVersionName('');
+  };
+
+  if (error) return <div>Error: {error.message}</div>;
+  if (isLoading || !collaboration) return <div>Connecting...</div>;
+
+  return (
+    <main>
+      <div>Status: {status} | Synced: {isSynced ? 'Yes' : 'No'}</div>
+      <div ref={containerRef} className="superdoc-container" />
+
+      <section>
+        <h3>Versions</h3>
+        <form onSubmit={handleSaveVersion}>
+          <input
+            value={versionName}
+            onChange={(event) => setVersionName(event.target.value)}
+            placeholder="Version name..."
+          />
+          <button type="submit">Save Version</button>
+        </form>
+        <ul>
+          {versions.map((version) => (
+            <li key={version.versionId}>
+              <span>{version.versionName}</span>
+              <button onClick={() => restoreVersion(version.versionId)}>
+                Restore
+              </button>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </main>
+  );
+}
+
+function AppContent() {
+  const veltUser = useCurrentUser();
+  const { setDocuments } = useSetDocuments();
+  const [documentReady, setDocumentReady] = useState(false);
+
+  useEffect(() => {
+    if (!veltUser) {
+      setDocumentReady(false);
+      return;
+    }
+    setDocuments([{
+      id: DOCUMENT_ID,
+      metadata: { documentName: 'SuperDoc CRDT React Demo' },
+    }]);
+    setDocumentReady(true);
+  }, [veltUser, setDocuments]);
+
+  return (
+    <div>
+      {veltUser && documentReady ? (
+        <EditorComponent key={veltUser.userId} />
+      ) : (
+        <p>Preparing collaboration...</p>
+      )}
+    </div>
+  );
+}
+
+export default function App() {
+  const authProvider = useMemo(() => ({
+    user: USER,
+    retryConfig: { retryCount: 3, retryDelay: 1000 },
+    generateToken: async () => {
+      const response = await fetch('/api/velt/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(USER),
+      });
+      const { token } = await response.json();
+      return token;
+    },
+  }), []);
+
+  return (
+    <VeltProvider apiKey={API_KEY} authProvider={authProvider}>
+      <AppContent />
+    </VeltProvider>
+  );
+}
+```
+
+Add the remote-cursor styles to your global stylesheet:
+
+```css
+.ProseMirror-yjs-cursor {
+  display: none;
+}
+
+.ProseMirror-yjs-selection {
+  background: transparent !important;
+}
+
+.superdoc-container {
+  min-height: 600px;
+}
+```
+
+</Tab>
+<Tab title="Other Frameworks">
+
+This vanilla TypeScript example initializes Velt, authenticates a user, creates the manager before SuperDoc, monitors sync, subscribes to CRDT events, saves versions, and performs explicit cleanup.
+
+```html
+<div id="status">Connecting...</div>
+<div id="superdoc"></div>
+<button id="save-version">Save version</button>
+```
+
+```ts Complete main.ts expandable lines
+import { initVelt } from '@veltdev/client';
+import {
+  createCollaboration,
+  type CollaborationManager,
+} from '@veltdev/superdoc-crdt';
+import { SuperDoc } from 'superdoc';
+import 'superdoc/style.css';
+
+const API_KEY = 'YOUR_API_KEY';
+const DOCUMENT_ID = 'superdoc-crdt-demo-doc-1';
+
+let manager: CollaborationManager | null = null;
+let superdoc: SuperDoc | null = null;
+let offStatus: (() => void) | null = null;
+let offSynced: (() => void) | null = null;
+let initSubscription: { unsubscribe(): void } | null = null;
+let crdtSubscription: { unsubscribe(): void } | null = null;
+
+const saveVersion = () => {
+  void manager?.saveVersion('Manual checkpoint');
+};
+
+async function main() {
+  const client = await initVelt(API_KEY);
+
+  client.setDocument(DOCUMENT_ID, {
+    documentName: 'SuperDoc shared contract',
+  });
+
+  await client.identify({
+    userId: 'ada',
+    name: 'Ada Lovelace',
+    email: 'ada@example.com',
+    organizationId: 'my-org-id',
+  });
+
+  initSubscription = client.getVeltInitState().subscribe(async (isReady) => {
+    if (!isReady || manager) return;
+
+    manager = await createCollaboration({
+      editorId: DOCUMENT_ID,
+      veltClient: client,
+      initialContent: { kind: 'blank-superdoc' },
+      onError: (error) => console.error('Collaboration error:', error),
+    });
+
+    const collaboration = manager.getCollaborationConfig();
+    if (!collaboration) {
+      manager.destroy();
+      manager = null;
+      const status = document.getElementById('status');
+      if (status) status.textContent = 'disconnected / synced: false';
+      console.error('SuperDoc collaboration did not initialize');
+      return;
+    }
+
+    superdoc = new SuperDoc({
+      selector: '#superdoc',
+      superdocId: DOCUMENT_ID,
+      documentMode: 'editing',
+      documents: [{
+        id: DOCUMENT_ID,
+        type: 'docx',
+        ydoc: collaboration.ydoc,
+        provider: collaboration.provider,
+      }],
+      modules: {
+        collaboration: {
+          ydoc: collaboration.ydoc,
+          provider: collaboration.provider,
+        },
+      },
+      layoutEngineOptions: { presence: { enabled: false } },
+      user: {
+        id: 'ada',
+        name: 'Ada Lovelace',
+        email: 'ada@example.com',
+      },
+      users: [],
+      onReady: () => {
+        console.log('SuperDoc ready');
+      },
+      onCollaborationReady: () => {
+        console.log('SuperDoc collaboration ready');
+      },
+    });
+
+    const renderStatus = () => {
+      const element = document.getElementById('status');
+      if (element && manager) {
+        element.textContent = `${manager.status} / synced: ${manager.synced}`;
+      }
+    };
+
+    renderStatus();
+    offStatus = manager.onStatusChange(renderStatus);
+    offSynced = manager.onSynced(renderStatus);
+
+    crdtSubscription = client
+      .getCrdtElement?.()
+      ?.on('updateData')
+      .subscribe((event) => console.log('CRDT update:', event)) ?? null;
+
+    document.getElementById('save-version')?.addEventListener('click', saveVersion);
+  });
+}
+
+export function destroy() {
+  document.getElementById('save-version')?.removeEventListener('click', saveVersion);
+  crdtSubscription?.unsubscribe();
+  crdtSubscription = null;
+  offStatus?.();
+  offStatus = null;
+  offSynced?.();
+  offSynced = null;
+  initSubscription?.unsubscribe();
+  initSubscription = null;
+
+  superdoc?.destroy();
+  superdoc = null;
+
+  manager?.destroy();
+  manager = null;
+}
+
+window.addEventListener('pagehide', destroy, { once: true });
+void main();
+```
+
+This variant disables SuperDoc's presentation-layer presence overlay, so the y-prosemirror cursor renderer remains active. Do not apply the React example's CSS that hides `.ProseMirror-yjs-cursor` to this configuration.
+
+</Tab>
+</Tabs>
+
+
+## How It Works
+
+1. **Velt initialization and authentication** happen through `VeltProvider` in React or `initVelt()` and `identify()` in other frameworks. Both paths establish the same stable document context.
+2. **The React hook or framework-agnostic factory** creates one `CollaborationManager` for the supplied `editorId` after Velt is ready.
+3. **The manager** creates an XML CRDT store backed by a Yjs document and Velt's real-time sync provider.
+4. **`getCollaborationConfig()`** exposes the manager-owned `Y.Doc` and provider. SuperDoc receives the same instances in its document entry and `modules.collaboration` configuration.
+5. **SuperDoc's y-prosemirror binding** writes text, formatting, and document structure into the shared Yjs document.
+6. **Remote changes and cursors** arrive through the provider and awareness state. Configure exactly one cursor renderer to avoid duplicate labels.
+7. **Version management** saves the complete Yjs state as a named snapshot. Restoring a version broadcasts the restored state to all connected users.
+8. **React cleanup** destroys the manager automatically while the editor effect destroys SuperDoc. Other frameworks unsubscribe callbacks, destroy SuperDoc, and then destroy the manager explicitly.
+
+
+## APIs
+
+### Other Frameworks: createCollaboration()
+
+Creates and initializes a `CollaborationManager` from `@veltdev/superdoc-crdt`. Pass an initialized, authenticated Velt client, then call `getCollaborationConfig()` to obtain the `{ ydoc, provider }` pair for SuperDoc.
+
+- Signature: `createCollaboration(config: CollaborationConfig): Promise<CollaborationManager>`
+- Cleanup: Call `manager.destroy()` when you dispose the editor.
+
+
+### React: useCollaboration()
+
+The primary React hook for collaborative SuperDoc editing. It creates a `CollaborationManager`, initializes the CRDT store, and returns the collaboration config expected by SuperDoc.
+
+- Signature: `useCollaboration(config: UseCollaborationConfig): UseCollaborationReturn`
+- Alias: `useSuperDocCollaboration`
+- Params: `UseCollaborationConfig`
+  - `editorId`: Unique identifier for the collaborative editor.
+  - `veltClient`: Optional explicit Velt client. Falls back to the `VeltProvider` context.
+  - `enabled`: Set to `false` to delay initialization or tear down active collaboration. Default: `true`.
+  - `initialContent`: Optional initial-content marker applied to a brand-new shared document.
+  - `forceResetInitialContent`: Clear the current shared SuperDoc state during initialization. Default: `false`.
+  - `debounceMs`: Throttle interval in milliseconds for backend writes. Default: `0`.
+  - `disableAwarenessUser`: Disable automatic awareness user setup. Default: `false`.
+  - `onError`: Callback for non-fatal collaboration errors.
+- Returns: `UseCollaborationReturn`
+  - `collaboration`: `{ ydoc, provider }` for SuperDoc. `null` while loading.
+  - `collaborationConfig`: Alias of `collaboration`.
+  - `primitives`: Lower-level Yjs and Velt collaboration handles. `null` while loading.
+  - `isLoading`: `true` until the manager is initialized.
+  - `isSynced`: `true` after the initial backend sync completes.
+  - `synced`: Alias of `isSynced`.
+  - `status`: Connection status: `'connecting'`, `'connected'`, or `'disconnected'`.
+  - `error`: Most recent error, or `null`.
+  - `manager`: The underlying `CollaborationManager`, or `null` before initialization.
+  - `versions`: Reactive list of saved versions.
+  - `saveVersion`: Save a named snapshot and refresh `versions`.
+  - `restoreVersion`: Restore a saved version by ID.
+  - `refreshVersions`: Refresh and return the saved-version list.
+
+```tsx
+const {
+  collaboration,
+  primitives,
+  isLoading,
+  isSynced,
+  status,
+  error,
+  manager,
+  versions,
+  saveVersion,
+  restoreVersion,
+  refreshVersions,
+} = useCollaboration({
+  editorId: DOCUMENT_ID,
+  onError: (err) => console.error('Collaboration error:', err),
+});
+```
+
+
+### SuperDocCollaborationConfig
+
+The exact collaboration shape expected by SuperDoc's collaborative document entries and `modules.collaboration` option.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `ydoc` | `Y.Doc` | Shared Yjs document containing SuperDoc content and metadata. |
+| `provider` | `SyncProvider` | Velt-backed Yjs provider used for sync and awareness. |
+
+
+### CollaborationPrimitives
+
+Lower-level handles returned as `primitives` for advanced integrations.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `ydoc` | `Y.Doc` | Shared Yjs document. |
+| `xmlFragment` | `Y.XmlFragment \| null` | SuperDoc's primary ProseMirror/Yjs fragment. |
+| `provider` | `SyncProvider` | Velt real-time sync provider. |
+| `awareness` | `Awareness` | Yjs awareness instance used for remote users and cursors. |
+| `store` | `Store<string>` | Underlying Velt CRDT store. |
+
+
+### Version
+
+Saved versions use the following shape:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `versionId` | `string` | Unique version identifier. |
+| `versionName` | `string` | Human-readable version name. |
+| `timestamp` | `number` | Time the version was saved, in epoch milliseconds. |
+
+
+### CollaborationManager Methods
+
+The manager is available from the `useCollaboration` return value after initialization.
+
+#### manager.getCollaborationConfig()
+
+Returns the `{ ydoc, provider }` object expected by SuperDoc, or `null` before initialization.
+
+- Returns: `SuperDocCollaborationConfig | null`
+
+```tsx
+const collaboration = manager.getCollaborationConfig();
+```
+
+#### manager.getCollaborationPrimitives()
+
+Returns the lower-level collaboration handles, or `null` before initialization.
+
+- Returns: `CollaborationPrimitives | null`
+
+```tsx
+const primitives = manager.getCollaborationPrimitives();
+```
+
+#### manager.onStatusChange()
+
+Subscribe to connection status changes.
+
+- Signature: `manager.onStatusChange(callback: (status: SyncStatus) => void): Unsubscribe`
+
+```tsx
+const unsubscribe = manager.onStatusChange((status) => {
+  console.log('Connection:', status);
+});
+
+unsubscribe();
+```
+
+#### manager.onSynced()
+
+Subscribe to initial sync state changes.
+
+- Signature: `manager.onSynced(callback: (synced: boolean) => void): Unsubscribe`
+
+```tsx
+const unsubscribe = manager.onSynced((synced) => {
+  if (synced) console.log('Initial sync complete');
+});
+```
+
+#### manager.initialized
+
+Whether `initialize()` has completed.
+
+- Returns: `boolean`
+
+#### manager.synced
+
+Whether initial sync with the backend has completed.
+
+- Returns: `boolean`
+
+#### manager.status
+
+Current connection status.
+
+- Returns: `SyncStatus` (`'connecting' | 'connected' | 'disconnected'`)
+
+#### manager.saveVersion()
+
+Save a named snapshot and return its version ID.
+
+- Signature: `manager.saveVersion(name: string): Promise<string>`
+
+```tsx
+const versionId = await manager.saveVersion('Before major edit');
+```
+
+#### manager.getVersions()
+
+List all saved versions.
+
+- Returns: `Promise<Version[]>`
+
+```tsx
+const versions = await manager.getVersions();
+```
+
+#### manager.restoreVersion()
+
+Restore a saved version. The restored state is sent to all connected users.
+
+- Signature: `manager.restoreVersion(versionId: string): Promise<boolean>`
+
+```tsx
+await manager.restoreVersion(versions[0].versionId);
+```
+
+#### manager.setStateFromVersion()
+
+Apply a `Version` object's state to the current document.
+
+- Signature: `manager.setStateFromVersion(version: Version): Promise<void>`
+
+```tsx
+await manager.setStateFromVersion(version);
+```
+
+#### manager.resetSuperDocState()
+
+Clear the shared SuperDoc XML content and metadata maps. This is the low-level reset used by `forceResetInitialContent`.
+
+- Returns: `boolean`
+
+```tsx
+const reset = manager.resetSuperDocState();
+```
+
+<Warning>`resetSuperDocState()` clears the current shared document for every connected user. Use it only for deliberate reset workflows.</Warning>
+
+#### manager.getDoc()
+
+Get the underlying Yjs document.
+
+- Returns: `Y.Doc | null`
+
+```tsx
+const doc = manager.getDoc();
+```
+
+#### manager.getXmlFragment()
+
+Get the Yjs XML fragment used by SuperDoc.
+
+- Returns: `Y.XmlFragment | null`
+
+```tsx
+const xml = manager.getXmlFragment();
+```
+
+#### manager.getProvider()
+
+Get the Velt sync provider.
+
+- Returns: `SyncProvider | null`
+
+```tsx
+const provider = manager.getProvider();
+```
+
+#### manager.getAwareness()
+
+Get the Yjs awareness instance used for remote users and cursors.
+
+- Returns: `Awareness | null`
+
+```tsx
+const awareness = manager.getAwareness();
+```
+
+#### manager.getStore()
+
+Get the underlying Velt CRDT store.
+
+- Returns: `Store<string> | null`
+
+```tsx
+const store = manager.getStore();
+```
+
+#### manager.destroy()
+
+Destroy the store, provider listeners, and awareness state. The React hook calls this automatically during cleanup.
+
+- Returns: `void`
+
+```tsx
+manager.destroy();
+```
+
+
+### Custom Encryption
+
+Encrypt CRDT data before it is stored in Velt by registering a custom encryption provider. For CRDT methods, input data is of type `Uint8Array | number[]`.
+
+```tsx
+const encryptionProvider = {
+  encrypt: async ({ data }) => data.map((n) => n.toString()).join('__'),
+  decrypt: async ({ data }) => data.split('__').map((s) => parseInt(s, 10)),
+};
+
+<VeltProvider
+  apiKey="YOUR_API_KEY"
+  authProvider={authProvider}
+  encryptionProvider={encryptionProvider}
+>
+  ...
+</VeltProvider>
+```
+
+See also: [setEncryptionProvider()](/api-reference/sdk/api/api-methods#setencryptionprovider-encryptionprovider)
+ · [VeltEncryptionProvider](/api-reference/sdk/models/data-models#veltencryptionprovider)
+ · [EncryptConfig](/api-reference/sdk/models/data-models#encryptconfig)
+ · [DecryptConfig](/api-reference/sdk/models/data-models#decryptconfig)

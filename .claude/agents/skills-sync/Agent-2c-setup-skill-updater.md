@@ -62,6 +62,8 @@ This skill is structurally unique. These rules apply on top of the base process:
 - **Framework support is conservative.** Adding a new framework variant (e.g., Svelte, SolidJS) is only justified when the docs explicitly add it. Do not infer new framework coverage from generic changes.
 - **The `setDocuments` initialization pattern is canonical.** Never reorder its standard fields (`id`, `metadata`, etc.).
 - **Next.js examples distinguish App Router from Pages Router.** Both patterns are present in this skill and must remain separate. If a docs change is App-Router-specific, the matching rule edit must be too.
+- **Page info is global unless the docs explicitly say otherwise.** `setPageInfo(pageInfo)` / `clearPageInfo()` are current global page-info APIs. If a ticket mentions `options.documentId`, document it only as reserved for future per-document scope unless the current docs explicitly state shipped per-document behavior. Do not write examples that rely on `{ documentId }` to scope page info today.
+- **Removed setup options must disappear from correct examples.** If docs remove a setup option or component variant, remove it from `**Correct:**` blocks and verification checklists, or explicitly mark it obsolete when the skill still needs a migration note.
 
 ## Output
 

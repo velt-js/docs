@@ -63,9 +63,26 @@ Use this API to fetch a workflow definition. Returns the full `DefinitionView`. 
     "description": null,
     "version": 1,
     "scope": { "level": "apiKey", "organizationId": null, "documentId": null },
-    "nodes": [ /* full node array */ ],
-    "edges": [ /* full edge array */ ],
-    "groups": [ /* full group array */ ],
+    "nodes": [
+      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1" } },
+      { "nodeId": "human-review", "type": "human", "config": { "reviewers": [{ "userId": "u_reviewer_01", "mandatory": true }] } },
+      { "nodeId": "agent-publish", "type": "agent", "config": { "agentId": "publish-agent-v1" } },
+      { "nodeId": "agent-rework", "type": "agent", "config": { "agentId": "rework-agent-v1" } }
+    ],
+    "edges": [
+      { "from": "agent-draft", "to": "human-review" },
+      { "from": "human-review", "to": "agent-publish", "on": "approve" },
+      { "from": "human-review", "to": "agent-rework", "on": "reject" }
+    ],
+    "groups": null,
+    "compiled": {
+      "forwardEdges": [
+        { "from": "agent-draft", "to": "human-review", "role": "always", "when": null },
+        { "from": "human-review", "to": "agent-publish", "role": "approve", "when": { "op": "eq", "args": [{ "var": "output.decision" }, "approve"] } },
+        { "from": "human-review", "to": "agent-rework", "role": "reject", "when": { "op": "eq", "args": [{ "var": "output.decision" }, "reject"] } }
+      ],
+      "loops": []
+    },
     "triggers": null,
     "tags": null,
     "custom": null,
@@ -75,6 +92,39 @@ Use this API to fetch a workflow definition. Returns the full `DefinitionView`. 
   }
 }
 ```
+
+#### The `compiled` block
+
+`compiled` is a read-only block on every `DefinitionView`. The authored `edges` echo `sourceEdges` byte-for-byte; `compiled` is the server-derived runtime view used to drive execution. Both are additive — render a workflow graph directly from `compiled.forwardEdges` instead of re-implementing group expansion client-side.
+
+<ResponseField name="compiled" type="object">
+  <Expandable title="properties">
+    <ResponseField name="forwardEdges" type="array">
+      The runtime forward-edge list. Group endpoints are expanded to per-member compiled edges and `on` roles are compiled to a predicate AST. Each entry:
+
+      | Field         | Type                                                       | Notes                                                              |
+      | ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------ |
+      | `from`        | string                                                     | Resolved node id.                                                  |
+      | `to`          | string                                                     | Resolved node id.                                                  |
+      | `role`        | `approve` / `reject` / `always` / `exhausted` / `custom`   | The authored `on` role.                                           |
+      | `when`        | `JsonAst \| null`                                          | Deterministic predicate AST; `null` for `always`.                |
+      | `fromGroupId` | string                                                     | Present when the authored `from` was a group.                     |
+      | `toGroupId`   | string                                                     | Present when the authored `to` was a group.                       |
+    </ResponseField>
+
+    <ResponseField name="loops" type="array">
+      The server-derived loop regions. Each entry:
+
+      | Field         | Type                                       | Notes                                                  |
+      | ------------- | ------------------------------------------ | ------------------------------------------------------ |
+      | `loopId`      | string                                     | Stable identifier for the derived loop.               |
+      | `entryNodeId` | string                                     | Node re-entered on each iteration.                    |
+      | `bodyNodeIds` | string[]                                   | Nodes inside the loop's iteration scope.              |
+      | `maxIterations` | number                                   | Hard cap per execution (from the reject edge's `loop`). |
+      | `onExhausted` | `{ routeToNodeId: string } \| null`        | Sibling `on:"exhausted"` target, or `null`.           |
+    </ResponseField>
+  </Expandable>
+</ResponseField>
 
 #### Failure Response
 
@@ -98,9 +148,12 @@ Use this API to fetch a workflow definition. Returns the full `DefinitionView`. 
     "description": null,
     "version": 1,
     "scope": { "level": "apiKey", "organizationId": null, "documentId": null },
-    "nodes": [],
+    "nodes": [
+      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1" } }
+    ],
     "edges": [],
-    "groups": [],
+    "groups": null,
+    "compiled": { "forwardEdges": [], "loops": [] },
     "triggers": null,
     "tags": null,
     "custom": null,

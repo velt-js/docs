@@ -1,0 +1,395 @@
+---
+title: "Nutrient Setup"
+description: "Add Velt text comments to a Nutrient Web SDK PDF viewer with the Velt Nutrient comments extension."
+---
+
+![Add text comments in an editor](/gifs/Add-Text-Comments.gif)
+
+The Nutrient integration renders each Velt comment as a view-only overlay positioned over the commented PDF text with Nutrient `CustomOverlayItem`s. It does not modify your PDF. Comment anchors are stored as a durable `{ text, pageNumber, occurrence }` object and re-resolved against the page text whenever comments render.
+
+## Setup
+
+#### Step 1: Add Comment components
+
+- Add the `Velt Comments` component to the root of your app. This component is required to create and render comments in your app.
+- Authenticate the user with `authProvider` and set the Velt document before users add comments.
+- Set the `textMode` prop to `false` to hide the default Velt text comment tool. Nutrient selections are handled by `@veltdev/nutrient-velt-comments`.
+- Add `VeltCommentsSidebar` if you want a Google Docs-style comment sidebar.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { VeltComments, VeltCommentsSidebar, VeltProvider, useSetDocument } from '@veltdev/react';
+
+    const user = {
+      userId: 'user-1',
+      organizationId: 'org-1',
+      name: 'User One',
+      email: 'user@example.com',
+    };
+
+    function VeltSetup() {
+      useSetDocument('document-id', { documentName: 'Document name' });
+      return null;
+    }
+
+    function App() {
+      return (
+        <VeltProvider apiKey="API_KEY" authProvider={{ user }}>
+          <VeltSetup />
+          <VeltComments textMode={false} />
+          <VeltCommentsSidebar />
+          {/* Your app content */}
+        </VeltProvider>
+      );
+    }
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 2: Install the Velt Nutrient extension
+
+```bash
+npm i @veltdev/nutrient-velt-comments @nutrient-sdk/viewer@1.15.1
+```
+
+`@nutrient-sdk/viewer` is a peer dependency used for types. Use the same Nutrient version that you load from the CDN script. Load the Nutrient Web SDK at runtime so your app does not bundle the browser-only PDF viewer and WebAssembly assets.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import Script from 'next/script';
+
+    const NUTRIENT_CDN_SCRIPT =
+      'https://cdn.cloud.nutrient.io/pspdfkit-web@1.15.1/nutrient-viewer.js';
+
+    export default function RootLayout({ children }: { children: React.ReactNode }) {
+      return (
+        <html lang="en">
+          <body>
+            <Script src={NUTRIENT_CDN_SCRIPT} strategy="afterInteractive" />
+            {children}
+          </body>
+        </html>
+      );
+    }
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+If you self-host Nutrient assets, copy `node_modules/@nutrient-sdk/viewer/dist/` into your static folder and load the SDK script from that path. The Velt Nutrient package expects the runtime SDK namespace on `window.NutrientViewer`.
+</Tip>
+
+#### Step 3: Configure the Nutrient viewer with the Velt Comments extension
+
+Load the Nutrient viewer, then attach `NutrientVeltComments` to the viewer instance after `NutrientViewer.load(...)` resolves. The same instance is used by `addComment`, `captureSelection`, and `renderComments`.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect, useRef, useState } from 'react';
+    import { useCommentAnnotations } from '@veltdev/react';
+    import {
+      NutrientVeltComments,
+      renderComments,
+      type AttachedExtension,
+      type NutrientInstance,
+    } from '@veltdev/nutrient-velt-comments';
+
+    type NutrientViewerApi = (typeof import('@nutrient-sdk/viewer'))['default'];
+
+    declare global {
+      interface Window {
+        NutrientViewer?: NutrientViewerApi;
+      }
+    }
+
+    const EDITOR_ID = 'my-pdf';
+
+    function waitForNutrientViewer(timeoutMs = 30000): Promise<NutrientViewerApi> {
+      return new Promise((resolve, reject) => {
+        const start = Date.now();
+
+        const tick = () => {
+          if (window.NutrientViewer) {
+            resolve(window.NutrientViewer);
+            return;
+          }
+
+          if (Date.now() - start > timeoutMs) {
+            reject(new Error('Nutrient SDK did not load.'));
+            return;
+          }
+
+          window.setTimeout(tick, 50);
+        };
+
+        tick();
+      });
+    }
+
+    function NutrientViewerComponent() {
+      const viewerRef = useRef<HTMLDivElement | null>(null);
+      const instanceRef = useRef<NutrientInstance | null>(null);
+      const extensionRef = useRef<AttachedExtension | null>(null);
+      const [instance, setInstance] = useState<NutrientInstance | null>(null);
+      const annotations = useCommentAnnotations();
+
+      useEffect(() => {
+        if (!viewerRef.current || instanceRef.current) return;
+
+        let cancelled = false;
+        const container = viewerRef.current;
+
+        waitForNutrientViewer().then((Nutrient) => {
+          if (cancelled || instanceRef.current) return;
+
+          Nutrient.unload(container);
+
+          Nutrient.load({
+            container,
+            document: '/your-document.pdf',
+            licenseKey: 'YOUR_NUTRIENT_LICENSE_KEY',
+          }).then((nutrientInstance) => {
+            if (cancelled) {
+              Nutrient.unload(container);
+              return;
+            }
+
+            instanceRef.current = nutrientInstance;
+            extensionRef.current = NutrientVeltComments
+              .configure({ editorId: EDITOR_ID })
+              .attach(nutrientInstance);
+            setInstance(nutrientInstance);
+          });
+        });
+
+        return () => {
+          cancelled = true;
+          extensionRef.current?.detach();
+          extensionRef.current = null;
+          window.NutrientViewer?.unload(container);
+          instanceRef.current = null;
+          setInstance(null);
+        };
+      }, []);
+
+      useEffect(() => {
+        if (!instance) return;
+
+        renderComments({
+          instance,
+          commentAnnotations: annotations ?? [],
+        });
+      }, [instance, annotations]);
+
+      return <div ref={viewerRef} style={{ width: '100%', height: '100vh' }} />;
+    }
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 4: Add a comment button to your Nutrient viewer
+
+Add a button that users can click after selecting text in the PDF. Call `captureSelection(instance)` before `addComment({ instance })` so the Velt Nutrient package records the current Nutrient selection before focus moves to your host UI.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment, captureSelection } from '@veltdev/nutrient-velt-comments';
+
+    const handleAddComment = async () => {
+      if (!instance) return;
+
+      await captureSelection(instance);
+      const result = await addComment({ instance });
+
+      if (!result) {
+        console.warn('Select text in the PDF before adding a comment.');
+      }
+    };
+
+    <button
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={handleAddComment}
+    >
+      Add Comment
+    </button>
+    ```
+  </Tab>
+</Tabs>
+
+#### Step 5: Call `addComment` to add a comment
+
+- Call this method to add a comment to selected text in the Nutrient viewer.
+- Params: [`AddCommentArgs`](/api-reference/sdk/models/data-models#nutrient-addcommentargs). It has the following properties:
+  - `instance`: Nutrient viewer instance returned by `NutrientViewer.load(...)`.
+- Returns: [`Promise<AddCommentResult | null>`](/api-reference/sdk/models/data-models#nutrient-addcommentresult). It returns `null` if no text is selected or Velt is not loaded.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment, captureSelection } from '@veltdev/nutrient-velt-comments';
+
+    await captureSelection(instance);
+    const result = await addComment({ instance });
+    ```
+  </Tab>
+</Tabs>
+
+To scope comments to a specific viewer on pages with multiple Nutrient instances, pass an editor id when attaching the extension:
+
+```tsx
+NutrientVeltComments.configure({ editorId: 'EDITOR_ID' }).attach(instance);
+```
+
+#### Step 6: Render comments in Nutrient viewer
+
+- Get comment data from the Velt SDK and render it in the Nutrient viewer.
+- Params: [`RenderCommentsArgs`](/api-reference/sdk/models/data-models#nutrient-rendercommentsargs). It has the following properties:
+  - `instance`: Nutrient viewer instance.
+  - `commentAnnotations`: Array of Comment Annotation objects.
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { useEffect } from 'react';
+    import { useCommentAnnotations } from '@veltdev/react';
+    import { renderComments } from '@veltdev/nutrient-velt-comments';
+
+    const commentAnnotations = useCommentAnnotations();
+
+    useEffect(() => {
+      if (!instance) return;
+
+      renderComments({
+        instance,
+        commentAnnotations: commentAnnotations ?? [],
+      });
+    }, [instance, commentAnnotations]);
+    ```
+  </Tab>
+</Tabs>
+
+Highlights are view-only. The library re-derives each highlight from its [`TextEditorConfig`](/api-reference/sdk/models/data-models#nutrient-texteditorconfig) anchor and Nutrient repositions the overlays across scroll, zoom, and page changes. Re-run `renderComments` when Velt's annotation list changes or when you unload and reload the document.
+
+#### Step 7: Clean up the Velt Nutrient extension
+
+`NutrientVeltComments.configure(...).attach(instance)` returns an [`AttachedExtension`](/api-reference/sdk/models/data-models#nutrient-attachedextension). Call `detach()` in your effect cleanup to remove listeners, clear per-instance state, and remove overlay elements before unloading the viewer.
+
+```tsx
+return () => {
+  extensionRef.current?.detach();
+  extensionRef.current = null;
+  window.NutrientViewer?.unload(container);
+};
+```
+
+#### Step 8: Style the commented text
+
+- Each highlight is a `div.velt-nutrient-highlight` inside a `velt-comment-text` overlay.
+- Override the default inline highlight styles with `!important`.
+
+```css
+velt-comment-text .velt-nutrient-highlight {
+  background-color: rgba(255, 212, 0, 0.4) !important;
+  border-bottom: 2px solid rgba(255, 170, 0, 0.95) !important;
+}
+
+velt-comment-text:hover .velt-nutrient-highlight,
+velt-comment-text[comment-selected="true"] .velt-nutrient-highlight,
+velt-comment-text.velt-comment-selected .velt-nutrient-highlight {
+  background-color: rgba(255, 212, 0, 0.7) !important;
+}
+```
+
+## Complete Example
+
+<Frame>
+  <iframe
+    src="https://sample-apps-nutrient-comments-demo.vercel.app/"
+    className="w-full"
+    height="500px"
+  ></iframe>
+</Frame>
+
+## APIs
+
+#### [NutrientVeltComments](/api-reference/sdk/api/api-methods#nutrient-nutrientveltcomments)
+
+Creates the Velt Comments extension for a Nutrient viewer. Use `NutrientVeltComments.configure(...).attach(instance)` to attach it to a viewer instance.
+
+- Config: [`NutrientVeltCommentsConfig`](/api-reference/sdk/models/data-models#nutrient-nutrientveltcommentsconfig)
+- Returns: `NutrientVeltComments`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { NutrientVeltComments } from '@veltdev/nutrient-velt-comments';
+
+    const attached = NutrientVeltComments
+      .configure({ editorId: 'my-pdf' })
+      .attach(instance);
+
+    attached.detach();
+    ```
+  </Tab>
+</Tabs>
+
+#### [captureSelection()](/api-reference/sdk/api/api-methods#nutrient-captureselection)
+
+Records the current Nutrient text selection for the next `addComment` call.
+
+- Signature: `(instance: NutrientInstance) => Promise<void>`
+- Params: `instance: NutrientInstance`
+- Returns: `Promise<void>`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { captureSelection } from '@veltdev/nutrient-velt-comments';
+
+    await captureSelection(instance);
+    ```
+  </Tab>
+</Tabs>
+
+#### [addComment()](/api-reference/sdk/api/api-methods#nutrient-addcomment)
+
+Creates a comment annotation for the currently captured Nutrient text selection.
+
+- Signature: `async (args: AddCommentArgs) => Promise<AddCommentResult | null>`
+- Params: `args:` [`AddCommentArgs`](/api-reference/sdk/models/data-models#nutrient-addcommentargs)
+- Returns: `Promise<AddCommentResult | null>`; see [`AddCommentResult`](/api-reference/sdk/models/data-models#nutrient-addcommentresult).
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { addComment } from '@veltdev/nutrient-velt-comments';
+
+    const result = await addComment({ instance });
+    ```
+  </Tab>
+</Tabs>
+
+#### [renderComments()](/api-reference/sdk/api/api-methods#nutrient-rendercomments)
+
+Renders and updates Velt comment highlights in the Nutrient viewer.
+
+- Signature: `(args:` [`RenderCommentsArgs`](/api-reference/sdk/models/data-models#nutrient-rendercommentsargs)`) => void`
+- Params: `args:` [`RenderCommentsArgs`](/api-reference/sdk/models/data-models#nutrient-rendercommentsargs)
+- Returns: `void`
+
+<Tabs>
+  <Tab title="React / Next.js">
+    ```tsx
+    import { renderComments } from '@veltdev/nutrient-velt-comments';
+
+    renderComments({
+      instance,
+      commentAnnotations: annotations ?? [],
+    });
+    ```
+  </Tab>
+</Tabs>

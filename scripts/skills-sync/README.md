@@ -17,6 +17,7 @@ Agent 1                   docs-diff-planner          → plan.json
 Agent 2 (matrix-parallel) one of 6 variants per skill → patch + changes.json
    ↓
 Agent 3                   skill-format-validator     → npm validate + build
+Deterministic check       semantic-checks.mjs        → coverage + stale API assertions
 Agent 4                   skill-pr-composer          → PR + issues on agent-skills
 ```
 
@@ -33,6 +34,8 @@ See `/Users/yoenzhang/.claude/plans/i-need-you-to-abundant-starlight.md` for the
 | `run-claude-agent.sh` | Thin wrapper around `claude-code` CLI; resolves agent name to file via glob |
 | `apply-patches.sh` | Merges per-skill patches from the matrix into one working tree |
 | `smoke-test.sh` | Local Agent 1 sanity check against a synthetic diff |
+| `semantic-checks.mjs` | Deterministic post-build semantic assertions for high-confidence coverage gaps |
+| `semantic-checks-fixture-test.sh` | Offline regression fixture for recent skills-sync semantic misses |
 | `reference-artifacts/` | Frozen ground truth (format guide, mapping, sample files) loaded by agents |
 
 Agent definitions live in `../../.claude/agents/skills-sync/`:
@@ -44,7 +47,7 @@ Agent-2b-frontend-realtime-skill-updater.md    (presence, cursors, huddle, singl
 Agent-2c-setup-skill-updater.md                (setup)
 Agent-2d-backend-skill-updater.md              (rest-apis, self-hosting-data)
 Agent-2e-infra-skill-updater.md                (proxy-server, yjs)
-Agent-2f-ai-skill-updater.md                   (rewriter — and future AI features)
+Agent-2f-ai-skill-updater.md                   (rewriter, approval-engine — and future AI features)
 Agent-3-skill-format-validator.md
 Agent-4-skill-pr-composer.md
 ```
@@ -105,6 +108,16 @@ DOCS_DIR=~/Downloads/docs \
 
 This runs Agent 1 only, against a synthetic "add darkMode prop" diff. Verifies the planner produces a single comments ticket with the right shape. Useful for prompt iteration without burning a full workflow run.
 
+### Local semantic regression fixture
+
+```bash
+DOCS_DIR=~/Downloads/docs \
+AGENT_SKILLS_DIR=~/Downloads/agent-skills \
+  bash docs/scripts/skills-sync/semantic-checks-fixture-test.sh
+```
+
+This does not call Claude. It simulates recent high-confidence misses — Apryse comments, Sidebar V2 removal, collapsed replies primitives, reserved page-info `documentId`, Node field filtering, Approval Engine inbound webhooks, and REST Agents/Memory vs hidden SDK namespaces — and verifies the deterministic checker passes against the current skill tree.
+
 ## Phase 4 production hardening (already wired)
 
 The following are in place as of Phase 4 — verify each before relying on the pipeline:
@@ -116,6 +129,7 @@ The following are in place as of Phase 4 — verify each before relying on the p
    - Rejects `metadata.json.abstract` or `.author` rewrites unless labeled `manual-skill-rewrite`
    - Requires `metadata.json.version` to bump when rule files change (skipped if labeled `docs-prose-only`)
    - Rejects `AGENTS.md` changes without a sibling rule change
+   - Runs `npm run validate`, `npm run build`, and fails if generated `AGENTS.md` / `AGENTS.full.md` are stale
    - Warns when >5 skills or >30 rule files are touched
 4. **Weekly drift check** at `docs/.github/workflows/skills-sync-drift-check.yml` (Mondays 14:00 UTC) — files (or updates) a `skills-sync-drift` issue in `agent-skills` if any docs feature dir isn't mapped or any skill has no docs counterpart. Closes the issue automatically when drift clears.
 5. **Documentation:** `agent-skills/CONTRIBUTING.md` has a new "Auto-sync from docs" section pointing contributors at the right authoring surface.
@@ -142,6 +156,10 @@ Read `outputs/abort.json` from the failed run's artifacts. Most likely causes:
 - An impact level was set to something not in the enum
 
 Fix the underlying issue in Agent 2's prompt, not in Agent 3 — the validator is intentionally conservative.
+
+### Semantic checks fail
+
+Read `outputs/semantic-checks.json` from the failed run's artifacts. These failures are deterministic; fix the relevant Agent 1 mapping, Agent 2 variant prompt, or skill rule source. Do not bypass them with prose-only labels. The checks catch stale APIs, missing known coverage terms, hidden SDK namespaces documented as live APIs, and public-vs-wireframe primitive name mixups.
 
 ### PR not opening
 

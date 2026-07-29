@@ -10,7 +10,7 @@ This endpoint uses **workspace-level auth**: pass `x-velt-workspace-id` and `x-v
 </Info>
 
 <Note>
-This API currently supports creating **`testing`** API keys only.
+Creating a **`production`** API key is gated. The workspace must be explicitly enabled for self‑serve production key creation and must already be on a paid plan. See [Production API Keys](#production-api-keys) below.
 </Note>
 
 # Endpoint
@@ -34,10 +34,13 @@ This API currently supports creating **`testing`** API keys only.
 <ParamField body="data" type="object" required>
   <Expandable title="properties">
     <ParamField body="ownerEmail" type="string" required>
-      Email address of the API key owner.
+      Email address of the API key owner. Must be a valid email.
     </ParamField>
     <ParamField body="type" type="string" required>
-      API key type. Currently only `"testing"` is supported.
+      API key type. Accepted values: `"testing"` or `"production"`.
+    </ParamField>
+    <ParamField body="persistenceDBRegion" type="string">
+      Provide this only for type: `"production"`. Accepts any supported region from [Supported Regions](/security/supported-regions).
     </ParamField>
     <ParamField body="createAuthToken" type="boolean">
       Whether to create an auth token along with the API key. Recommended: `true`.
@@ -56,6 +59,21 @@ This API currently supports creating **`testing`** API keys only.
     </ParamField>
     <ParamField body="useWebhookService" type="boolean">
       Whether to enable the webhook service for this API key.
+    </ParamField>
+    <ParamField body="useNotificationService" type="boolean">
+      Whether to enable the in‑app notification service for this API key.
+    </ParamField>
+    <ParamField body="setDefaultNotificationTriggers" type="boolean">
+      Seed the default notification triggers when enabling the notification service.
+    </ParamField>
+    <ParamField body="setDefaultEmailTriggers" type="boolean">
+      Seed the default email triggers when enabling the email service.
+    </ParamField>
+    <ParamField body="requireAutoOrgUser" type="boolean">
+      Require auto‑creation of the organization user.
+    </ParamField>
+    <ParamField body="enablePrivateComments" type="boolean">
+      Initial value for the workspace‑scoped private comments feature flag. Defaults to `false` when omitted.
     </ParamField>
     <ParamField body="emailServiceConfig" type="object">
       Configuration object for the email service. See [Update Email Config](/api-reference/rest-apis/v2/workspace/emailconfig-update) for the full schema.
@@ -99,11 +117,41 @@ This API currently supports creating **`testing`** API keys only.
 
 # Example Request
 
+#### Testing key
+
 ```JSON
 {
   "data": {
     "ownerEmail": "owner@example.com",
     "type": "testing",
+    "createAuthToken": true
+  }
+}
+```
+
+#### Production key (default North America region)
+
+```JSON
+{
+  "data": {
+    "ownerEmail": "owner@example.com",
+    "type": "production",
+    "apiKeyName": "Production Key",
+    "createAuthToken": true
+  }
+}
+```
+
+#### Production key with region selection (Europe)
+
+```JSON
+{
+  "data": {
+    "ownerEmail": "owner@example.com",
+    "type": "production",
+    "apiKeyName": "EU Production Key",
+    "persistenceDBRegion": "eur3",
+    "realtimeDBRegion": "europe-west1",
     "createAuthToken": true
   }
 }
@@ -135,6 +183,15 @@ This API currently supports creating **`testing`** API keys only.
   }
 }
 ```
+
+# Errors
+
+| Status | When |
+|--------|------|
+| `INVALID_ARGUMENT` | Missing/invalid `ownerEmail` or `type`, or an unsupported `persistenceDBRegion` / `realtimeDBRegion` (including an explicit empty string). |
+| `PERMISSION_DENIED` | Invalid workspace credentials, or the workspace is not allowed to create production API keys. |
+| `FAILED_PRECONDITION` | Creating a production key but the workspace has not been upgraded to a paid plan. |
+| `RESOURCE_EXHAUSTED` | The workspace has reached its maximum number of production API keys. |
 
 <ResponseExample>
 ```js

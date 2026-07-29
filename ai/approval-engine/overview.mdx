@@ -78,14 +78,15 @@ Work units that can run.
 | ------- | --------------------------------------------------------------------------------------------------------- | -------------------------- |
 | `agent` | Runs an agent. Non-blocking by default. With `blocking: true`, parks until external resolutions arrive.   | Only when `blocking: true` |
 | `human` | Requires reviewer approval. Use `reviewers: [{ userId, mandatory }]`. Legacy `reviewerIds[]` still works. | Yes                        |
+| `webhook` | Deferred in v1: the type validates in a definition, but the runtime handler isn't enabled yet.          | Doesn't run in v1          |
 
 ### Edges
 
-Connections between nodes. Edges optionally carry a `when` expression like `output.passesBrandCheck == true`. Expressions compile at write time (pure AST, no `eval`) and walk at runtime.
+Connections between nodes. Every transition — approve routing, reject routing, group fan-out/in, and loop-backs — is a single unified `edges[]` entry. Each edge carries an `on` role (`approve` / `reject` / `always` / `exhausted` / `custom`); a `human` node's reject path is an outgoing `on:"reject"` edge. A reject back-edge marked with `loop` becomes a loop region. Use `on:"custom"` with a JSON-AST `when` string like `{"op":"eq","args":[{"var":"output.passesBrandCheck"},true]}` to gate on the source step's output. Expressions compile at write time (pure AST, no `eval`) and walk at runtime.
 
-Supported operators: equality, comparison, boolean, regex, `includes`, `startsWith`, `endsWith`, `length`, `isEmpty`.
+Supported operators: equality, comparison, boolean, regex, `includes`, `startsWith`, `endsWith`, `length`, `isEmpty`. Path roots: `output.*`, `step.*`, `execution.input.*`.
 
-Path roots: `output.*`, `step.*`, `execution.input.*`.
+A group can also be an edge source: a `waitAll` group fans out one collective approve/reject branch by unanimity, and a `cancelOnQuorum` group fans out a collective approve successor on quorum. Every `DefinitionView` returns a read-only `compiled` block (`compiled.forwardEdges` + `compiled.loops`) so clients can render the runtime graph without re-implementing the compiler. See [the edge model](/ai/approval-engine/customize-behavior#edge-model).
 
 ### Execution
 
@@ -126,6 +127,10 @@ Pick the level that matches how your product is structured.
 
 Defaults to `{ level: "apiKey" }`.
 
+<Note>
+  Approval Engine state is partitioned per tenant: each tenant's executions, definitions, and events are routed to that tenant's dedicated `storeDbId`.
+</Note>
+
 ## Idempotency
 
 Dispatch is idempotent on `idempotencyKey`. Replay with the same key returns `{ deduplicated: true, executionId: <original> }`. Safe to retry from clients and queues.
@@ -134,14 +139,32 @@ Dispatch is idempotent on `idempotencyKey`. Replay with the same key returns `{ 
 
 Every state change writes an event doc with a monotonic `seq`. Set `webhookUrl` and `webhookSecret` on dispatch and externally-visible events are POSTed to your receiver with an HMAC-SHA256 signature and exponential-backoff retry. Recover missed events via `/executions/getEvents` with `sinceSeq`.
 
+### Inbound webhook handler
+
+In addition to outbound delivery (above), the Approval Engine exposes an **inbound** webhook handler: an HTTP endpoint with a stable URL that external systems such as Salesforce, Stripe, or GitHub can POST raw JSON to.
+
+Unlike the standard REST endpoints, payloads do **not** need to be wrapped in a `{data: ...}` envelope. The handler accepts raw JSON bodies directly.
+
+The inbound handler enforces:
+
+- **Bearer-token validation:** requests must carry a valid bearer token; unauthenticated requests are rejected before any processing.
+- **Signed callback tokens:** callbacks issued by the handler are signed, allowing downstream consumers to verify authenticity end-to-end.
+- **Rate limiting:** per-source request rate is capped to prevent abuse.
+- **Body-size limits:** oversized payloads are rejected at the boundary before parsing.
+- **SSRF URL guard:** any URL values in the incoming payload are validated against an allowlist to block server-side request forgery.
+
+<Note>
+  The inbound and outbound webhook surfaces are complementary, not duplicative. **Inbound**: external systems push events into the Approval Engine. **Outbound**: the Approval Engine pushes state-change events out to your receiver. Both paths are active independently and can coexist on the same workflow.
+</Note>
+
 ## Get started
 
 <CardGroup cols={2}>
   <Card title="Setup" icon="gear" href="/ai/approval-engine/setup">
-    Author a workflow definition, dispatch an execution, configure your webhook receiver, and record decisions end-to-end.
+    A hands-on walkthrough: author a workflow definition, dispatch a run, record decisions, and receive the outcome via webhooks or polling.
   </Card>
 
   <Card title="Customize Behavior" icon="sliders" href="/ai/approval-engine/customize-behavior">
-    Node configuration, edge gating expressions, parallel groups and quorum policies, SLAs, linter rules, event reference, and the error vocabulary.
+    Node configuration, the unified edge model, custom predicates, parallel groups and quorum policies, SLAs, linter rules, event reference, and the error vocabulary.
   </Card>
 </CardGroup>

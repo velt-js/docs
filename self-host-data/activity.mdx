@@ -22,24 +22,233 @@ Velt supports self-hosting your activity log PII data:
 When activity records are created or read:
 
 1. The SDK uses your configured [`ActivityAnnotationDataProvider`](/api-reference/sdk/models/data-models#activityannotationdataprovider) to handle storage and retrieval.
-2. Your data provider implements two optional methods:
-   - `get`: Fetches activity PII from your database and returns it for re-hydration
-   - `save`: Stores PII fields stripped from the activity record before Velt writes to its backend
+2. Your data provider implements two optional methods, each of which can be supplied as either a callback function **or** a config endpoint URL:
+   - `get` / `getConfig`: Fetches activity PII from your database and returns it for re-hydration
+   - `save` / `saveConfig`: Stores PII fields stripped from the activity record before Velt writes to its backend
+3. Each method is considered valid as long as it has either a callback function (`get` / `save`) **or** a corresponding config endpoint URL (`getConfig` / `saveConfig`).
 
 **The process works as follows:**
 
-On write:
-1. The SDK strips configured PII fields from the activity record.
-2. Your `save` handler receives the stripped data and stores it in your backend.
-3. Velt's backend stores only the minimal identifiers.
+On write (`stripActivityPII`):
+1. The SDK strips PII from the activity record. *How much* is stripped depends on `featureType` — see [What gets stripped](#what-gets-stripped) below.
+2. Your `save` handler receives the stripped PII (`PartialActivityRecord`) and stores it in your backend.
+3. Velt's backend stores the skeleton record (structural identifiers, timestamps, flags) plus any non-PII fields.
 
-On read:
+On read (`rehydrateActivities`):
 1. The SDK fetches the activity records from Velt's backend (with PII absent).
-2. Your `get` handler is called with the activity IDs.
-3. The SDK merges the returned PII back into the activity records before delivering them to your UI.
+2. The SDK runs 5 resolver passes in order: `user` → `comment` → `reaction` → `recorder` → `activity`. Your `get` handler is called during the activity pass with the activity IDs.
+3. The returned PII is merged back into the activity records before they are delivered to your UI.
 4. [`ActivityRecord.isActivityResolverUsed`](/api-reference/sdk/models/data-models#activityrecord) is set to `true` when PII was stripped by the resolver. Use this to show a loading state while re-hydration is pending.
 
+## What gets stripped
+
+How much PII is removed from `entityData` and `entityTargetData` depends on `featureType`. On top of the automatic behavior below, `config.fieldsToRemove` applies to **all** activity feature types (`comment`, `reaction`, `recorder`, and `custom`) — any top-level keys you list are moved wholesale to your DB and restored on read.
+
+### Built-in `featureType` (`comment` / `reaction` / `recorder`) — partial strip
+
+`entityData` and `entityTargetData` objects are **kept** on the Velt record; only specific PII *fields inside them* are removed. Structural identifiers (annotation IDs, comment IDs, target IDs) are preserved so the read path can re-match resolved data.
+
+| Feature | Fields removed from `entityData` / `entityTargetData` | Gating |
+|---|---|---|
+| **comment** | `commentText`, `commentHtml`, `attachments` (name/url), `from`, `to`, `taggedUserContacts` | Always (when the activity resolver is active) |
+| **reaction** | `icon`, `from`, `metadata` | Only when **both** the activity resolver **and** the reaction resolver are active. Otherwise only user objects are reduced to `{ userId }` and the rest survives. |
+| **recorder** | `from`, `transcription`, `attachment`, `attachments` | Only when **both** the activity resolver **and** the recorder resolver are active. Otherwise only user objects are reduced to `{ userId }` and the rest survives. |
+
+`changes['commentText']` is moved to your DB **only** when the activity resolver is active. If only a comment resolver is registered (no activity resolver), it is preserved on the Velt side to avoid unrestorable loss.
+
+Comment `entityData` / `entityTargetData` PII is handled by the comment resolver's own store, not duplicated through the activity resolver.
+
+Any top-level keys you additionally list in `config.fieldsToRemove` are moved wholesale to your DB on top of this automatic strip.
+
+### `featureType === 'custom'` — wholesale removal by config
+
+There is **no automatic field-level stripping** for custom activities. The only fields removed are the top-level keys you list in `config.fieldsToRemove` — each listed key is moved wholesale to your DB and `delete`d from the Velt record. On read it's restored by wholesale replacement.
+
+- If you list `entityData` or `entityTargetData` in `fieldsToRemove`, the *entire field* disappears from the Velt record (not field-by-field).
+- If you don't list them, they're left untouched on the Velt record.
+
+### Universal
+
+- `displayMessage` is always recomputed on the client and stored in neither DB.
+- `actionUser` and any user objects in `changes` and `displayMessageTemplateData` are reduced to `{ userId }` whenever a `user` resolver is active.
+- Activity is **append-only** — there is no delete.
+
 # Implementation
+
+## Implementation Approaches
+
+You can implement activity self-hosting using either of these approaches:
+
+1. **Endpoint based**: Provide endpoint URLs and let the SDK handle HTTP requests
+2. **Function based**: Implement `get` and `save` methods yourself
+
+Both approaches are fully backward compatible and can be used together.
+
+| Feature | Function based | Endpoint based |
+|---------|----------------|----------------|
+| **Best For** | Complex setups requiring middleware logic, dynamic headers, or transformation before sending | Standard REST APIs where you just need to pass the request "as-is" to the backend |
+| **Implementation** | You write the `fetch()` or `axios` code | You provide the endpoint `url`, static or async `headers`, and optional `credentials` |
+| **Flexibility** | High | Medium |
+| **Speed** | Medium | High |
+
+## Endpoint based DataProvider
+
+Instead of implementing custom methods, you can configure endpoints directly and let the SDK handle HTTP requests.
+
+<Note>
+  `headers` may also be an async function resolved per request, and `credentials` (`'include' | 'same-origin' | 'omit'`) enables cookie/session auth — see [Async headers and credentials](/self-host-data/overview#async-headers-and-credentials) for details.
+</Note>
+
+<Note>
+Activity is **append-only** — there is no `delete` operation, so there is no `deleteConfig` for activity.
+</Note>
+
+### getConfig
+Config-based endpoint for fetching activity PII. The SDK automatically makes HTTP POST requests with the request body.
+- Type: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig)
+- Request body format: [`GetActivityResolverRequest`](/api-reference/sdk/models/data-models#getactivityresolverrequest)
+- Response format: [`ResolverResponse<Record<string, PartialActivityRecord>>`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const activityResolverConfig = {
+  getConfig: {
+    url: 'https://your-backend.com/api/velt/activity/get',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  }
+};
+
+const activityDataProvider = {
+  config: activityResolverConfig
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ activity: activityDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const activityResolverConfig = {
+  getConfig: {
+    url: 'https://your-backend.com/api/velt/activity/get',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  }
+};
+
+const activityDataProvider = {
+  config: activityResolverConfig
+};
+
+Velt.setDataProviders({ activity: activityDataProvider });
+```
+</Tab>
+</Tabs>
+
+### saveConfig
+Config-based endpoint for saving stripped activity PII. The SDK automatically makes HTTP POST requests with the request body.
+- Type: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig)
+- Request body format: [`SaveActivityResolverRequest`](/api-reference/sdk/models/data-models#saveactivityresolverrequest) (the SDK sends `{ activity, event, metadata }`)
+- Response format: [`ResolverResponse`](/api-reference/sdk/models/data-models#resolverresponse)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const activityResolverConfig = {
+  saveConfig: {
+    url: 'https://your-backend.com/api/velt/activity/save',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  }
+};
+
+const activityDataProvider = {
+  config: activityResolverConfig
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ activity: activityDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const activityResolverConfig = {
+  saveConfig: {
+    url: 'https://your-backend.com/api/velt/activity/save',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  }
+};
+
+const activityDataProvider = {
+  config: activityResolverConfig
+};
+
+Velt.setDataProviders({ activity: activityDataProvider });
+```
+</Tab>
+</Tabs>
+
+### Endpoint based Complete Example
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const activityResolverConfig = {
+  getConfig: {
+    url: 'https://your-backend.com/api/velt/activity/get',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  },
+  saveConfig: {
+    url: 'https://your-backend.com/api/velt/activity/save',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  },
+  resolveTimeout: 60000,
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000, revertOnFailure: true },
+  fieldsToRemove: ['customSensitiveField']
+};
+
+const activityDataProvider = {
+  config: activityResolverConfig
+};
+
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ activity: activityDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const activityResolverConfig = {
+  getConfig: {
+    url: 'https://your-backend.com/api/velt/activity/get',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  },
+  saveConfig: {
+    url: 'https://your-backend.com/api/velt/activity/save',
+    headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+  },
+  resolveTimeout: 60000,
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000, revertOnFailure: true },
+  fieldsToRemove: ['customSensitiveField']
+};
+
+const activityDataProvider = {
+  config: activityResolverConfig
+};
+
+Velt.setDataProviders({ activity: activityDataProvider });
+```
+</Tab>
+</Tabs>
 
 ## Function based DataProvider
 
@@ -135,18 +344,22 @@ Configuration for the activity data provider.
 
 - Type: [`ResolverConfig`](/api-reference/sdk/models/data-models#resolverconfig). Relevant properties:
   - `resolveTimeout`: Timeout duration (in milliseconds) for resolver operations.
-  - `fieldsToRemove`: `string[]`. Additional fields to strip from activity records before writing to Velt's backend (e.g., `['customSensitiveField']`).
+  - `getRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for `get` operations.
+  - `saveRetryConfig`: [`RetryConfig`](/api-reference/sdk/models/data-models#retryconfig). Configure retry behavior for `save` operations. `RetryConfig` is `{ retryCount?: number; retryDelay?: number; revertOnFailure?: boolean }`. Note: `revertOnFailure` reverts the optimistic cache update if the save ultimately fails.
+  - `getConfig`: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig). Endpoint URL + headers for fetching activity PII. See [Endpoint based DataProvider](#endpoint-based-dataprovider).
+  - `saveConfig`: [`ResolverEndpointConfig`](/api-reference/sdk/models/data-models#resolverendpointconfig). Endpoint URL + headers for saving stripped activity PII. See [Endpoint based DataProvider](#endpoint-based-dataprovider).
+  - `fieldsToRemove`: `string[]`. Top-level keys to move wholesale from the activity record to your DB. Applies to **all** activity feature types (`comment`, `reaction`, `recorder`, and `custom`). For built-in feature types it runs in addition to the feature-aware partial strip described in [What gets stripped](#what-gets-stripped); for `custom` it is the only stripping that happens. Listing `entityData` or `entityTargetData` moves the *entire field* (not field-by-field). Fields are matched on `!== undefined`, so falsy-but-meaningful values (`0`, `false`, `""`) are moved too.
 
 ```tsx
-const activityDataProvider = {
-  config: {
-    resolveTimeout: 60000,
-    fieldsToRemove: ['customSensitiveField'],
-  },
+const activityResolverConfig = {
+  resolveTimeout: 60000,
+  getRetryConfig: { retryCount: 3, retryDelay: 2000 },
+  saveRetryConfig: { retryCount: 3, retryDelay: 2000, revertOnFailure: true },
+  fieldsToRemove: ['customSensitiveField']
 };
 ```
 
-## Complete Example
+## Function based Complete Example
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -272,6 +485,8 @@ activities?.map((activity) => (
   "immutable": false
 }
 ```
-Note: Entity snapshots, display message templates, and custom fields are NOT stored on Velt servers when using the activity resolver. Only minimal identifiers, action metadata, and resolver flags (`isActivityResolverUsed`, `targetEntityId`) are stored.
+Note: The example above is a `custom` activity with `entityData`, `entityTargetData`, `displayMessageTemplate`, and `displayMessageTemplateData` listed in `config.fieldsToRemove` — that's why those whole fields move to your DB.
+
+For built-in feature types (`comment` / `reaction` / `recorder`), `entityData` and `entityTargetData` are **kept** on the Velt record; only specific PII fields inside them are moved to your DB (see [What gets stripped](#what-gets-stripped)).
 </Tab>
 </Tabs>

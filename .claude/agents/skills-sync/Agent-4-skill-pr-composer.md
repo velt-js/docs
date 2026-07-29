@@ -14,6 +14,7 @@ You wrap up the run. You commit the working tree, push a branch, open one PR wit
 - `inputs/plan.json` — full plan from Agent 1.
 - `inputs/changes-merged.json` — concatenated `changes.json` from every Agent-2 matrix instance.
 - `inputs/validator-status.json` — pass/abort from Agent 3 (also `inputs/abort.json` if aborted).
+- `inputs/semantic-checks.json` — deterministic semantic coverage report from `semantic-checks.mjs` (coverage matrix + high-confidence semantic check results).
 - `inputs/source-commit.json` — `{sha, short_sha, message, author, url}` for the docs commit that triggered this run.
 - `agent-skills/` — a checked-out working tree on branch `skills-sync/<short-sha>`, already containing committed changes from Agent 3.
 - Env: `GH_TOKEN` with `contents:write`, `pull-requests:write`, `issues:write` on `velt-js/agent-skills`.
@@ -102,6 +103,10 @@ PR body (write to `/tmp/pr-body.md` and pass via `--body-file`):
 <For each path in inputs/plan.json.noops:>
 - `<path>` — prose-only, no skill edits
 
+## Coverage matrix
+<If inputs/semantic-checks.json exists, list each `coverage_matrix` entry:>
+- `<path>` — `<classification>`<if skills: ` → skill1, skill2`><if reason: ` — reason`>
+
 ## Unmapped docs changes
 <For each entry in inputs/plan.json.unmapped:>
 - **<feature>** — issue: #<issue-number-filed-in-step-3>
@@ -109,6 +114,16 @@ PR body (write to `/tmp/pr-body.md` and pass via `--body-file`):
 ## Validation
 - `npm run validate`: ✅ (<count> warnings — see expandable below)
 - `npm run build`: ✅ (regenerated AGENTS.md for <count> skill(s))
+- Semantic coverage checks: ✅ (<ok count> ok, <skipped count> skipped, <warning count> warnings)
+
+<If inputs/semantic-checks.json has warnings:>
+<details>
+<summary>Semantic coverage warnings</summary>
+
+```
+<compact list of warning check IDs + summaries>
+```
+</details>
 
 <If inputs/validator-status.json.validate_warnings is non-empty:>
 <details>
@@ -148,6 +163,7 @@ if [ -n "${EXISTING_PR_NUMBER:-}" ]; then
   #  cumulative composition before this Step 3 runs.)
   gh pr edit "$EXISTING_PR_NUMBER" \
     --repo velt-js/agent-skills \
+    --title "skills-sync: $N skills updated from docs@<short-sha>" \
     --body-file /tmp/pr-body.md
 
   # Make sure the reviewer is still requested (idempotent — re-adding an
@@ -240,6 +256,8 @@ After all issues are filed, regenerate `/tmp/pr-body.md` with the actual issue n
 - **Never touch repository settings**, branch protections, or labels (labels must already exist in the repo).
 - **Always assign `@yoen-velt` as the reviewer** — via `--reviewer yoen-velt` on `gh pr create` (new PR path) or `--add-reviewer yoen-velt` on `gh pr edit` (reused PR path). The `CODEOWNERS` file in `agent-skills` is retained for ownership documentation only — it is **not** the review-routing mechanism for this pipeline.
 - **Cumulative PR body on reuse.** When updating an existing PR, fetch its current body and append the new run's summary block beneath the prior ones rather than overwriting. Each block is headed by `docs@<short-sha> · <timestamp>` so reviewers can scan run-by-run.
+- **Latest SHA in title.** When reusing an existing PR, refresh the PR title to the latest target docs short SHA after appending the new summary block. The title should never keep an older commit while the body summarizes a newer run.
+- **Semantic report is PR-visible.** If `inputs/semantic-checks.json` exists, include its coverage matrix and non-failing warning summaries in the PR body. If its `status` is not `ok`, do not open or update a PR; file a failure issue instead because the workflow should have blocked before this agent.
 - **If `inputs/plan.json.tickets` is empty AND `inputs/plan.json.unmapped` is empty**, exit successfully without opening or updating a PR and without filing issues. (This shouldn't reach you — the workflow's gate exits earlier — but be defensive.)
 - **If `inputs/plan.json.tickets` is empty but `unmapped` is non-empty**, file issues only. Do not open or update a PR for issues alone.
 

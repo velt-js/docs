@@ -106,7 +106,7 @@ Model: `CommentAnnotation`. PII payload: `PartialCommentAnnotation`.
 | `priority` | `CustomPriority` | `{ id: 'P1', name: 'High', color: '#f00' }` | Priority. | kept |
 | `ghostComment` | `GhostComment \| null` `{ targetElement?; message?; type?; isSameGroup? }` | `{ message: 'element not found', type: 'desktop' }` | Placeholder when target element is missing. | kept |
 | `areaAnnotationId` | `string` | `"area_77"` | Connected area annotation id. | kept |
-| `context` | `any` | `{ access: { roles: ['editor'] } }` | Your custom context data. | kept (unless in `fieldsToRemove`) |
+| `context` | `any` | `{ access: { roles: ['editor'] }, accessFields: ['roles'] }` | Your custom context data. | kept; `context.access` and `context.accessFields` are **mandatory** for querying and are always retained (not subject to `fieldsToRemove`) |
 | `contextId` | `string` | `"ctx_abc123"` | Hash of `context`. | kept |
 | `iam` | `CommentIAMConfig` `{ accessMode? }` | `{ accessMode: 'PUBLIC' }` | IAM access config. | default `new CommentIAMConfig()` |
 | `isPageAnnotation` | `boolean` | `false` | Page-level annotation flag. | kept |
@@ -122,8 +122,9 @@ Model: `CommentAnnotation`. PII payload: `PartialCommentAnnotation`.
 | `sourceId` | `string` | `"src_99"` | Source id. | kept |
 | `views` | `CommentAnnotationViews` | `{ views: { 'u_1': { timestamp: 1717800000 } } }` | View tracking. | kept — see [CommentAnnotationViews](#commentannotationviews) |
 | `viewedByUserIds` | `string[]` | `["u_1","u_2"]` | Viewer userIds. | already userIds |
+| `involvedUserIds` | `string[]` | `["u_1","u_2"]` | All userIds participating in the thread (authors, assignees, @mentions). | already userIds; auto-maintained |
 | `suggestion` | `SuggestionData` | `{ status: 'pending', resolvedBy: { userId: 'u_1' } }` | SDK-managed suggestion data (iff `type === 'suggestion'`). | kept; nested `resolvedBy` reduced when `user` provider active |
-| `agent` | `AgentData` `{ agentName?; name?; avatar?; result?: { title? }; agentFields?[] }` | `{ agentName: 'Reviewer Bot', result: { title: 'Fix typo' } }` | AI-agent identity + output. | read-only from SDK; kept |
+| `agent` | `AgentData` `{ agentName?; name?; avatar?; result?: { title? }; agentFields?[] }` | `{ agentName: 'Reviewer Bot', result: { title: 'Fix typo' }, agentFields: ['result'] }` | AI-agent identity + output. | read-only from SDK; kept; `agent.agentFields` is **mandatory** for querying and is always retained (not subject to `fieldsToRemove`) |
 
 ### 1.B — Stored in your DB (`PartialCommentAnnotation`)
 
@@ -186,6 +187,7 @@ Model: `ReactionAnnotation`. PII payload: `PartialReactionAnnotation`.
 | `pageInfo` | `PageInfo` | `{ title: 'Dashboard', url: 'https://app.example.com/dashboard' }` | Page context. | default `new PageInfo()` — see [PageInfo](#pageinfo) |
 | `from` | `User` → `{ userId }` | `{ userId: 'u_1' }` | Creator of the reaction annotation. | reduced when `user` provider active; **copied-not-moved** |
 | `isReactionResolverUsed` | `boolean` | `true` | Resolver-used flag. | flag; set `true` on strip |
+| `involvedUserIds` | `string[]` | `["u_1","u_2"]` | All userIds that have reacted on this annotation. | already userIds; auto-maintained |
 | `metadata` | `ReactionMetadata` (extends `BaseMetadata`; `[key]: any`) | `{ documentId: 'doc_42', organizationId: 'org_7' }` | Routing metadata. | **full** kept; `getClientMetadata` copy sent to your DB |
 
 ### 2.B — Stored in your DB (`PartialReactionAnnotation`)
@@ -238,7 +240,7 @@ Model: `RecorderAnnotation`. PII payload: `PartialRecorderAnnotation`.
 | `mode` | `RecorderLayoutMode` | `"floating"` | Recorder layout mode. | default `'floating'` |
 | `approved` | `boolean` | `true` | Approval flag. | kept |
 | `attachment` | `Attachment \| null` | `null` | Single recorded-media attachment. | **@deprecated**; value **never sent to Velt** — written as `null`; full object → your DB |
-| `attachments` | `Attachment[]` | `[{ attachmentId: 'att_1', name: 'recording.webm', bucketPath: 'orgs/o1/rec/att_1.webm' }]` | Recording attachments. | **reduced to stubs** `{ attachmentId, name, bucketPath }` (url etc. never sent to Velt; bucketPath kept for cleanup) |
+| `attachments` | `Attachment[]` | `[{ attachmentId: 'att_1', name: 'recording.webm' }]` | Recording attachments. | **reduced to stubs** `{ attachmentId, name }` (url etc. never sent to Velt) |
 | `annotationIndex` | `number` | `3` | 1-based index. | kept |
 | `pageInfo` | `PageInfo` | `{ title: 'Home', url: 'https://app.example.com' }` | Page context. | default `new PageInfo()` — see [PageInfo](#pageinfo) |
 | `recordedTime` | `{ duration?: number; display?: string } \| null` | `{ duration: 12500, display: '00:00:12' }` | Recorded duration. | kept; sent to Velt |
@@ -248,7 +250,6 @@ Model: `RecorderAnnotation`. PII payload: `PartialRecorderAnnotation`.
 | `metadata` | `RecorderMetadata` (extends `BaseMetadata`; `[key]: any`) | `{ apiKey: 'AbC', documentId: 'doc-1', organizationId: 'org-1' }` | Routing metadata. | **full** kept; `getClientMetadata` copy sent to your DB |
 | `latestVersion` | `number` | `2` | Current edit version number. | kept |
 | `recordingEditVersions` | `{ [version: number]: RecorderAnnotationEditVersion }` | `{ 1: { recordedTime: {...}, waveformData: [...], displayName: 'v1' } }` | Per-edit version history. | per-version PII withheld (`from`→`{userId}`, `attachment`→`null`, `attachments`→stubs, `transcription` never sent); non-PII per-version fields kept |
-| `chunkUrls` | `{ [index: number]: string }` | `{}` | Per-chunk upload URLs. | value **never sent to Velt** — written as `{}` when resolver active (full map → your DB) |
 | `isRecorderResolverUsed` | `boolean` | `true` | Resolver-used flag. | flag; set `true` on strip |
 | `isUrlAvailable` | `boolean` | `false` | Real URL (vs. local blob) ready yet. | kept **and** copied to your DB |
 
@@ -262,7 +263,6 @@ Model: `RecorderAnnotation`. PII payload: `PartialRecorderAnnotation`.
 | `transcription` | `Transcription` | `{ from: { userId: 'user-123' }, transcriptedText: 'Hello team…', vttUrl: 'https://…/cap.vtt' }` | Full transcript (PII). | **never sent to Velt** — see [Transcription](#transcription-your-db-recorder-payload) |
 | `attachment` | `Attachment \| null` | `{ attachmentId: 'att_1', name: 'recording.webm', url: 'https://storage/…' }` | Deprecated single attachment (with URL). | **@deprecated**; sent when defined; value never sent to Velt (written as `null` there) |
 | `attachments` | `Attachment[]` | `[{ attachmentId: 'att_1', name: 'recording.webm', url: 'https://storage/…' }]` | Full attachment list incl. media URLs (PII). | sent only when length > 0; reduced to stubs in Velt's DB |
-| `chunkUrls` | `Record<number, string>` | `{ 0: 'https://storage/chunk0', 1: 'https://storage/chunk1' }` | Full chunk-URL map. | sent only when non-empty; value never sent to Velt (written as `{}` there) |
 | `recordingEditVersions` | `Record<number, PartialRecorderAnnotationEditVersion>` | `{ 1: { from: { userId: 'user-123' }, attachments: [{ attachmentId: 'att_1', url: 'https://…' }], transcription: { transcriptedText: '…' } } }` | Per-version PII (`from`, `attachment`, `attachments`, `transcription`). | only versions with ≥1 PII field |
 | `isUrlAvailable` | `boolean` | `false` | Real URL ready yet. | copied (also kept in Velt's DB) |
 | `[additionalFields]` | `any` | `{ customTag: 'launch-demo' }` | Your replicated custom fields. | per `config.additionalFields`; kept in Velt's DB too |
@@ -270,9 +270,9 @@ Model: `RecorderAnnotation`. PII payload: `PartialRecorderAnnotation`.
 ### 3.C — Recorder strip rules
 
 - Never sent to Velt: `transcription` (entire object → your DB), the value of `attachment`
-  (written as `null`), the urls inside `attachments` (Velt keeps only `{ attachmentId, name, bucketPath }`
-  stubs; `bucketPath` is deliberately kept for Velt-side storage cleanup), and the value of `chunkUrls`
-  (written as `{}`). `from` is reduced to `{ userId }`; `isRecorderResolverUsed` set `true`.
+  (written as `null`), and the urls inside `attachments` (Velt keeps only `{ attachmentId, name }`
+  stubs). `from` is reduced to `{ userId }`;
+  `isRecorderResolverUsed` set `true`.
 - `recordingEditVersions` per-version PII is withheld the same way; non-PII per-version fields
   (`recordedTime`, `waveformData`, `displayName`, `boundedTrimRanges`, `boundedScaleRanges`) are sent to Velt.
 - Top-level `displayName` / `waveformData` / `recordedTime` are sent to Velt (not part of the your-DB payload).
@@ -351,9 +351,9 @@ Model: `ActivityRecord`. PII payload: `PartialActivityRecord`. **Append-only** �
 | `targetEntityId` | `string` | `"annotation_55"` | Parent entity id (annotation/recording/…). | resolver lookup key |
 | `targetSubEntityId` | `string \| null` | `"comment_88"` | Sub-entity id (commentId); null for entity-level. | optional |
 | `changes` | `ActivityChanges` `{ [key]: { from?; to? } }` | `{ status: { from: { id: 'open' }, to: { id: 'closed' } } }` | Linear-style from/to pairs. | user objects → `{ userId }`; `commentText` entry **never sent to Velt** (→ your DB) when **activity** resolver active |
-| `entityData` | `TEntity` (e.g. `CommentAnnotation`/`ReactionAnnotation`/`RecorderAnnotation`) | `{ annotationId: 'annotation_55', status: { id: 'open' } }` | Full parent-entity snapshot. | feature PII **never sent to Velt** (comment text/html/attachments, reaction icon, recorder transcription/attachments/chunkUrls); users → `{ userId }` |
-| `entityTargetData` | `TTarget` (e.g. `Comment`) | `{ commentId: 'comment_88', from: { userId: 'user_123' } }` | Sub-entity snapshot (or custom-activity data). | comment PII **never sent to Velt** (text/html/from/to/taggedUserContacts) |
-| `displayMessageTemplate` | `string` | `"{{actionUser.name}} shipped {{releaseName}}"` | Template — **custom activities only**. | kept (unless in `fieldsToRemove`) |
+| `entityData` | `TEntity` (e.g. `CommentAnnotation`/`ReactionAnnotation`/`RecorderAnnotation`) — built-in feature types; or arbitrary shape for `custom` | `{ annotationId: 'annotation_55', status: { id: 'open' } }` | Parent-entity snapshot. | **Built-in feature types** (`comment`/`reaction`/`recorder`): object is kept, only specific PII *fields inside it* are stripped — comment `commentText`/`commentHtml`/`attachments` (name/url)/`from`/`to`/`taggedUserContacts`; reaction `icon`/`from`/`metadata` (only when reaction resolver also active); recorder `from`/`transcription`/`attachment`/`attachments` (only when recorder resolver also active). Structural IDs are preserved so reads can rematch. User objects → `{ userId }`. **Custom** (`featureType === 'custom'`): no automatic field-level stripping — `entityData` is only removed if you list it in `fieldsToRemove` (then the whole field is moved to your DB). |
+| `entityTargetData` | `TTarget` (e.g. `Comment`) — built-in; or arbitrary for `custom` | `{ commentId: 'comment_88', from: { userId: 'user_123' } }` | Sub-entity snapshot. | **Built-in**: same partial-strip model as `entityData` (e.g. comment fields `commentText`/`commentHtml`/`attachments`/`from`/`to`/`taggedUserContacts` removed; structural ids kept). **Custom**: untouched unless listed in `fieldsToRemove` (then removed wholesale). |
+| `displayMessageTemplate` | `string` | `"{{actionUser.name}} shipped {{releaseName}}"` | Template — **custom activities only**. | kept (unless you list it in `fieldsToRemove`, in which case it's moved wholesale to your DB) |
 | `displayMessageTemplateData` | `Record<string, unknown>` | `{ actionUser: { userId: 'user_123' }, releaseName: 'v2.1' }` | Template values — **custom only**. | user objects → `{ userId }`; non-user values kept |
 | `actionIcon` | `string` | `"https://cdn.example.com/icons/status.svg"` | Display icon (typically custom). | optional |
 | `immutable` | `boolean` | `true` | If true, cannot be updated/deleted via REST. | optional flag |
@@ -365,24 +365,55 @@ Model: `ActivityRecord`. PII payload: `PartialActivityRecord`. **Append-only** �
 |---|---|---|---|---|
 | `id` | `string` | `"act_8f3kd92mz"` | Correlation key. | required; same as `ActivityRecord.id` |
 | `metadata` | `BaseMetadata` | `{ organizationId: 'org_1', documentId: 'doc_42' }` | Client-facing metadata copy. | `getClientMetadata` subset |
-| `changes` | `ActivityChanges` | `{ commentText: { from: 'old text', to: 'new text' } }` | PII change pairs. | for comment activities, only `{ commentText }`; sent when **activity** resolver active |
-| `entityData` | `unknown` (`PartialReaction…`/`PartialRecorder…`) | `{ annotationId: 'rec_77', transcription: {…}, attachment: {…} }` | Feature-specific entity PII. | reaction/recorder only, **and** only when the matching feature resolver is also active |
-| `entityTargetData` | `unknown` | `{ commentId: 'comment_88', commentText: 'Looks good' }` | Sub-entity PII snapshot. | merged back on read |
-| `displayMessageTemplateData` | `Record<string, unknown>` | `{ releaseName: 'v2.1', secretNote: 'internal only' }` | Custom-activity template values. | via `fieldsToRemove` for custom; users → `{ userId }` Velt-side |
-| `[key: string]` | `any` | `{ customField: { ssn: '***' } }` | `fieldsToRemove` custom fields. | **`featureType === 'custom'` only**; **never sent to Velt** (→ your DB) |
+| `changes` | `ActivityChanges` | `{ commentText: { from: 'old text', to: 'new text' } }` | PII change pairs. | for **comment** activities, only `{ commentText }`; sent only when the **activity** resolver is active (if only the comment resolver is registered, `changes['commentText']` is preserved on the Velt side to avoid unrestorable loss) |
+| `entityData` | `unknown` (`PartialReaction…` / `PartialRecorder…` for built-ins; arbitrary for custom) | `{ annotationId: 'rec_77', transcription: {…}, attachment: {…} }` | Feature-specific entity PII. | **Reaction**: only when activity **and** reaction resolvers are both active (carries `icon`/`from`/`metadata`). **Recorder**: only when activity **and** recorder resolvers are both active (carries `from`/`transcription`/`attachment`/`attachments`). **Comment**: handled by the comment resolver's own store — not duplicated here. **Custom**: only if you list `entityData` in `fieldsToRemove` (then the entire field is relocated). |
+| `entityTargetData` | `unknown` | `{ commentId: 'comment_88', commentText: 'Looks good' }` | Sub-entity PII snapshot. | Built-in feature types: per-feature PII fields only. Custom: only if you list `entityTargetData` in `fieldsToRemove` (wholesale relocation). Merged back on read by wholesale replacement. |
+| `displayMessageTemplateData` | `Record<string, unknown>` | `{ releaseName: 'v2.1', secretNote: 'internal only' }` | Custom-activity template values. | only when listed in `fieldsToRemove` (`custom` only); users → `{ userId }` Velt-side |
+| `[key: string]` | `any` | `{ customField: { ssn: '***' } }` | Any top-level field listed in `fieldsToRemove`. | applies to **all** activity feature types; the entire top-level key is moved wholesale to your DB and deleted from the Velt record |
 
 ### 5.C — Activity strip rules
 
-- `displayMessage` is **always recomputed on the client** (from the template + values) and stored in
-  neither DB — omitted from the tables above.
-- All user reduction (`actionUser`, users in `changes`, users in `displayMessageTemplateData`) happens
-  only when the **`user`** provider is active.
-- `changes['commentText']` is **never sent to Velt** (→ your DB) **only** when the **activity**
-  resolver is active; if only the *comment* resolver is active it is preserved (to avoid unrestorable
-  loss). Comment `entityData`/`entityTargetData` PII is handled by the comment resolver's own store.
-- Reaction/recorder `entityData` PII reaches your DB **only when both** the activity resolver **and**
-  the matching feature resolver are active.
-- `fieldsToRemove` applies to `featureType === 'custom'` only; built-in feature types ignore it.
+The activity resolver runs a **strip-on-write / resolve-on-read** cycle: PII is pulled out of the
+`ActivityRecord` before it ships to Velt and is merged back from your DB on read. *How much* is
+removed depends on `featureType`.
+
+**Built-in `featureType` (`comment` / `reaction` / `recorder`) — partial strip**
+
+- `entityData` and `entityTargetData` objects are **kept** on the Velt record; only specific PII
+  *fields inside them* are removed. Structural identifiers (annotation/comment/target IDs) are
+  deliberately preserved so the read path can match resolved data back.
+- Per feature (matches the per-feature partial tables above):
+  - **comment** — removes `commentText`, `commentHtml`, `attachments` (name/url), `from`, `to`,
+    `taggedUserContacts` from both `entityData` and `entityTargetData`.
+  - **reaction** — removes `icon`, `from`, `metadata` *only when both the activity resolver and the
+    reaction resolver are active*; otherwise only user objects are reduced to `{ userId }` and the
+    rest of the structure survives.
+  - **recorder** — removes `from`, `transcription`, `attachment`, `attachments` *only when both the
+    activity resolver and the recorder resolver are active*; otherwise only user objects are reduced
+    to `{ userId }`.
+- `changes['commentText']` is removed from the Velt record (→ your DB) **only** when the activity
+  resolver is active; if only the comment resolver is registered it is preserved on the Velt side to
+  avoid unrestorable loss.
+- Comment `entityData` / `entityTargetData` PII is handled by the comment resolver's own store, not
+  duplicated into the activity resolver payload.
+- Any top-level keys you additionally list in `config.fieldsToRemove` are moved wholesale to your DB
+  on top of this automatic strip.
+
+**`featureType === 'custom'` — wholesale removal by config**
+
+- There is no feature-aware partial stripping for custom activities. The only fields removed are the
+  **top-level keys you list in `fieldsToRemove`**: each listed key is moved wholesale to your DB and
+  `delete`d from the Velt record. On read it's restored by wholesale replacement.
+- This means if you list `entityData` or `entityTargetData` in `fieldsToRemove`, the *entire field*
+  disappears from the Velt record (not field-by-field). If you don't list them, they're left
+  untouched — there is no automatic stripping for custom.
+
+**Universal**
+
+- `displayMessage` is always recomputed on the client (from the template + values) and stored in
+  neither DB.
+- `actionUser` and any user objects in `changes` and `displayMessageTemplateData` are reduced to
+  `{ userId }` whenever a `user` resolver is active.
 - Append-only: no delete.
 
 ---
@@ -401,7 +432,6 @@ Stored model: `Attachment` — embedded on comments (`comments[].attachments`) a
 | `attachmentId` | `number` | `742193` | Unique attachment id (random 6-digit). | auto-generated; primary key |
 | `isAttachmentResolverUsed` | `boolean` | `true` | Self-hosted storage used for this attachment. | flag |
 | `name` | `string` | `"design-spec.pdf"` | Original file name. | kept; also sent (reduced) to your storage |
-| `bucketPath` | `string` | `"attachments/abc123/design-spec.pdf"` | Path of the file in storage. | kept |
 | `size` | `number` | `204800` | File size (bytes). | kept |
 | `type` | `RecorderFileFormat` (`'mp3'\|'mp4'\|'webm'`) | `"mp4"` | File format. | kept (string union, not enum) |
 | `url` | `string` | `"https://customer-cdn.example.com/files/design-spec.pdf"` | Download URL. | with self-hosting = the URL **your** storage returned |
@@ -496,7 +526,7 @@ subset sent to your DB.
 | `tagUrl` | `string` | `"https://app.example.com/editor#tag-1"` | Tag-annotation reference URL. | optional |
 | `recorderUrl` | `string` | `"https://app.example.com/editor#rec-1"` | Recorder-annotation reference URL. | optional |
 | `screenWidth` | `number` | `1440` | Author screen width. | auto-generated |
-| `deviceInfo` | `IDeviceInfo` | `{ os: 'macOS', browser: 'Chrome' }` | Device/browser info. | auto-generated default |
+| `deviceInfo` | `IDeviceInfo` | `{ browserName: 'Chrome', osName: 'macOS', deviceType: 'desktop' }` | Device/browser info. | auto-generated default |
 
 ### TargetElement
 
@@ -603,7 +633,7 @@ Full object sent to your DB (never sent to Velt) when the recorder resolver is a
 | Data | Velt's DB | Your DB / storage |
 |---|---|---|
 | Comment text / HTML | — | ✅ |
-| Comment attachment file + name/url | bucketPath stub (recordings) | ✅ |
+| Comment attachment file + name/url | — | ✅ |
 | Reaction `icon` | — | ✅ |
 | Recording transcript / file | file stubs only | ✅ |
 | Custom-notification display/template PII | — | ✅ |
@@ -623,7 +653,7 @@ stripped on the frontend and goes only to your DB (or is recomputed on the clien
 |---|---|---|---|
 | Comments | 53 top-level (+ ~24-field `Comment` element) | `PartialCommentAnnotation` + nested `PartialComment` | strip on the frontend, merge on read |
 | Reactions | 16 top-level (+ 3-field `Reaction` element) | `{ annotationId, metadata, icon, from? }` | strip `icon` only |
-| Recordings | 36 (incl. reduced `from`/`attachments`/`chunkUrls`; `transcription` → your DB only) | `PartialRecorderAnnotation` (+ per-version partials, `additionalFields`) | strip + reduce on the frontend; optional file storage |
+| Recordings | 35 (incl. reduced `from`/`attachments`; `transcription` → your DB only) | `PartialRecorderAnnotation` (+ per-version partials, `additionalFields`) | strip + reduce on the frontend; optional file storage |
 | Notifications | 11 (structural + flags) | `PartialNotification` (6 PII + open index) | **read-only enrichment** (custom only) |
 | Activity | 17 | `PartialActivityRecord` (`{ id, metadata?, changes?, entityData?, entityTargetData?, displayMessageTemplateData?, [key]: any }`) | strip on the frontend; append-only |
 | Attachments | `Attachment` (12 fields, minus bytes) | `file` + `{ attachmentId, name, mimeType }` + `AttachmentResolverMetadata` + `event` → returns `{ url }` | binary file storage only |

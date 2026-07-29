@@ -1,0 +1,160 @@
+---
+title: "Search Judgments"
+api: "POST https://api.velt.dev/v2/memory/search"
+---
+
+Use this API to run a semantic vector search over past **judgments**: the enriched records of your team's review decisions. Optional filters and retrieval-mode overrides let you narrow by decision, reviewer, content type, recency, or a single comment thread. This is distinct from [Search Knowledge Base](/api-reference/rest-apis/v2/memory/knowledge/search), which searches the content of your ingested files.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/memory/search`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="query" type="string" required>
+      Non-empty search text. Ignored when `filters.annotationId` or `recencyDays` is set; those shortcut paths skip vector search.
+    </ParamField>
+
+    <ParamField body="embeddingType" type="string">
+      `review` (default) searches the decision + reasoning. `content` searches the reviewed content itself.
+    </ParamField>
+
+    <ParamField body="scope" type="string">
+      `document`, `organization`, or `apiKey`. Defaults from `organizationId`/`documentId` presence.
+    </ParamField>
+
+    <ParamField body="organizationId" type="string">
+      Narrow to one organization.
+    </ParamField>
+
+    <ParamField body="documentId" type="string">
+      Narrow to one document. Requires `organizationId`.
+    </ParamField>
+
+    <ParamField body="limit" type="integer">
+      1 to 50. Defaults to 10.
+    </ParamField>
+
+    <ParamField body="filters" type="object">
+      `{ decision?, judgeType?, contentType?, reviewerId?, annotationId?, dateRange? }`. `decision` filters by decision value, e.g. `approve` or `reject`. `judgeType` is `human` or `agent`. `dateRange` is `{ start, end }` (ISO-8601 strings or epoch ms; `start` must not be after `end`). `annotationId` requires `organizationId` and reads that one comment thread directly, oldest first.
+    </ParamField>
+
+    <ParamField body="recencyDays" type="integer">
+      1 to 365. Recency-true mode: skips vector search and returns the most-recent activity in the window. Overrides `filters.dateRange`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## **Example Requests**
+
+#### Search rejected decisions
+
+```JSON
+{
+  "data": {
+    "query": "marketing copy with unsupported medical claims",
+    "limit": 5,
+    "filters": { "decision": "reject" }
+  }
+}
+```
+
+#### Read one comment thread chronologically
+
+```JSON
+{
+  "data": {
+    "query": "thread summary",
+    "organizationId": "org_eu",
+    "filters": { "annotationId": "annotation_123" }
+  }
+}
+```
+
+#### Last week's activity (recency-true mode)
+
+```JSON
+{
+  "data": {
+    "query": "recent activity",
+    "recencyDays": 7
+  }
+}
+```
+
+# Response
+
+Each result includes the reasoning, decision, confidence, who decided (`actionUser`), and a `similarity` score (`1.0` for the annotation and recency shortcut paths). `totalInScope` reports how many judgments were in scope; `searchLatencyMs` reports the search time. An `agent` block is present when the decision came from an AI agent.
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "results": [
+      {
+        "recordId": "act_8f3...",
+        "reasoning": "Claim 'clinically proven' lacks a citation.",
+        "decision": "reject",
+        "confidence": 0.92,
+        "actionUser": { "name": "Sarah Lee" },
+        "createdAt": 1731432000000,
+        "similarity": 0.87,
+        "scope": "organization",
+        "agent": null
+      }
+    ],
+    "totalInScope": 128,
+    "searchLatencyMs": 142
+  }
+}
+```
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "results": [
+      {
+        "recordId": "act_8f3...",
+        "reasoning": "Claim 'clinically proven' lacks a citation.",
+        "decision": "reject",
+        "confidence": 0.92,
+        "actionUser": { "name": "Sarah Lee" },
+        "createdAt": 1731432000000,
+        "similarity": 0.87,
+        "scope": "organization",
+        "agent": null
+      }
+    ],
+    "totalInScope": 128,
+    "searchLatencyMs": 142
+  }
+}
+```
+</ResponseExample>

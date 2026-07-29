@@ -44,19 +44,15 @@ Accepts every field from [Create Definition](/api-reference/rest-apis/v2/approva
     </ParamField>
 
     <ParamField body="nodes" type="array">
-      1–100 nodes.
+      1–100 nodes. Each node accepts optional cosmetic `name` (1–200 chars) and `description` (≤ 2000 chars) labels.
     </ParamField>
 
     <ParamField body="edges" type="array">
-      0–500 edges.
+      0–500 edges, unified `EdgeSchema`: `{ from, to, on?, when?, loop? }`. `from` / `to` are `EdgeEndpoint`s (bare node-id string, `{ kind: "node", nodeId }`, or `{ kind: "group", groupId }`); `on` ∈ `approve` / `reject` / `always` (default) / `exhausted` / `custom`; `when` is valid only on `on:"custom"`; `loop { maxIterations: 1–20 }` only on an `on:"reject"` back-edge. A `human` node must have an outgoing `on:"reject"` edge. See [the edge model](/ai/approval-engine/customize-behavior#edge-model) for full semantics and the [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition) field table.
     </ParamField>
 
     <ParamField body="groups" type="array">
-      0–100 parallel-group definitions.
-    </ParamField>
-
-    <ParamField body="loops" type="array">
-      0–20 loop region declarations. See [loop regions](/ai/approval-engine/customize-behavior#loop-regions) on the Customize Behavior page for the full schema and linter rules.
+      0–100 parallel-group definitions. A `waitAll` or `cancelOnQuorum` group can be an edge source (`from: { kind: "group", groupId }`); group-to-node fan-out (`to: { kind: "group", groupId }`) is accepted for all policies. A forward `on:"reject"` from a `joinOnQuorum` / `cancelOnQuorum` group is rejected as a dead edge. See [parallel groups and quorum policies](/ai/approval-engine/customize-behavior#parallel-groups-and-quorum-policies).
     </ParamField>
 
     <ParamField body="triggers" type="array">
@@ -119,9 +115,26 @@ Every successful update increments `version` and snapshots the prior content. In
     "description": null,
     "version": 2,
     "scope": { "level": "apiKey", "organizationId": null, "documentId": null },
-    "nodes": [ /* current */ ],
-    "edges": [ /* current */ ],
-    "groups": [ /* current */ ],
+    "nodes": [
+      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1" } },
+      { "nodeId": "human-review", "type": "human", "config": { "reviewers": [{ "userId": "u_reviewer_01", "mandatory": true }] } },
+      { "nodeId": "agent-publish", "type": "agent", "config": { "agentId": "publish-agent-v1" } },
+      { "nodeId": "agent-rework", "type": "agent", "config": { "agentId": "rework-agent-v1" } }
+    ],
+    "edges": [
+      { "from": "agent-draft", "to": "human-review" },
+      { "from": "human-review", "to": "agent-publish", "on": "approve" },
+      { "from": "human-review", "to": "agent-rework", "on": "reject" }
+    ],
+    "groups": null,
+    "compiled": {
+      "forwardEdges": [
+        { "from": "agent-draft", "to": "human-review", "role": "always", "when": null },
+        { "from": "human-review", "to": "agent-publish", "role": "approve", "when": { "op": "eq", "args": [{ "var": "output.decision" }, "approve"] } },
+        { "from": "human-review", "to": "agent-rework", "role": "reject", "when": { "op": "eq", "args": [{ "var": "output.decision" }, "reject"] } }
+      ],
+      "loops": []
+    },
     "triggers": null,
     "tags": null,
     "custom": null,
@@ -143,7 +156,7 @@ Every successful update increments `version` and snapshots the prior content. In
 }
 ```
 
-**Errors:** `NOT_FOUND` (definition does not exist) / `FAILED_PRECONDITION` (`ifVersion` mismatch) / `INVALID_ARGUMENT` (schema or linter failure).
+**Errors:** `NOT_FOUND` (definition does not exist) / `FAILED_PRECONDITION` (`ifVersion` mismatch) / `INVALID_ARGUMENT` (schema, `compileGraph`, or linter failure).
 
 <ResponseExample>
 ```js
@@ -154,9 +167,12 @@ Every successful update increments `version` and snapshots the prior content. In
     "description": null,
     "version": 2,
     "scope": { "level": "apiKey", "organizationId": null, "documentId": null },
-    "nodes": [],
+    "nodes": [
+      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1" } }
+    ],
     "edges": [],
-    "groups": [],
+    "groups": null,
+    "compiled": { "forwardEdges": [], "loops": [] },
     "triggers": null,
     "tags": null,
     "custom": null,

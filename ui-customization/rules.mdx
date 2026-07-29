@@ -146,6 +146,39 @@ A customization can be pixel-perfect and behaviorally dead. Because Velt routes 
 **R26: Termination is mechanical: a sample is INCOMPLETE, never a pass.**
 The checklist covers every distinct styled appearance, every `mustSupply` slot, every mount-map part, and every required state. A report that covers fewer elements than the checklist, skips a required state, or omits visual evidence is **INCOMPLETE, not PASS**. `PASS` requires 100% coverage and all dispositions, states, and artifacts clean. Use the complete checklist as the review standard. "Looks matched" or "the ones I measured pass" cannot end the loop.
 
+---
+
+**R27: Anchor layout/visibility on a STABLE state, never a transient one, and verify interactive targets don't move mid-interaction.**
+A static per-state capture proves the surface looks right *while it sits still*. It does **not** prove the surface holds still *during a click*, a distinct fidelity failure, on **any** interactive surface. The bug class: a visibility/layout rule keyed on a **transient** state (`:focus` / `:hover` / `:active`, or a Velt twin like `velt-composer-input-focused`) flips at the exact instant of the interaction, the element loses focus/hover on pointer-down, a piece hidden under that state reappears, everything below shifts, and the click lands on empty air (the "button shifts and never fires" symptom). Two obligations:
+- **Author against the stable anchor.** When you hide/show or re-lay-out a piece by interaction state, key it on a state that **holds through the whole interaction**, not one that drops the instant the pointer leaves the element. Pick the stable twin: e.g. style a composer by `velt-composer-open` (`composerInOpenState`) rather than `velt-composer-input-focused` (`isInputFocused`); gate on a "selected/open" condition (`commentDialogSelected`) rather than `:focus`/`:hover`. Same visual result, no flicker, no shift. (Enabled/disabled may key off the control's own `:disabled`, that tracks the control's state, not pointer position.) Verify any stateful class against [`CSS classes`](/ui-customization/reference/css-classes) (R10).
+- **Verify the target is stable across the transition.** Driving the static states isn't enough, measure the target's box, drop the transient state the click would drop (blur the focused element + `focusout`), reflow, re-measure. **Any shift > 1px ⇒ the target moves under the cursor ⇒ FAIL.** And the real action is performed **end-to-end** (do the interaction, real-click the on-screen control, assert the outcome); a nearby path passing once is not proof.
+
+---
+
+**R28: `velt-if` / `velt-class` attribute directives work ONLY on Velt wireframe elements, NEVER on plain HTML elements.**
+Spreading or writing `velt-if="…"` / `velt-class="…"` onto a native `<div>`/`<span>` inside a wireframe **silently never fires**, the cloner resolves directives only on Velt elements (`Velt…Wireframe.X` slots, `<VeltIf>`, `<VeltData>`). The element renders unconditionally / the class never toggles, and nothing errors. Do it the supported way:
+- **Show/hide custom HTML** → wrap it in **`<VeltIf condition="{…}">`** (it *is* a Velt element).
+- **Print a live value** → **`<VeltData field="…" />`**.
+- **Toggle a class by state** → put `velt-class` on a **Velt wireframe element**, or key your CSS off **Velt's own state classes / attributes** on the live DOM (e.g. `velt-composer-open`, `:has(button.velt-composer--submit-button:not([disabled]))`), see [`CSS classes`](/ui-customization/reference/css-classes).
+Helper spreads like `{...veltIf("…")}` on HTML elements are the same defect in disguise, treat any `velt-if`/`velt-class` attribute on a non-Velt element as dead code.
+
+---
+
+**R29: Sub-pixel glyph residue with a verified-identical asset is ACCEPTED-with-note, never retried.**
+Figma and Chrome rasterize differently: Chrome snaps SVG placement to whole CSS pixels, so a glyph whose exported SVG is **byte/shape-identical** to the design's asset can still leave a sparse &lt;1-device-px diff residue that **no CSS change can remove**. The rule cuts both ways:
+- **Accept it, mechanically.** A diff region qualifies as an accepted residual ONLY when ALL hold: its fill is sparse (&lt; ~0.10: anti-aliasing residue, never a solid block), it is **confined to an icon/glyph box** from the designSpec, AND the rendered asset's **identity is verified** (exact exported-SVG file/shape match (R17)'s check). These residuals stop counting toward FAIL only after the icon-identity check passed for the block.
+- **Never stretch it.** A solid-fill region, a region outside a glyph box, a wrong glyph (identity check failed), or any delta-table row is a REAL diff, this rule accepts rasterizer noise, never build defects. Widening tolerances anywhere else to escape a FAIL is a defect (R0).
+
+---
+
+**R30: Every component family passes a REAL-PATH smoke suite; fixture-green is not done.**
+Seeded fixtures verify appearance, not reality: a run can go fully green while **real interaction paths are broken**, the fixture typed full-width text (masking a flex-end alignment bug), never opened the popover dialog context (its CSS leaked), and a `min-height` pinned to a 2-line fixture dead-banded 1-line real text. So per **family** (after its blocks pass), a real-path suite must run and pass:
+- type a **short** message AND a **max-length** message (not just the canonical fixture text);
+- exercise the surface in **every dialog context it appears in** (sidebar card, popover/open dialog, hover preview, shared classes leak across contexts);
+- click **every affordance once** (reply, resolve, edit, options) asserting no layout shift, no dead band, and the action's outcome;
+- one **viewport resize** sanity pass; **zero console errors** throughout.
+Never pin a layout value (like `min-height`) to a multi-line fixture measurement, derive it from the design's single-line state and let content grow it.
+
 ## Quick gate before shipping
 
 - [ ] **No hacky/patchy fixes**: clean code only; unresolvable blockers are commented, not faked (R0).
@@ -166,3 +199,8 @@ The checklist covers every distinct styled appearance, every `mustSupply` slot, 
 - [ ] No feature/prop whose UI the design doesn't show; every host prop justified by a design cue (R24).
 - [ ] Mount-map intact: every behavioral `contract.part` mounts as its Velt primitive, contained, singleton-correct, no phantom interactive; a violation is a hard FAIL regardless of pixels (R25).
 - [ ] Termination is mechanical: 100% of the checklist is covered (no sampling), the visual artifact exists per state, and the complete review returns PASS (INCOMPLETE != done) (R26).
+- [ ] Interaction-state visibility/layout keyed on a **stable** anchor (a persistent open/selected condition), never `:focus`/`:hover`/`:active`; each interactive target moves 0px through the transition; the real action verified end-to-end (R27).
+- [ ] No `velt-if`/`velt-class` attribute on a plain HTML element (dead code, they fire only on Velt elements); custom HTML gated with `<VeltIf>`, classes toggled on Velt elements or via Velt's own state classes (R28).
+- [ ] Built family-by-family (shared wireframe subtree in one pass), verified block-by-block, flows last (R16).
+- [ ] Sub-pixel glyph residue accepted ONLY when asset identity is verified; no tolerance-stretching anywhere else (R29).
+- [ ] Every family's real-path smoke suite ran and passed, short/long text, every dialog context, every affordance, resize, zero console errors (R30).

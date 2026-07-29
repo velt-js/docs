@@ -8,12 +8,14 @@ description: "Verify each customized Velt surface against design, behavior, acce
 **Audience: AI coding agents** (and teams running them). This page is part of the deterministic agent workflow for building and verifying Velt UI customizations. Customizing by hand? Start with the [Approaches](/ui-customization/styling) and [Feature Guides](/ui-customization/features/other-features).
 </Info>
 
-A customization is **done** when three things are true, in this order: it **matches the design**, Velt's **behavior is still intact**, and the code is **rule-compliant**. This page is the step-ordered flow for confirming all three on **one surface**: the executable companion to R15 (verify after each surface) and R16 (one surface at a time).
+A customization is **done** when four things are true, in this order: it **matches the design**, Velt's **behavior is still intact**, the code is **rule-compliant**, and its family's **real paths work** (R30). This page is the step-ordered flow for confirming all four on **one surface**: the executable companion to R15 (verify after each surface) and R16 (build by family, verify per block).
 
 <Warning>
-**Golden rule of verification: measure the whole surface, don't eyeball or sample, and name every difference.** Fidelity is a whole-surface measurement problem. Check **three** things per state and require all of them to be clean: rendered computed styles vs. the `designSpec`, surface-relative layout boxes and relationships, and a visual side-by-side where any nameable difference is a fail. The checklist is auto-derived from every mapped element; there is no aggregate score, and "looks close" is a fail.
+**Golden rule of verification: measure the style of every element, not the screenshot of the surface, and name every difference.** The design is **dummy data**; the live app has **real data** (2 comments vs 11, placeholder text vs real messages), so they never match pixel-for-pixel. A whole-surface pixel comparison against the mock is **not a valid gate**. Fidelity is a **content-independent, per-element** problem: verify the *look of each template element*, true whether the app shows 2 cards or 200.
 
-Collect evidence first, then decide the verdict. A build step or runtime check should not declare a surface matched without the full design, behavior, and rules evidence.
+Check these and require all to be clean: (1) **style**, rendered computed styles vs the `designSpec` (non-structural lengths ±2px, colour CIEDE2000 ΔE &lt; 2, keywords exact); (2) **layout**, each element's surface-relative box, sibling gaps (especially the inter-card gap), and relations, plus missing/extra elements. The checklist is auto-derived from every mapped element, and a thin spec is **INCOMPLETE**, not a pass. (3) A **visual side-by-side is advisory**, it flags regions worth a look, but a pixel region is only a defect once you can name it as a style or layout row. Pure **content** differences (comment count, text, names, timestamps) are never a FAIL. There is no aggregate score, and "looks close" is a FAIL. The single mechanical exception is R29: sparse sub-pixel glyph residue with verified-identical asset identity.
+
+Collect evidence first, then decide the verdict. A build step or runtime check should not declare a surface matched without the full design, behavior, rules, and real-path evidence.
 </Warning>
 
 <Note>
@@ -56,15 +58,30 @@ For each state, do all four: this is the gate:
 1. **Consume or assemble the complete checklist (R26: do not hand-pick samples).** Build the checklist from **every distinct styled appearance in the design** (deduped by its declarations: the teal mention, the placeholder, each filter row), **every `mustSupply` slot**, **every mount-map part**, and **every required state**. Resolve each element's live selector by inspection: use the manifest `cssClasses` for measured leaves and inspect to the leaf for the rest. Add **relations + gaps** from the manifest `layout`. Produce a disposition for **every** checklist element plus the per-state visual artifact. A report that samples fewer elements than the checklist is **INCOMPLETE, not PASS**, so the loop cannot end on it.
 2. **Gross-mismatch pre-check first:** compare total content height / element count / surface extents vs the designSpec. Grossly off ⇒ FAIL immediately (don't let per-element props "pass" on a broken surface).
 3. **Measure live browser output**: read each **live** node's `getComputedStyle` plus surface-relative `getBoundingClientRect` (never the 0-size `*-wireframe` template) and produce a delta table with a verdict covering **style** (Delta E below 2, ±1px, keywords exact) and **layout** (box ±2-3px, gaps, relations, missing or extra elements).
-4. **Visual side-by-side: a GATE:** capture the full-surface screenshot beside the Figma frame and **name every visible difference** (density/spacing, name placement, filter as a box vs icon, hover actions revealed, unwanted banner). **Any nameable difference ⇒ FAIL**, then find the property/relation you didn't measure and add it. A clean table with an obviously-wrong screenshot is still a FAIL.
+4. **Visual side-by-side: advisory, not a gate:** capture the full-surface screenshot beside the Figma frame to **spot regions worth investigating**. It does **not** FAIL on its own, the live app's real data differs from the mock's dummy data, so raw pixel regions and content differences are expected, not defects. For any region that reflects a genuine *style* issue, find the property/relation you didn't measure, **add it to the delta spec**, and let that gate it. A clean delta table plus an obviously-wrong screenshot means you're missing a style/layout assertion, add it; never fail on the pixels alone.
 
 **Hard gates:** any console error / unbuilt page / mapped element with `width===0` ⇒ `BLOCKED`/`FAIL`. Every `mustSupply` slot must be **present and carry the design's content**: an icon slot must contain the design's exported SVG (compare identity), not a Velt default or hand-drawn glyph (R17 FAIL). A popup must be styled on its `content` slot, never its container/trigger (R23). Horizontal padding must not compound across nested wrappers (R22). No feature/prop whose UI the design doesn't show (R24). **Colours still must trace to a `--velt-*` token / documented class** (an accidentally-matching hard-coded colour breaks in dark mode: fail it even if ΔE passes).
 
-The delta table's failing rows + the named visual differences ARE the feedback. Mark the goal **met** only when, for every state, the gross check is clean, the style + layout tables are empty, and the visual side-by-side has no nameable difference; otherwise **not met**, listing each diff.
+The delta table's failing rows ARE the feedback (advisory pixel regions only matter once named as a delta row). Mark the goal **met** only when, for every state, the gross check is clean and the style + layout tables are empty, the spec having actually covered every visible slot + the inter-card gap (a thin spec is INCOMPLETE, not a pass), and content differences excluded; otherwise **not met**, listing each diff.
 
-### Step 3: Behavior check (Velt still works)
+### Step 3: Behavior check (Velt still works), including interaction stability
 
-Customizing presentation must **never** break Velt's behavior: you never disabled it, so it must still work (R0, R7). Perform the surface's real actions (in the [matrix](#per-surface-state--behavior-matrix)) and confirm each still functions: place a pin, open a dialog, reply, change status, filter, sidebar sync; open a notifications panel, switch tab, mark read, click through. If an action is dead, something was hidden with CSS instead of a prop (R7), interactivity was put in wireframe markup (R4), or a slot was dropped: fix it; it is not a "design gap."
+Customizing presentation must **never** break Velt's behavior: you never disabled it, so it must still work (R0, R7). Two halves, both required:
+
+**3a: the action functions, end-to-end.** Perform the surface's real actions (in the [matrix](#per-surface-state--behavior-matrix)) and confirm each still functions **through to its outcome**: place a pin, open a dialog, **type a reply and click Send and confirm it posts**, change status, filter, sidebar sync; open a notifications panel, switch tab, mark read, click through. Perform the action by a **real on-screen click at the visible element's box** (a JS `.click()` often won't fire Velt's handler). If an action is dead, something was hidden with CSS instead of a prop (R7), interactivity was put in wireframe markup (R4), or a slot was dropped: fix it; it is not a "design gap." **One passing path is not proof**, drive the *exact reported* interaction, not a convenient neighbour.
+
+**3b: the target doesn't MOVE mid-interaction (R27).** A static per-state capture proves the surface looks right while it sits still; it does not prove it holds still *during a click*. The failure: a visibility/layout rule keyed on a **transient** state (`:focus`/`:hover`/`:active`, or a Velt twin like `velt-composer-input-focused`) flips at the instant of the click, the element loses focus, a hidden piece re-appears, the control shifts out from under the cursor, the click misses. On **every interactive affordance the surface renders**: record its box, drop the transient state the click would drop (blur the focused element), reflow, re-measure. **Any shift > 1px ⇒ FAIL**, re-anchor the rule on a stable, persistent state (e.g. `velt-composer-open`). Passing the static capture does not exempt this gate.
+
+### Step 3c: Family real-path smoke suite (R30), after the family's blocks pass
+
+Fixture-green is not done: a run can pass every seeded-fixture block while real interaction paths are broken. Once a **family**'s blocks are clean, run its real-path suite:
+
+- a **short** message AND a **max-length** message (never only the canonical fixture text);
+- the surface in **every dialog context it appears in** (sidebar card / popover open-dialog / hover preview, shared classes leak across contexts);
+- **every affordance clicked once** (reply, resolve, edit, options), asserting the outcome and no dead band;
+- one **viewport resize**; **zero console errors** throughout.
+
+A missing or failing smoke suite means the family is not done.
 
 ### Step 4: Rules-compliance scan (static, on the produced code)
 
@@ -105,7 +122,7 @@ The concrete "what to drive" for each v1 surface. Drive the **states** for the v
 |---|---|---|
 | **Comment pin** (`VeltCommentPin`) | default, by-status (`OPEN`/`IN_PROGRESS`/`RESOLVED`), unread, selected; index/number shown for normal comments (none in page-mode) | click → opens dialog; recolors on status change; index via `velt-data` renders |
 | **Comment bubble** (`VeltCommentBubble`) | default, with count, unread, on-pin-hover (if enabled) | hover/click behavior; count updates as comments are added |
-| **Comment dialog** (`VeltCommentDialog`) | default, empty thread, resolved, long content; `variant="dialog"` and `variant="sidebar"` if both used | reply, change status (resolve/unresolve), reactions, composer submit; opens from pin |
+| **Comment dialog** (`VeltCommentDialog`) | default, empty thread, **collapsed/empty-composer** (single comment, reply box closed, measure trailing whitespace = 0 extra px, R27), resolved, long content; `variant="dialog"` and `variant="sidebar"` if both used | reply **posts end-to-end**, Send/Cancel **don't shift mid-click** (R27), change status (resolve/unresolve), reactions, composer submit; opens from pin |
 | **Comments sidebar V1** (`VeltCommentsSidebar`) | default list, empty, loading, filtered-to-zero | search, filter panel (apply/reset), select a thread → syncs to its pin/dialog |
 | **Comments sidebar V2** (`VeltCommentsSidebarV2`) | list, group headers expanded/collapsed, empty-placeholder, filtered-to-zero | search, filters/miniFilters, grouping, select row → sync |
 | **Sidebar button** (`VeltSidebarButton`) | default, with unread count | click → opens/closes sidebar; count updates |

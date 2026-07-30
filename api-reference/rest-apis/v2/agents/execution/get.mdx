@@ -74,8 +74,8 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
         "agentName": "Brand Consistency Checker",
         "agentVersion": 3,
         "metadata": {
-          "clientOrganizationId": "org_001",
-          "clientDocumentId": "doc_001"
+          "organizationId": "org_001",
+          "documentId": "doc_001"
         },
         "config": {
           "seedUrl": "https://example.com",
@@ -94,12 +94,11 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
         "ranBy": { "userId": "user_123", "name": "Jane Doe", "email": "jane@example.com" },
         "resultsSummary": {
           "totalFindings": 7,
-          "totalAnnotationsCreated": 5,
+          "totalAnnotationsCreated": 7,
           "urlsProcessed": 12,
           "urlsWithFindings": 5,
           "issuesCreated": 7,
-          "summary": "Found 7 issues across 12 pages. 5 annotations created, 2 matched existing.",
-          "matchResult": { "created": 5, "skipped": 2, "resolved": 1 }
+          "summary": "Found 7 issues across 12 pages. 7 annotations created."
         },
         "crawlerResults": { "status": "completed", "totalUrlsFound": 12, "duration": 45000, "pagesVisited": 12 },
         "llmModel": "claude/claude-sonnet-4-6",
@@ -118,8 +117,8 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
 | `agentId`                                | string              | Agent that was executed.                                                                                       |
 | `agentName`                              | string              | Denormalized agent display name.                                                                               |
 | `agentVersion`                           | number              | Agent config version at execution time (pinned).                                                               |
-| `metadata.clientOrganizationId`          | string              | Client-provided organization ID.                                                                               |
-| `metadata.clientDocumentId`              | string              | Client-provided document ID.                                                                                   |
+| `metadata.organizationId`                | string              | The `organizationId` you passed on Run Execution. Empty string when absent.                                    |
+| `metadata.documentId`                    | string              | The `documentId` you passed on Run Execution. Empty string when absent.                                        |
 | `config.seedUrl`                         | string              | The seed URL provided by the user.                                                                             |
 | `config.crossPageExecute`                | boolean             | Whether cross-page mode was used.                                                                              |
 | `config.maxUrlsToProcess`                | number              | Max URLs limit.                                                                                                |
@@ -137,17 +136,17 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
 | `error.occurredAt`                       | number              | Epoch ms when the error occurred.                                                                              |
 | `trigger`                                | string              | `"standalone"` or `"workflow"`.                                                                                |
 | `workflowExecutionId`                    | string \| null      | Parent workflow execution ID (if workflow-triggered).                                                          |
-| `previousExecutionId`                    | string \| null      | Previous execution ID (for match-and-merge reruns).                                                            |
+| `previousExecutionId`                    | string \| null      | Previous execution ID (set on reruns).                                                                         |
 | `ranBy`                                  | object              | `{ userId, name, email }` of who triggered.                                                                    |
 | `resultsSummary.totalFindings`           | number              | Total findings (after guardrails filtering).                                                                   |
-| `resultsSummary.totalAnnotationsCreated` | number              | Annotations created (after match-and-merge dedup).                                                             |
+| `resultsSummary.totalAnnotationsCreated` | number              | Annotations created. Re-runs first clear the prior run's suggestions per URL (delete-and-recreate), so this counts the fresh annotations written by this run. |
 | `resultsSummary.urlsProcessed`           | number              | URLs that were processed.                                                                                      |
 | `resultsSummary.urlsWithFindings`        | number              | URLs that had at least one finding.                                                                            |
 | `resultsSummary.urlsErrored`             | number \| undefined | URLs whose agent run failed. `0 < urlsErrored < urlsProcessed` → `partial`; `urlsErrored >= urlsProcessed` (≥1 processed) → `error`. |
 | `resultsSummary.erroredUrls`             | array \| undefined  | Bounded sample (≤50) of `{ url, message }` for failing URLs.                                                    |
 | `resultsSummary.issuesCreated`           | number              | Equals `totalFindings` (backwards compat).                                                                     |
 | `resultsSummary.summary`                 | string \| null      | Human-readable summary. Null while running.                                                                    |
-| `resultsSummary.matchResult`             | object \| undefined | Match-and-merge outcome: `{ created, skipped, resolved }`.                                                     |
+| `resultsSummary.matchResult`             | object \| undefined | **Legacy.** Match-and-merge outcome (`{ created, skipped, resolved }`) written by the retired match-and-merge dedup. Present only on old execution documents; new executions use per-URL delete-and-recreate and never write this field. |
 | `crawlerResults`                         | object \| undefined | Only populated when `crossPageExecute: true`.                                                                  |
 | `llmModel`                               | string \| undefined | LLM model used (e.g. `"claude/claude-sonnet-4-6"`, `"gemini/gemini-3-flash-preview"`).                          |
 | `tokenUsage`                             | object              | `{ promptTokens, completionTokens, thoughtsTokens, totalTokens }`.                                             |
@@ -226,8 +225,8 @@ When `includeResults` is true, a `results` array is included alongside `executio
 | `htmlSelector` | string  | CSS selector of the DOM element.                                         |
 | `htmlXpath`    | string  | XPath of the DOM element.                                                |
 | `isPageLevel`  | boolean | `true` for visual/layout findings; `false` when `targetText` matches DOM text. |
-| `issueType`    | string  | Match-and-merge key (e.g. `"casing"`, `"pii"`, `"spelling"`, `"broken-link"`). |
-| `confidence`   | number  | 0–100 confidence score. Below 50 may be suppressed by guardrails.        |
+| `issueType`    | string  | Issue classification tag (e.g. `"casing"`, `"pii"`, `"spelling"`, `"broken-link"`). |
+| `confidence`   | number  | 0–100 confidence score reported by the agent.                            |
 | `commentId`    | string  | Comment annotation ID (populated after annotation creation).             |
 | `source`       | string  | `"instructions"` or `"knowledge"`.                                       |
 

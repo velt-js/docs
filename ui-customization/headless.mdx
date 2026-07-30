@@ -4,9 +4,9 @@ sidebarTitle: "Headless"
 description: "Build fully custom Velt UI with headless hooks, data, and actions."
 ---
 
-**What it is:** Velt gives you the **data and the actions** through React hooks. **You build 100% of the UI** with your own components. Velt renders nothing.
+**What it is:** Velt gives you the **data and the actions** through React hooks, or the equivalent API methods in other frameworks. **You build 100% of the UI** with your own components. Velt renders nothing.
 
-<Note>Headless hooks are React-only. In other frameworks, use the equivalent client API methods (see [API methods](/api-reference/sdk/api/api-methods)).</Note>
+<Note>Hooks are React-only. In other frameworks, the same data and actions live on the `Velt` client's elements (e.g. `Velt.getCommentElement()`), shown in the Other Frameworks tabs below. The full mapping is in [API methods](/api-reference/sdk/api/api-methods).</Note>
 
 **Use it when:** the design needs your **own interactive components** inside the collaboration UI, a layout wireframe slots can't express, or you're rendering comments into a surface Velt can't draw into (a PDF/canvas/video timeline). (This is the last question in the [decision tree](/ui-customization/decision-tree).)
 
@@ -18,7 +18,7 @@ description: "Build fully custom Velt UI with headless hooks, data, and actions.
 
 ## The model
 
-Three kinds of hooks (full list grouped in [`Hooks`](/ui-customization/reference/hooks)):
+Three kinds of hooks (full list grouped in [`Hooks`](/ui-customization/reference/hooks); each maps to an API method on the `Velt` client for other frameworks, e.g. `useAddComment` → `commentElement.addComment()`, `useCommentAnnotations` → `commentElement.getAllCommentAnnotations()`):
 
 - **Read (data/state):** `useCommentAnnotations`, `useCommentAnnotationById`, `useUnreadCommentCountOnCurrentDocument`, `useCommentModeState`, … → reactive data you render.
 - **Mutate (actions):** `useAddCommentAnnotation`, `useAddComment`, `useUpdateComment`, `useDeleteComment`, `useDeleteCommentAnnotation`, `useResolveCommentAnnotation`, `useUpdateStatus`, `useToggleReaction`, `useGetLink`, … → call these from your own buttons.
@@ -32,8 +32,10 @@ Middle ground: keep Velt's components but strip their visual styling with [`setU
 
 ## Steps
 
-### Step 1: Render data from a read hook
+### Step 1: Render data from a read source
 
+<Tabs>
+<Tab title="React / Next.js">
 ```tsx
 import { useCommentAnnotations } from "@veltdev/react";
 import type { CommentAnnotation } from "@veltdev/types";
@@ -49,13 +51,37 @@ function CommentsPanel() {
   );
 }
 ```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<div id="my-panel" class="my-panel"></div>
 
-`useCommentAnnotations()` is reactive: it re-renders when comments change anywhere (including other users in real time). You never poll.
+<script>
+const commentElement = Velt.getCommentElement();
 
-### Step 2: Wire your buttons to action hooks
+const subscription = commentElement.getAllCommentAnnotations().subscribe((annotations) => {
+  const panel = document.getElementById('my-panel');
+  panel.innerHTML = '';
+  (annotations || []).forEach((a) => {
+    panel.appendChild(renderMyThreadCard(a));   // renderMyThreadCard is defined in Step 2
+  });
+});
 
-Your components are fully interactive (unlike wireframes). Call the action hooks from your own handlers:
+// when your panel is destroyed:
+subscription?.unsubscribe();
+</script>
+```
+</Tab>
+</Tabs>
 
+The read source is reactive: it updates when comments change anywhere (including other users in real time). You never poll.
+
+### Step 2: Wire your buttons to actions
+
+Your components are fully interactive (unlike wireframes). Call the actions from your own handlers:
+
+<Tabs>
+<Tab title="React / Next.js">
 ```tsx
 import {
   useAddComment, useResolveCommentAnnotation, useCurrentUser,
@@ -83,11 +109,38 @@ function MyThreadCard({ annotation }: { annotation: CommentAnnotation }) {
   );
 }
 ```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+// currentUser: the same User object you passed to Velt.identify()
+
+async function reply(annotation, text, html) {
+  const comment = buildComment(currentUser, text, html);   // buildComment is defined in Step 3
+  await commentElement.addComment({ annotationId: annotation.annotationId, comment });
+}
+
+function renderMyThreadCard(annotation) {
+  const card = document.createElement('article');
+  // your fully custom, interactive UI
+  const resolveButton = document.createElement('button');
+  resolveButton.textContent = 'Resolve';
+  resolveButton.addEventListener('click', () => {
+    commentElement.resolveCommentAnnotation({ annotationId: annotation.annotationId });
+  });
+  card.appendChild(resolveButton);
+  return card;
+}
+```
+</Tab>
+</Tabs>
 
 ### Step 3: Build objects to the SDK data model
 
 Mutations expect objects shaped like Velt's types (from `@veltdev/types`). You construct them yourself. Example `Comment` builder:
 
+<Tabs>
+<Tab title="React / Next.js">
 ```tsx
 import type { Comment, User } from "@veltdev/types";
 
@@ -106,6 +159,27 @@ function buildComment(currentUser: User, text: string, html: string): Comment {
   } as unknown as Comment;   // cast: fill every field your action needs; cast bridges optional fields you omit
 }
 ```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+// currentUser: the same User object you passed to Velt.identify()
+function buildComment(currentUser, text, html) {
+  return {
+    commentId: Date.now(),
+    type: 'text',
+    from: currentUser,
+    status: 'added',
+    commentText: text,
+    commentHtml: html,
+    taggedUserContacts: [],
+    attachments: [],
+    reactionAnnotationIds: [],
+    customList: [],
+  };
+}
+```
+</Tab>
+</Tabs>
 
 > Because you hand-build these, **read the type** (`Comment`, `CommentAnnotation`, `User` in `@veltdev/types`) and fill every field the action needs. Missing fields are the most common headless bug.
 
@@ -113,7 +187,7 @@ function buildComment(currentUser: User, text: string, html: string): Comment {
 
 #### What each action expects (the request object)
 
-Action hooks take a single **request object**, not loose args. The required fields per common mutation (optional ones omitted; all also accept `options?`):
+Actions take a single **request object**, not loose args. In other frameworks, the same methods live on `Velt.getCommentElement()` with identical names and request shapes (`commentElement.addComment(request)`, `commentElement.updateStatus(request)`, …). The required fields per common mutation (optional ones omitted; all also accept `options?`):
 
 | Hook | Request fields (required) | Notes |
 |---|---|---|

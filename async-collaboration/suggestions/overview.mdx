@@ -1,7 +1,7 @@
 ---
 title: "Suggestions (Beta)"
 sidebarTitle: "Suggestions"
-description: "Capture edits from humans or AI agents as reviewable suggestions with accept and reject actions on the comment dialog."
+description: "Capture edits from humans or AI agents as reviewable suggestions in Velt, with diff-style accept and reject actions on the comment dialog."
 ---
 
 ## Overview
@@ -24,7 +24,7 @@ The accept/reject UI renders on the Velt comment dialog, so your app needs Velt 
 
 ## Properties
 
-- A suggestion is a regular comment annotation with `type: "suggestion"` and a populated [`suggestion`](/api-reference/sdk/models/data-models#suggestiondata) field. There is no separate suggestions data store.
+- A suggestion is a regular comment annotation with `type: "suggestion"` and a populated [`suggestion`](/api-reference/sdk/models/data-models#suggestiondata) field. There is no separate suggestions data store. An annotation marked `type: "suggestion"` (or `commentType: "suggestion"`) without a full `suggestion` payload — for example, one created over REST — is backfilled to a pending suggestion state at render time, so accept and reject still work.
 - Suggestion mode is global for the current user and **not persisted**. A page reload returns to normal editing until you enable it again.
 - An edit is committed when the user finishes it, not on every keystroke. Text-like inputs (text, number, date, textarea, contenteditable) commit when the field loses focus (`focusout`), so each focus session produces at most one suggestion. Dropdowns, checkboxes, and radios commit on `change`, since picking a value is the whole edit.
 - Unchanged values never create suggestions. Focusing and blurring without editing is ignored, and `commitSuggestion` rejects a `newValue` that's identical to the old value.
@@ -188,11 +188,47 @@ suggestionElement.isSuggestionModeEnabled$().subscribe((isEnabled) => {
 
 #### 3. Capture Edits as Suggestions
 
-When a user finishes an edit, you decide how it becomes a suggestion. There are three ways, from simplest to most control. Use one per target; only one of them handles any given edit.
+When a user finishes an edit, you decide how it becomes a suggestion. There are four ways, from simplest to most control. Use one per target; only one of them handles any given edit.
 
-**Option 1: Auto-commit with `onTargetEditCommit` (simplest)**
+**Option 1: Zero-config auto-commit (default)**
 
-Pass `onTargetEditCommit` when you enable suggestion mode. The SDK calls it with the old and new values every time a user finishes an edit. Return an object and the SDK creates the suggestion right away, using your `summary` and `metadata`. This is the path most apps want. (`onTargetEditStart` fires when editing begins; it's informational in v1 and its return value is reserved for future use.)
+The simplest setup: enable suggestion mode with no handler at all. Every finished edit on a tagged target automatically becomes a pending suggestion, using the SDK's default diff summary (a styled before/after diff — see [Rich HTML summaries with `summaryHtml`](#rich-html-summaries-with-summaryhtml)). This is controlled by the `autoCommit` flag on [`EnableSuggestionModeConfig`](/api-reference/sdk/models/data-models#enablesuggestionmodeconfig), which **defaults to `true`**. Pass `autoCommit: false` for **detect-only mode**: edits still fire the `targetEditCommit` event, but no suggestion is created until you call the `commitSuggestion` function on the event payload (see Option 3).
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useEnableSuggestionMode } from '@veltdev/react';
+
+const { enableSuggestionMode } = useEnableSuggestionMode();
+
+// Zero-config: edits on tagged targets auto-commit as suggestions.
+enableSuggestionMode();
+
+// Detect-only: events fire, but nothing commits until you
+// call `commitSuggestion` on the event payload (Option 3).
+enableSuggestionMode({ autoCommit: false });
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+// Zero-config: edits on tagged targets auto-commit as suggestions.
+suggestionElement.enableSuggestionMode();
+
+// Detect-only: events fire, but nothing commits until you
+// call `commitSuggestion` on the event payload (Option 3).
+suggestionElement.enableSuggestionMode({ autoCommit: false });
+```
+</Tab>
+</Tabs>
+
+<Note>
+`autoCommit` is ignored when you pass `onTargetEditCommit` (Option 2) — the handler always wins, even when it returns `null` to skip creating a suggestion (see the Tip under Option 2). Calling `disableSuggestionMode()` clears the flag; if you re-enable suggestion mode without passing `autoCommit: false` again, you're back to the default (`true`).
+</Note>
+
+**Option 2: Customize each suggestion with `onTargetEditCommit`**
+
+Pass `onTargetEditCommit` when you enable suggestion mode. The SDK calls it with the old and new values every time a user finishes an edit. Return an object and the SDK creates the suggestion right away, using your `summary`, `summaryHtml`, and `metadata`. Use this when you want per-edit control over the suggestion body without subscribing to the `targetEditCommit` event (Option 3). (`onTargetEditStart` fires when editing begins; it's informational in v1 and its return value is reserved for future use.)
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -229,20 +265,27 @@ suggestionElement.enableSuggestionMode({
 </Tabs>
 
 <Tip>
-Don't want every edit to become a suggestion automatically? Return `null` (or leave out `onTargetEditCommit`) and handle the edit yourself with the `targetEditCommit` event below, for example to validate the value or ask the user to confirm first.
+Don't want every edit to become a suggestion automatically? Return `null` from `onTargetEditCommit` — or leave the handler out **and** pass `autoCommit: false` — and handle the edit yourself with the `targetEditCommit` event below, for example to validate the value or ask the user to confirm first.
 </Tip>
 
-**Option 2: Decide per edit with the `targetEditCommit` event**
+**Option 3: Decide per edit with the `targetEditCommit` event**
 
-If you skip `onTargetEditCommit`, subscribe to the `targetEditCommit` event instead. The event gives you the edit details plus a `commitSuggestion` function that's already tied to that edit. Call it to create the suggestion (you can override `summary` / `metadata`), or don't call it to discard the edit. Nothing is created until you call it.
+Enable suggestion mode with `autoCommit: false` and no `onTargetEditCommit` handler, then subscribe to the `targetEditCommit` event. The event gives you the edit details plus a `commitSuggestion` function that's already tied to that edit. Call it to create the suggestion (you can override `summary` / `summaryHtml` / `metadata`), or don't call it to discard the edit. Nothing is created until you call it — without `autoCommit: false`, the SDK commits each edit itself (Option 1); once that auto-commit succeeds, the event's `commitSuggestion` becomes a no-op for that edit (if the auto-commit fails, you can still call it to retry).
 
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
-import { useSuggestionEventCallback } from '@veltdev/react';
+import { useEnableSuggestionMode, useSuggestionEventCallback } from '@veltdev/react';
 import { useEffect } from 'react';
 
 function CommitGate() {
+  const { enableSuggestionMode } = useEnableSuggestionMode();
+
+  useEffect(() => {
+    // Detect-only: without this, the SDK auto-commits before your gate runs.
+    enableSuggestionMode({ autoCommit: false });
+  }, []);
+
   const commitEvent = useSuggestionEventCallback('targetEditCommit');
 
   useEffect(() => {
@@ -260,9 +303,12 @@ function CommitGate() {
 
 <Tab title="Other Frameworks">
 ```js
+// Detect-only: without this, the SDK auto-commits before your gate runs.
+suggestionElement.enableSuggestionMode({ autoCommit: false });
+
 suggestionElement.on('targetEditCommit').subscribe(({ details, commitSuggestion }) => {
-  // `commitSuggestion` is a pre-bound builder. Call it to finalize the suggestion,
-  // or skip it to discard this edit.
+  // `commitSuggestion` is already tied to this edit. Call it to create
+  // the suggestion, or skip it to discard this edit.
   if (isValid(details.newValue)) {
     commitSuggestion({ summary: `Update ${details.targetId}` });
   }
@@ -271,7 +317,7 @@ suggestionElement.on('targetEditCommit').subscribe(({ details, commitSuggestion 
 </Tab>
 </Tabs>
 
-**Option 3: Create suggestions manually with `startSuggestion` / `commitSuggestion`**
+**Option 4: Create suggestions manually with `startSuggestion` / `commitSuggestion`**
 
 When there's no input for the SDK to watch (a custom widget, a canvas element, or an "AI proposes a change" button), create the suggestion yourself. Call `startSuggestion(targetId)` to capture the current value as `oldValue`, then `commitSuggestion(config)` with the `newValue` to create it.
 
@@ -316,6 +362,44 @@ const { id } = await suggestionElement.commitSuggestion({
 
 <Note>
 `commitSuggestion` only works while suggestion mode is on and the `targetId` is known to the SDK (tagged in the DOM or registered via `registerTarget`). It also creates nothing when `newValue` is identical to the captured `oldValue`.
+</Note>
+
+##### Rich HTML summaries with `summaryHtml`
+
+When a suggestion is created, the SDK adds a first comment to its thread — that comment is the body the suggestion card displays, built from the `summary` you provide. Pass an optional `summaryHtml` alongside `summary` — in the config you pass to `commitSuggestion`, in the object you return from `onTargetEditCommit`, or in the overrides you pass to the event's `commitSuggestion` function — to render a formatted body, for example a color-coded before/after diff. `summaryHtml` becomes the comment's `commentHtml`; plain `summary` (or the SDK's default diff text) stays in `commentText` as the fallback.
+
+If you pass only `summary`, the comment's `commentHtml` is the HTML-escaped summary wrapped in a `<p>` tag, so existing `summary`-only usage renders exactly as before. If you provide neither, the SDK renders a default styled HTML diff (old value in red italic, new value in green italic).
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+import { useCommitSuggestion } from '@veltdev/react';
+
+const { commitSuggestion } = useCommitSuggestion();
+
+await commitSuggestion({
+  targetId: 'price-field',
+  newValue: 6000,
+  summary: 'Price: $5,000 → $6,000',
+  summaryHtml: '<p>Price: <s>$5,000</s> <b>$6,000</b></p>',
+});
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+await suggestionElement.commitSuggestion({
+  targetId: 'price-field',
+  newValue: 6000,
+  summary: 'Price: $5,000 → $6,000',
+  summaryHtml: '<p>Price: <s>$5,000</s> <b>$6,000</b></p>',
+});
+```
+</Tab>
+</Tabs>
+
+<Note>
+`summaryHtml` is sanitized with DOMPurify at render time — `<script>` tags and event-handler attributes (like `onclick`) are stripped. Inline `style` attributes are preserved, so rich diff styling survives.
 </Note>
 
 #### 4. Apply Accepted Suggestions
@@ -415,6 +499,7 @@ Suggestions are stored as comment annotations, so you manage them from your back
 
 #### Add Suggestions
 - Add agent-generated suggestions using the Add Comment Annotations REST API with `type: "suggestion"` and an `agent` block on the root comment. [Learn more](/api-reference/rest-apis/v2/comments-feature/comment-annotations/add-comment-annotations)
+- Human-authored suggestions need no `agent` block — any annotation created with `type: "suggestion"` renders the same suggestion card (header, diff body, accept/reject actions) in the comment dialog. The card's header shows the author's avatar instead of the agent identity.
 - See the [Agent Comments](/ai/agent-comments) guide for the full walkthrough of agent findings.
 
 #### Get Suggestions

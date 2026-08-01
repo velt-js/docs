@@ -4,40 +4,24 @@ sidebarTitle: "CSS"
 description: "Theme Velt UI with CSS variables, dark mode tokens, and supported class overrides."
 ---
 
-**What it is:** change Velt's look (colors, spacing, fonts, radius, shadows) without touching its structure or behavior. The lowest-effort, most upgrade-safe layer.
+Change Velt's look (colors, spacing, fonts, radius, shadows) without touching its structure or behavior. It's the lowest-effort approach, and it layers on top of every other one.
 
 <Info>
-Try the [Theme Playground](https://playground.velt.dev/themes) to visually customize and preview your theme, then copy the generated CSS variables. Have the design in Figma? The [UI Customization Plugin](/get-started/ui-customization-plugin) can extract these values and write the overrides for you.
+Try the [Theme Playground](https://playground.velt.dev/themes) to preview a theme and copy the generated variables. Working from a Figma design? The [UI Customization Plugin](/get-started/ui-customization-plugin) can extract these values for you.
 </Info>
 
-**Use it when:** your design is Velt's default UI in different colors/spacing/typography (the first question in the [decision tree](/ui-customization/decision-tree)).
-
-**Don't use it when:** you need to reorder, add, remove, or relayout parts. Use [wireframes](/ui-customization/layout) for that. And don't use `display:none` to hide features; toggle them with a prop on the [primitive](/ui-customization/primitives) instead.
-
 <Warning>
-Passing `className` or `style` directly to a Velt component does **not** change its UI. Style Velt components with the CSS variables and class overrides below, or add classes to your own markup inside a [wireframe template](/ui-customization/layout).
+`className` and `style` props on Velt components do nothing. Style Velt with the variables and classes below, or add classes to your own markup inside a [wireframe](/ui-customization/layout).
 </Warning>
 
----
+## Make your CSS reach Velt
 
-## The model
+Velt can render inside a shadow DOM, which blocks your stylesheets.
 
-Velt exposes a large set of **CSS custom properties** (variables), all prefixed `--velt-…`. You override them in your own stylesheet. Velt reads them at render time, so your values flow through its whole UI: including (for variables) inside the shadow DOM.
+- **CSS variables** (`--velt-*`) always cross the boundary. Theming with variables alone needs nothing here.
+- **Class and element selectors** don't. Pick one of these:
 
-There are two families:
-
-- **Modern tokens**: `--velt-light-mode-*`, `--velt-dark-mode-*`, `--velt-spacing-*`, `--velt-border-radius-*`, `--velt-font-size-*`, plus z-index tokens. Use these.
-- **Legacy tokens**: `--legacy-velt-*` (older components still read some of these). Only touch them if a specific older surface needs it.
-
-Full list: [`CSS variables`](/ui-customization/reference/css-variables).
-
-## Steps
-
-### Step 1: Make sure your selector CSS can reach Velt
-
-CSS **variables** cross the shadow boundary (so **Step 2 variable theming works no matter what**), but **class/element selectors** do not reach inside a shadow DOM. If you'll use any selector-based CSS (Step 5) or styled wireframes, pick **one** of these two supported approaches:
-
-**Option A: turn shadow DOM off** (simplest; your normal stylesheet then reaches the elements):
+**Option A: turn shadow DOM off.**
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -54,7 +38,7 @@ CSS **variables** cross the shadow boundary (so **Step 2 variable theming works 
 </Tab>
 </Tabs>
 
-**Option B: keep shadow DOM on, and inject your CSS into the shadow root** with the client's `injectCustomCss` API. Use this when you want to keep Velt's style isolation (so Velt's CSS can't leak into your app and vice-versa) but still style inside it:
+**Option B: keep it on and inject your CSS into the shadow root.** Use `type: "styles"` for a CSS string, `type: "link"` for a stylesheet URL.
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -63,8 +47,6 @@ const { client } = useVeltClient();
 client.injectCustomCss({ type: "styles", value: `
   .velt-comment-dialog-composer { border-radius: 10px !important; }
 ` });
-// or load an external stylesheet into the shadow root:
-client.injectCustomCss({ type: "link", value: "https://yourcdn.com/velt-overrides.css" });
 ```
 </Tab>
 <Tab title="Other Frameworks">
@@ -72,55 +54,37 @@ client.injectCustomCss({ type: "link", value: "https://yourcdn.com/velt-override
 Velt.injectCustomCss({ type: "styles", value: `
   .velt-comment-dialog-composer { border-radius: 10px !important; }
 ` });
-// or load an external stylesheet into the shadow root:
-Velt.injectCustomCss({ type: "link", value: "https://yourcdn.com/velt-overrides.css" });
 ```
 </Tab>
 </Tabs>
-`injectCustomCss` pushes your CSS **into Velt's shadow root**, so selectors match there. `type: "styles"` = a raw CSS string; `type: "link"` = a stylesheet URL.
 
-Pick A *or* B per project: don't do both for the same surface. (See [`Setup`](/ui-customization/setup).)
+<Note>
+**Wireframes change this.** Registering a component's **root** wireframe (e.g. `VeltCommentDialogWireframe`) removes that component's shadow DOM automatically, so your class CSS reaches it. A **nested-only** wireframe doesn't: set `shadowDom={false}` yourself. Inline `style=""` always works either way.
+</Note>
 
-#### Shadow DOM & wireframes (root vs nested)
+## Theme with variables
 
-When you customize with **wireframes**, whether you still need `shadowDom={false}` depends on *which* wireframe you registered:
-
-- **You registered the component's ROOT wireframe** (e.g. `VeltCommentDialogWireframe` / `velt-comment-dialog-wireframe`): Velt **auto-removes that component's own shadow DOM**, so it renders in **light DOM** and your normal class CSS reaches it: **no `shadowDom={false}` needed** for that component.
-- **You registered only a NESTED / leaf wireframe** (e.g. just the `ThreadCard`, with no root dialog wireframe): shadow DOM is **NOT** auto-removed. Your layout markup applies, but **class CSS won't reach inside**, so the look may change without your styles landing. For this case you **must** set `shadowDom={false}` (or the per-surface flag / `injectCustomCss`) explicitly.
-- **Either way, inline `style=""`** on your wireframe markup always works (it survives the clone and lives in whatever DOM the slot renders into).
-- **Nesting caveat:** a root-wireframed component that renders *inside another* shadow-DOM component (e.g. the dialog shown inside the sidebar with the sidebar's default shadow on) still sits in **that outer** component's shadow root: turn the outer component's shadow off too if you need class CSS there.
-
-<Tip>
-Rule of thumb: **root wireframe → class CSS works (shadow auto-off); leaf-only wireframe → set `shadowDom={false}` yourself; inline styles always work.**
-</Tip>
-
-### Step 2: Override variables at `:root`
-
-Put all Velt CSS in one stylesheet. Override the tokens you care about:
+Put all Velt CSS in one stylesheet and override the tokens you need:
 
 ```css
-/* velt.css: loaded once */
+/* velt.css */
 :root {
-  /* Brand accent used across comment UI (buttons, active states, links) */
   --velt-light-mode-accent: #FF6B35;
   --velt-light-mode-accent-hover: #E55A29;
+  --velt-light-mode-background-0: #FFFFFF;
+  --velt-light-mode-text-0: #0A0A0A;
 
-  /* Surfaces & text */
-  --velt-light-mode-background-0: #FFFFFF;   /* primary surface */
-  --velt-light-mode-text-0: #0A0A0A;         /* primary text */
-
-  /* Shape & rhythm */
   --velt-border-radius-md: 10px;
   --velt-spacing-md: 14px;
-  --velt-font-size-sm: 13px;          /* overriding the 14px default */
+  --velt-font-size-sm: 13px;
 }
 ```
 
-These names are real and exhaustive: see [`CSS variables`](/ui-customization/reference/css-variables). **Never invent a token name.**
+Every token is listed in [`CSS variables`](/ui-customization/reference/css-variables); don't invent names. Older surfaces read a few `--legacy-velt-*` tokens, which are listed there too.
 
-### Step 3: Support dark mode
+## Dark mode
 
-Velt switches modes via the `data-velt-theme="dark"` attribute on the document root. Override the dark tokens under that selector:
+Velt sets `data-velt-theme="dark"` on the document root when dark mode is on. You supply the values:
 
 ```css
 :root[data-velt-theme="dark"] {
@@ -130,10 +94,7 @@ Velt switches modes via the `data-velt-theme="dark"` attribute on the document r
 }
 ```
 
-You supply the dark values; Velt sets the `data-velt-theme="dark"` attribute when dark mode is on. **To toggle dark mode**, use any of:
-- the **`darkMode` prop** on a component (also `dialogDarkMode`, `pinDarkMode`, … for components Velt injects for you, like dialogs and pins);
-- the **client API**: `setDarkMode(true)` (app-wide);
-- **follow the OS preference**: wire your own `prefers-color-scheme` media query to `setDarkMode`.
+Turn it on with the `darkMode` prop (also `dialogDarkMode`, `pinDarkMode`, … for components Velt injects for you), with `setDarkMode()` app-wide, or by wiring your own `prefers-color-scheme` listener to it:
 
 <Tabs>
 <Tab title="React / Next.js">
@@ -143,35 +104,23 @@ const { client } = useVeltClient();
 client.setDarkMode(true);
 
 // Per component
-<VeltComments
-  darkMode={true}
-  dialogDarkMode={true}
-  pinDarkMode={true}
-/>
+<VeltComments darkMode={true} dialogDarkMode={true} pinDarkMode={true} />
 ```
 </Tab>
 <Tab title="Other Frameworks">
 ```html
 <script>
-  // Global
   Velt.setDarkMode(true);
 </script>
 
-<!-- Per component -->
-<velt-comments
-  dark-mode="true"
-  dialog-dark-mode="true"
-  pin-dark-mode="true"
-></velt-comments>
+<velt-comments dark-mode="true" dialog-dark-mode="true" pin-dark-mode="true"></velt-comments>
 ```
 </Tab>
 </Tabs>
 
-So: **you decide *when* dark mode is on (prop / `setDarkMode` / OS), and you supply the dark token *values* under `[data-velt-theme="dark"]`.**
+## Fonts
 
-### Step 4: Change the default font
-
-Velt reads one global font token, `--velt-default-font-family` (default `sans-serif`). Override it at `:root` and every Velt surface picks it up: no per-component work:
+One global token sets the font across every Velt surface:
 
 ```css
 :root {
@@ -179,48 +128,39 @@ Velt reads one global font token, `--velt-default-font-family` (default `sans-se
 }
 ```
 
-(There are no global line-height or font-weight tokens: those are per-component. The `--velt-font-size-*` scale can be overridden the same way.)
+Font sizes use the `--velt-font-size-*` scale. Line-height and weight are per-component.
 
-### Step 5: Override specific elements by class (always with `!important`)
+## Override classes
 
-For anything variables don't cover, target Velt's classes directly. **Velt injects its own styles at runtime with high specificity, so your overrides must use `!important` to win.** Treat this as the rule for class-based Velt CSS, not a hack.
+For anything variables don't cover, target Velt's classes. **Velt's own styles are high-specificity, so your overrides need `!important`.** That's the supported way to do class-based Velt CSS, not a hack.
 
-**The workflow (do this for any element you want to restyle):**
-
-1. Run the app with `shadowDom={false}` and **inspect the element** in DevTools.
-2. Read the classes on it: Velt applies dual names: a short legacy class (e.g. `selected`) and a BEM `velt-*` class (e.g. `velt-comment-dialog--selected`). **Prefer the `velt-*` class.**
-3. Write a rule for that class, ending each declaration with `!important`:
+1. Run with `shadowDom={false}` and inspect the element.
+2. Prefer its `velt-*` BEM class over the short legacy twin: `velt-comment-dialog--selected`, not `selected`.
+3. Write the rule with `!important`:
 
 ```css
-/* identified by inspecting the composer's send button */
 .velt-composer--submit-button {
   background: #3d5afe !important;
   border-radius: 6px !important;
-  color: #fff !important;
 }
 ```
 
 <Tip>
-See [`CSS classes`](/ui-customization/reference/css-classes) for the catalog of structural and **stateful** classes (unread, resolved, selected, has-reactions, hover, filter-applied, and more) you can target. Class names are an implementation detail and can shift between versions, so prefer `--velt-*` variables where one exists. Use `!important` class overrides for the rest, and re-check them on upgrade.
+[`CSS classes`](/ui-customization/reference/css-classes) lists every structural and stateful class (unread, resolved, selected, hover, filter-applied, …). Class names can shift between versions, so prefer a `--velt-*` variable where one exists and re-check overrides on upgrade.
 </Tip>
 
-### Step 6 (optional): Start from a blank slate with unstyled mode
+## Unstyled mode
 
-If you're restyling most of the UI anyway, remove Velt's visual styling entirely with [`setUnstyledMode()`](/api-reference/sdk/api/api-methods#setunstyledmode) (v6.0.0-beta.10+) and bring your own CSS. Layout and positioning styles are kept by default so components stay functional.
+Restyling most of the UI anyway? Strip Velt's visual styling with [`setUnstyledMode()`](/api-reference/sdk/api/api-methods#setunstyledmode) (v6.0.0-beta.10+) and bring your own CSS. Layout and positioning styles are kept so components stay functional. It covers styles in the page head and inside shadow roots, and is reversible.
 
 <Tabs>
 <Tab title="React / Next.js">
 ```tsx
 const { client } = useVeltClient();
 
-// Remove Velt's visual styling; keep layout/positioning (default)
-client.setUnstyledMode(true);
-
-// Strip everything down to raw browser defaults
-client.setUnstyledMode(true, { keepFunctionalStyles: false });
-
-// Restore all Velt styling
-client.setUnstyledMode(false);
+client.setUnstyledMode(true);                                    // keep layout styles
+client.setUnstyledMode(true, { keepFunctionalStyles: false });   // strip everything
+client.setUnstyledMode(false);                                   // restore
 ```
 </Tab>
 <Tab title="Other Frameworks">
@@ -232,53 +172,38 @@ Velt.setUnstyledMode(false);
 </Tab>
 </Tabs>
 
-It applies to Velt styles in the page head and inside shadow roots, including styles injected later, and is reversible at any time.
-
-You can also disable Velt's default **global** CSS styles (styles Velt adds outside its own components) by setting `globalStyles: false` in the SDK configuration. This prevents conflicts with your custom styling:
+To also drop Velt's global styles (the ones outside its own components), set `globalStyles: false` in your config:
 
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
-// Using VeltProvider
-<VeltProvider apiKey='API_KEY' config={{
-    globalStyles: false
-}}>
+<VeltProvider apiKey='API_KEY' config={{ globalStyles: false }}>
     {/* Your app content */}
 </VeltProvider>
-
-// Or using the API method
-const { client } = useVeltClient();
-client.initConfig('API_KEY', {
-  globalStyles: false
-});
 ```
 </Tab>
 <Tab title="Other Frameworks">
-```html
-<script>
-Velt.initConfig('API_KEY', {
-  globalStyles: false
-});
-</script>
+```js
+Velt.initConfig('API_KEY', { globalStyles: false });
 ```
 </Tab>
 </Tabs>
 
-## What it can and can't do
+## What CSS can and can't do
 
 | ✅ CSS can | ❌ CSS cannot |
 |---|---|
 | Recolor everything (light + dark) | Reorder or restructure the UI |
-| Change spacing, radius, fonts, shadows | Add/remove UI parts (use a prop or wireframe) |
+| Change spacing, radius, fonts, shadows | Add or remove UI parts (use a prop or wireframe) |
 | Theme to match a brand | Insert your own markup between Velt's pieces |
 | Adjust z-index layering | Change behavior |
 
-If you're writing `display:none` to remove parts, or wishing you could move a button, you've hit CSS's ceiling: escalate to [wireframes](/ui-customization/layout) (restructure) or [primitives](/ui-customization/primitives) (toggle features / compose).
+Writing `display:none` to remove parts, or wishing you could move a button? You've hit CSS's ceiling: escalate to [wireframes](/ui-customization/layout) to restructure, or [primitives](/ui-customization/primitives) to toggle features.
 
 ## Checklist
 
-- [ ] `shadowDom={false}` on customized components.
+- [ ] `shadowDom={false}` on components you style with classes.
 - [ ] All Velt CSS in **one** stylesheet.
-- [ ] Only `--velt-*` / `--legacy-velt-*` names that exist in [`CSS variables`](/ui-customization/reference/css-variables).
+- [ ] Only token names that exist in [`CSS variables`](/ui-customization/reference/css-variables).
 - [ ] Dark values under `:root[data-velt-theme="dark"]`.
-- [ ] No `display:none` hacks to remove features (toggle with a prop instead).
+- [ ] No `display:none` to remove features: toggle them with a prop.

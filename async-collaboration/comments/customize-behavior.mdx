@@ -3203,6 +3203,92 @@ const addCommentEventData = await commentElement.addComment(addCommentRequest);
 </Tab>
 </Tabs>
 
+#### Private comments with Access Context
+
+Comments have two independent scoping systems. A comment can carry both at the same time.
+
+- **Visibility** controls who is allowed to see a comment. Set it with [`updateVisibility()`](/api-reference/sdk/api/api-methods#updatevisibility), [`enablePrivateMode()`](#enableprivatemode), or the composer visibility banner. The result is stored on the annotation as [`visibilityConfig`](/api-reference/sdk/models/data-models#commentannotationvisibilityconfig).
+- **Access Context** partitions comments by custom metadata. Attach it with [`addContext()`](#addcontext) or [`setContextProvider()`](#setcontextprovider), then set `isContextEnabled: true` on your Permission Provider. See [Set Feature Level Permissions using Access Context](/key-concepts/overview#d-set-feature-level-permissions-using-access-context).
+
+Velt enforces the two systems separately. A viewer must pass both checks to see the comment. No integration change required.
+
+This example attaches an Access Context to every new comment and restricts those comments to the current organization:
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+// Hook
+import { useEffect } from 'react';
+import { useSetContextProvider } from '@veltdev/react';
+
+const { setContextProvider } = useSetContextProvider();
+
+useEffect(() => {
+  if (setContextProvider) {
+    // Attach an Access Context to every new comment
+    setContextProvider(() => ({
+      access: { widgetId: 2 }
+    }));
+  }
+}, [setContextProvider]);
+
+// API Method
+const commentElement = client.getCommentElement();
+
+// Attach an Access Context to every new comment
+commentElement.setContextProvider(() => ({
+  access: { widgetId: 2 }
+}));
+
+// Restrict every new comment to the current organization
+commentElement.enablePrivateMode({ type: 'organizationPrivate' });
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+
+// Attach an Access Context to every new comment
+commentElement.setContextProvider(() => ({
+  access: { widgetId: 2 }
+}));
+
+// Restrict every new comment to the current organization
+commentElement.enablePrivateMode({ type: 'organizationPrivate' });
+```
+</Tab>
+</Tabs>
+
+**How the two settings behave together**
+
+- Making a comment private keeps its Access Context. The comment stays scoped to the same context values.
+- Updating a comment's Access Context with [`updateContext()`](#updatecontext) keeps its visibility. A private comment stays private, including when you clear the access object by passing `null`.
+- You can edit a private comment while Access Context is enabled.
+- Comments created with an Access Context set outside the [`addContext()`](#addcontext) event callback now load right away and still appear after a reload. This covers [`setContextProvider()`](#setcontextprovider) and the `context` prop on components such as `VeltCommentTool` and `VeltCommentComposer`. Comments created with `addContext()` were never affected.
+- A private comment reaches only the users its visibility allows. Viewers in the same Access Context who are not on that list never receive it.
+- A private comment appears only under its own Access Context, for everyone including the author. Context is a data partition, not a permission.
+- Turning an already loaded comment private removes it from other viewers' screens right away. Previously the stale copy stayed on screen until they reloaded.
+- Turning a comment back to public keeps it loadable when Access Context is turned off.
+- Organization members keep seeing the comments already restricted to their organization, even after you turn the Private Comments feature off in the [Velt Console](https://console.velt.dev/dashboard/config/appconfig). Previously those comments could disappear for them.
+
+**Reactions, recordings, and area annotations**
+
+These child items do not inherit their parent comment's Access Context when the parent comment is private.
+
+- Velt does not copy the parent's Access Context onto them, so Access Context does not scope them.
+- Viewers in the same Access Context who cannot see the parent comment no longer receive them.
+
+<Note>
+**Reserved names.** Do not name an Access Context field `organizationPrivate`. Velt reads that field as a visibility setting, so the comment loads for the wrong users. Velt does not block the name at runtime, so check it on your side. [Learn more →](/key-concepts/overview#d-set-feature-level-permissions-using-access-context)
+</Note>
+
+#### Notifications for private comments
+
+Comment notifications follow the comment's visibility. A user who cannot see a private comment gets no notification for it, on any channel. Velt sends no redacted placeholder. The comment author and any user or organization named in the comment's visibility normally receive the notification. No API change.
+
+[Learn more →](/async-collaboration/notifications/overview#notifications-for-private-comments)
+
 # Custom Lists
 
 #### createCustomListDataOnAnnotation
@@ -9349,4 +9435,3 @@ subscription?.unsubscribe()
 ```
 </Tab>
 </Tabs>
-

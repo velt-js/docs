@@ -5,7 +5,7 @@ api: "POST https://api.velt.dev/v2/agents/execution/run"
 
 Use this API to start an asynchronous agent execution. The engine creates an execution document in Firestore and dispatches a Cloud Task for processing. The response returns immediately with the `executionId`. Poll [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) to track progress and fetch findings.
 
-The `apiKey` is injected from request headers. `organizationId` and `documentId` are required and identify the document the execution runs against — the document must already exist, and findings are persisted to it as comment annotations. Cross-page execution is controlled via the `crossPageExecute` boolean; there is no separate endpoint.
+The `apiKey` is injected from request headers. `organizationId` and `documentId` are required and identify the document the execution runs against: the document must already exist, and findings are persisted to it as comment annotations. Cross-page execution is controlled via the `crossPageExecute` boolean; there is no separate endpoint.
 
 The schema uses `.passthrough()` so any additional fields are forwarded.
 
@@ -55,6 +55,16 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 
     <ParamField body="documentId" type="string" required>
       Document ID. The document must already exist (unknown documents return `NOT_FOUND`); findings are persisted to it as comment annotations.
+    </ParamField>
+
+    <ParamField body="annotationVisibility" type="string">
+      Sets who can see the comment annotations this execution creates: `"public"` or `"private"`. Default: `"private"`.
+
+      With `"private"`, each annotation is created with visibility `{ type: "organizationPrivate", organizationId }`. Only members and admins of the execution's organization see the finding pins.
+
+      With `"public"`, each annotation is created with visibility `{ type: "public" }`. Anyone with access to the document sees the finding pins, including users outside the organization.
+
+      These two are the only accepted values; request validation rejects any other string. Omitting the field resolves to `"private"`. The execution never overrides an annotation that already carries its own `visibility`.
     </ParamField>
 
     <ParamField body="trigger" type="string">
@@ -145,7 +155,22 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 }
 ```
 
-#### 4. Minimal request
+#### 4. Execution with public annotations
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456",
+    "url": "https://example.com/pricing",
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "annotationVisibility": "public",
+    "ranBy": { "userId": "user_123" }
+  }
+}
+```
+
+#### 5. Minimal request
 
 ```JSON
 {
@@ -189,7 +214,7 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 }
 ```
 
-**Errors:** `INVALID_ARGUMENT` (invalid URL; missing `agentId`, `organizationId`, or `documentId`; invalid `trigger` or `deviceType`) / `NOT_FOUND` (store database not found, or the target document does not exist) / `ALREADY_EXISTS` (an execution is already running for this agent + document combination; the error message includes the running execution's ID) / `RESOURCE_EXHAUSTED` (the workspace's AI credits are exhausted).
+**Errors:** `INVALID_ARGUMENT` (invalid URL; missing `agentId`, `organizationId`, or `documentId`; invalid `trigger`, `deviceType`, or `annotationVisibility`) / `NOT_FOUND` (store database not found, or the target document does not exist) / `ALREADY_EXISTS` (an execution is already running for this agent + document combination; the error message includes the running execution's ID) / `RESOURCE_EXHAUSTED` (the workspace's AI credits are exhausted).
 
 <ResponseExample>
 ```js

@@ -1,0 +1,387 @@
+---
+title: "Reference"
+description: "Field-level reference for Velt full self-hosting: release registry, umbrella manifest schema, trust verification, deployment profiles, the SDK selfHosted config, console runtime config, and acceptance criteria."
+---
+
+Field-level reference for the self-hosting release contract: registry layout, umbrella manifest, deployment profiles, runtime config shapes, and trust verification.
+
+<Info>
+  **New here?** Start with the [Overview](/self-hosting/full/overview) for concepts, then the [Get Started](/self-hosting/full/gcp/overview) page. Execute steps with the [Install](/self-hosting/full/gcp/install) and [Upgrade](/self-hosting/full/gcp/upgrade) guides. When those guides and this Reference disagree on *shapes and contracts*, **this Reference wins**.
+</Info>
+
+## Release registry
+
+All customer-facing artifacts live in one public Artifact Registry repo (anonymous read):
+
+```
+us-docker.pkg.dev/velt-sdk/velt-releases/
+```
+
+| Artifact | Tag / ref | Contents |
+| --- | --- | --- |
+| `velt-functions` | `<X.Y.Z>`, digest | Backend container image (cosign-signed) |
+| `velt-backend-module` | `<X.Y.Z>` | Terraform module archive + compiled deployment-profiles CLI |
+| `velt-console-dist` | `<consoleVersion>` | Console static bundle tarball |
+| `velt-sdk-dist` | `<sdkVersion>` | Pristine `@veltdev/sdk` npm tarball (testedVersion) |
+| `velt-selfhost-manifest` | `<X.Y.Z>` (immutable), `latest` (mutable) | Umbrella manifest JSON (cosign-signed) |
+| `velt-selfhost-index` | `latest` (mutable) | Enumerates published releases (newest first) |
+
+Pull with [`oras`](https://oras.land). Non-image artifacts are OCI artifacts; the image is a normal container.
+
+**Discovery vs trust:** mutable tags (`latest`) are for discovery only. Always resolve to a digest and verify the cosign signature before deploying.
+
+```bash
+RELEASE_REGISTRY="us-docker.pkg.dev/velt-sdk/velt-releases"
+
+oras pull -o . "$RELEASE_REGISTRY/velt-selfhost-index:latest"       # list versions
+oras pull -o . "$RELEASE_REGISTRY/velt-selfhost-manifest:0.9.4"   # pin a release
+# or: .../velt-selfhost-manifest:latest
+```
+
+---
+
+## Umbrella version semantics
+
+`selfHostVersion` (e.g. `0.9.4`) is the customer-visible release number.
+
+| Bump | Meaning |
+| --- | --- |
+| **Major** | Breaking customer deployment contract (Terraform vars, container env, console config `schemaVersion`, provision-cli flags). Read migration notes before upgrading. |
+| **Minor** | New modules/functions/features; backwards-compatible `terraform apply`. |
+| **Patch** | Fixes, base-image security rebuilds, or single-component bumps (unchanged components keep prior pins). |
+
+Component versions **do not** need to equal the umbrella version (a console-only fix can ship as self-host `1.2.1` pinning console `1.2.1` + image `1.2.0`).
+
+**Immutability:** a given `velt-selfhost-manifest:<X.Y.Z>` is never rewritten. Fixes publish a new patch version.
+
+**Migration-free contract (current):** releases do not require customer-side data migrations. If that ever changes, release notes and the manifest call it out explicitly.
+
+---
+
+## Manifest schema (`schemaVersion: 2`)
+
+```jsonc
+{
+  "schemaVersion": 2,
+  "selfHostVersion": "0.9.4",
+  "releasedAt": "2026-07-22T10:00:00.000Z",
+  "registry": "us-docker.pkg.dev/velt-sdk/velt-releases",
+  "backend": {
+    "image": "us-docker.pkg.dev/velt-sdk/velt-releases/velt-functions:0.9.4",
+    "digest": "sha256:…",
+    "imageByDigest": "us-docker.pkg.dev/velt-sdk/velt-releases/velt-functions@sha256:…",
+    "terraformRef": "container-v0.9.4",
+    "moduleRef": "us-docker.pkg.dev/velt-sdk/velt-releases/velt-backend-module:0.9.4",
+    "moduleSha256": "…",
+    "knownFindings": [                    // optional — signed accepted scan findings
+      {
+        "id": "CVE-…",
+        "package": "…",
+        "severity": "CRITICAL",
+        "fixAvailable": false            // publisher refuses fixAvailable: true
+      }
+    ]
+  },
+  "console": {
+    "version": "…",
+    "bundleRef": "us-docker.pkg.dev/velt-sdk/velt-releases/velt-console-dist:…",
+    "sha256": "…",
+    "configSchemaVersion": 1              // must match Terraform-emitted console config
+  },
+  "sdk": {
+    "package": "@veltdev/sdk",
+    "testedVersion": "6.0.0",
+    "minVersion": "5.8.0",
+    "bundleRef": "us-docker.pkg.dev/velt-sdk/velt-releases/velt-sdk-dist:6.0.0",
+    "sha256": "…"
+  },
+  "releaseNotes": "https://docs.velt.dev/self-hosting/releases/v0.9.4"
+}
+```
+
+### Field rules
+
+| Field | Rule |
+| --- | --- |
+| `schemaVersion` | Consumers must tolerate unknown additive fields. Renames/removals bump the schema (v1 to v2 replaced GCS URLs with registry refs). |
+| `backend.digest` / `imageByDigest` | What Terraform and image copy must pin. Prefer digest over tag. |
+| `backend.moduleSha256` | Hard-fail the install if the pulled module archive doesn't match. |
+| `backend.knownFindings` | Optional. Customer scan sign-off diffs *your* Trivy/Artifact Analysis output against this signed list. |
+| `console.configSchemaVersion` | Cross-repo gate: must equal what the backend Terraform emits (`velt-console-config.json`). |
+| `sdk.testedVersion` | Default install pin (also available as `velt-sdk-dist`). |
+| `sdk.minVersion` | Oldest SDK the backend still supports; `min ≤ tested`. Non-tested pins may use npm instead of the registry tarball. |
+
+### Index artifact
+
+```jsonc
+{
+  "schemaVersion": 2,
+  "releases": [
+    {
+      "selfHostVersion": "0.9.4",
+      "releasedAt": "…",
+      "manifestRef": "us-docker.pkg.dev/velt-sdk/velt-releases/velt-selfhost-manifest:0.9.4"
+    }
+  ]
+}
+```
+
+Sorted newest-first by semver.
+
+### Schema version 1 (legacy)
+
+Older manifests used GCS URLs (`moduleUrl` / `bundleUrl`) instead of registry refs.
+**New installs must use `schemaVersion: 2`.** If you encounter a v1 manifest, contact Velt.
+
+---
+
+## Trust model
+
+### Verify the manifest (mandatory)
+
+```bash
+RELEASE_REGISTRY="us-docker.pkg.dev/velt-sdk/velt-releases"
+TAG="0.9.4"   # or latest
+
+MANIFEST_DIGEST=$(oras manifest fetch --descriptor \
+  "$RELEASE_REGISTRY/velt-selfhost-manifest:$TAG" \
+  | python3 -c "import json,sys;print(json.load(sys.stdin)['digest'])")
+
+cosign verify \
+  --certificate-identity-regexp 'https://github\.com/[^/]+/shared-firebase-function/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "$RELEASE_REGISTRY/velt-selfhost-manifest@$MANIFEST_DIGEST"
+```
+
+The certificate identity is Velt's GitHub Actions OIDC signer for this release pipeline
+(repo path appears in the regex by design: you do not need access to that repository).
+Only deploy releases that verify successfully.
+
+### Trust chain
+
+```
+cosign(manifest@digest)
+  ├─ backend.digest          → cosign(image@digest) independently
+  ├─ backend.moduleSha256    → sha256 of pulled module tarball
+  ├─ console.sha256          → sha256 of console-dist tarball
+  └─ sdk.sha256              → sha256 of sdk tarball (testedVersion)
+```
+
+Optional SBOM attestations on console/SDK artifacts (SPDX via cosign) are available for infosec inventory via `cosign verify-attestation`.
+
+### Image scan sign-off
+
+After copying the image into **your** registry, re-scan it. Diff CRITICAL/HIGH findings against `backend.knownFindings`. Fixable findings (`fixAvailable: true`) are never accepted in a published manifest. If you see one, stop and contact Velt.
+
+---
+
+## Deployment profiles
+
+Customers pick a **curated profile**, then optionally opt in modules. There is no per-function control plane.
+
+### Curated profiles
+
+| Profile | Modules included |
+| --- | --- |
+| `core` | `core` |
+| `core+recording` | `core`, `recorder-media` |
+| `core+ai+agents` | `core`, `ai`, `agents` |
+| `full` | `core`, `rest-api`, `recorder-media`, `ai`, `agents`, `huddle-webrtc` |
+
+### Module catalog
+
+| Module | Availability | Role |
+| --- | --- | --- |
+| `core` | always on | Auth, data plane, workspace, notifications, agents runtime, analytics/debugger backends, console backend, index tooling |
+| `rest-api` | selectable | `*apibe` REST dispatchers, GDPR workers, document migration / folder-move workers |
+| `recorder-media` | selectable | Recording, Whisper, screenshots, related tools |
+| `ai` | selectable | AI completion / chat Cloud Functions (BYO LLM keys) |
+| `agents` | selectable | Additional agents surfaces beyond the runtime already in `core` (profile `core+ai+agents`) |
+| `huddle-webrtc` | selectable | ICE / huddle (`getIceServers`) |
+| `integrations-workflow` | off by default | Workflow engine + connectors |
+| `migrations` | off by default | Operational migration / data tooling (often useful with the full console) |
+
+### Opt-in
+
+Pass comma-separated module ids at install time (Terraform / guide `OPT_IN_MODULES`), e.g. `migrations,ai`. Only modules from the catalog above are valid: the CLI rejects unknown ids.
+
+### `dataRegions` (optional)
+
+Regional `setencrypteddata*` variants can be filtered. Omit the key for the default "all catalog regions" shape; `[]` and omitted are **different** fleets, so never coalesce them when generating SDK config.
+
+### Emitted profile document
+
+Terraform / the deployment-profiles CLI writes `velt-deployment-profile.json` (v1):
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "profile": "core",
+  "optInModules": ["migrations"],
+  "enabledModules": ["core", "migrations"],   // resolved closure — source of truth
+  "provisionedFunctions": ["validateclient", "…"],
+  "dataRegions": null                          // or string[]
+}
+```
+
+Console and SDK consume **`enabledModules` verbatim**, and never re-derive the dependency closure.
+
+---
+
+## SDK `selfHosted` config
+
+Generated during install (Phase 5.1) as `velt-selfhosted-config.json`. Contains **no secrets**, only public URLs, web-app `firebaseConfig`, and the module list.
+
+```jsonc
+{
+  "strict": true,
+  "deploymentProfile": ["core", "rest-api", "ai"],   // === enabledModules from Terraform
+  "firebaseConfig": {
+    "apiKey": "…",
+    "authDomain": "…",
+    "projectId": "…",
+    "storageBucket": "…",
+    "messagingSenderId": "…",
+    "appId": "…",
+    "databaseURL": "…"
+  },
+  "firebaseNotificationsDatabaseURL": "https://<project>-notifications.firebaseio.com",
+  "cloudFunction": {
+    "validateClient": "https://…run.app",
+    "sdkProxy": "https://…/v2/core/a",
+    "setEncryptedData": "https://…",
+    "getNotificationsForDocuments": "https://…",
+    "getPlanDetails": "https://…",
+    "getAllowedDocuments": "https://…",
+    "sa": "https://…"
+    // Module-gated keys added only when provisioned, e.g.:
+    // "chatgptCompletion", "getIceServers", "whisperTranscription"
+  }
+  // "dataRegions": ["europe-west1"]   // only if tfvars set it — mirror verbatim
+}
+```
+
+### Semantics
+
+| Field | Behavior |
+| --- | --- |
+| `strict: true` | Unspecified endpoints resolve to `velt://self-hosted-disabled/<name>` (zero egress). Missing **core** endpoints are reported once via `console.error`. |
+| `strict: false` / omitted | Unspecified endpoints fall back to the SDK build's SaaS defaults, which is **not** acceptable for full self-hosting. |
+| `deploymentProfile` | Must be the resolved `enabledModules` array. Endpoints for modules absent from this list are inert even if a URL were injected. |
+| `cloudFunction.*` | Absolute base URLs (Cloud Run). No `*.cloudfunctions.net` assumption. |
+| `cloudFunction.setEncryptedData` | Single URL collapses the SaaS multi-region split into one endpoint on self-host. |
+| `firebaseConfig` | Merged over SDK env defaults (injected keys win). Use the Terraform-emitted web app config, **not** the console-patched copy whose `authDomain` was rewritten for the console host. |
+
+### App wiring
+
+```ts
+config: {
+  proxyDomain: 'https://static.example.com',  // origin only
+  version: '<sdk.testedVersion>',             // path /lib/sdk@<version>/velt.js
+  selfHosted: { /* object above */ }
+}
+```
+
+CDN serving requirements (CORS, MIME, path shape): see the "Wire your app" step in [Get Started on GCP](/self-hosting/full/gcp/overview).
+
+---
+
+## Console runtime config
+
+Self-host console builds load **same-origin** `/velt-console-config.json` before bootstrap. Terraform emits this file; the install guide deploys it next to the static bundle.
+
+Minimum validity (fetch must be 200 + JSON with non-empty):
+
+- `firebaseConfig.apiKey`
+- `firebaseConfig.projectId`
+- `firebaseConfig.appId`
+- `firebaseConfig.databaseURL`
+
+Also carries endpoint overrides (`sendLoginLink`, `aiChat`, and others), `enabledModules`, and self-host flags. Fail-soft: if the fetch fails or the payload is invalid, the app boots on build defaults and logs one error. It never falls open to Velt SaaS URLs (self-host builds ship with those stripped).
+
+`configSchemaVersion` inside the bundle's `console-version.json` must match the backend-emitted schema (pinned in the umbrella manifest as `console.configSchemaVersion`).
+
+---
+
+## State file contract
+
+`velt-selfhost-state.json` (working directory or config repo) is the resume and handoff record for Install/Upgrade.
+
+```jsonc
+{
+  "guideVersion": 1,
+  "release": { /* full verified manifest */ },
+  "inputs": {
+    "projectId": "",
+    "region": "us-central1",
+    "profile": "core",
+    "optInModules": [],
+    "ownerEmail": "",
+    "consoleBase": "",
+    "cdnBase": ""
+  },
+  "phases": {
+    "0-preflight": "pending|done",
+    "1-project-bootstrap": "pending|in-progress|done",
+    "2-backend": "…",
+    "3-workspace": "…",
+    "4-console": "…",
+    "5-sdk-cdn": "…",
+    "6-acceptance": "…"
+  },
+  "artifacts": {
+    "moduleDir": "",
+    "imageRef": "",           // customer-registry ref, pinned BY DIGEST
+    "serviceUrls": {},
+    "bootstrapResultPath": "", // SECRET — path only
+    "selfHostedConfigPath": "",
+    "consoleUrl": "",
+    "sdkCdnPath": ""
+  },
+  "humanSteps": {
+    "billing": "pending|done",       // link a billing account on the GCP project
+    "oauthClient": "pending|done",
+    "infosecScan": "pending|done|waived",
+    "dnsRecord": "pending|done|n/a",
+    "signInTest": "pending|done"
+  },
+  "log": [{ "ts": "…", "phase": "…", "note": "…" }]
+}
+```
+
+Store secret **values** in your secret manager; record only paths and references here. On upgrade, replace `release` only after the upgrade completes so an interrupted run still knows the installed version.
+
+---
+
+## Backend module archive contents
+
+Pulled from `backend.moduleRef`, verified with `backend.moduleSha256`:
+
+| Path | Purpose |
+| --- | --- |
+| `terraform/` | Blueprint (no local state / emitted artifacts) |
+| `functions/lib/` | Compiled deployment-profiles CLI for Terraform `external` data. Node ≥ 20, no `npm install` on the customer side |
+
+Install/Upgrade guides are **not** packed into the archive. Use the copies on this docs site.
+
+---
+
+## Acceptance criteria (definition of done)
+
+A deployment is complete only when all hold:
+
+1. Console sign-in as a seeded admin lands on the dashboard with the workspace + keys.
+2. App loads `velt.js` + chunks from **your** CDN (nothing from `cdn.velt.dev`); `window.Velt.version` matches the pin.
+3. Creating a comment in the app persists and appears in the console data browser.
+4. Network audit on app + console sessions: **no** requests to `velt.dev` or other Velt-owned hosts.
+
+---
+
+## Related documents
+
+| Document | Role |
+| --- | --- |
+| [Overview](/self-hosting/full/overview) | Concepts and architecture |
+| [Get Started](/self-hosting/full/gcp/overview) | The short path for a first deployment |
+| [Install](/self-hosting/full/gcp/install) | Greenfield procedure |
+| [Upgrade](/self-hosting/full/gcp/upgrade) | Delta upgrade procedure |

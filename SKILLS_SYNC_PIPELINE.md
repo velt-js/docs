@@ -12,7 +12,7 @@ Every push to `velt-js/docs/main` touching one of the watched paths runs `.githu
 
 ```
 async-collaboration/**       realtime-collaboration/**
-api-reference/rest-apis/**   self-host-data/**
+api-reference/rest-apis/**   self-hosting/partial/**
 security/**                  webhooks/**
 get-started/**               backend-sdks/**
 ui-customization/**          permission-management/**

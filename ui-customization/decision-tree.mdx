@@ -1,0 +1,175 @@
+---
+title: "Choosing an approach"
+sidebarTitle: "Decision tree"
+description: "Choose the right UI customization layer for each Velt surface using a step-by-step decision tree."
+---
+
+**Run this decision tree for every design, feature by feature.**
+
+There is no single "best" layer, but there **is** a default order to reach for them. Cheaper layers (CSS, wireframes) are faster and upgrade-safe; richer layers (primitives, headless) give more control but you do more work and maintain more.
+
+> **Three golden principles**
+> 1. **Use the cheapest layer that can express the design.** Reach in this order: **CSS → Wireframes → Primitives → Headless**. CSS is always available and layers on top of every approach.
+> 2. **Wireframes are the default for structural customization.** Escalate to primitives only for your own UI library or interactivity; headless is the last resort.
+> 3. **You can mix layers, even on the same surface.** One caveat: on **anchored** surfaces (pin dialog, pins, bubbles, cursors), dropping below wireframes forfeits Velt's positioning engine; see [`Behaviors`](/ui-customization/reference/behaviors).
+
+---
+
+## How to use this
+
+Split the design into **features/surfaces** (comment dialog, comments sidebar, comment pin, notifications panel, …) and walk the questions below **once per surface**; stop at the first "yes". Different surfaces can land on different layers, and one surface can mix layers; that's expected. *Not sure which Velt component a design element is?* Match it first in [`Component definitions`](/ui-customization/reference/component-definitions).
+
+---
+
+## The questions (per feature)
+
+**Q1: Is the only difference colors, spacing, fonts, radius, or shadows?**
+(The layout and which elements appear are basically Velt's default.)
+→ **CSS.** Theme with `--velt-*` variables; override classes with `!important`. See [`CSS`](/ui-customization/styling).
+
+**Q2: Does the design change the structure/layout (custom header, reordered parts, custom thread-card, custom empty state) while the features stay the same, with no interactive components of yours inside?**
+→ **Wireframes** (+ CSS). **This is the default for structural customization: prefer it.** Velt fetches the data, loops the threads/comments, and wires each slot's behavior; you just supply layout markup. See [`Wireframes`](/ui-customization/layout).
+
+**Q3: Do you need full control: your own UI component library, your own interactivity/state, or to compose Velt's building blocks yourself and place them anywhere in your tree?**
+→ **Primitives** (+ CSS, + a leaf's wireframe where needed). You write the React (loop annotations, pass `annotation-id`, loop comments, pass each `comment`); you compose the building-block components and their sub-components into any layout; you wrap them in any UI library. More effort, most control. See [`Primitives`](/ui-customization/primitives).
+
+**Q4: Does nothing Velt renders fit: you must own 100% of the UI, or render on a surface Velt can't draw into (PDF, canvas, video timeline)?**
+→ **Headless** (last resort). Data + actions via hooks; you build everything. See [`Headless`](/ui-customization/headless).
+
+**Still unsure between wireframes and primitives?** Default to **wireframes** and only switch to primitives when you hit one of the Q3 triggers (UI library, custom interactivity, leaf-deep changes, arbitrary placement).
+
+---
+
+## Flowchart
+
+```text
+                    ┌─────────────────────────────────────────────┐
+                    │  For ONE feature/surface of the design       │
+                    └──────────────────────┬──────────────────────┘
+                                           ▼
+              Only colors / spacing / fonts / radius differ?
+                          │ yes ──────────────► CSS
+                          │ no
+                          ▼
+        Custom STRUCTURE/LAYOUT, same features, no need for your
+        own interactive/UI-library components inside?
+                          │ yes ──────────────► WIREFRAMES (+ CSS)   ◄── default
+                          │ no
+                          ▼
+        Need full control: own UI library, own interactivity,
+        compose building blocks yourself, place anywhere, or
+        change a piece deeper than its wireframe allows?
+                          │ yes ──────────────► PRIMITIVES (+ CSS, + leaf wireframes)
+                          │ no
+                          ▼
+        Must own 100% of the UI, or render where Velt can't draw?
+                          │ yes ──────────────► HEADLESS (last resort)
+                          │ no  ──────────────► re-check Q1-Q4
+```
+
+---
+
+## After you pick: eight quick checks
+
+Q1-Q4 pick the **primary layer**. These checks refine it; run through them once per surface.
+
+<AccordionGroup>
+<Accordion title="Is a piece the design shows hidden by default?">
+Many features are **off by default** (reply avatars, priority, minimap, `@here`, device indicator, comment index / pin number, sidebar-button-on-dialog, format toolbar, …). If the design shows one, **enable it with its prop** (e.g. `priority`, `replyAvatars`, `commentIndex`, `sidebarButtonOnCommentDialog`): look up the exact prop in [`Feature flags`](/ui-customization/reference/feature-flags). Enabling a documented feature is **not** a hack and is **not** a reason to escalate layers.
+</Accordion>
+<Accordion title="Does the design surface custom data?">
+Custom **statuses / priorities / categories / reactions** → configure `customStatus` / `customPriority` / `customCategory` / `customReactions` ([`Component config`](/ui-customization/reference/component-config)). The design surfaces **your app's own data** in the comment UI → that's [context](/ui-customization/context). Neither changes the layer: they're data config layered on top.
+</Accordion>
+<Accordion title="Where do your UI-library components sit?">
+If the design is built from your own component library, *where* those components sit decides wireframe vs primitive. Static shell + classes only → wireframe is OK; must stay interactive → **primitive**. See the [next section](#the-ui-component-library-question-dont-miss-this).
+</Accordion>
+<Accordion title="Mixing layers on one surface?">
+A surface can combine layers: wireframe most of it + use a **leaf's** wireframe for one piece; or a **primitive** for the surface + a leaf wireframe for one part; + CSS on either. Note the per-piece split, and keep **one** `<VeltWireframe>` and **one** stylesheet globally ([`Combining approaches`](/ui-customization/combining-approaches)).
+</Accordion>
+<Accordion title="Do you need to control show/hide yourself?">
+If the design requires **your** logic to decide when a piece appears (not Velt's internal condition), that's a **primitive** with `defaultCondition={false}`: wireframes have **no** equivalent ([`Primitives`](/ui-customization/primitives)). This can flip a Q2 "wireframe" answer to a primitive; resolve it here.
+</Accordion>
+<Accordion title="Shadow DOM: will your class CSS reach the surface?">
+- Wireframing a surface's **ROOT** wireframe (e.g. `VeltCommentDialogWireframe`, `VeltCommentPinWireframe`) → Velt **auto-removes that surface's shadow DOM** → your class CSS reaches it, no flag needed.
+- Wireframing **only a nested / leaf** slot (no root wireframe for that surface) → shadow is **not** removed → set `shadowDom={false}` (or the per-surface flag / `injectCustomCss`) for class CSS.
+- **CSS variables** (`--velt-*`) and **inline `style=""`** always work, shadow or not.
+See [`CSS`](/ui-customization/styling#make-your-css-reach-velt). (Which wireframes are roots: the per-surface map in [`Component catalog`](/ui-customization/reference/component-catalog).)
+</Accordion>
+<Accordion title="Is the surface anchored? (positioning)">
+If the surface is **anchored** (pin dialog, pins, bubbles, cursors, minimap), Velt's host owns its on-page position: the dialog component itself only *requests* re-anchoring and has no position input. **Wireframes keep that positioning for free; primitives/headless mean *you* own it**, which for a pin-anchored dialog may not even be feasible via the public API. Treat this as a strong reason to stay at wireframes; escalate only after a positioning path is *verified* feasible. Statically-placed surfaces have no penalty. See [`Behaviors`](/ui-customization/reference/behaviors).
+</Accordion>
+<Accordion title="Confirm the data exists">
+Before concluding a goal needs **primitives/headless** or is **not possible**, confirm in [`Data models`](/ui-customization/reference/data-models) that the required fields/events exist. If they do → feasible via headless at worst. If they're a documented **absence** → genuinely not achievable client-side. Name the first layer that achieves the goal (default behavior → prop/config → wireframe → primitive → headless) and go with that. If these docs don't cover it, check against the live SDK in a running app before declaring it impossible.
+</Accordion>
+</AccordionGroup>
+
+> **By the end you should know, per surface:** the layer (or mix), which feature flags to enable, any custom-data config, where your UI-library components sit, shadow-DOM handling, and whether the surface is anchored. With those answered, the build is mechanical.
+
+---
+
+## The UI-component-library question (don't miss this)
+
+If your design is built from **your own component library** (MUI, shadcn/ui, Ant, Radix, Chakra, Tailwind UI…), where those components live changes everything:
+
+| Where your library components sit | Allowed? | Why |
+|---|---|---|
+| **Around / next to** a Velt **primitive** (`<MuiCard><VeltCommentDialog/></MuiCard>`) | ✅ Yes | Primitives are real React components; your library renders normally beside them. |
+| **As interactive components composed with primitives** | ✅ Yes | You own the React tree: full interactivity. |
+| **As the visual shell** inside a **wireframe** slot (static components + classes, no behavior) | ⚠️ Static only | Velt clones the markup: your library's **static rendered output + CSS classes** survive, but `onClick`/state/hooks **do not run**. |
+| **As interactive components** inside a **wireframe** slot (needing their own click/state) | ❌ No | Cloning strips React interactivity. Use **primitives** instead. |
+| **Anywhere**, in a **headless** build | ✅ Yes | You render everything yourself; Velt only supplies data/actions. |
+
+**Rule of thumb:** *want to reuse your interactive design-system components inside the collaboration UI?* → **Primitives** (or Headless). Not wireframes.
+
+---
+
+## Comparison matrix
+
+| | **CSS** | **Wireframes** | **Primitives** | **Headless** |
+|---|---|---|---|---|
+| **Reach order** | 1st (theming) | 2nd (default structural) | 3rd (full control) | 4th (last resort) |
+| **Design control** | Theme only | High (any layout/structure) | Highest short of headless | Total |
+| **Effort** | Lowest | Low | Medium-High | Highest |
+| **Who does data/looping/wiring** | Velt | **Velt** (you just lay out slots) | **You** (fetch, loop, pass props) | You (from hooks) |
+| **Velt-managed behavior** | All | All (via slots) | All (you compose it) | None: you wire actions |
+| **Custom layout/structure** | ❌ | ✅ (slots) | ✅ (sub-components; leaf via wireframe) | ✅ |
+| **Use your UI library** | n/a | ⚠️ static components & classes only (no behavior) | ✅ fully | ✅ fully |
+| **Your own interactivity inside** | n/a | ❌ (cloned markup) | ✅ | ✅ |
+| **Upgrade safety** | Highest | High | Medium | Lowest |
+| **Maintenance burden** | Lowest | Low | Medium-High | Highest |
+| **Reference page** | [`css-variables`](/ui-customization/reference/css-variables) · [`css-classes`](/ui-customization/reference/css-classes) | [`wireframe-components`](/ui-customization/reference/wireframe-components) · [Template Variables](/ui-customization/template-variables) | [`component-catalog`](/ui-customization/reference/component-catalog) · [`component-config`](/ui-customization/reference/component-config) | [`hooks`](/ui-customization/reference/hooks) |
+
+---
+
+## When a layer "breaks down" → escalate
+
+Signs you've outgrown your current layer:
+
+- **CSS → Wireframes:** you're writing `display:none` to hide parts, or you need to reorder/add/remove parts or restructure the header/composer/thread-card layout.
+- **Wireframes → Primitives:** you need your **own interactive component** inside the UI, your **own UI component library** there, to **place Velt pieces arbitrarily** in your tree, custom data composition/conditionals beyond `velt-if`, or to customize a **leaf** piece more than its slot allows. (For a single leaf you can stay in wireframes and use that leaf's wireframe; switch to primitives when the *whole surface* needs that level of control.)
+- **Primitives → Headless:** Velt can't render where you need it (PDF/canvas), or you want to own 100% of the data→view pipeline.
+
+And the reverse: **don't over-escalate**:
+
+- Went **primitives** just to restructure layout that wireframe slots already expose? Wireframes are less work.
+- Went **headless** just to recolor or reflow? CSS or wireframes would do it.
+
+---
+
+## Worked examples
+
+| Design intent | Chosen layer(s) | Why |
+|---|---|---|
+| Velt sidebar, brand colors + tighter spacing | **CSS** | Only theme differs. |
+| Custom dialog with a custom header, thread card, and empty state | **Wireframes + CSS** | Structure changes, features stay the same. |
+| App-native page-mode sidebar (custom cards, attachments, assign rows) anchored to page elements | **Wireframes** | Deep slot customization; Velt keeps behavior, data, and looping. |
+| Comment UI rendered inside an app built on a component library, composed with that library | **Primitives + CSS** | Needs the UI library + custom composition. |
+| A fully bespoke, interactive comment panel built from your own components | **Primitives** | Full control + own interactivity. |
+| Unread-count badge in your own app header, no Velt UI | **Headless** | Data only: `useUnreadCommentCountOnCurrentDocument`. |
+| Comments rendered as overlays on a PDF / canvas / video timeline | **Headless** | No Velt UI fits; render from `useCommentAnnotations`. |
+
+Picked your layer or layer mix? Head to [Setup](/ui-customization/setup), then open the matching approach page.
+
+<Tip>
+**Have this design in Figma?** The [UI Customization Plugin](/get-started/ui-customization-plugin) for Cursor and Claude Code turns a Figma design into verified Velt UI customization (comments and notifications today): it runs this decision tree on your design surface-by-surface, then builds and verifies each result.
+</Tip>

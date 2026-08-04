@@ -14,176 +14,23 @@ This is a core customization concept: if your design shows app-specific info in 
 
 ## Attach context
 
-Every method below lands on the same place, `annotation.context`, so wireframes read them all the same way. Pick by **when you know the value**:
+Every method lands on the same place, `annotation.context`, so your wireframes read them all the same way. Pick by **when you know the value**, then follow the link for params, examples, and merge behavior:
 
 | Method | Use when |
 |---|---|
-| [`context` prop](#the-context-prop) | You know the value when you render the component. The common case. |
-| [`setContextProvider()`](#setcontextprovider) | The value depends on the document or location, and every new comment should get it. |
-| [`addContext()`](#addcontext) | The value is only known at the moment the comment is created. |
-| [`updateContext()`](#updatecontext) | The comment already exists and its context changed. |
-| [`setContextInPageModeComposer()`](#setcontextinpagemodecomposer) | You're driving the page-mode composer yourself. |
+| [`context` prop](/async-collaboration/comments/customize-behavior#context) | You know the value when you render the component. The common case. |
+| [`setContextProvider()`](/async-collaboration/comments/customize-behavior#setcontextprovider) | The value is derived from the document or location, and every new comment should get it. |
+| [`addContext()`](/async-collaboration/comments/customize-behavior#addcontext) | The value is only known at the moment the comment is created. |
+| [`updateContext()`](/async-collaboration/comments/customize-behavior#updatecontext) | The comment already exists and its context changed. |
+| [`setContextInPageModeComposer()`](/async-collaboration/comments/customize-behavior#setcontextinpagemodecomposer) | You are driving the page-mode composer yourself. |
 
-Full API detail for all five, including params and merge behavior: [Metadata](/async-collaboration/comments/customize-behavior#metadata).
+Three props do the work on the component side:
 
-### The `context` prop
+- **`context`**: your object, any keys. Lands on `annotation.context`.
+- **`targetElementId`**: ties the comment or bubble to a DOM element with that `id`, so the bubble renders on that row. This is how you scope a comment to one element.
+- **`contextInPageModeComposer`**: routes the tool's context into the page-mode composer flow ([reference](/async-collaboration/comments/customize-behavior#contextinpagemodecomposer)).
 
-Pass your object on the component that creates the comment. `VeltCommentTool`, `VeltCommentBubble`, `VeltCommentPin`, `VeltCommentComposer`, and `VeltInlineCommentsSection` all accept it, along with the sidebar and dialog components (full list: [`Props`](/ui-customization/reference/props)).
-
-<Tabs>
-<Tab title="React / Next.js">
-```tsx
-const targetElementId = `question-${question.id}`;   // matches the DOM id of the element
-
-<VeltCommentTool
-  contextInPageModeComposer={true}
-  targetElementId={targetElementId}                  // scopes the comment to that element
-  context={{ questionId: question.id, questionNumber: question.number, questionTitle: question.title }}
-/>
-```
-</Tab>
-<Tab title="Other Frameworks">
-```html
-<!-- target-element-id matches the DOM id of the element -->
-<velt-comment-tool
-  context-in-page-mode-composer="true"
-  target-element-id="question-1"
-  context='{"questionId": "1", "questionNumber": 1, "questionTitle": "What is your role?"}'>
-</velt-comment-tool>
-```
-</Tab>
-</Tabs>
-
-- **`context`**: your object (any keys). Lands on `annotation.context`.
-- **`targetElementId`**: ties the comment/bubble to a DOM element with that `id`, so the bubble renders on that row.
-- **`contextInPageModeComposer`**: routes this context into the page-mode composer flow.
-
-Other domain shapes work the same: `context={{ title: step.label, scope: "step", stepId: step.id }}`, `context={{ device, mode }}`, and so on.
-
-<Tip>
-`contextOptions={{ partialMatch: true }}` changes how a component **matches** existing comments by context: with it, a comment matches when it contains all the fields you specified, ignoring extras. See [`ContextOptions`](/api-reference/sdk/models/data-models#contextoptions).
-</Tip>
-
-### `setContextProvider()`
-
-Register a function and Velt calls it for every new comment annotation, passing the `documentId` and optional `location`. Use it when context is derived rather than known at render time, so you don't have to repeat the prop on every component.
-
-<Tabs>
-<Tab title="React / Next.js">
-```tsx
-// Hook
-const { setContextProvider } = useSetContextProvider();
-useEffect(() => {
-  setContextProvider?.((documentId, location) => ({ dashboardId: documentId, view: location?.id }));
-}, [setContextProvider]);
-
-// API Method
-const commentElement = client.getCommentElement();
-commentElement.setContextProvider((documentId, location) => ({ dashboardId: documentId, view: location?.id }));
-```
-</Tab>
-<Tab title="Other Frameworks">
-```js
-const commentElement = Velt.getCommentElement();
-commentElement.setContextProvider((documentId, location) => ({
-  dashboardId: documentId,
-  view: location?.id,
-}));
-```
-</Tab>
-</Tabs>
-
-The function may return an object, `null`, `undefined`, or a Promise resolving to any of those, so you can skip adding context for some documents or locations.
-
-### `addContext()`
-
-The `addCommentAnnotationDraft` and `addCommentAnnotation` events carry an `addContext` method. Call it to attach context at the moment the comment is created, when the value depends on something you only know then (the current scroll target, the selected row, a live filter).
-
-<Tabs>
-<Tab title="React / Next.js">
-```tsx
-// Hook
-const event = useCommentEventCallback('addCommentAnnotation');
-useEffect(() => {
-  event?.addContext({ selectedRowId: getSelectedRowId() });
-}, [event]);
-
-// API Method
-const commentElement = client.getCommentElement();
-const subscription = commentElement.on('addCommentAnnotation').subscribe((event) => {
-  event.addContext({ selectedRowId: getSelectedRowId() });
-});
-subscription?.unsubscribe();
-```
-</Tab>
-<Tab title="Other Frameworks">
-```js
-const commentElement = Velt.getCommentElement();
-const subscription = commentElement.on('addCommentAnnotation').subscribe((event) => {
-  event.addContext({ selectedRowId: getSelectedRowId() });
-});
-subscription?.unsubscribe();
-```
-</Tab>
-</Tabs>
-
-### `updateContext()`
-
-Change the context on a comment that already exists, for example when the dashboard it lives on gets renamed. Pass `{ merge: true }` to patch the existing object; the default replaces it entirely.
-
-<Tabs>
-<Tab title="React / Next.js">
-```tsx
-// API Method (no hook)
-const commentElement = client.getCommentElement();
-commentElement.updateContext(annotationId, { questionTitle: newTitle }, { merge: true });
-```
-</Tab>
-<Tab title="Other Frameworks">
-```js
-const commentElement = Velt.getCommentElement();
-commentElement.updateContext(annotationId, { questionTitle: newTitle }, { merge: true });
-```
-</Tab>
-</Tabs>
-
-### `setContextInPageModeComposer()`
-
-When a comment tool is clicked, Velt fires a `commentToolClick` event carrying that tool's `context` and `targetElementId`. Push it into the shared page-mode composer, then focus it.
-
-<Tabs>
-<Tab title="React / Next.js">
-```tsx
-// Hook
-const commentUtils = useCommentUtils();
-const evt = useCommentEventCallback('commentToolClick');
-useEffect(() => {
-  if (commentUtils && evt) {
-    commentUtils.setContextInPageModeComposer({ context: evt.context, targetElementId: evt.targetElementId });
-    commentUtils.focusPageModeComposer();
-  }
-}, [evt]);
-
-// after submit / on cancel:
-commentUtils.clearPageModeComposerContext();
-```
-</Tab>
-<Tab title="Other Frameworks">
-```js
-const commentElement = Velt.getCommentElement();
-const subscription = commentElement.on('commentToolClick').subscribe((event) => {
-  commentElement.setContextInPageModeComposer({ context: event.context, targetElementId: event.targetElementId });
-  commentElement.focusPageModeComposer();
-});
-
-// after submit / on cancel:
-commentElement.clearPageModeComposerContext();
-subscription?.unsubscribe();
-```
-</Tab>
-</Tabs>
-
-The three methods here are `setContextInPageModeComposer({ context, targetElementId })`, `focusPageModeComposer()`, and `clearPageModeComposerContext()`. Under the hood this is the `context` argument of `addComment(...)`. To get the tool's context into the composer automatically instead, set `contextInPageModeComposer` on the tool ([above](#the-context-prop)).
+`VeltCommentTool`, `VeltCommentBubble`, `VeltCommentPin`, `VeltCommentComposer`, and `VeltInlineCommentsSection` accept `context`, as do the sidebar and dialog components. Per-component prop lists: [`Props`](/ui-customization/reference/props). To control how a component **matches** existing comments by context, see [`ContextOptions`](/api-reference/sdk/models/data-models#contextoptions).
 
 ## Read context in the wireframe
 
@@ -224,7 +71,7 @@ Context is readable via `{…}` tokens: display with `<VeltData field="…">`, b
 - [ ] Attached context by the method that matches when you know the value (prop, provider, create event, update, or page-mode composer).
 - [ ] Read it with the correct path prefix for the surface (`annotation.context.*` in the dialog, `context.*` in the page-mode composer, `focusedAnnotation.context.*` in the sidebar).
 - [ ] Gated context-dependent UI with `velt-if="{…context.key}"` so it only shows when present.
-- [ ] Cleared page-mode context after submit/cancel (`clearPageModeComposerContext()`).
+- [ ] Cleared page-mode context after submit/cancel ([`clearPageModeComposerContext()`](/async-collaboration/comments/customize-behavior#clearpagemodecomposercontext)).
 
 <Tip>
 **Have this design in Figma?** The [UI Customization Plugin](/get-started/ui-customization-plugin) for Cursor and Claude Code turns a Figma design into verified Velt UI customization (comments and notifications today): it can generate context-driven wireframes like these from your design.

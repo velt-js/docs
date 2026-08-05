@@ -58,7 +58,7 @@ A `urlPath` value with no scheme is normalized. Vercel's `payload.deployment.url
 The step output carries `agentExecutionStatus`, `agentResultsSummary`, `resolvedUrl`, `agentDurationMs`, and a `decision` of `approve` when the agent passed. Route on any of them with a [custom predicate](#custom-predicates).
 
 <Warning>
-  `blocking: true` and `resolutionPolicy` pass schema validation but are rejected at run time with `agent-blocking-not-supported`. To put a person in front of an agent's findings, place a `human` node downstream of the agent node instead.
+  `blocking: true` requires a sibling `resolutionPolicy` to pass schema validation, and the pair is then rejected at run time with `agent-blocking-not-supported`, for every agent id including `__mock__`. To put a person in front of an agent's findings, place a `human` node downstream of the agent node instead.
 </Warning>
 
 ### Human nodes
@@ -425,6 +425,10 @@ Any provider other than `velt` requires `authMode: "hmac"`.
 
 An `allowedEvents` gate fails closed. If the event name cannot be resolved, the event is dropped.
 
+<Note>
+  This endpoint takes **raw JSON**. Unlike the other REST endpoints, you do not wrap the payload in a `data` envelope, because external providers cannot reshape their outgoing bodies. The handler rate-limits per source, rejects oversized bodies at the boundary before parsing, and validates any URL values in the payload against an allowlist to block server-side request forgery.
+</Note>
+
 ### Scheduled (cron) trigger
 
 Declaring `schedule` starts runs on a cron cadence, for example a nightly audit.
@@ -527,6 +531,20 @@ Each delivery is deduplicated on the provider's delivery id, so duplicate delive
 ```
 
 `urlPath` resolves the just-deployed URL from the Vercel payload. It arrives without a scheme, so the engine normalizes it to `https://`.
+
+## Cancelling and overriding
+
+| Goal | Endpoint |
+| --- | --- |
+| Stop a whole run and all its in-flight steps | [Cancel Execution](/api-reference/rest-apis/v2/approval-engine/executions/cancel-execution) |
+| Stop one step, leaving its siblings running | [Cancel Step](/api-reference/rest-apis/v2/approval-engine/steps/cancel-step) |
+| Force a parked step to a decision | [Resolve Step](/api-reference/rest-apis/v2/approval-engine/steps/resolve-step) |
+
+Cancelling a run is a no-op on a run that already reached a terminal status. Successors of a cancelled step are never scheduled.
+
+Resolve Step has two flavors. `force-approve`, `force-reject`, `force-complete`, and `force-fail` are admin overrides for hung steps. `reviewer-approve` and `reviewer-reject` are reviewer actions, and they additionally require `actorId` to be one of the step's declared reviewers, or the call is rejected with `PERMISSION_DENIED`.
+
+For every approve or reject action the engine computes `decision`, `approved`, and `approvalReply` itself and writes them as authoritative. A caller-supplied `output` carrying those keys cannot override them, so you cannot record a rejection in the audit log while routing downstream edges as an approval. Other keys in `output` still pass through.
 
 ## Webhook delivery
 
@@ -656,6 +674,8 @@ All errors follow the standard envelope:
 
 ### Schema validation messages
 
+These are the literal `message` strings returned in the error envelope. The `APPROVAL_*` names used elsewhere on this page are internal rule identifiers, not values you will find in a response body.
+
 | Message | Trigger |
 | --- | --- |
 | `webhookUrl and webhookSecret must be provided together` | Dispatch supplied one but not the other. |
@@ -665,13 +685,13 @@ All errors follow the standard envelope:
 | `cannot set both reviewerIds and reviewers, use one` | Both populated. Use `reviewers[]`. |
 | `reviewer userIds must be unique` | Duplicate `userId` in `reviewers[]`. |
 | `reviewers must include at least one mandatory reviewer` | Every reviewer has `mandatory: false`. |
-| `APPROVAL_NOTIFICATION_EMAIL_REQUIRES_RECIPIENTS` | `channel: "email"` with no `recipients`. |
-| `APPROVAL_NOTIFICATION_SLACK_REQUIRES_TARGET` | `channel: "slack"` with no `slackTarget`. |
-| `APPROVAL_WEBHOOK_NODE_TOKEN_MODE_REQUIRES_HEADER` | `authMode: "token"` with no `authTokenHeader`. |
-| `APPROVAL_INBOUND_PROVIDER_REQUIRES_HMAC` | A non-`velt` provider using `authMode: "bearer"`. |
-| `APPROVAL_INBOUND_CUSTOM_PROVIDER_REQUIRES_SIGNATURE_FIELDS` | `provider: "custom"` with `hmac` but no `signatureHeader` or `signatureAlgorithm`. |
-| `APPROVAL_SCHEDULE_CRON_INVALID` | `cron` is not a parseable 5-field expression. |
-| `APPROVAL_SCHEDULE_TIMEZONE_INVALID` | `timezone` is not a valid IANA zone. |
+| `notification node with channel="email" requires a non-empty recipients array` | `channel: "email"` with no `recipients`. |
+| `notification node with channel="slack" requires a slackTarget (channel id or incoming-webhook URL)` | `channel: "slack"` with no `slackTarget`. |
+| `webhook node with authMode="token" requires authTokenHeader to be set` | `authMode: "token"` with no `authTokenHeader`. |
+| `inboundWebhook provider="github"/"vercel"/"custom" requires authMode="hmac"` | A non-`velt` provider using `authMode: "bearer"`. |
+| `inboundWebhook with provider="custom" and authMode="hmac" requires signatureHeader and signatureAlgorithm` | `provider: "custom"` with `hmac` but no `signatureHeader` or `signatureAlgorithm`. |
+| `schedule.cron must be a valid 5-field cron expression` | `cron` is not a parseable 5-field expression. |
+| `schedule.timezone must be a valid IANA timezone name (e.g. America/Los_Angeles)` | `timezone` is not a valid IANA zone. |
 
 ## Rate limiting
 

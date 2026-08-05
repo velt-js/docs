@@ -1,0 +1,111 @@
+---
+title: "Combining approaches (mix-and-match)"
+sidebarTitle: "Combining approaches"
+description: "Mix CSS, wireframes, primitives, and headless hooks safely across Velt UI surfaces."
+---
+
+The four layers are **not** an app-wide setting. You pick CSS, wireframes, primitives, or headless **per feature and per surface**, then layer CSS on top of everything for theming. Most real apps mix two or more, and different features landing on different layers is normal and correct.
+
+**Use it when** different features need different layers, which is the usual case. Run the [decision tree](/ui-customization/decision-tree) on each feature; its [worked examples](/ui-customization/decision-tree#worked-examples) show what a given design intent usually lands on. If one surface genuinely needs a single layer, go straight to that layer's page: [CSS](/ui-customization/styling), [Wireframes](/ui-customization/layout), [Primitives](/ui-customization/primitives), or [Headless](/ui-customization/headless).
+
+<Tip>
+Mixing is also the [UI Customization Plugin](/get-started/ui-customization-plugin)'s default: it picks the cheapest workable layer per surface, exactly like the decision tree.
+</Tip>
+
+## The rules
+
+One constraint governs mixing:
+
+<Warning>
+**Use one `<VeltWireframe>` registry in the whole app.** It can hold as many feature wireframes as you like. Multiple registries merge first-with-content-wins, which is order-dependent and conflict-prone.
+</Warning>
+
+Beyond that, the layers compose freely:
+
+- **CSS composes with everything.** `--velt-*` variables apply globally, so theming sits on top of any other layer.
+- **Different surfaces can use different layers.** A wireframed dialog and a plain primitive sidebar don't interfere.
+- **The same surface can use more than one layer.** You can render a `VeltCommentDialog` primitive *and* wireframe a single piece of that same dialog. Leaf pieces have no sub-components, so their wireframe is the only way to restructure them, which makes this combination necessary rather than exotic.
+
+Mixing doesn't suspend each layer's own rules: wireframe interactivity limits and headless cost still apply. Picking a layer *more expensive* than the design needs is the one real mistake here, and the [escalation signs](/ui-customization/decision-tree#when-a-layer-breaks-down--escalate) tell you when you've done it.
+
+## Common combinations
+
+| Combination | What it looks like |
+|---|---|
+| **CSS + Primitives** | Drop in Velt components, toggle features with props, wrap in your UI library, theme with `--velt-*`. |
+| **CSS + Wireframes** | Override the slots you need, theme the result with one stylesheet. The most common combination in practice. |
+| **Wireframes + Primitives** | Wireframe one surface and use another as a plain primitive. Or use a primitive on one surface and wireframe a leaf piece of it. |
+| **Wireframes + Headless** | Wireframe the visible comment UI, and use a read hook to render something in *your* chrome (unread badge, counts, a custom filter control). |
+| **Headless only** | No Velt UI at all; you render everything from hooks. |
+
+## A concrete mixed setup
+
+Dialog = **wireframe**, sidebar = **primitive**, badge = **headless**, all themed with **CSS**, one `<VeltWireframe>`.
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// 1) Global theme (CSS): applies to everything
+import "./velt/ui-customization/styles.css";
+
+// 2) One wireframe registry (custom dialog layout)
+<VeltCustomization />            {/* the single <VeltWireframe> */}
+
+// 3) Live feature components
+<VeltComments shadowDom={false} />               {/* renders dialogs via the wireframe */}
+<VeltCommentsSidebar shadowDom={false} />        {/* default sidebar = primitive */}
+
+// 4) A headless extra in your own header
+function HeaderBadge() {
+  // returns an object ({ count } | null): read .count, don't render the object
+  const unread = useUnreadCommentCountOnCurrentDocument();
+  return <span className="badge">{unread?.count ?? 0}</span>;
+}
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<!-- 1) Global theme (CSS): applies to everything -->
+<link rel="stylesheet" href="/velt/ui-customization/styles.css" />
+
+<!-- 2) One wireframe registry (custom dialog layout) -->
+<velt-wireframe style="display:none;">
+  <!-- your feature wireframes -->
+</velt-wireframe>
+
+<!-- 3) Live feature components -->
+<velt-comments shadow-dom="false"></velt-comments>
+<velt-comments-sidebar shadow-dom="false"></velt-comments-sidebar>
+
+<!-- 4) A headless extra in your own header -->
+<span id="badge" class="badge">0</span>
+
+<script>
+const commentElement = Velt.getCommentElement();
+// emits an object ({ count } | null): read .count
+const subscription = commentElement.getUnreadCommentCountOnCurrentDocument().subscribe((unread) => {
+  document.getElementById('badge').textContent = unread?.count ?? 0;
+});
+subscription?.unsubscribe();
+</script>
+```
+</Tab>
+</Tabs>
+
+In React, `VeltCustomization` is **your own** wrapper component: the single file that holds your `<VeltWireframe>` registry and CSS import, per the [recommended folder structure](/ui-customization/setup#set-up-the-folder-structure).
+
+## What it can and can't do
+
+| ✅ Combining can | ❌ Combining can't |
+|---|---|
+| Mix CSS, wireframes, primitives, and headless **per feature/surface** in one app | Use more than one `<VeltWireframe>` registry cleanly: keep it to exactly **one** per app |
+| Layer CSS theming on top of *any* other layer (variables apply globally) | Justify a layer **more expensive** than the design needs |
+| Use multiple layers on the **same surface** (e.g. primitive dialog + wireframe leaf) | Escape each layer's own rules: wireframe interactivity limits and headless cost still apply |
+| Pick the cheapest viable layer per piece via the [decision tree](/ui-customization/decision-tree) | |
+
+## Checklist
+
+- [ ] One `<VeltWireframe>` total.
+- [ ] Cheapest viable layer chosen per feature and per piece (ran the decision tree on each).
+- [ ] Each piece's layer chosen intentionally; same-surface mixing is fine.
+- [ ] One shared stylesheet for all `--velt-*` theming and `!important` overrides.

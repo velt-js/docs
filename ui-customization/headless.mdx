@@ -1,0 +1,228 @@
+---
+title: "Headless"
+sidebarTitle: "Headless"
+description: "Build fully custom Velt UI with headless hooks, data, and actions."
+---
+
+Velt gives you the **data and the actions**; you build 100% of the UI with your own components. Velt renders nothing.
+
+**Use it when** the design needs your own interactive components inside the collaboration UI, a layout wireframe slots can't express, or you're rendering comments onto a surface Velt can't draw into (a PDF, canvas, or video timeline). **Don't** when a [wireframe](/ui-customization/layout) could express the layout: headless is the most expensive layer, and you own everything it gives up.
+
+<Note>
+Hooks are React-only. In other frameworks the same data and actions live on the `Velt` client's elements (`Velt.getCommentElement()`), shown in the Other Frameworks tabs below. Full mapping: [API methods](/api-reference/sdk/api/api-methods).
+</Note>
+
+## The model
+
+Three kinds of hooks (full list in [`Hooks`](/ui-customization/reference/hooks); each maps to a client API method for other frameworks, e.g. `useAddComment` → `commentElement.addComment()`):
+
+- **Read:** `useCommentAnnotations`, `useCommentAnnotationById`, `useUnreadCommentCountOnCurrentDocument`, `useCommentModeState`, … → reactive data you render.
+- **Mutate:** `useAddCommentAnnotation`, `useAddComment`, `useUpdateComment`, `useDeleteComment`, `useResolveCommentAnnotation`, `useUpdateStatus`, `useToggleReaction`, … → call these from your own buttons.
+- **Control:** `useVeltClient`, `useSetDocuments`, `useIdentify`, `useVeltInitState`, … → init, scope, imperative control.
+
+You render the read hooks' data and wire your UI's events to the mutate hooks. Velt still handles storage, sync, mentions, and permissions: you're only replacing the **view**.
+
+<Tip>
+**Middle ground:** keep Velt's components but strip their visual styling with [`setUnstyledMode()`](/api-reference/sdk/api/api-methods#setunstyledmode) (v6.0.0-beta.10+) and bring your own CSS. Far less work than headless. See [unstyled mode](/ui-customization/styling#unstyled-mode).
+</Tip>
+
+## Steps
+
+<Steps titleSize="h3">
+<Step title="Render data from a read source">
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+import { useCommentAnnotations } from "@veltdev/react";
+import type { CommentAnnotation } from "@veltdev/types";
+
+function CommentsPanel() {
+  const annotations: CommentAnnotation[] = useCommentAnnotations() ?? [];
+  return (
+    <div className="my-panel">
+      {annotations.map((a) => (
+        <MyThreadCard key={a.annotationId} annotation={a} />
+      ))}
+    </div>
+  );
+}
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<div id="my-panel" class="my-panel"></div>
+
+<script>
+const commentElement = Velt.getCommentElement();
+
+const subscription = commentElement.getAllCommentAnnotations().subscribe((annotations) => {
+  const panel = document.getElementById('my-panel');
+  panel.innerHTML = '';
+  (annotations || []).forEach((a) => {
+    panel.appendChild(renderMyThreadCard(a));   // defined in the next step
+  });
+});
+
+// when your panel is destroyed:
+subscription?.unsubscribe();
+</script>
+```
+</Tab>
+</Tabs>
+
+The read source is reactive: it updates whenever comments change, including other users in real time. You never poll.
+
+</Step>
+
+<Step title="Wire your buttons to actions">
+
+Your components are fully interactive, unlike wireframes. Call the actions from your own handlers:
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+import { useAddComment, useResolveCommentAnnotation, useCurrentUser } from "@veltdev/react";
+import type { CommentAnnotation } from "@veltdev/types";
+
+function MyThreadCard({ annotation }: { annotation: CommentAnnotation }) {
+  const currentUser = useCurrentUser();            // the identified user
+  const { addComment } = useAddComment();
+  const { resolveCommentAnnotation } = useResolveCommentAnnotation();
+
+  const reply = async (text: string, html: string) => {
+    if (!currentUser) return;
+    const comment = buildComment(currentUser, text, html);   // defined in the next step
+    await addComment({ annotationId: annotation.annotationId, comment });
+  };
+
+  return (
+    <article>
+      {/* your fully custom, interactive UI */}
+      <button onClick={() => resolveCommentAnnotation({ annotationId: annotation.annotationId })}>
+        Resolve
+      </button>
+    </article>
+  );
+}
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+// currentUser: the same User object you passed to Velt.identify()
+
+async function reply(annotation, text, html) {
+  const comment = buildComment(currentUser, text, html);   // defined in the next step
+  await commentElement.addComment({ annotationId: annotation.annotationId, comment });
+}
+
+function renderMyThreadCard(annotation) {
+  const card = document.createElement('article');
+  // your fully custom, interactive UI
+  const resolveButton = document.createElement('button');
+  resolveButton.textContent = 'Resolve';
+  resolveButton.addEventListener('click', () => {
+    commentElement.resolveCommentAnnotation({ annotationId: annotation.annotationId });
+  });
+  card.appendChild(resolveButton);
+  return card;
+}
+```
+</Tab>
+</Tabs>
+
+</Step>
+
+<Step title="Build objects to the SDK data model">
+
+Mutations expect objects shaped like Velt's types (from `@veltdev/types`), and you construct them yourself:
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+import type { Comment, User } from "@veltdev/types";
+
+function buildComment(currentUser: User, text: string, html: string): Comment {
+  return {
+    commentId: Date.now(),
+    type: "text",
+    from: currentUser,
+    status: "added",
+    commentText: text,
+    commentHtml: html,
+    taggedUserContacts: [],
+    attachments: [],
+    reactionAnnotationIds: [],
+    customList: [],
+  } as unknown as Comment;   // the cast bridges optional fields you omit
+}
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+// currentUser: the same User object you passed to Velt.identify()
+function buildComment(currentUser, text, html) {
+  return {
+    commentId: Date.now(),
+    type: 'text',
+    from: currentUser,
+    status: 'added',
+    commentText: text,
+    commentHtml: html,
+    taggedUserContacts: [],
+    attachments: [],
+    reactionAnnotationIds: [],
+    customList: [],
+  };
+}
+```
+</Tab>
+</Tabs>
+
+For `addComment` and `updateComment`, the `Comment` needs: `commentId` (auto if omitted), `type` (`'text' | 'voice'`, default `'text'`), **`from`** (a full `User`), `commentText`, `commentHtml`, `status` (`'added' | 'updated'`), and any array fields you touch. **`from` is the field most often missed**, and missing fields are the most common headless bug.
+
+</Step>
+</Steps>
+
+## Request objects
+
+Actions take a single **request object**, not loose arguments. The same methods exist on `Velt.getCommentElement()` with identical names and shapes. Required fields only; all also accept `options?`:
+
+| Hook | Request fields | Notes |
+|---|---|---|
+| `useAddCommentAnnotation` → `addCommentAnnotation` | `{ annotation: CommentAnnotation }` | Creates a new thread; build the full `CommentAnnotation`. |
+| `useAddComment` → `addComment` | `{ annotationId: string; comment: Comment }` | Adds a reply. Optional: `assignedTo?: User`, `assigned?: boolean`. |
+| `useUpdateComment` → `updateComment` | `{ annotationId: string; comment: Comment }` | Optional `merge?: boolean` to patch rather than replace. |
+| `useDeleteComment` → `deleteComment` | `{ annotationId: string; commentId: number }` | `commentId` is a **number**. |
+| `useResolveCommentAnnotation` → `resolveCommentAnnotation` | `{ annotationId: string }` | Toggles resolved. |
+| `useUpdateStatus` → `updateStatus` | `{ annotationId: string; status: CustomStatus }` | `status` is a full `CustomStatus` object, not a string: see [`Layout config`](/ui-customization/reference/props#part-3-layout-config-and-custom-data). |
+| `useToggleReaction` → `toggleReaction` | `{ annotationId: string; commentId: number; reaction: { reactionId: string } }` | Optional `reaction.customReaction?`. |
+
+The current shapes are the `*Request` interfaces in `@veltdev/types` (`AddCommentRequest`, `UpdateStatusRequest`, …). Read the type if a call errors.
+
+## What it can and can't do
+
+| ✅ Headless can | ❌ Headless can't |
+|---|---|
+| Give you **100% custom UI**: Velt renders nothing, you build every component | Save you from re-implementing thread layout, the composer (@mentions, attachments, reactions, formatting), filtering, sorting, empty and loading states, accessibility, and dark mode |
+| Expose all data and actions through hooks, while Velt still does storage, sync, mentions, and permissions | Auto-inherit **new Velt UI features**: the upgrade burden is yours |
+| Render comments onto a **non-DOM surface** (PDF, canvas, video timeline) where Velt can't draw | Be the cheap choice: it's the most expensive layer to build and maintain |
+| Drive bespoke workflows and filtering from your own design-system components | |
+
+If a [wireframe](/ui-customization/layout) can express the layout, prefer it: you keep Velt's behavior for free and only restyle. Not sure? Point the [UI Customization Plugin](/get-started/ui-customization-plugin) at your design and it will tell you whether a cheaper layer covers it.
+
+## Troubleshooting
+
+Common headless symptoms, in [`Debugging`](/ui-customization/debugging):
+
+- ["Headless mutation does nothing, or errors"](/ui-customization/debugging#headless-mutation-does-nothing-or-errors)
+- ["My UI shows stale data after someone else changes a comment"](/ui-customization/debugging#my-ui-shows-stale-data-after-someone-else-changes-a-comment)
+- ["SSR or hydration error (Next.js)"](/ui-customization/debugging#ssr-or-hydration-error-nextjs)
+
+## Checklist
+
+- [ ] Using real hook names from [`Hooks`](/ui-customization/reference/hooks).
+- [ ] Objects passed to mutations match `@veltdev/types`, with every required field.
+- [ ] Reactive data comes from read hooks; no manual polling.
+- [ ] You've confirmed a wireframe genuinely can't do it.

@@ -30,6 +30,62 @@ description: "Which feature to reach for, and the mistakes that look reasonable 
 | An admin acts on a reviewer's behalf, distinguishable in the audit log. | `/steps/resolve` with `reviewer-approve` or `reviewer-reject`. |
 | An admin force-completes a step that has no approve or reject concept. | `/steps/resolve` with `force-complete` or `force-fail`. |
 
+## Duplicating a workflow
+
+There is no duplicate endpoint. A definition supports five operations: create, update, delete, get, and list. Copying is not one of them, so you do it by hand. It is four steps.
+
+<Steps>
+  <Step title="Fetch the original">
+    Call [Get Definition](/api-reference/rest-apis/v2/approval-engine/definitions/get-definition). You get the whole thing back: nodes, edges, groups, triggers, everything.
+  </Step>
+
+  <Step title="Change the id and the name">
+    `definitionId` is the workflow's permanent handle, and two active definitions cannot share one. Turn `marketing-page-approval` into `marketing-page-approval-eu`. Give the copy a name a human can tell apart too.
+  </Step>
+
+  <Step title="Strip the five fields the server owns">
+    A read response carries bookkeeping that is not yours to set: `version`, `createdAt`, `updatedAt`, `status`, and `compiled`. Delete all five before sending.
+
+    Create rejects unknown fields outright, so leaving even one in fails the whole request with `INVALID_ARGUMENT`. That is the good outcome: you get a loud error, never a silently mangled copy.
+  </Step>
+
+  <Step title="Send it to create">
+    POST the trimmed object to [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition). You now have a second workflow, starting at `version: 1`.
+  </Step>
+</Steps>
+
+<Warning>
+  **Triggers are what bite people.** If the original runs every night at 2am, the copy now runs every night at 2am too, and you have two nightly runs. A copied `webhookConfig` reuses the same secret, so one leaked secret exposes both workflows.
+
+  Before you create the copy, either drop `triggers` and `webhookConfig` entirely and re-add them deliberately, or give the copy fresh `triggerId` values and a fresh secret.
+</Warning>
+
+Everything else copies safely. Your `edges` come back exactly as you authored them, byte for byte with no reformatting, so the round trip cannot quietly change routing. `scope` echoes the organization and document ids you originally sent, not internal ones, so it is safe to copy or edit as-is.
+
+## Versioning, and what it does not do
+
+Every update bumps the version (`v1` to `v2` to `v3`) and stores a complete copy of the previous content. Nothing is overwritten in place.
+
+Three things follow, and they are the useful part:
+
+- **You cannot clobber a coworker's edit.** Update requires `ifVersion`, your claim about which version you are editing. If someone pushed `v5` while you were working from `v4`, your update is rejected with `FAILED_PRECONDITION` and a message like `Version conflict: expected 4, current 5`, instead of silently overwriting them.
+- **Editing never disturbs runs already in progress.** A run locks onto the version that was current when it started and finishes on that version. If a request is sitting in someone's queue on `v3` and you publish `v4` adding a reviewer, that request does not change shape under the reviewer. It completes as `v3`. Only new runs pick up `v4`.
+- **Delete and recreate resets the counter.** Recreating a deleted `definitionId` purges the old snapshots and starts again at `v1`. The version line is not continuous across a delete.
+
+### What versioning does not give you
+
+This is where expectations usually outrun reality.
+
+Old versions are stored, but **you cannot read them**. There is no endpoint to list history or fetch what `v2` looked like. The snapshots exist for audit and recovery; they are not part of the public API. All you can see is the current version number.
+
+Which means **there is no rollback**. If `v5` was a mistake, you cannot ask for `v4` back. You need your own copy of `v4`'s content, which you resubmit as an update, producing a `v6` that contains `v4`'s content. You move forward to go back. Without a copy, you are reconstructing it by hand.
+
+There is also no draft versus live distinction, no way to mark a version as the stable one, and no way to run a specific version. New runs always get the latest.
+
+<Tip>
+  Keep your definitions in source control and treat the API as the deployment target. That single habit gives you the history, the diffs, and the rollback path the API does not.
+</Tip>
+
 ## Choosing a parallel-review policy
 
 Pick by what should happen the moment quorum is met.

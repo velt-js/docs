@@ -26,7 +26,9 @@ Use this API to update an existing workflow definition. Atomically increments th
 Accepts every field from [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition) plus:
 
 <Warning>
-Update replaces the definition; it is not a partial patch. Send the complete `name`, `nodes`, and `edges` on every call. Any field you omit is not preserved from the stored definition. Read the current definition with [Get Definition](/api-reference/rest-apis/v2/approval-engine/definitions/get-definition), change what you need, then send the whole object back with `ifVersion`.
+Update replaces the definition; it is not a partial patch. Send the complete `name`, `nodes`, and `edges` on every call. Any field you omit is not preserved from the stored definition.
+
+Read the current definition with [Get Definition](/api-reference/rest-apis/v2/approval-engine/definitions/get-definition), change what you need, then send the whole object back with `ifVersion`. A read response is not accepted verbatim: strip the server-owned `version`, `createdAt`, `updatedAt`, `status`, and `compiled` fields first. Strip the explicit nulls too. `description`, `groups`, and `triggers` come back as `null` when you never set them. Update takes those fields as absent or as real values, never as `null`, so a leftover `null` or a leftover server-owned field fails the request with `INVALID_ARGUMENT`.
 </Warning>
 
 <ParamField body="data" type="object" required>
@@ -45,6 +47,16 @@ Update replaces the definition; it is not a partial patch. Send the complete `na
 
     <ParamField body="description" type="string">
       0–2000 chars.
+    </ParamField>
+
+    <ParamField body="scope" type="object">
+      Defaults to `{ level: "apiKey" }`. Options:
+
+      - `{ level: "apiKey" }`: workspace-wide.
+      - `{ level: "organization", organizationId: "<id>" }`: bound to one organization. `organizationId` is required (returns `INVALID_ARGUMENT` if omitted).
+      - `{ level: "document", organizationId: "<id>", documentId: "<id>" }`: bound to one document under an organization. Both fields required.
+
+      Update replaces `scope` like every other field. Omit it and `level` resets to `apiKey`, silently demoting an organization-scoped or document-scoped definition to workspace scope. Resend the `scope` you read from [Get Definition](/api-reference/rest-apis/v2/approval-engine/definitions/get-definition) on every update.
     </ParamField>
 
     <ParamField body="nodes" type="array" required>
@@ -186,11 +198,25 @@ Only `name` changes here, so the request resends the unchanged `nodes` and `edge
     "version": 2,
     "scope": { "level": "apiKey", "organizationId": null, "documentId": null },
     "nodes": [
-      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1", "urlPath": "documentUrl" } }
+      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1", "urlPath": "documentUrl" } },
+      { "nodeId": "human-review", "type": "human", "config": { "reviewers": [{ "userId": "u_reviewer_01", "mandatory": true }] } },
+      { "nodeId": "agent-publish", "type": "agent", "config": { "agentId": "publish-agent-v1", "urlPath": "documentUrl" } },
+      { "nodeId": "agent-rework", "type": "agent", "config": { "agentId": "rework-agent-v1", "urlPath": "documentUrl" } }
     ],
-    "edges": [],
+    "edges": [
+      { "from": "agent-draft", "to": "human-review" },
+      { "from": "human-review", "to": "agent-publish", "on": "approve" },
+      { "from": "human-review", "to": "agent-rework", "on": "reject" }
+    ],
     "groups": null,
-    "compiled": { "forwardEdges": [], "loops": [] },
+    "compiled": {
+      "forwardEdges": [
+        { "from": "agent-draft", "to": "human-review", "role": "always", "when": null },
+        { "from": "human-review", "to": "agent-publish", "role": "approve", "when": { "op": "eq", "args": [{ "var": "output.decision" }, "approve"] } },
+        { "from": "human-review", "to": "agent-rework", "role": "reject", "when": { "op": "eq", "args": [{ "var": "output.decision" }, "reject"] } }
+      ],
+      "loops": []
+    },
     "triggers": null,
     "tags": null,
     "custom": null,

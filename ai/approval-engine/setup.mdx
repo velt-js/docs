@@ -93,7 +93,7 @@ curl -X POST https://api.velt.dev/v2/workflow/definitions/create \
 
 A successful create returns a `DefinitionView` with `version: 1` and `status: "active"`.
 
-The engine validates the graph at write time. Schema errors, edge-contract errors, cycles, dangling edges, unreachable nodes, and bad quorum settings all fail here rather than at run time. A rejected definition returns `INVALID_ARGUMENT`. The `message` is the human-readable rule text, for example `every human node must have at least one outgoing edge with on="reject" (a forward reject route or a reject back-edge): manager-approval`. Linter failures instead return `Definition linter failed:` followed by a JSON array whose entries each carry a `code` such as `missing-breach-edge`. Match on the linter `code`; the `APPROVAL_*` names are internal rule identifiers and never appear in a response.
+The engine validates the graph at write time. Schema errors, edge-contract errors, cycles, dangling edges, unreachable nodes, and bad quorum settings all fail here rather than at run time. A rejected definition returns `INVALID_ARGUMENT`. The `message` is the human-readable rule text, for example `every human node must have at least one outgoing edge with on="reject" (a forward reject route or a reject back-edge): manager-approval`. Linter failures put everything in `error.message` too: the text `Definition linter failed:` followed by a JSON array whose entries each carry a `code` such as `missing-breach-edge`. Parse `error.message` to read those codes, because `error.details` is not set on a linter failure. Only schema failures populate `error.details`, with an `issues` array of Zod `{ code, path, message }` entries. Match on the linter `code`; the `APPROVAL_*` names are internal rule identifiers and never appear in a response.
 
 <Tip>
   Two rules catch most first-time authors. A `human` node needs an outgoing `on: "reject"` edge (`APPROVAL_HUMAN_NODE_REQUIRES_REJECT_PATH`). An `agent` node needs either `url` or `urlPath` (`APPROVAL_AGENT_NODE_REQUIRES_URL_OR_URLPATH`). Those two names are internal rule identifiers. The response carries the rule text, not the name.
@@ -343,8 +343,8 @@ You do not have to call the dispatch API. Add a `triggers[]` entry to a definiti
 
 | Code | Meaning |
 | --- | --- |
-| `INVALID_ARGUMENT` | The request failed schema or graph validation, or `x-velt-auth-token` is missing. The message names the rule. |
-| `PERMISSION_DENIED` | The `x-velt-auth-token` is not one of the workspace's registered tokens, or a `reviewer-approve` / `reviewer-reject` resolve call used an `actorId` that is not on the step's reviewer list. |
+| `INVALID_ARGUMENT` | The request failed schema or graph validation, or `x-velt-auth-token` is missing. For schema and graph failures the message names the rule. A missing auth token returns the flat message `Auth token is required`. |
+| `PERMISSION_DENIED` | The `x-velt-auth-token` is not one of the workspace's registered tokens. The `steps/resolve` endpoint also returns it when a `reviewer-approve` or `reviewer-reject` action passes an `actorId` that is not on the step's reviewer list. `recordReviewerDecision` never returns this code: an undeclared `reviewerId` comes back as `recorded: false`. |
 | `NOT_FOUND` | Unknown `executionId`, `definitionId`, or `stepId`. |
 | `ALREADY_EXISTS` | An active definition already uses that `definitionId`. |
 | `FAILED_PRECONDITION` | State violation, such as resolving a step that is not `waiting`. |
@@ -357,7 +357,7 @@ The four most common reasons the engine rejects a definition:
 - **A node sets `slaMs` but nothing routes on a breach.** The linter rejects it with the `code` `missing-breach-edge`.
 - **`when` written as JavaScript.** It must be a JSON-AST string, not `"output.decision == 'approve'"`.
 
-Linter failures arrive as `Definition linter failed:` plus a JSON array, and every entry carries a `code`. Match on that `code` rather than on the message text.
+Linter failures arrive inside `error.message` as `Definition linter failed:` plus a JSON array, and every entry carries a `code`. Parse the message to read them, because `error.details` stays empty on a linter failure. Match on that `code` rather than on the surrounding message text.
 
 See [Linter rules](/ai/approval-engine/customize-behavior#linter-rules) for the full list, and [Anti-patterns](/ai/approval-engine/patterns#anti-patterns) for the mistakes that trigger them.
 

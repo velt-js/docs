@@ -15,7 +15,7 @@ Every node has a `nodeId`, a `type`, and a `config` block.
 | `type` | enum | Required. `agent`, `human`, `notification`, or `webhook`. |
 | `config` | object | Required. Shape depends on `type`. See below. |
 | `slaMs` | integer | Deadline for the step, up to 7 days. See [SLA and breach handling](#sla-and-breach-handling). |
-| `requireNonEmptyOutput` | boolean | Webhook nodes only. Fails the step terminally with `webhook-node-empty-response` when the receiver returns an empty body. Accepted on the other node types, with no runtime effect. |
+| `requireNonEmptyOutput` | boolean | Sync webhook nodes only. Fails the step terminally with `webhook-node-empty-response` when the receiver returns an empty body. It has no effect in `mode: "async"`, because the step parks in `waiting` before the check runs. Accepted on the other node types, with no runtime effect. |
 | `name` | string | Cosmetic label, 1 to 200 chars. Echoed back, no runtime effect. |
 | `description` | string | Cosmetic, up to 2000 chars. Echoed back, no runtime effect. |
 
@@ -240,7 +240,7 @@ Render `compiled` directly instead of re-implementing the compiler in your clien
 
 Set `slaMs` on any node to give the step a deadline, up to 7 days. If the step does not complete in time it becomes `breached` and emits `step.breached`.
 
-Declare an outgoing edge that routes on the breached status: either an `on: "always"` edge, which fires on every terminal status including `breached`, or an `on: "custom"` edge whose `when` tests for `breached`. A node that has outgoing edges but none that route on a breach is rejected with `missing-breach-edge`. A terminal node with no outgoing edges is accepted; if it breaches, the execution rolls up to `failed` and emits `execution.failed`.
+Declare an outgoing edge that routes on the breached status: either an `on: "always"` edge, which fires on the four fan-out-eligible statuses `completed`, `skipped`, `breached`, and `failed`, or an `on: "custom"` edge whose `when` tests for `breached`. A node that has outgoing edges but none that route on a breach is rejected with `missing-breach-edge`. A terminal node with no outgoing edges is accepted; if it breaches, the execution rolls up to `failed` and emits `execution.failed`.
 
 Agent nodes also have their own ceiling via `agentMaxRuntimeMs`, which defaults to 10 minutes.
 
@@ -273,7 +273,7 @@ A member counts toward quorum only when it ends `completed` with `output.decisio
 
 Two consequences follow:
 
-1. **Agent nodes never satisfy quorum on their own** unless they produce a `decision`. Put human nodes in groups whose policy is `cancelOnQuorum` or `joinOnQuorum`.
+1. **Agent nodes do count toward quorum.** An agent step ends `completed` with `output.decision: "approve"` when its run passes or is skipped, so it advances the approval counter exactly like a human approval. The one exception is an agent step that fails before dispatch: it takes the failure path, whose `output` is empty and carries no `decision`. See [Anti-patterns](/ai/approval-engine/patterns#assuming-an-agent-in-a-quorum-group-never-counts).
 2. **A reject does not block group completion.** It just stops the approval counter from advancing. Completion and quorum are tracked separately.
 
 ### `onQuorumMet` policies
@@ -587,16 +587,16 @@ Events delivered by webhook and returned from [Get Execution Events](/api-refere
 | `execution.cancelled` | Run cancelled, or fully rolled back. | `{ reason? }` |
 | `step.awaiting-approval` | A step entered `waiting`: a human step, a running agent step, or an async webhook step. | Human steps: `{ waitingForReviewers, mandatoryCount, resumeKey }`. Agent steps: `{ agentId, agentExecutionId, pollIntervalMs }`. |
 | `step.completed` | Step transitioned to `completed`. | Human steps: `{ aggregatorStatus, nodeType, decision }`. Agent steps: `{ agentExecutionId, agentExecutionStatus, decision, source }`. |
-| `step.failed` | Step failed after its retry budget ran out, or failed terminally when retries cannot help. | Varies by node type. Human steps: `{ reason }` (`no-reviewers`, `no-mandatory-reviewers`, `duplicate-reviewer-user-ids`, `exception`). Webhook steps: `{ httpStatus, latencyMs, retryClass }`. Notification steps: `{ channel, retryClass }`. Agent resumes: `{ agentExecutionId, agentExecutionStatus, decision, source }`. |
+| `step.failed` | Step failed after its retry budget ran out, or failed terminally when retries cannot help. | Varies by node type. Human steps: `{ reason }` (`no-reviewers`, `no-mandatory-reviewers`, `duplicate-reviewer-user-ids`, `exception`). Webhook steps: `{ httpStatus, latencyMs, retryClass }`. Notification steps: `{ channel, retryClass }`. Config failures on either of those two types emit `{ reason }` instead, including the `webhook-node-empty-response` path. Agent resumes: `{ agentExecutionId, agentExecutionStatus, decision, source }`. |
 | `step.breached` | Step passed its SLA before completing. | `{ reason }` |
 | `step.cancelled` | Step cancelled directly or by a quorum side effect. | `{ actorId, reason }` |
 | `group.quorum-met` | A group's approval threshold was first satisfied. | `{ groupId, total, quorum, completedTotal, expectedSteps }` |
 | `loop.iteration-started` | A rejected iteration spawned the next one below the cap. | `{ loopId, iteration, triggeredBy: 'rejection' }` |
 | `loop.exhausted` | The loop hit `maxIterations`. | `{ loopId, iteration, lastRejectedBy?, lastRejectionReason? }` |
 
-The `{ code, message }` error object is not part of the event `data`. It lives on the step's `error` field, which you read with [Get Execution](/api-reference/rest-apis/v2/approval-engine/executions/get-execution) as `steps[].error`. Route on `event.type`, then fetch the step for the detail.
-
 A step using the reserved `__mock__` agent id completes inline and emits `{ agentId, synthetic, decision }` instead, so a receiver you tested against `__mock__` sees different `data` keys in production.
+
+The `{ code, message }` error object is not part of the event `data`. It lives on the step's `error` field, which you read with [Get Execution](/api-reference/rest-apis/v2/approval-engine/executions/get-execution) as `steps[].error`. Route on `event.type`, then fetch the step for the detail.
 
 <Note>
   Internal events such as `step.scheduled`, `step.started`, `step.retried`, and `step.overridden` consume `seq` numbers but are not delivered externally. Your stream may have gaps in `seq`, which is expected.
@@ -667,9 +667,8 @@ All errors follow the standard envelope:
 
 | Code | Meaning | Typical cause |
 | --- | --- | --- |
-| `INVALID_ARGUMENT` | Schema or graph validation failed. | Missing field, wrong type, out-of-range value, edge contract violation, linter rule. |
-| `UNAUTHENTICATED` | Missing or invalid `x-velt-auth-token`. | |
-| `PERMISSION_DENIED` | Token valid but lacks the required scope. | A `reviewer-*` resolve action whose `actorId` is not on the step's reviewer list. |
+| `INVALID_ARGUMENT` | Schema or graph validation failed, or `x-velt-auth-token` is missing. | Missing field, wrong type, out-of-range value, edge contract violation, linter rule, absent auth token. |
+| `PERMISSION_DENIED` | The `x-velt-auth-token` is not one of the workspace's registered tokens, or the actor is not allowed to take the action. | An unregistered auth token, or a `reviewer-*` resolve action whose `actorId` is not on the step's reviewer list. |
 | `NOT_FOUND` | Target does not exist. | Unknown `executionId`, `definitionId`, or `stepId`. |
 | `ALREADY_EXISTS` | Conflicting create. | An active definition already uses that `definitionId`. |
 | `FAILED_PRECONDITION` | Optimistic lock or state-machine violation. | `ifVersion` mismatch, cancelling a terminal step, deleting a definition with in-flight runs. |

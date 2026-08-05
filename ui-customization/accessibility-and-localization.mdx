@@ -1,0 +1,113 @@
+---
+title: "Accessibility, localization, and responsive UI"
+sidebarTitle: "Accessibility & localization"
+description: "Keep Velt customizations accessible, translated, RTL-ready, and usable on mobile, whichever approach you use."
+---
+
+These apply to **every** approach and feature. Handle them as you build each surface, not after.
+
+## Accessibility
+
+Velt's default UI and its slot components ship with roles, labels, keyboard handling, and focus management. How much of that you keep depends on your approach:
+
+| Approach | What you inherit | What's yours |
+|---|---|---|
+| **CSS** | All of it | Contrast of the colors you set |
+| **Wireframes** | The `Velt…Wireframe.X` slot components' a11y | Any custom markup you add around slots |
+| **Primitives** | All of it: primitives render Velt's own components, and wrapping them in your UI library keeps that intact | Your wrappers |
+| **Headless** | Nothing: there's no Velt UI to inherit from | All of it |
+
+**When you're writing your own markup:**
+
+- Use semantic elements (`<button>`, `<nav>`, `<ul>`), and add `aria-*`, `role`, and `aria-label` where your markup needs them.
+- Preserve a sensible **focus order** and visible **focus styles** (`:focus-visible`). Don't `outline: none` without a replacement.
+- Keep interactive behavior in Velt slot components. A custom `<div onClick>` in a wireframe doesn't run at all ([the interactivity rule](/ui-customization/layout#the-interactivity-rule)), and a bare div isn't keyboard-accessible anyway.
+- Don't rely on **color alone** for state (resolved, unread, priority): pair it with an icon or label.
+- Keep **contrast** at WCAG AA (4.5:1 for text) when you override `--velt-*` colors. Brand palettes break this easily, so check light and dark.
+- Respect `prefers-reduced-motion` in any transitions you add.
+
+## Localization
+
+Four levers, cheapest first:
+
+**1. Placeholder props.** Pass already-translated values to `commentPlaceholder`, `replyPlaceholder`, `editPlaceholder`, `editCommentPlaceholder`, `editReplyPlaceholder`, and the slot-level `placeholder` props.
+
+**2. Your own text.** Anything in your wireframe markup or headless components is yours: render it through your app's i18n library.
+
+**3. Automatic translation.** [`enableAutoTranslation()`](/api-reference/sdk/api/api-methods#enableautotranslation) translates text in Velt components based on the user's language preference, with no string map to maintain.
+
+**4. Your own translations.** The strongest lever: supply the strings yourself and switch languages at runtime. Use it to **reword** Velt's UI text, not only to translate it.
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+const { client } = useVeltClient();
+
+client.setTranslations({
+  en: { 'All comments': 'All comments' },
+  fr: { 'All comments': 'Tous les commentaires' },
+});
+
+client.setLanguage('fr');   // switch the active language
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setTranslations({
+  en: { 'All comments': 'All comments' },
+  fr: { 'All comments': 'Tous les commentaires' },
+});
+
+Velt.setLanguage('fr');   // switch the active language
+```
+</Tab>
+</Tabs>
+
+Every localizable string key is in the [downloadable JSON map](https://firebasestorage.googleapis.com/v0/b/snippyly.appspot.com/o/external%2Flocalization-strings-map.json?alt=media&token=0cdd2b52-10ed-4033-a08a-5c2b622ce7df).
+
+<Note>
+Dates and relative times are rendered by Velt's own UI. If you render your own timestamps in a headless build, localize them yourself.
+</Note>
+
+### Right-to-left (RTL)
+
+- Set **`dir="rtl"`** on the container wrapping your Velt UI. Velt's UI inherits direction from the DOM.
+- In **your** CSS and wireframe markup, use **logical properties** (`margin-inline-start`, `padding-inline`, `inset-inline`) instead of hard `left`/`right`, so they mirror automatically.
+- **Mirror directional glyphs** you supply (chevrons, arrows, reply icons) with `transform: scaleX(-1)` under `[dir="rtl"]`.
+- Check anything **absolutely positioned** (pins, dialogs, dropdown popovers) and your `position: relative` wrappers anchor on the correct side.
+- Fix mirroring in your own CSS, never by hacking Velt internals.
+
+## Responsive and mobile
+
+- **Use the layout props first**, they're the cheapest fix: `filterPanelLayout="bottomSheet"` and `filterOptionLayout` on the sidebar, `panelOpenMode` on notifications, the dialog's bottom-sheet mode, and `embedMode` / `floatingMode` / `position`. See [`Component config`](/ui-customization/reference/component-config).
+- **Your media queries** apply to your wrappers and your wireframe markup. Velt also flips some internal layouts at mobile breakpoints on its own.
+- **Touch targets** of roughly 44px or more, especially for custom buttons in wireframe slots.
+- **Hover doesn't exist on touch.** If you build a hover-reveal, add an always-visible fallback under a mobile media query ([recipe](/ui-customization/styling#recipes)).
+- Re-check the [scroll and height chain](/ui-customization/debugging#my-sidebar-or-list-wont-scroll-or-wont-take-the-available-height) at mobile sizes: collapsed viewports expose missing `min-height:0` links.
+
+## Verify before you ship
+
+Run this on **every surface you gave custom markup**, after customizing it.
+
+**Manual:**
+
+- States: **empty**, **loading/skeleton**, **unread**, **resolved**, **private**, **filtered-to-zero**, and long content (truncation).
+- **Dark mode** on and off, **RTL** on and off, **mobile** width.
+- **Keyboard-only** navigation through the whole surface, with visible focus. Then a screen-reader pass (VoiceOver or NVDA) and zoom to 200%.
+- **Scroll** actually works; nothing overflows or clips.
+- **Compare against default:** temporarily remove your customization to confirm a problem is yours and not Velt's.
+
+**Automated:**
+
+- Assert on Velt's **stateful classes** from [`CSS classes`](/ui-customization/reference/css-classes), e.g. expect `.velt-comment-pin-unread-comment` present or absent.
+- Read live data via [`Hooks`](/ui-customization/reference/hooks) in component tests, e.g. assert `useUnreadCommentCountOnCurrentDocument()?.count`.
+- Put **`data-testid`** on **your own** wrapper markup, not on Velt internals whose class and structure can change between versions, and target those in e2e.
+- **Visual regression** snapshots per surface × (light/dark) × (LTR/RTL) catch CSS-override drift after SDK upgrades, the main risk for class-based overrides.
+
+<Tip>
+After every SDK upgrade, re-run the visual and accessibility checks. Variable-based theming is upgrade-safe; **class and selector overrides** and **wireframe slot names** are the most drift-prone pieces.
+</Tip>
+
+<Note>
+Building with an AI agent? [`Verifying a customization`](/ui-customization/verifying-a-customization) is the deterministic version of this: driving every state, measured visual gates, and a pass/fail verdict.
+</Note>

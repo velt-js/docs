@@ -1,77 +1,223 @@
 ---
 title: "Memory (Beta)"
-sidebarTitle: "Overview"
-description: "Memory turns your team's review and approval activity into a searchable, queryable knowledge base with grounded answers, suggestions, and insights."
+sidebarTitle: "Memory (Beta)"
+description: "Memory turns your team's review decisions into a searchable knowledge base. Query it over REST to search past decisions, ask questions, and get grounded suggestions."
 ---
 
-Memory is Velt's review-intelligence layer. It records every review decision your team (and your AI agents) make, lets you add your own reference material, and gives you REST APIs to search, question, and learn from all of it.
-
-## What is Memory?
-
-As people and agents make review decisions in Velt, Memory records each one as a **judgment**: the decision, the reasoning, who decided, and what they decided on. On top of that, you can ingest your **reference material** (guidelines, standards, policy docs) as knowledge sources.
-
-With that foundation you can:
-
-- **Search** past decisions semantically ("how have we judged copy with medical claims?").
-- **Ask** natural-language questions and get grounded answers with citations.
-- **Suggest** a decision for a new item, based on precedent.
-- Surface **reviewer profiles**, detected **patterns**, aggregate **stats**, and proactive **alerts**.
+Memory records every review decision your team and your AI agents make in Velt. Add your own guidelines on top, then query all of it over REST.
 
 ## How it works
 
-### Reviews create judgments automatically
+<Steps>
+  <Step title="Reviews become judgments">
+    Every review decision in Velt is recorded as a **judgment**: the decision, the reasoning, who decided, and what they decided on. This happens automatically. There is no "create judgment" endpoint.
+  </Step>
 
-Every review decision made in Velt becomes a judgment. You don't write judgments through the API; a new workspace starts empty and fills in as review activity happens.
+  <Step title="You add knowledge">
+    Ingest your guidelines, standards, and policy docs. Memory converts each file to markdown, extracts rules, and embeds it.
+  </Step>
 
-### You ingest knowledge
+  <Step title="You query both">
+    Use `search` for raw decision records, `ask` for a written answer with citations, and `suggest` for a recommendation on a new item.
+  </Step>
 
-Upload guidelines, standards, and policy docs (PDF, CSV, XLSX, or plain text). Memory converts each file to canonical markdown, extracts rules, and embeds it for semantic search.
-
-### You query the combined base
-
-Call `search` for raw decision records, `ask` for a grounded natural-language answer with citations, or `suggest` for a precedent-based recommendation on a new item.
-
-### Memory derives insights over time
-
-Reviewer profiles, decision patterns, workspace stats, and proactive alerts are computed from accumulated judgments.
-
-## Core concepts
-
-| Concept | What it is |
-| --- | --- |
-| **Judgment** | An enriched record of one review decision: decision, reasoning, reviewer, content type, and scope, plus an agent block when an AI agent decided. The thing `search` / `ask` / `suggest` read over. Created automatically from review activity. |
-| **Knowledge source** | Reference material you ingest (PDF / CSV / XLSX / text). Memory converts it to canonical markdown, extracts rules, and embeds it. |
-| **Scope** | `apiKey` (workspace), `organization`, or `document`; narrow reads to the right level. `documentId` requires `organizationId`. |
-| **Embedding type** | `review` (decision + reasoning, the default) vs `content` (the reviewed item). |
-| **Filters** | Narrow results by `decision`, `judgeType` (human/agent), `contentType`, `reviewerId`, `annotationId`, or `dateRange`. |
-| **Retrieval modes** | `search`/`ask` use vector search by default; set `recencyDays` for "what happened recently", or `filters.annotationId` to read one comment thread. |
-| **Pattern / Reviewer profile / Alert** | Derived insights Memory computes from your judgments. |
-
-## Where the data comes from
-
-- **Judgments** are produced automatically as your team reviews and approves work in Velt; there's no "create judgment" endpoint. Expect Memory to be sparse on a new workspace and to get richer as review activity accumulates. Comment data from older SDK clients is enriched into Memory too, including a one-time backfill of historical data.
-- **Knowledge sources** are the part you control directly: ingest the guidelines and standards you want Memory (and your agents) to reason against.
-- **Profiles, patterns, and alerts** are derived from judgments over time, so they also need some review history before they're meaningful.
+  <Step title="Memory derives insights">
+    Reviewer profiles, decision patterns, stats, and alerts build up from your judgments over time.
+  </Step>
+</Steps>
 
 <Note>
-  **Honesty by design:** if Memory has no relevant context, `ask` returns an empty answer with `confidence: 0` rather than inventing one. Treat that as "nothing learned about this yet"; it's expected for brand-new workspaces.
+  A new workspace starts empty. `ask` returns an empty `answer` with `confidence: 0` until enough review history exists. Memory returns nothing rather than inventing an answer.
 </Note>
 
-## Limitations
+## Authenticate
 
-- **Ingestion is asynchronous:** `ingest` returns `status: "processing"`; poll `ingest-status` for the terminal state.
-- **File limits:** inline uploads up to 5 MB, by-reference uploads up to 30 MB; PDF / CSV / XLSX / plain text only.
-- **Judgments are read-only via the API:** they're created from review activity, not written directly.
-- **New workspaces start empty:** `ask` returns an empty answer and `suggest`/insights stay sparse until enough review history exists.
+All endpoints are `POST` requests under `https://api.velt.dev/v2/`.
 
-## Get started
+| Header | Value |
+| --- | --- |
+| `x-velt-api-key` | Your API key. |
+| `x-velt-auth-token` | Your [Auth Token](/security/auth-tokens). |
+| `content-type` | `application/json` |
+
+Wrap the payload in `data`. Success comes back under `result`, errors under `error`.
+
+```json
+// Request
+{ "data": { "question": "..." } }
+
+// Success
+{ "result": { "answer": "..." } }
+
+// Error
+{ "error": { "message": "...", "status": "INVALID_ARGUMENT" } }
+```
+
+Export your credentials once for the examples below:
+
+```bash
+export VELT_API_KEY="your_api_key"
+export VELT_AUTH_TOKEN="your_auth_token"
+```
+
+## Quickstart
+
+<Steps titleSize="h3">
+  <Step title="Add a knowledge source">
+    Base64-encode a file and send it. Ingestion runs in the background and returns a `sourceId`.
+
+    ```bash
+    curl -X POST https://api.velt.dev/v2/memory/knowledge/ingest \
+      -H "x-velt-api-key: $VELT_API_KEY" \
+      -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+      -H "content-type: application/json" \
+      -d '{
+        "data": {
+          "source": "inline",
+          "file": {
+            "base64": "'"$(base64 -w0 brand-guidelines.pdf)"'",
+            "mimeType": "application/pdf",
+            "fileName": "brand-guidelines.pdf",
+            "fileSize": 184320
+          }
+        }
+      }'
+    # -> { "result": { "status": "processing", "sourceId": "src_9a8...", "message": "Ingestion started." } }
+    ```
+
+    Poll with that `sourceId` until `status` is `completed` or `failed`:
+
+    ```bash
+    curl -X POST https://api.velt.dev/v2/memory/knowledge/ingest-status \
+      -H "x-velt-api-key: $VELT_API_KEY" \
+      -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+      -H "content-type: application/json" \
+      -d '{ "data": { "sourceId": "src_9a8..." } }'
+    # -> { "result": { "status": "completed", "extractedRulesCount": 7 } }
+    ```
+
+    Files up to 5 MB go inline. For files up to 30 MB, call [Get Upload URL](/api-reference/rest-apis/v2/memory/knowledge/upload-url), `PUT` the bytes to the returned `uploadUrl`, then ingest with `{ "source": "fileRef", "fileRef": "<gs:// URI>", "mimeType": "..." }`.
+  </Step>
+
+  <Step title="Ask a question">
+    You get a written answer, the records it drew on, and a confidence score.
+
+    ```bash
+    curl -X POST https://api.velt.dev/v2/memory/ask \
+      -H "x-velt-api-key: $VELT_API_KEY" \
+      -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+      -H "content-type: application/json" \
+      -d '{ "data": { "question": "How do we handle copy that makes medical claims?" } }'
+    ```
+
+    ```json
+    {
+      "result": {
+        "answer": "Reviewers reject copy that makes medical claims without a citation...",
+        "citations": [ { "recordId": "act_8f3...", "snippet": "Claim 'clinically proven' lacks a citation." } ],
+        "confidence": 0.74,
+        "recordsSearched": 18
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Search past decisions">
+    Use `search` when you want the underlying records instead of a written answer.
+
+    ```bash
+    curl -X POST https://api.velt.dev/v2/memory/search \
+      -H "x-velt-api-key: $VELT_API_KEY" \
+      -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+      -H "content-type: application/json" \
+      -d '{ "data": { "query": "unsupported medical claim", "limit": 5, "filters": { "decision": "reject" } } }'
+    ```
+
+    Each result carries the `reasoning`, `decision`, `confidence`, who decided (`actionUser`), and a `similarity` score.
+  </Step>
+
+  <Step title="Get a suggestion">
+    Ask what Memory would recommend for a new item, based on precedent.
+
+    ```bash
+    curl -X POST https://api.velt.dev/v2/memory/suggest \
+      -H "x-velt-api-key: $VELT_API_KEY" \
+      -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
+      -H "content-type: application/json" \
+      -d '{ "data": { "query": "Ad copy: clinically proven to reduce wrinkles" } }'
+    ```
+
+    ```json
+    {
+      "result": {
+        "primary": { "recommendation": "reject", "confidence": 0.78, "basedOn": 12, "topReasons": ["Unsupported medical claim"], "caveats": [] },
+        "conflict": null
+      }
+    }
+    ```
+
+    `primary` is the best-grounded recommendation. `conflict` is filled in when the evidence is split, so you can show that reviewers disagree.
+  </Step>
+</Steps>
+
+## Narrow your results
+
+Add these fields to `search` and `ask` to control what Memory reads.
+
+| Field | What it does |
+| --- | --- |
+| `organizationId` | Limits the read to one organization. |
+| `documentId` | Limits the read to one document. Requires `organizationId`. |
+| `limit` | Caps results. 1 to 50, defaults to 10 on `search`. |
+| `filters` | Narrows by `decision`, `judgeType` (`human` or `agent`), `contentType`, `reviewerId`, or `dateRange`. |
+| `filters.annotationId` | Reads one comment thread in chronological order. Requires `organizationId`. |
+| `recencyDays` | Returns the last N complete UTC days of activity instead of a semantic match. 1 to 365. Good for digests. |
+
+## All endpoints
 
 <CardGroup cols={2}>
-  <Card title="Setup" icon="gear" href="/ai/memory/setup">
-    A hands-on walkthrough: add a knowledge source, ask a question, search past decisions, and pull a grounded suggestion.
+  <Card title="Search and Ask" icon="magnifying-glass">
+    [Search Judgments](/api-reference/rest-apis/v2/memory/search) · [Ask Memory](/api-reference/rest-apis/v2/memory/ask) · [Suggest Decision](/api-reference/rest-apis/v2/memory/suggest) · [Query Judgments](/api-reference/rest-apis/v2/memory/judgments/query)
   </Card>
 
-  <Card title="REST API Reference" icon="code" href="/api-reference/rest-apis/v2/memory/search">
-    All endpoints organized into Search &amp; Q&amp;A, Knowledge, Insights, and Alerts, with full request and response schemas.
+  <Card title="Knowledge" icon="book">
+    [Ingest](/api-reference/rest-apis/v2/memory/knowledge/ingest) · [Ingest Status](/api-reference/rest-apis/v2/memory/knowledge/ingest-status) · [Upload URL](/api-reference/rest-apis/v2/memory/knowledge/upload-url) · [Search](/api-reference/rest-apis/v2/memory/knowledge/search) · [List](/api-reference/rest-apis/v2/memory/knowledge/list) · [Rules](/api-reference/rest-apis/v2/memory/knowledge/rules) · [Update](/api-reference/rest-apis/v2/memory/knowledge/update) · [Download](/api-reference/rest-apis/v2/memory/knowledge/download) · [Delete](/api-reference/rest-apis/v2/memory/knowledge/delete)
+  </Card>
+
+  <Card title="Insights" icon="chart-line">
+    [Reviewer Profile](/api-reference/rest-apis/v2/memory/profiles/get) · [Patterns](/api-reference/rest-apis/v2/memory/patterns/get) · [Stats](/api-reference/rest-apis/v2/memory/stats/get)
+  </Card>
+
+  <Card title="Alerts" icon="bell">
+    [List](/api-reference/rest-apis/v2/memory/alerts/list) · [Dismiss](/api-reference/rest-apis/v2/memory/alerts/dismiss) · [Mark Actioned](/api-reference/rest-apis/v2/memory/alerts/action) · [Get Config](/api-reference/rest-apis/v2/memory/alerts/config/get) · [Update Config](/api-reference/rest-apis/v2/memory/alerts/config/update)
   </Card>
 </CardGroup>
+
+<Tip>
+  There are two searches, and they read different things. [Search Judgments](/api-reference/rest-apis/v2/memory/search) reads past decisions. [Search Knowledge Base](/api-reference/rest-apis/v2/memory/knowledge/search) reads the content of the files you ingested. Pass `includeRules: true` on the second one to search extracted rules too.
+</Tip>
+
+## Good to know
+
+- **Judgments are read-only.** They come from review activity in Velt, so a new workspace has none until reviews happen. Comments from older SDK clients are enriched into Memory too, including a one-time backfill of historical data.
+- **Ingestion is asynchronous.** `ingest` returns `processing`. Poll `ingest-status` until it is `completed` or `failed`.
+- **Supported file types:** PDF, CSV, Excel (`.xlsx`), and plain text.
+- **File limits:** 5 MB inline, 30 MB by reference.
+- **Duplicate uploads** report the original source's status, so a duplicate can stay `processing` until the original finishes. `completed` always means safe to download.
+
+## Errors
+
+| Status | Meaning |
+| --- | --- |
+| `INVALID_ARGUMENT` | The request failed validation. |
+| `UNAUTHENTICATED` | The `x-velt-auth-token` is missing or invalid. |
+| `NOT_FOUND` | Unknown `sourceId`. |
+| `FAILED_PRECONDITION` | For example, deleting a source that is still processing or has duplicates pointing at it. |
+| `RESOURCE_EXHAUSTED` | Rate limited. Back off and retry. |
+
+The most common `INVALID_ARGUMENT` causes:
+
+- `filters.annotationId` without `organizationId`.
+- `documentId` without `organizationId`.
+- A `dateRange` whose `start` is after its `end`.
+- An unsupported file type, or an inline file over 5 MB. Use [Get Upload URL](/api-reference/rest-apis/v2/memory/knowledge/upload-url) for larger files.

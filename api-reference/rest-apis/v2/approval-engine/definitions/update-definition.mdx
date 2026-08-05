@@ -32,7 +32,7 @@ Accepts every field from [Create Definition](/api-reference/rest-apis/v2/approva
     </ParamField>
 
     <ParamField body="ifVersion" type="integer" required>
-      Optimistic-locking version. Must equal the stored definition's current `version`. The update is rejected if the stored version has advanced since you last read it.
+      Optimistic-locking version. Must equal the stored definition's current `version`. If someone else updated the definition since you read it, the request is rejected with `FAILED_PRECONDITION` and a message like `Version conflict: expected 4, current 5`, so a concurrent edit is never silently overwritten.
     </ParamField>
 
     <ParamField body="name" type="string">
@@ -44,7 +44,7 @@ Accepts every field from [Create Definition](/api-reference/rest-apis/v2/approva
     </ParamField>
 
     <ParamField body="nodes" type="array">
-      1–100 nodes. Each node accepts optional cosmetic `name` (1–200 chars) and `description` (≤ 2000 chars) labels.
+      1–100 nodes of type `agent`, `human`, `notification`, or `webhook`. Each node accepts an optional `slaMs` (up to 7 days) and optional cosmetic `name` (1–200 chars) and `description` (≤ 2000 chars) labels. See [Node configuration](/ai/approval-engine/customize-behavior#node-configuration) and the [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition) type table.
     </ParamField>
 
     <ParamField body="edges" type="array">
@@ -56,15 +56,13 @@ Accepts every field from [Create Definition](/api-reference/rest-apis/v2/approva
     </ParamField>
 
     <ParamField body="triggers" type="array">
-      0–50 trigger declarations. Each trigger has the shape `{ triggerId, eventName?, filters? }`:
+      0–50 trigger declarations: `{ triggerId, eventName?, filters?, inboundWebhook?, schedule?, appTrigger? }`. A trigger starts executions for you, with no dispatch call. The three mechanisms are mutually exclusive on a single entry. See the [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition) field table and [Triggers](/ai/approval-engine/customize-behavior#triggers).
 
-      | Field        | Type    | Required | Description                                                                                       |
-      | ------------ | ------- | -------- | ------------------------------------------------------------------------------------------------- |
-      | `triggerId`  | string  | yes      | 1–128 chars. Stable identifier for this trigger.                                                  |
-      | `eventName`  | string  | no       | ≤ 128 chars. The event name your application emits when the workflow should dispatch.             |
-      | `filters`    | object  | no       | Free-form filter map; consumed by your dispatch wrapper to decide whether to fire this trigger.   |
+      Updating `triggers` replaces the stored array. Removing a `schedule` entry, or setting its `enabled` to `false`, stops that schedule from firing.
+    </ParamField>
 
-      Triggers are descriptive metadata in v1 — the engine does not auto-dispatch from them. Use them to label which definition belongs to which application event so your own dispatcher can resolve `eventName → definitionId`.
+    <ParamField body="webhookConfig" type="object">
+      Default webhook receiver for every execution of this definition: `{ url, secret, eventTypes? }`. See [Webhook delivery](/ai/approval-engine/customize-behavior#webhook-delivery).
     </ParamField>
 
     <ParamField body="tags" type="string[]">
@@ -86,7 +84,9 @@ Accepts every field from [Create Definition](/api-reference/rest-apis/v2/approva
 </ParamField>
 
 <Note>
-Every successful update increments `version` and snapshots the prior content. In-flight executions are immune to updates — they keep running on the pinned `definitionVersion` from their dispatch.
+Every successful update increments `version` and snapshots the prior content. In-flight executions are immune to updates: they keep running on the pinned `definitionVersion` from their dispatch.
+
+Snapshots are kept for audit and recovery only. There is no endpoint to read an old version and no rollback, so keep your own copy of anything you may want to restore. See [Versioning](/ai/approval-engine/patterns#versioning-and-what-it-does-not-do).
 </Note>
 
 ## **Example Requests**
@@ -116,10 +116,10 @@ Every successful update increments `version` and snapshots the prior content. In
     "version": 2,
     "scope": { "level": "apiKey", "organizationId": null, "documentId": null },
     "nodes": [
-      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1" } },
+      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1", "urlPath": "documentUrl" } },
       { "nodeId": "human-review", "type": "human", "config": { "reviewers": [{ "userId": "u_reviewer_01", "mandatory": true }] } },
-      { "nodeId": "agent-publish", "type": "agent", "config": { "agentId": "publish-agent-v1" } },
-      { "nodeId": "agent-rework", "type": "agent", "config": { "agentId": "rework-agent-v1" } }
+      { "nodeId": "agent-publish", "type": "agent", "config": { "agentId": "publish-agent-v1", "urlPath": "documentUrl" } },
+      { "nodeId": "agent-rework", "type": "agent", "config": { "agentId": "rework-agent-v1", "urlPath": "documentUrl" } }
     ],
     "edges": [
       { "from": "agent-draft", "to": "human-review" },
@@ -168,7 +168,7 @@ Every successful update increments `version` and snapshots the prior content. In
     "version": 2,
     "scope": { "level": "apiKey", "organizationId": null, "documentId": null },
     "nodes": [
-      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1" } }
+      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1", "urlPath": "documentUrl" } }
     ],
     "edges": [],
     "groups": null,

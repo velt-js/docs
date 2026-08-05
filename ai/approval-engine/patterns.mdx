@@ -1,0 +1,256 @@
+---
+title: "Patterns"
+description: "Which feature to reach for, and the mistakes that look reasonable but break."
+---
+
+[Customize Behavior](/ai/approval-engine/customize-behavior) tells you what every field does. This page tells you which one to pick.
+
+## I want X, use Y
+
+| You want to model | Use |
+| --- | --- |
+| One reviewer. On reject, retry up to N times, then escalate. | An `on: "reject"` back-edge with `loop.maxIterations`, plus a sibling `on: "exhausted"` edge. |
+| One reviewer. On reject, hand off to a different team. | An `on: "reject"` forward edge. |
+| Three reviewers in parallel, all must approve, any rejection rewinds the stage as a unit. | A `joinOnQuorum` group with `quorum === expectedSteps`, plus one group-source `on: "reject"` back-edge. |
+| Two of three approvals is enough, stop bothering the third. | `cancelOnQuorum`. |
+| Two of three approvals is enough, then run "publish" exactly once. | `joinOnQuorum`. |
+| Everyone must finish, then take one collective approve or reject path. | A `waitAll` group as an edge source, carrying both an `on: "approve"` and an `on: "reject"` branch. |
+| Specific people must approve, regardless of the count. | `requiredNodeIds` on the group. |
+| An agent's findings need human sign-off. | An `agent` node with a `human` node downstream of it. |
+| A reviewer must respond within 24 hours, or escalate. | `slaMs` on the node, plus an `on: "always"` edge or an `on: "custom"` edge whose `when` tests for `breached`. |
+| Real-time notification on every state change. | `webhookUrl` + `webhookSecret` on dispatch. |
+| The same receiver for every run of a definition. | `webhookConfig` on the definition. |
+| Catch up after a missed webhook. | `/executions/getEvents` with `sinceSeq`. |
+| A workflow step calls your API and continues based on the response. | A `webhook` node with `mode: "sync"`. |
+| A workflow step hands off to a slow external system and waits. | A `webhook` node with `mode: "async"`. |
+| An external system starts a run. | A trigger with `inboundWebhook`. |
+| A run on a schedule, such as a nightly audit. | A trigger with `schedule`. |
+| GitHub or Vercel events start runs, with no per-repo setup. | A trigger with `appTrigger`. |
+| Email or Slack sent from inside the workflow. | A `notification` node. |
+| An admin acts on a reviewer's behalf, distinguishable in the audit log. | `/steps/resolve` with `reviewer-approve` or `reviewer-reject`. |
+| An admin force-completes a step that has no approve or reject concept. | `/steps/resolve` with `force-complete` or `force-fail`. |
+
+## Duplicating a workflow
+
+There is no duplicate endpoint. A definition supports five operations: create, update, delete, get, and list. Copying is not one of them, so you do it by hand. It is four steps.
+
+<Steps>
+  <Step title="Fetch the original">
+    Call [Get Definition](/api-reference/rest-apis/v2/approval-engine/definitions/get-definition). You get the whole thing back: nodes, edges, groups, triggers, everything.
+  </Step>
+
+  <Step title="Change the id and the name">
+    `definitionId` is the workflow's permanent handle, and two active definitions cannot share one. Turn `marketing-page-approval` into `marketing-page-approval-eu`. Give the copy a name a human can tell apart too.
+  </Step>
+
+  <Step title="Strip the five fields the server owns">
+    A read response carries bookkeeping that is not yours to set: `version`, `createdAt`, `updatedAt`, `status`, and `compiled`. Delete all five before sending.
+
+    Create rejects unknown fields outright, so leaving even one in fails the whole request with `INVALID_ARGUMENT`. That is the good outcome: you get a loud error, never a silently mangled copy.
+  </Step>
+
+  <Step title="Send it to create">
+    POST the trimmed object to [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition). You now have a second workflow, starting at `version: 1`.
+  </Step>
+</Steps>
+
+<Warning>
+  **Triggers are what bite people.** If the original runs every night at 2am, the copy now runs every night at 2am too, and you have two nightly runs. A copied `webhookConfig` reuses the same secret, so one leaked secret exposes both workflows.
+
+  Before you create the copy, either drop `triggers` and `webhookConfig` entirely and re-add them deliberately, or give the copy fresh `triggerId` values and a fresh secret.
+</Warning>
+
+Everything else copies safely. Your `edges` come back exactly as you authored them, byte for byte with no reformatting, so the round trip cannot quietly change routing. `scope` echoes the organization and document ids you originally sent, not internal ones, so it is safe to copy or edit as-is.
+
+## Versioning, and what it does not do
+
+Every update bumps the version (`v1` to `v2` to `v3`) and stores a complete copy of the previous content. Nothing is overwritten in place.
+
+Three things follow, and they are the useful part:
+
+- **You cannot clobber a coworker's edit.** Update requires `ifVersion`, your claim about which version you are editing. If someone pushed `v5` while you were working from `v4`, your update is rejected with `FAILED_PRECONDITION` and a message like `Version conflict: expected 4, current 5`, instead of silently overwriting them.
+- **Editing never disturbs runs already in progress.** A run locks onto the version that was current when it started and finishes on that version. If a request is sitting in someone's queue on `v3` and you publish `v4` adding a reviewer, that request does not change shape under the reviewer. It completes as `v3`. Only new runs pick up `v4`.
+- **Delete and recreate resets the counter.** Recreating a deleted `definitionId` purges the old snapshots and starts again at `v1`. The version line is not continuous across a delete.
+
+### What versioning does not give you
+
+This is where expectations usually outrun reality.
+
+Old versions are stored, but **you cannot read them**. There is no endpoint to list history or fetch what `v2` looked like. The snapshots exist for audit and recovery; they are not part of the public API. All you can see is the current version number.
+
+Which means **there is no rollback**. If `v5` was a mistake, you cannot ask for `v4` back. You need your own copy of `v4`'s content, which you resubmit as an update, producing a `v6` that contains `v4`'s content. You move forward to go back. Without a copy, you are reconstructing it by hand.
+
+There is also no draft versus live distinction, no way to mark a version as the stable one, and no way to run a specific version. New runs always get the latest.
+
+<Tip>
+  Keep your definitions in source control and treat the API as the deployment target. That single habit gives you the history, the diffs, and the rollback path the API does not.
+</Tip>
+
+## Choosing a parallel-review policy
+
+Pick by what should happen the moment quorum is met.
+
+| You want | Use | What happens |
+| --- | --- | --- |
+| Everyone signs off. Nobody is freed early. | `waitAll` (default) | The engine waits for every member to terminate. Each member's edges fire on its own completion. |
+| Once 2 of 3 approve, stop bothering the third. Each approver still triggers its own downstream work. | `cancelOnQuorum` | The third reviewer's waiting step is cancelled by the system. The two approvers still fan out per edge. |
+| After quorum, run the next step exactly once, not once per approver. | `joinOnQuorum` | Same cancellation as `cancelOnQuorum`, and per-member fan-out is suppressed. The group fires one shared successor carrying every member's output. |
+
+**Groups can branch collectively.** Set `from: { kind: "group", groupId }` and the group fires one successor instead of one per member. `waitAll` waits for everyone and decides by unanimity, approving only if every member approved, so it can carry both an `on: "approve"` and an `on: "reject"` branch. `joinOnQuorum` and `cancelOnQuorum` fire on approval quorum only, so a forward `on: "reject"` from either is rejected as a dead edge.
+
+<Warning>
+  A per-member `on: "reject"` edge on a `joinOnQuorum` member is unreachable at runtime. The policy suppresses per-member fan-out, so the rejecter's edge never fires. It still satisfies the reject-path rule, but it is dead code. For per-rejecter routing, use `waitAll` or `cancelOnQuorum`, which keep per-member fan-out.
+</Warning>
+
+## Choosing a rejection strategy
+
+Every `human` node needs a reject route. There are three shapes.
+
+**Send it back to me.** One reviewer, one retry counter. The work returns to an earlier node, up to N times, then escalates.
+
+```json
+{ "from": "human-boss", "to": "agent-publish",        "on": "approve" },
+{ "from": "human-boss", "to": "agent-draft",          "on": "reject", "loop": { "maxIterations": 3 } },
+{ "from": "human-boss", "to": "human-skip-level-mgr", "on": "exhausted" }
+```
+
+**Send it somewhere else.** No retry, just routing. A different team picks it up.
+
+```json
+{ "from": "human-boss", "to": "agent-publish",     "on": "approve" },
+{ "from": "human-boss", "to": "human-rework-team", "on": "reject" }
+```
+
+**Rewind the whole stage.** Several reviewers work in parallel, all must approve, and any single rejection sends the entire stage back with one shared retry counter.
+
+```json
+{
+  "groups": [
+    {
+      "groupId": "compliance-review",
+      "memberNodeIds": ["human-legal", "human-brand", "human-finance"],
+      "expectedSteps": 3,
+      "quorum": 3,
+      "onQuorumMet": "joinOnQuorum"
+    }
+  ],
+  "edges": [
+    { "from": { "kind": "group", "groupId": "compliance-review" }, "to": "agent-publish", "on": "approve" },
+    { "from": { "kind": "group", "groupId": "compliance-review" }, "to": "agent-draft",   "on": "reject", "loop": { "maxIterations": 3 } },
+    { "from": { "kind": "group", "groupId": "compliance-review" }, "to": "human-cco",     "on": "exhausted" }
+  ]
+}
+```
+
+A group-source reject back-edge is `joinOnQuorum`-only, because that is the case where one shared counter makes sense. Forward collective fan-out works for any policy.
+
+If rejection should simply end the run, say so explicitly with a reject edge to a terminal node. The engine will not let you leave it implicit.
+
+## Choosing SLA and breach handling
+
+Set `slaMs` when a step is time-critical. On breach the step becomes `breached`, which is terminal.
+
+The catch: a reject edge fires on `decision == 'reject'`, never on a breach. So `slaMs` plus only a reject edge is rejected at write time with `missing-breach-edge`. Add one of:
+
+- An `on: "always"` edge, which fires on every terminal status including `breached`.
+- An `on: "custom"` edge whose `when` tests for the breached status.
+
+## Webhooks or polling
+
+They are complementary, not alternatives.
+
+| You want | Use |
+| --- | --- |
+| Push notification the moment state changes. | `webhookUrl` + `webhookSecret` on dispatch, or `webhookConfig` on the definition. |
+| Recovery after your receiver was down. | `/executions/getEvents` with `sinceSeq`. |
+| A read-only tool that should not host an HTTPS receiver. | Polling alone. |
+
+In production use both: webhooks for liveness, polling for recovery. `seq` is monotonic per execution, so catch-up is deterministic.
+
+## Anti-patterns
+
+These look reasonable. They are not.
+
+### One reject back-edge per parallel reviewer
+
+```json
+// Rejected: loop-node-in-multiple-loops
+"edges": [
+  { "from": "human-legal",   "to": "agent-draft", "on": "reject", "loop": { "maxIterations": 3 } },
+  { "from": "human-brand",   "to": "agent-draft", "on": "reject", "loop": { "maxIterations": 3 } },
+  { "from": "human-finance", "to": "agent-draft", "on": "reject", "loop": { "maxIterations": 3 } }
+]
+```
+
+Each back-edge derives its own loop region, and the bodies overlap. Use one `joinOnQuorum` group with a single group-source reject back-edge, as in "Rewind the whole stage" above.
+
+### `slaMs` with only a reject edge
+
+```json
+// Rejected: missing-breach-edge
+"nodes": [{ "nodeId": "human-review", "type": "human", "slaMs": 86400000, "config": { "reviewers": [{ "userId": "u_1", "mandatory": true }] } }],
+"edges": [{ "from": "human-review", "to": "human-rework", "on": "reject" }]
+```
+
+The reject edge never fires on a breach, so the breach would dead-end. Add a breach route.
+
+### A final human node with no reject edge
+
+```json
+// Rejected: APPROVAL_HUMAN_NODE_REQUIRES_REJECT_PATH
+"nodes": [{ "nodeId": "human-final-approver", "type": "human", "config": { "reviewers": [{ "userId": "u_1", "mandatory": true }] } }]
+```
+
+Even the last approver needs somewhere to send a rejection. If rejection should end the run, route it to a terminal node explicitly.
+
+### An agent node inside a quorum group
+
+```json
+// Accepted, but quorum can never be met
+"groups": [{
+  "groupId": "x",
+  "memberNodeIds": ["agent-summarize", "human-legal"],
+  "expectedSteps": 2,
+  "quorum": 2,
+  "onQuorumMet": "joinOnQuorum"
+}]
+```
+
+Quorum counts approvals, and an agent step has no reviewer decision to contribute. The group hangs. Move the agent out of the group and put it upstream or downstream instead.
+
+<Note>
+  The old workaround was to mark the agent `blocking: true`. That is not available: blocking agent nodes are rejected at runtime with `agent-blocking-not-supported`. Sequence the agent and the humans instead of grouping them.
+</Note>
+
+### `when` written as JavaScript
+
+```json
+// Rejected: the expression fails to compile
+{ "from": "x", "to": "y", "on": "custom", "when": "output.decision == 'approve'" }
+```
+
+`when` is a JSON-AST string, not an expression language:
+
+```json
+{ "from": "x", "to": "y", "on": "custom", "when": "{\"op\":\"eq\",\"args\":[{\"var\":\"output.decision\"},\"approve\"]}" }
+```
+
+You only write this for `on: "custom"`. The `approve`, `reject`, `always`, and `exhausted` roles compile their own predicates.
+
+### An `on: "exhausted"` target that is reachable another way
+
+This is accepted, and it will surprise you. The engine skips seeding an exhausted-route node as a root only when that node has no other incoming edges. If your escalation node is also reachable by normal fan-out, dispatch spawns it once at the start, and the loop spawns a second copy when the cap is hit. Both run.
+
+Keep `on: "exhausted"` targets as leaves with no other incoming edges. Chain anything else off them.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Customize Behavior" icon="sliders" href="/ai/approval-engine/customize-behavior">
+    The field reference behind every choice on this page.
+  </Card>
+
+  <Card title="Setup" icon="gear" href="/ai/approval-engine/setup">
+    Build and run a workflow end to end.
+  </Card>
+</CardGroup>

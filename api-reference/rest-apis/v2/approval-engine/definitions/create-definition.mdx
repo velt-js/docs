@@ -3,7 +3,7 @@ title: "Create Definition"
 api: "POST https://api.velt.dev/v2/workflow/definitions/create"
 ---
 
-Use this API to register a new workflow definition (the static blueprint of nodes, edges, and optional parallel groups). Definitions are validated at write time — schema errors, `compileGraph` edge-contract errors, and linter graph-shape errors are rejected with explicit validation keys.
+Use this API to register a new workflow definition (the static blueprint of nodes, edges, and optional parallel groups). Definitions are validated at write time: schema errors, `compileGraph` edge-contract errors, and linter graph-shape errors are rejected with explicit validation keys.
 
 # Endpoint
 
@@ -40,19 +40,28 @@ Use this API to register a new workflow definition (the static blueprint of node
     <ParamField body="scope" type="object">
       Defaults to `{ level: "apiKey" }`. Options:
 
-      - `{ level: "apiKey" }` — workspace-wide.
-      - `{ level: "organization", organizationId: "<id>" }` — bound to one organization. `organizationId` is required (returns `INVALID_ARGUMENT` if omitted).
-      - `{ level: "document", organizationId: "<id>", documentId: "<id>" }` — bound to one document under an organization. Both fields required.
+      - `{ level: "apiKey" }`: workspace-wide.
+      - `{ level: "organization", organizationId: "<id>" }`: bound to one organization. `organizationId` is required (returns `INVALID_ARGUMENT` if omitted).
+      - `{ level: "document", organizationId: "<id>", documentId: "<id>" }`: bound to one document under an organization. Both fields required.
 
-      When the response echoes `scope.organizationId` / `scope.documentId`, the values are the engine's server-namespaced ids (hashed from your client ids), not the literal strings you sent. Don't try to use them as your own identifiers — keep your client ids on your side.
+      The response echoes back the same `organizationId` / `documentId` you sent. The engine keeps its own internal namespaced copies for storage, but they are never returned, so a definition read round-trips safely into a create or update call. See [Duplicating a workflow](/ai/approval-engine/patterns#duplicating-a-workflow).
     </ParamField>
 
     <ParamField body="nodes" type="array" required>
-      1–100 nodes. Each node has `nodeId`, `type` (`agent` / `human` / `webhook` — `webhook` validates but its runtime is deferred in v1), and a `config` block. See node configuration details in [Customize Behavior](/ai/approval-engine/customize-behavior#node-configuration). Each node also accepts an optional `slaMs` (integer, ms) — SLA deadline for the step — and optional cosmetic `name` (1–200 chars) and `description` (≤ 2000 chars) labels echoed verbatim in the response.
+      1–100 nodes. Each node has `nodeId` (1–64 chars), a `type`, and a `config` block validated strictly against that type.
+
+      | `type` | What it does | `config` essentials |
+      | ------ | ------------ | ------------------- |
+      | `agent` | Runs a Velt agent against a URL. | `agentId` plus `url` or `urlPath` (at least one required). |
+      | `human` | Waits for reviewers to approve or reject. | `reviewers[]` or legacy `reviewerIds[]`. |
+      | `notification` | Sends an email or Slack message from the workflow. | `channel` and `bodyTemplate`, plus `recipients` (email) or `slackTarget` (slack). |
+      | `webhook` | Calls your HTTPS endpoint. `async` mode waits for your callback. | `url`, optional `mode`, `authMode`, `timeoutMs`. |
+
+      Each node also accepts an optional `slaMs` (integer ms, up to 7 days) and optional cosmetic `name` (1–200 chars) and `description` (≤ 2000 chars) labels echoed verbatim in the response. Full field tables: [Node configuration](/ai/approval-engine/customize-behavior#node-configuration).
     </ParamField>
 
     <ParamField body="edges" type="array" required>
-      0–500 edges. Each edge: `{ from, to, on?, when?, loop? }`. `from` / `to` are `EdgeEndpoint`s — a bare node-id string, `{ kind: "node", nodeId }`, or `{ kind: "group", groupId }`.
+      0–500 edges. Each edge: `{ from, to, on?, when?, loop? }`. `from` / `to` are `EdgeEndpoint`s: a bare node-id string, `{ kind: "node", nodeId }`, or `{ kind: "group", groupId }`.
 
       | Field  | Type            | Required                          | Notes                                                                                                          |
       | ------ | --------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -72,15 +81,22 @@ Use this API to register a new workflow definition (the static blueprint of node
     </ParamField>
 
     <ParamField body="triggers" type="array">
-      0–50 trigger declarations. Each trigger has the shape `{ triggerId, eventName?, filters? }`:
+      0–50 trigger declarations. A trigger starts executions for you, with no dispatch call.
 
-      | Field        | Type    | Required | Description                                                                                       |
-      | ------------ | ------- | -------- | ------------------------------------------------------------------------------------------------- |
-      | `triggerId`  | string  | yes      | 1–128 chars. Stable identifier for this trigger.                                                  |
-      | `eventName`  | string  | no       | ≤ 128 chars. The event name your application emits when the workflow should dispatch.             |
-      | `filters`    | object  | no       | Free-form filter map; consumed by your dispatch wrapper to decide whether to fire this trigger.   |
+      | Field            | Type    | Required | Description                                                                                     |
+      | ---------------- | ------- | -------- | ------------------------------------------------------------------------------------------------- |
+      | `triggerId`      | string  | yes      | 1–128 chars. Stable identifier, also the idempotency-key prefix.                                 |
+      | `eventName`      | string  | no       | ≤ 128 chars. Optional label.                                                                     |
+      | `filters`        | object  | no       | Free-form match filters.                                                                         |
+      | `inboundWebhook` | object  | no       | External systems POST to start a run. See [Inbound webhook trigger](/ai/approval-engine/customize-behavior#inbound-webhook-trigger). |
+      | `schedule`       | object  | no       | Cron cadence starts runs. See [Scheduled trigger](/ai/approval-engine/customize-behavior#scheduled-cron-trigger). |
+      | `appTrigger`     | object  | no       | A connected GitHub App or Vercel Integration routes events. See [App trigger](/ai/approval-engine/customize-behavior#app-trigger). |
 
-      Triggers are descriptive metadata in v1 — the engine does not auto-dispatch from them. Use them to label which definition belongs to which application event so your own dispatcher can resolve `eventName → definitionId`.
+      `inboundWebhook`, `schedule`, and `appTrigger` are mutually exclusive on a single trigger entry (`APPROVAL_APP_TRIGGER_EXCLUSIVE`). A definition may declare several entries, each using a different mechanism. A triggered run always inherits the definition's `scope`.
+    </ParamField>
+
+    <ParamField body="webhookConfig" type="object">
+      Default webhook receiver for every execution of this definition: `{ url, secret, eventTypes? }`. `url` is `https`-only and SSRF-guarded; `secret` is 16–512 chars; optional `eventTypes` limits delivery to up to 50 event types. A per-execution `webhookUrl` / `webhookSecret` on [Dispatch Execution](/api-reference/rest-apis/v2/approval-engine/executions/dispatch-execution) overrides this.
     </ParamField>
 
     <ParamField body="tags" type="string[]">
@@ -101,7 +117,7 @@ Use this API to register a new workflow definition (the static blueprint of node
   </Expandable>
 </ParamField>
 
-#### Node object example
+#### Node object examples
 
 ```JSON
 {
@@ -109,10 +125,27 @@ Use this API to register a new workflow definition (the static blueprint of node
   "type": "agent",
   "name": "Brand check",
   "description": "Verifies copy against brand guidelines.",
-  "config": { "agentId": "brand-agent-v1", "blocking": false, "requireNonEmptyOutput": true },
+  "config": { "agentId": "brand-agent-v1", "urlPath": "documentUrl", "requireNonEmptyOutput": true },
   "slaMs": 3600000
 }
 ```
+
+```JSON
+{
+  "nodeId": "notify-stakeholders",
+  "type": "notification",
+  "config": {
+    "channel": "email",
+    "recipients": ["lead@acme.dev"],
+    "subjectTemplate": "Approval {{input.decision}}",
+    "bodyTemplate": "Findings: {{input.agentResultsSummary.summary}}"
+  }
+}
+```
+
+<Warning>
+  An `agent` node must set `url` or `urlPath`, or the definition is rejected with `APPROVAL_AGENT_NODE_REQUIRES_URL_OR_URLPATH`. Setting `blocking: true` passes schema validation but is rejected at run time with `agent-blocking-not-supported`; place a `human` node downstream of the agent instead.
+</Warning>
 
 #### Edge object examples
 
@@ -135,15 +168,36 @@ Use this API to register a new workflow definition (the static blueprint of node
     "name": "Marketing copy approval",
     "scope": { "level": "apiKey" },
     "nodes": [
-      { "nodeId": "agent-draft",   "type": "agent", "config": { "agentId": "copy-agent-v1" } },
+      { "nodeId": "agent-draft",   "type": "agent", "config": { "agentId": "copy-agent-v1",    "urlPath": "documentUrl" } },
       { "nodeId": "human-review",  "type": "human", "config": { "reviewers": [{ "userId": "u_reviewer_01", "mandatory": true }] } },
-      { "nodeId": "agent-publish", "type": "agent", "config": { "agentId": "publish-agent-v1" } },
-      { "nodeId": "agent-rework",  "type": "agent", "config": { "agentId": "rework-agent-v1" } }
+      { "nodeId": "agent-publish", "type": "agent", "config": { "agentId": "publish-agent-v1", "urlPath": "documentUrl" } },
+      { "nodeId": "agent-rework",  "type": "agent", "config": { "agentId": "rework-agent-v1",  "urlPath": "documentUrl" } }
     ],
     "edges": [
       { "from": "agent-draft", "to": "human-review" },
       { "from": "human-review", "to": "agent-publish", "on": "approve" },
       { "from": "human-review", "to": "agent-rework", "on": "reject" }
+    ]
+  }
+}
+```
+
+#### Start runs from a nightly cron schedule
+
+```JSON
+{
+  "data": {
+    "definitionId": "nightly-content-audit",
+    "name": "Nightly content audit",
+    "nodes": [
+      { "nodeId": "audit", "type": "agent", "config": { "agentId": "broken-links", "url": "https://acme.com" } }
+    ],
+    "edges": [],
+    "triggers": [
+      {
+        "triggerId": "nightly-audit",
+        "schedule": { "cron": "0 2 * * *", "timezone": "America/Los_Angeles", "enabled": true }
+      }
     ]
   }
 }
@@ -162,10 +216,10 @@ Use this API to register a new workflow definition (the static blueprint of node
     "version": 1,
     "scope": { "level": "apiKey", "organizationId": null, "documentId": null },
     "nodes": [
-      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1" } },
+      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1", "urlPath": "documentUrl" } },
       { "nodeId": "human-review", "type": "human", "config": { "reviewers": [{ "userId": "u_reviewer_01", "mandatory": true }] } },
-      { "nodeId": "agent-publish", "type": "agent", "config": { "agentId": "publish-agent-v1" } },
-      { "nodeId": "agent-rework", "type": "agent", "config": { "agentId": "rework-agent-v1" } }
+      { "nodeId": "agent-publish", "type": "agent", "config": { "agentId": "publish-agent-v1", "urlPath": "documentUrl" } },
+      { "nodeId": "agent-rework", "type": "agent", "config": { "agentId": "rework-agent-v1", "urlPath": "documentUrl" } }
     ],
     "edges": [
       { "from": "agent-draft", "to": "human-review" },
@@ -216,7 +270,7 @@ The read-only `compiled` block is added to every `DefinitionView` (create / get 
     "version": 1,
     "scope": { "level": "apiKey", "organizationId": null, "documentId": null },
     "nodes": [
-      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1" } }
+      { "nodeId": "agent-draft", "type": "agent", "config": { "agentId": "copy-agent-v1", "urlPath": "documentUrl" } }
     ],
     "edges": [],
     "groups": null,

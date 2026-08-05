@@ -15,6 +15,7 @@ Every node has a `nodeId`, a `type`, and a `config` block.
 | `type` | enum | Required. `agent`, `human`, `notification`, or `webhook`. |
 | `config` | object | Required. Shape depends on `type`. See below. |
 | `slaMs` | integer | Deadline for the step, up to 7 days. See [SLA and breach handling](#sla-and-breach-handling). |
+| `requireNonEmptyOutput` | boolean | Webhook nodes only. Fails the step terminally with `webhook-node-empty-response` when the receiver returns an empty body. Accepted on the other node types, with no runtime effect. |
 | `name` | string | Cosmetic label, 1 to 200 chars. Echoed back, no runtime effect. |
 | `description` | string | Cosmetic, up to 2000 chars. Echoed back, no runtime effect. |
 
@@ -35,8 +36,7 @@ An agent node runs a Velt agent against a URL, then routes on the result. The st
 | `promptOverride` | string | Up to 8000 chars. |
 | `inputMapping` | object | Extra step inputs passed to the agent. |
 | `pollIntervalMs` | integer | 5000 to 60000. How often the engine checks the agent's status. Defaults to 15000. |
-| `agentMaxRuntimeMs` | integer | Hard ceiling, up to 24 hours. Defaults to 30 minutes. |
-| `requireNonEmptyOutput` | boolean | Fail the step if the agent returns empty output. |
+| `agentMaxRuntimeMs` | integer | Hard ceiling, up to 24 hours. Defaults to 10 minutes. |
 
 **You must set `url` or `urlPath`.** Setting neither is rejected with `APPROVAL_AGENT_NODE_REQUIRES_URL_OR_URLPATH`. If `urlPath` resolves to nothing at run time and no static `url` is set, the step fails with `agent-url-unresolved`.
 
@@ -48,8 +48,7 @@ A `urlPath` value with no scheme is normalized. Vercel's `payload.deployment.url
   "type": "agent",
   "config": {
     "agentId": "brand-agent-v1",
-    "urlPath": "documentUrl",
-    "requireNonEmptyOutput": true
+    "urlPath": "documentUrl"
   },
   "slaMs": 3600000
 }
@@ -146,7 +145,7 @@ A webhook node calls your own HTTPS endpoint as a workflow step.
 
 **`sync` mode** posts and waits for your response. A 2xx (or a listed `expectedStatusCodes` value) completes the step. A 4xx fails it terminally, because that is a configuration error on your side. A 5xx, timeout, or network error fails it with retry budget remaining.
 
-**`async` mode** posts a payload that includes a signed `callbackToken` and `callbackUrl`, then parks the step in `waiting`. You POST back to the callback endpoint to complete or fail the step. Async mode needs a `webhookSecret` on the execution to sign the callback token.
+**`async` mode** posts the payload, then parks the step in `waiting`. With the default `bodyTemplate: "envelope"`, the body carries `callback.url`, `callback.token`, and `callback.tokenHeader`. With `bodyTemplate: "pass-through"`, the same three values are nested under `_velt` as `_velt.callbackUrl`, `_velt.callbackToken`, and `_velt.callbackTokenHeader`. To complete or fail the step, POST to that callback URL with the token in the `x-velt-callback-token` header and a body of `{ "status": "completed" | "failed", "output"?: {}, "error"?: {} }`. Async mode needs a `webhookSecret` on the execution to sign the callback token.
 
 With `authMode: "hmac"` the engine signs the outbound body with the execution's `webhookSecret` in `x-velt-signature`. With `authMode: "token"` it sends a static token, whose value is read at dispatch time from `triggerContext.webhookAuth[<nodeId>]` so the secret never lives in the definition.
 
@@ -241,9 +240,9 @@ Render `compiled` directly instead of re-implementing the compiler in your clien
 
 Set `slaMs` on any node to give the step a deadline, up to 7 days. If the step does not complete in time it becomes `breached` and emits `step.breached`.
 
-Declare an outgoing edge that routes on the breached status. Without one the definition is rejected with `missing-breach-edge`. Silent dead-ends are a bug, so the engine will not let you author one.
+Declare an outgoing edge that routes on the breached status: either an `on: "always"` edge, which fires on every terminal status including `breached`, or an `on: "custom"` edge whose `when` tests for `breached`. A node that has outgoing edges but none that route on a breach is rejected with `missing-breach-edge`. A terminal node with no outgoing edges is accepted; if it breaches, the execution rolls up to `failed` and emits `execution.failed`.
 
-Agent nodes also have their own ceiling via `agentMaxRuntimeMs`, which defaults to 30 minutes.
+Agent nodes also have their own ceiling via `agentMaxRuntimeMs`, which defaults to 10 minutes.
 
 ## Parallel groups and quorum policies
 
@@ -402,7 +401,7 @@ Declaring `inboundWebhook` exposes the definition at `POST /v2/workflow/webhook-
 | `eventNameHeader` | string | custom only | Header carrying the event name for `allowedEvents`. |
 | `idempotencyHeader` | string | no | Header to read the source event id from. |
 | `idempotencyBodyPath` | string | no | Dot-path in the body for the source event id, such as `event.id`. |
-| `payloadMapping` | enum | no | `velt` only. `pass-through` (default) sends the body as `triggerContext`; `wrap` nests it under `source`. |
+| `payloadMapping` | enum | no | Applies to every provider. `pass-through` (default) sends the extracted payload as `triggerContext`; `wrap` nests it under `source`. |
 
 Presets resolve the signature header, algorithm, prefix, and event-name source for you:
 
@@ -426,7 +425,7 @@ Any provider other than `velt` requires `authMode: "hmac"`.
 An `allowedEvents` gate fails closed. If the event name cannot be resolved, the event is dropped.
 
 <Note>
-  This endpoint takes **raw JSON**. Unlike the other REST endpoints, you do not wrap the payload in a `data` envelope, because external providers cannot reshape their outgoing bodies. The handler rate-limits per source, rejects oversized bodies at the boundary before parsing, and validates any URL values in the payload against an allowlist to block server-side request forgery.
+  This endpoint takes **raw JSON**. Unlike the other REST endpoints, you do not wrap the payload in a `data` envelope, because external providers cannot reshape their outgoing bodies. Bodies over 1 MB are rejected with HTTP 413 and code `body-too-large`. This endpoint applies no per-source rate limiting, so add your own throttling in front of it if your source can burst. URL values inside the payload are not screened: the SSRF allowlist applies only to outbound destination URLs you configure on a definition, meaning the webhook node `url`, `webhookConfig.url`, the dispatch `webhookUrl`, and a URL-valued `slackTarget`.
 </Note>
 
 ### Scheduled (cron) trigger
@@ -584,16 +583,20 @@ Events delivered by webhook and returned from [Get Execution Events](/api-refere
 | --- | --- | --- |
 | `execution.dispatched` | Run created and first steps scheduled. | `{ definitionId, definitionVersion, rootStepIds }` |
 | `execution.completed` | All steps terminal, no unhandled failure. | null |
-| `execution.failed` | A blocking step failed or breached with no recovery edge. | `{ failureReason }` |
+| `execution.failed` | A blocking step failed or breached with no recovery edge. | null |
 | `execution.cancelled` | Run cancelled, or fully rolled back. | `{ reason? }` |
 | `step.awaiting-approval` | A step entered `waiting`: a human step, a running agent step, or an async webhook step. | Human steps: `{ waitingForReviewers, mandatoryCount, resumeKey }`. Agent steps: `{ agentId, agentExecutionId, pollIntervalMs }`. |
-| `step.completed` | Step transitioned to `completed`. | Human steps: `{ aggregatorStatus, nodeType, decision }`. Agent steps: `{ agentId }`. |
-| `step.failed` | Step failed after its retry budget ran out. | `{ error: { code, message } }` |
+| `step.completed` | Step transitioned to `completed`. | Human steps: `{ aggregatorStatus, nodeType, decision }`. Agent steps: `{ agentExecutionId, agentExecutionStatus, decision, source }`. |
+| `step.failed` | Step failed after its retry budget ran out, or failed terminally when retries cannot help. | Varies by node type. Human steps: `{ reason }` (`no-reviewers`, `no-mandatory-reviewers`, `duplicate-reviewer-user-ids`, `exception`). Webhook steps: `{ httpStatus, latencyMs, retryClass }`. Notification steps: `{ channel, retryClass }`. Agent resumes: `{ agentExecutionId, agentExecutionStatus, decision, source }`. |
 | `step.breached` | Step passed its SLA before completing. | `{ reason }` |
 | `step.cancelled` | Step cancelled directly or by a quorum side effect. | `{ actorId, reason }` |
 | `group.quorum-met` | A group's approval threshold was first satisfied. | `{ groupId, total, quorum, completedTotal, expectedSteps }` |
 | `loop.iteration-started` | A rejected iteration spawned the next one below the cap. | `{ loopId, iteration, triggeredBy: 'rejection' }` |
 | `loop.exhausted` | The loop hit `maxIterations`. | `{ loopId, iteration, lastRejectedBy?, lastRejectionReason? }` |
+
+The `{ code, message }` error object is not part of the event `data`. It lives on the step's `error` field, which you read with [Get Execution](/api-reference/rest-apis/v2/approval-engine/executions/get-execution) as `steps[].error`. Route on `event.type`, then fetch the step for the detail.
+
+A step using the reserved `__mock__` agent id completes inline and emits `{ agentId, synthetic, decision }` instead, so a receiver you tested against `__mock__` sees different `data` keys in production.
 
 <Note>
   Internal events such as `step.scheduled`, `step.started`, `step.retried`, and `step.overridden` consume `seq` numbers but are not delivered externally. Your stream may have gaps in `seq`, which is expected.
@@ -620,7 +623,7 @@ Definitions are validated on create and update. Any violation returns `INVALID_A
 | `cycle-detected` | The graph has a cycle. Only marked reject loop-backs may revisit a node. |
 | `unreachable-node` | A node has no path from any root. |
 | `node-missing-config` | A node has no `config` block. |
-| `missing-breach-edge` | A node sets `slaMs` but no edge routes on a breach. |
+| `missing-breach-edge` | A node sets `slaMs` and has outgoing edges, but none routes on a breach. |
 | `group-duplicate-id` | Two groups share the same `groupId`. |
 | `group-members-empty` | `memberNodeIds` is empty. |
 | `group-member-missing` | A member references an unknown node. |
@@ -642,7 +645,7 @@ Definitions are validated on create and update. Any violation returns `INVALID_A
 | `APPROVAL_EDGE_CUSTOM_REQUIRES_WHEN` | `on: "custom"` without a non-empty `when`. |
 | `APPROVAL_EDGE_WHEN_ONLY_FOR_CUSTOM` | `when` supplied on a non-custom edge. |
 | `APPROVAL_EDGE_LOOP_REQUIRES_REJECT` | `loop` on an edge that is not `on: "reject"`. |
-| `APPROVAL_EDGE_LOOP_TARGET_NOT_ANCESTOR` | A reject loop-back whose `to` is not an ancestor of `from`. |
+| `APPROVAL_EDGE_LOOP_REQUIRES_BACK_EDGE` | A reject loop-back whose `to` is not an ancestor of `from`. |
 | `APPROVAL_EDGE_REJECT_CYCLE_REQUIRES_LOOP` | `on: "reject"` to an ancestor without `loop`. |
 | `APPROVAL_EDGE_EXHAUSTED_REQUIRES_LOOP_SIBLING` | `on: "exhausted"` with no sibling reject loop-back from the same `from`. |
 | `APPROVAL_HUMAN_NODE_REQUIRES_REJECT_PATH` | A human node has no outgoing `on: "reject"` edge. |

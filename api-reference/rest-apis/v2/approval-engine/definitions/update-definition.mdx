@@ -25,6 +25,10 @@ Use this API to update an existing workflow definition. Atomically increments th
 
 Accepts every field from [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition) plus:
 
+<Warning>
+Update replaces the definition; it is not a partial patch. Send the complete `name`, `nodes`, and `edges` on every call. Any field you omit is not preserved from the stored definition. Read the current definition with [Get Definition](/api-reference/rest-apis/v2/approval-engine/definitions/get-definition), change what you need, then send the whole object back with `ifVersion`.
+</Warning>
+
 <ParamField body="data" type="object" required>
   <Expandable title="properties">
     <ParamField body="definitionId" type="string" required>
@@ -35,7 +39,7 @@ Accepts every field from [Create Definition](/api-reference/rest-apis/v2/approva
       Optimistic-locking version. Must equal the stored definition's current `version`. If someone else updated the definition since you read it, the request is rejected with `FAILED_PRECONDITION` and a message like `Version conflict: expected 4, current 5`, so a concurrent edit is never silently overwritten.
     </ParamField>
 
-    <ParamField body="name" type="string">
+    <ParamField body="name" type="string" required>
       1–200 chars.
     </ParamField>
 
@@ -43,11 +47,11 @@ Accepts every field from [Create Definition](/api-reference/rest-apis/v2/approva
       0–2000 chars.
     </ParamField>
 
-    <ParamField body="nodes" type="array">
+    <ParamField body="nodes" type="array" required>
       1–100 nodes of type `agent`, `human`, `notification`, or `webhook`. Each node accepts an optional `slaMs` (up to 7 days) and optional cosmetic `name` (1–200 chars) and `description` (≤ 2000 chars) labels. See [Node configuration](/ai/approval-engine/customize-behavior#node-configuration) and the [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition) type table.
     </ParamField>
 
-    <ParamField body="edges" type="array">
+    <ParamField body="edges" type="array" required>
       0–500 edges, unified `EdgeSchema`: `{ from, to, on?, when?, loop? }`. `from` / `to` are `EdgeEndpoint`s (bare node-id string, `{ kind: "node", nodeId }`, or `{ kind: "group", groupId }`); `on` ∈ `approve` / `reject` / `always` (default) / `exhausted` / `custom`; `when` is valid only on `on:"custom"`; `loop { maxIterations: 1–20 }` only on an `on:"reject"` back-edge. A `human` node must have an outgoing `on:"reject"` edge. See [the edge model](/ai/approval-engine/customize-behavior#edge-model) for full semantics and the [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition) field table.
     </ParamField>
 
@@ -91,14 +95,28 @@ Snapshots are kept for audit and recovery only. There is no endpoint to read an 
 
 ## **Example Requests**
 
-#### Rename a definition
+#### Update a definition
+
+Only `name` changes here, so the request resends the unchanged `nodes` and `edges` verbatim.
 
 ```JSON
 {
   "data": {
     "definitionId": "marketing-copy-approval",
     "ifVersion": 1,
-    "name": "Marketing copy approval (Q2 revision)"
+    "name": "Marketing copy approval (Q2 revision)",
+    "scope": { "level": "apiKey" },
+    "nodes": [
+      { "nodeId": "agent-draft",   "type": "agent", "config": { "agentId": "copy-agent-v1",    "urlPath": "documentUrl" } },
+      { "nodeId": "human-review",  "type": "human", "config": { "reviewers": [{ "userId": "u_reviewer_01", "mandatory": true }] } },
+      { "nodeId": "agent-publish", "type": "agent", "config": { "agentId": "publish-agent-v1", "urlPath": "documentUrl" } },
+      { "nodeId": "agent-rework",  "type": "agent", "config": { "agentId": "rework-agent-v1",  "urlPath": "documentUrl" } }
+    ],
+    "edges": [
+      { "from": "agent-draft", "to": "human-review" },
+      { "from": "human-review", "to": "agent-publish", "on": "approve" },
+      { "from": "human-review", "to": "agent-rework", "on": "reject" }
+    ]
   }
 }
 ```

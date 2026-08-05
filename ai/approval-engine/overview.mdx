@@ -1,170 +1,143 @@
 ---
 title: "Approval Engine (Beta)"
 sidebarTitle: "Overview"
-description: "Multi-step approval workflows where AI agents and humans review work together."
+description: "Run multi-step review and approval workflows where AI agents and people sign off together."
 ---
 
 ## What is the Approval Engine?
 
-Build approval flows as a graph. Define the workflow once, dispatch it against a trigger, and the engine runs everything: state, retries, fan-out, parallel review, SLAs, and webhooks.
+The Approval Engine runs review and approval processes for you. You describe the process once as a **definition**, a graph of steps. Whenever something in your app needs review, you start a **run** against it.
 
-You write nodes (`agent`, `human`) and connect them with edges. You record reviewer decisions and agent resolutions through the REST API. The engine does the rest. Every state change is persisted, replayable, and (when you configure a webhook) pushed to your receiver in real time.
+The engine walks the graph: it runs AI agents, waits for human approvals, evaluates branching rules, enforces deadlines, sends notifications, and tells you when the run finishes.
 
-This is the part of an approval system you don't want to build yourself: the runtime that keeps state, handles concurrent reviewers, enforces quorum, fires events, and survives outages.
-
-## What you get
-
-- **Agent + human steps in one flow.** Run AI agents inline. Park them for human review when needed. Mix and match without writing glue code.
-
-- **Parallel review with quorum.** Run reviewers in parallel. Gate downstream work behind a quorum policy: wait for everyone, advance once N approve, or require specific people regardless of count.
-
-- **Real-time webhooks.** Every state change is POSTed to your receiver with an HMAC-SHA256 signature and exponential-backoff retry. Missed events are recoverable via `/executions/getEvents`.
-
-- **Idempotent dispatch.** Replay safely. Same `idempotencyKey`, same execution id, no duplicates. Even concurrent dispatches with the same key return the original id.
-
-- **SLA-aware.** Set a deadline per step. The engine transitions to `breached` and routes through dedicated `breached` edges.
-
-- **Versioned definitions.** Updates increment the version. In-flight executions stay pinned to the version they started on.
-
-- **Static linting.** Definitions are validated at write time for cycles, dangling edges, unreachable nodes, and quorum misconfiguration. No surprises at runtime.
-
-## Use cases
-
-<CardGroup cols={2}>
-  <Card title="Marketing copy approval" icon="newspaper">
-    An AI agent drafts copy. Legal and brand reviewers approve in parallel. A publish agent ships the asset once both approve.
-  </Card>
-
-  <Card title="AI agent + human review" icon="robot">
-    Park a blocking agent step until N external resolutions arrive, then continue. Useful for agent-assisted moderation or QA pipelines where humans review specific outputs.
-  </Card>
-
-  <Card title="Regulated workflows" icon="shield-check">
-    Multi-stakeholder sign-off where specific reviewers (compliance, legal) must approve even if a numeric quorum is otherwise met. Every decision is auditable with correlation IDs.
-  </Card>
-
-  <Card title="Multi-stakeholder review" icon="users">
-    3-of-5 quorum with `cancelOnQuorum` stops bothering remaining reviewers once the threshold is met. System-actor cancellation events go into the audit trail.
-  </Card>
-
-  <Card title="Contract sign-off" icon="file-signature">
-    Sequential or parallel approval chains with SLAs. If a step breaches its deadline, route to an escalation node or fail-fast the execution.
-  </Card>
-
-  <Card title="Document approval" icon="file-check">
-    Scope workflows per-document so each instance is bound to a specific `documentId`, with per-execution webhook receivers for downstream integrations.
-  </Card>
-</CardGroup>
+You never build the runtime. No state machine, no retry logic, no concurrent-reviewer bookkeeping.
 
 ## How it works
 
-1. **Define the workflow.** Register a definition with nodes, edges, and optional parallel groups. The engine lints it at write time.
-2. **Dispatch an execution.** POST a `definitionId`, an idempotency key, and optional `triggerContext` (exposed as `execution.input.*` in edge expressions). The engine pins the current version and enqueues the first step.
-3. **The engine drives the flow.** Agent nodes run immediately. Human nodes (and blocking agent nodes) park in `waiting` until decisions arrive.
-4. **Record decisions.** Call `/steps/recordReviewerDecision` for humans and `/steps/recordAgentResolution` for blocking agents. Matching edges fire. Quorum policies trigger their side effects.
-5. **Consume events.** Subscribe via webhook for real-time delivery. Poll `/executions/getEvents` with `sinceSeq` to reconcile after an outage.
+1. **Author a definition.** Nodes are the steps. Edges connect them. The engine validates the graph when you save it.
+2. **Start a run.** Call the dispatch API, or let a webhook, cron schedule, or connected GitHub / Vercel app start it for you.
+3. **The engine executes.** Agent, notification, and sync webhook steps finish without your involvement. Human steps wait for a decision.
+4. **Record decisions.** Post each reviewer's approve or reject. Matching edges fire and the run advances.
+5. **Consume the outcome.** Receive signed webhooks in real time, or poll the event stream.
 
-## Mental model
+## A minimal workflow
 
-### Definition
+One reviewer approves. If they reject, the work goes back to an agent for rework.
 
-A **definition** is the blueprint. An **execution** is one live run of that blueprint. A **step** is one node executing inside an execution.
-
-### Nodes
-
-Work units that can run.
-
-| Type    | What it does                                                                                              | Parks in `waiting`?        |
-| ------- | --------------------------------------------------------------------------------------------------------- | -------------------------- |
-| `agent` | Runs an agent. Non-blocking by default. With `blocking: true`, parks until external resolutions arrive.   | Only when `blocking: true` |
-| `human` | Requires reviewer approval. Use `reviewers: [{ userId, mandatory }]`. Legacy `reviewerIds[]` still works. | Yes                        |
-| `webhook` | Deferred in v1: the type validates in a definition, but the runtime handler isn't enabled yet.          | Doesn't run in v1          |
-
-### Edges
-
-Connections between nodes. Every transition — approve routing, reject routing, group fan-out/in, and loop-backs — is a single unified `edges[]` entry. Each edge carries an `on` role (`approve` / `reject` / `always` / `exhausted` / `custom`); a `human` node's reject path is an outgoing `on:"reject"` edge. A reject back-edge marked with `loop` becomes a loop region. Use `on:"custom"` with a JSON-AST `when` string like `{"op":"eq","args":[{"var":"output.passesBrandCheck"},true]}` to gate on the source step's output. Expressions compile at write time (pure AST, no `eval`) and walk at runtime.
-
-Supported operators: equality, comparison, boolean, regex, `includes`, `startsWith`, `endsWith`, `length`, `isEmpty`. Path roots: `output.*`, `step.*`, `execution.input.*`.
-
-A group can also be an edge source: a `waitAll` group fans out one collective approve/reject branch by unanimity, and a `cancelOnQuorum` group fans out a collective approve successor on quorum. Every `DefinitionView` returns a read-only `compiled` block (`compiled.forwardEdges` + `compiled.loops`) so clients can render the runtime graph without re-implementing the compiler. See [the edge model](/ai/approval-engine/customize-behavior#edge-model).
-
-### Execution
-
-An execution is one live run of a definition. Dispatch pins the definition version, stamps a correlation ID and idempotency key, and enqueues the first step(s).
-
-**Lifecycle:**
-
-```
-pending → running → completed | failed | cancelled
+```json
+{
+  "definitionId": "doc-signoff",
+  "name": "Document sign-off",
+  "nodes": [
+    {
+      "nodeId": "manager-approval",
+      "type": "human",
+      "config": { "reviewers": [{ "userId": "u_manager_01", "mandatory": true }] }
+    },
+    {
+      "nodeId": "rework-notice",
+      "type": "agent",
+      "config": { "agentId": "rework-agent-v1", "urlPath": "documentUrl" }
+    }
+  ],
+  "edges": [
+    { "from": "manager-approval", "to": "rework-notice", "on": "reject" }
+  ]
+}
 ```
 
-### Step
+That is a complete, valid workflow. [Run it end to end in Setup](/ai/approval-engine/setup).
 
-A step is one runtime instance of a node.
+## Building blocks
 
-**Lifecycle:**
+| Term | What it is |
+| --- | --- |
+| **Definition** | The blueprint: `nodes` + `edges` + optional `groups`. You give it a stable `definitionId`. |
+| **Node** | One step. Four types: `agent`, `human`, `notification`, `webhook`. |
+| **Edge** | "When this node finishes, start that one." Carries an `on` role such as `approve` or `reject`. |
+| **Group** | A set of nodes that run in parallel and share an approval quorum. |
+| **Execution** | One live run of a definition. Has an `executionId` and a `steps[]` array. |
+| **Step** | One runtime instance of a node inside an execution. |
+
+Definitions are **versioned**. Editing one creates a new version, and runs already in flight finish on the version they started with.
+
+The graph is a DAG. Revision loops are the one exception: a `reject` edge pointing back to an earlier node creates a bounded retry loop. A definition holds up to 100 nodes and 500 edges.
+
+### Node types
+
+| Type | What it does | Parks in `waiting`? |
+| --- | --- | --- |
+| `agent` | Runs a Velt agent against a URL, then routes on the result. | Yes, while the agent runs. Resumes on its own. |
+| `human` | Waits for reviewers to approve or reject. | Yes, until you record decisions. |
+| `notification` | Sends an email or Slack message built from the previous step's output. | No. |
+| `webhook` | Calls your own HTTPS endpoint. | Only in `async` mode, until your callback. |
+
+Full config for each type is in [Customize Behavior](/ai/approval-engine/customize-behavior#node-configuration).
+
+### Lifecycles
+
 ```
-pending → running → (waiting) → completed | failed | skipped | cancelled | breached
+Execution:  pending → running → completed | failed | cancelled
+Step:       pending → running → (waiting) → completed | failed | skipped | cancelled | breached
 ```
 
-`waiting` only applies to human steps and blocking agent steps.
+`waiting` means the step is parked. Agent steps resume on their own when the agent finishes. Human and async webhook steps stay parked until you send a decision or a callback.
 
-Step IDs are deterministic, so retries land on the same doc:
+## Four ways to start a run
 
-- **Root steps** (no incoming edges): `step_<nodeId>_<timestamp>_<rand>`
-- **Per-edge fan-out**: `${parentStepId}__to__${childNodeId}`
-- **`joinOnQuorum` fan-out**: `group_<groupId>__to__<childNodeId>` (one instance regardless of how many group members ran)
+| Trigger | How it starts | Setup |
+| --- | --- | --- |
+| **Dispatch API** | Your backend calls `/executions/dispatch`. | [Setup](/ai/approval-engine/setup#step-2-dispatch-an-execution) |
+| **Inbound webhook** | An external system POSTs to the engine. Supports GitHub, Vercel, and custom signature presets. | [Inbound webhook trigger](/ai/approval-engine/customize-behavior#inbound-webhook-trigger) |
+| **Cron schedule** | A cron expression starts a run on a cadence, such as a nightly audit. | [Scheduled trigger](/ai/approval-engine/customize-behavior#scheduled-cron-trigger) |
+| **Installed app** | Connect the Velt GitHub App or Vercel Integration once, then GitHub and Vercel events route to your workflows. | [App trigger](/ai/approval-engine/customize-behavior#app-trigger) |
 
 ## Scope
 
-Pick the level that matches how your product is structured.
+Pick the level that matches how your product is structured. The most specific matching definition wins.
 
-| Level          | Bound to                              |
-| -------------- | ------------------------------------- |
-| `apiKey`       | Workspace-wide                        |
-| `organization` | A specific `organizationId`           |
-| `document`     | A specific `documentId` under an org  |
-
-Defaults to `{ level: "apiKey" }`.
+| Level | Bound to |
+| --- | --- |
+| `apiKey` | Workspace-wide. This is the default. |
+| `organization` | One `organizationId`. |
+| `document` | One `documentId` under an organization. |
 
 <Note>
-  Approval Engine state is partitioned per tenant: each tenant's executions, definitions, and events are routed to that tenant's dedicated `storeDbId`.
+  Approval Engine state is partitioned per tenant. Each tenant's definitions, executions, and events live in that tenant's own database.
 </Note>
 
-## Idempotency
+## What the engine handles for you
 
-Dispatch is idempotent on `idempotencyKey`. Replay with the same key returns `{ deduplicated: true, executionId: <original> }`. Safe to retry from clients and queues.
+- **Parallel review with quorum.** Wait for everyone, advance once N approve, or require specific people.
+- **Idempotent dispatch.** The same `idempotencyKey` always returns the same `executionId`. Retries never duplicate a run.
+- **SLA deadlines.** Set `slaMs` on a step. On breach the step becomes `breached` and routes down your escalation edge.
+- **Signed webhooks.** Every state change is POSTed with an HMAC-SHA256 signature and retried with backoff.
+- **Recoverable events.** Every event has a monotonic `seq`. Poll with `sinceSeq` to catch up after an outage.
+- **Write-time validation.** Cycles, dangling edges, unreachable nodes, and bad quorum settings are rejected before you dispatch.
 
-## Events and webhooks
+## Limitations in beta
 
-Every state change writes an event doc with a monotonic `seq`. Set `webhookUrl` and `webhookSecret` on dispatch and externally-visible events are POSTed to your receiver with an HMAC-SHA256 signature and exponential-backoff retry. Recover missed events via `/executions/getEvents` with `sinceSeq`.
-
-### Inbound webhook handler
-
-In addition to outbound delivery (above), the Approval Engine exposes an **inbound** webhook handler: an HTTP endpoint with a stable URL that external systems such as Salesforce, Stripe, or GitHub can POST raw JSON to.
-
-Unlike the standard REST endpoints, payloads do **not** need to be wrapped in a `{data: ...}` envelope. The handler accepts raw JSON bodies directly.
-
-The inbound handler enforces:
-
-- **Bearer-token validation:** requests must carry a valid bearer token; unauthenticated requests are rejected before any processing.
-- **Signed callback tokens:** callbacks issued by the handler are signed, allowing downstream consumers to verify authenticity end-to-end.
-- **Rate limiting:** per-source request rate is capped to prevent abuse.
-- **Body-size limits:** oversized payloads are rejected at the boundary before parsing.
-- **SSRF URL guard:** any URL values in the incoming payload are validated against an allowlist to block server-side request forgery.
-
-<Note>
-  The inbound and outbound webhook surfaces are complementary, not duplicative. **Inbound**: external systems push events into the Approval Engine. **Outbound**: the Approval Engine pushes state-change events out to your receiver. Both paths are active independently and can coexist on the same workflow.
-</Note>
+- You author definitions as JSON. There is no visual builder yet.
+- You host the reviewer UI. Render the waiting step and call `recordReviewerDecision`.
+- Setting `blocking: true` on an agent node is rejected at runtime. Put a `human` node downstream of the agent instead.
+- Editing a definition only affects new runs. In-flight runs are not migrated.
 
 ## Get started
 
 <CardGroup cols={2}>
   <Card title="Setup" icon="gear" href="/ai/approval-engine/setup">
-    A hands-on walkthrough: author a workflow definition, dispatch a run, record decisions, and receive the outcome via webhooks or polling.
+    Author a definition, start a run, record a decision, and get the outcome.
   </Card>
 
   <Card title="Customize Behavior" icon="sliders" href="/ai/approval-engine/customize-behavior">
-    Node configuration, the unified edge model, custom predicates, parallel groups and quorum policies, SLAs, linter rules, event reference, and the error vocabulary.
+    Node config, edge routing, quorum policies, triggers, SLAs, events, and errors.
+  </Card>
+
+  <Card title="REST API Reference" icon="code" href="/api-reference/rest-apis/v2/approval-engine/definitions/create-definition">
+    Every endpoint with full request and response schemas.
+  </Card>
+
+  <Card title="Review Agents" icon="robot" href="/ai/agents/overview">
+    The AI agents your `agent` nodes run.
   </Card>
 </CardGroup>

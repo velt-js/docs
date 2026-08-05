@@ -54,7 +54,7 @@ Every endpoint is a `POST` under `https://api.velt.dev/v2/`. The examples below 
           }
         }
       }'
-    # -> { "result": { "status": "processing", "sourceId": "src_9a8...", "message": "Ingestion started." } }
+    # -> { "result": { "status": "processing", "sourceId": "src_9a8...", "message": "Knowledge ingestion task enqueued." } }
     ```
 
     Poll with that `sourceId` until `status` is `completed` or `failed`:
@@ -102,7 +102,7 @@ Every endpoint is a `POST` under `https://api.velt.dev/v2/`. The examples below 
       -H "x-velt-api-key: $VELT_API_KEY" \
       -H "x-velt-auth-token: $VELT_AUTH_TOKEN" \
       -H "content-type: application/json" \
-      -d '{ "data": { "query": "unsupported medical claim", "limit": 5, "filters": { "decision": "reject" } } }'
+      -d '{ "data": { "query": "unsupported medical claim", "limit": 5, "filters": { "decision": "rejected" } } }'
     ```
 
     Each result carries the `reasoning`, `decision`, `confidence`, who decided (`actionUser`), and a `similarity` score.
@@ -139,9 +139,9 @@ Add these fields to `search` and `ask` to control what Memory reads.
 | Field | What it does |
 | --- | --- |
 | `organizationId` | Limits the read to one organization. |
-| `documentId` | Limits the read to one document. Requires `organizationId`. |
-| `limit` | Caps results. 1 to 50, defaults to 10 on `search`. |
-| `filters` | Narrows by `decision`, `judgeType` (`human` or `agent`), `contentType`, `reviewerId`, or `dateRange`. |
+| `documentId` | Limits the read to one document. Applied only when you also send `organizationId`; without it the field is ignored and the read stays workspace-wide. |
+| `limit` | `search` only. Caps results. 1 to 50, defaults to 10. `ask` sizes its own retrieval and ignores this field. |
+| `filters` | Narrows by `decision`, `judgeType` (`human` or `agent`), `contentType`, `reviewerId`, or `dateRange`. `decision` matches the stored value exactly: `comment`, `resolve`, `approved`, `rejected`, `in_progress`, `agree`, `disagree`, `endorse`, `document_approved`, or `document_rejected`. `dateRange` is `{ start, end }` as epoch milliseconds. |
 | `filters.annotationId` | Reads one comment thread in chronological order. Requires `organizationId`. |
 | `recencyDays` | Returns the last N complete UTC days of activity instead of a semantic match. 1 to 365. Good for digests. |
 
@@ -176,20 +176,25 @@ Add these fields to `search` and `ask` to control what Memory reads.
 - **Supported file types:** PDF, CSV, Excel (`.xlsx`), and plain text.
 - **File limits:** 5 MB inline, 30 MB by reference.
 - **Duplicate uploads** report the original source's status, so a duplicate can stay `processing` until the original finishes. `completed` always means safe to download.
+- **Knowledge rate limits**, per API key per minute: `knowledge/ingest-status` 600, `knowledge/search` 120, `knowledge/upload-url` 100, `knowledge/ingest` 30, `knowledge/delete` 30. Going over returns `RESOURCE_EXHAUSTED`, so keep bulk imports and status polling under those ceilings.
 
 ## Errors
 
 | Status | Meaning |
 | --- | --- |
-| `INVALID_ARGUMENT` | The request failed validation. |
-| `UNAUTHENTICATED` | The `x-velt-auth-token` is missing or invalid. |
-| `NOT_FOUND` | Unknown `sourceId`. |
-| `FAILED_PRECONDITION` | For example, deleting a source that is still processing or has duplicates pointing at it. |
+| `INVALID_ARGUMENT` | The request failed validation, or the `x-velt-auth-token` header is missing. |
+| `PERMISSION_DENIED` | The `x-velt-auth-token` is not valid for this API key. |
+| `NOT_FOUND` | Unknown `sourceId`, or an `x-velt-api-key` that does not resolve to a workspace. `knowledge/download` is the exception: an unknown `sourceId` there returns `null` with a `200`. |
+| `ABORTED` | Deleting a source that is still processing, or one that duplicate uploads point at. Poll `ingest-status` until the status is terminal, or delete the duplicates first. |
+| `FAILED_PRECONDITION` | The signed upload URL expired before you called `ingest`, or you called `knowledge/update` on a source that is not rule-based. |
 | `RESOURCE_EXHAUSTED` | Rate limited. Back off and retry. |
+
+On a validation error, every memory endpoint returns `details.issues` alongside `message` and `status`, listing each failing field.
 
 The most common `INVALID_ARGUMENT` causes:
 
 - `filters.annotationId` without `organizationId`.
-- `documentId` without `organizationId`.
+- `documentId` without `organizationId` on `knowledge/ingest` or `knowledge/upload-url`.
 - A `dateRange` whose `start` is after its `end`.
 - An unsupported file type, or an inline file over 5 MB. Use [Get Upload URL](/api-reference/rest-apis/v2/memory/knowledge/upload-url) for larger files.
+- An unrecognized field on `knowledge/ingest`, `knowledge/upload-url`, `knowledge/ingest-status`, `knowledge/delete`, or `knowledge/search`. These five reject unknown keys, so a typo like `bas64` fails instead of being ignored. `knowledge/search` is workspace-wide and rejects `organizationId` and `documentId`.

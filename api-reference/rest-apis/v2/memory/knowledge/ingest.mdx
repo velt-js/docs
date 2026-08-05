@@ -9,6 +9,8 @@ Use this API to submit reference material (guidelines, standards, policy docs) t
 
 `POST https://api.velt.dev/v2/memory/knowledge/ingest`
 
+Rate limit: 30 requests per minute per API key.
+
 # Headers
 
 <ParamField header="x-velt-api-key" type="string" required>
@@ -23,7 +25,7 @@ Use this API to submit reference material (guidelines, standards, policy docs) t
 
 #### Params
 
-The request is a discriminated union on `source`: send `source: "inline"` with a base64 `file` (decoded size up to 5 MB), or `source: "fileRef"` with a `gs://` URI from [Get Upload URL](/api-reference/rest-apis/v2/memory/knowledge/upload-url) (up to 30 MB).
+The request is a discriminated union on `source`: send `source: "inline"` with a base64 `file` (decoded size up to 5 MB, 5,242,880 bytes), or `source: "fileRef"` with a `gs://` URI from [Get Upload URL](/api-reference/rest-apis/v2/memory/knowledge/upload-url) (up to 30 MB, 31,457,280 bytes).
 
 <ParamField body="data" type="object" required>
   <Expandable title="properties">
@@ -32,15 +34,15 @@ The request is a discriminated union on `source`: send `source: "inline"` with a
     </ParamField>
 
     <ParamField body="file" type="object">
-      Required when `source` is `inline`. `{ base64, mimeType, fileName, fileSize }`. `base64` is the encoded file bytes (decoded size up to 5 MB); `fileName` is 1 to 255 characters; `fileSize` is in bytes.
+      Required when `source` is `inline`. `{ base64, mimeType, fileName, fileSize }`, and all four sub-fields are required. `base64` is the encoded file bytes; `fileName` is 1 to 255 characters. `fileSize` is the decoded size in bytes and must itself be at most 5 MB (5,242,880 bytes); the server also re-measures the decoded `base64` against the same cap.
     </ParamField>
 
     <ParamField body="fileRef" type="string">
-      Required when `source` is `fileRef`. The `gs://` URI returned by Get Upload URL.
+      Required when `source` is `fileRef`. The `gs://` URI returned by Get Upload URL. Pass the same `organizationId` and `documentId` you used when calling Get Upload URL; a scope mismatch returns `PERMISSION_DENIED`, as does a ref that belongs to another workspace. Each `fileRef` can be ingested only once. An object that was never uploaded, has expired, or was already ingested returns `FAILED_PRECONDITION`. The 30 MB cap is enforced against the bytes actually uploaded, not against any request field.
     </ParamField>
 
     <ParamField body="mimeType" type="string">
-      Required when `source` is `fileRef`. One of the supported types: `application/pdf`, `text/csv`, `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, or `text/plain`.
+      Required when `source` is `fileRef`. One of the supported types: `application/pdf`, `text/csv`, `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, or `text/plain`. Use the same `mimeType` you passed to Get Upload URL and set as the upload's `Content-Type` header.
     </ParamField>
 
     <ParamField body="organizationId" type="string">
@@ -52,6 +54,10 @@ The request is a discriminated union on `source`: send `source: "inline"` with a
     </ParamField>
   </Expandable>
 </ParamField>
+
+<Note>
+  On an inline upload, the server verifies `file.mimeType` against the file's own bytes. A mismatch, or a `text/csv` or `text/plain` file that is not valid UTF-8, returns `INVALID_ARGUMENT`. This endpoint also rejects unrecognized fields, so a misspelled key returns `INVALID_ARGUMENT` instead of being ignored.
+</Note>
 
 ## **Example Requests**
 
@@ -94,7 +100,7 @@ Ingestion runs in the background. Poll Get Ingest Status with the returned `sour
   "result": {
     "status": "processing",
     "sourceId": "src_9a8...",
-    "message": "Ingestion started."
+    "message": "Knowledge ingestion task enqueued."
   }
 }
 ```
@@ -116,7 +122,7 @@ Ingestion runs in the background. Poll Get Ingest Status with the returned `sour
   "result": {
     "status": "processing",
     "sourceId": "src_9a8...",
-    "message": "Ingestion started."
+    "message": "Knowledge ingestion task enqueued."
   }
 }
 ```

@@ -9,6 +9,8 @@ Use this API to run a semantic vector search over the **content of your ingested
 
 `POST https://api.velt.dev/v2/memory/knowledge/search`
 
+Rate limit: 120 requests per minute per API key.
+
 # Headers
 
 <ParamField header="x-velt-api-key" type="string" required>
@@ -33,8 +35,8 @@ Use this API to run a semantic vector search over the **content of your ingested
       Restrict the search to one or more knowledge sources. A single id restricts to that source; an array of **2 to 30** ids fans out one prefiltered nearest-neighbour search per id and merges/re-ranks the combined results by distance. Omit to search the entire workspace knowledge base. When `includeRules` is `true`, `sourceId` narrows both corpora simultaneously (a single id restricts both searches; an array fans out one query per id per corpus, then merges).
     </ParamField>
 
-    <ParamField body="limit" type="integer">
-      Maximum number of results to return (1–50). When `includeRules` is `true`, this is the combined cap across both corpora (global top-N after the merge), not a per-corpus quota.
+    <ParamField body="limit" type="integer" default="10">
+      Maximum number of results to return (1–50). Defaults to `10` when omitted. When `includeRules` is `true`, this is the combined cap across both corpora (global top-N after the merge), not a per-corpus quota.
     </ParamField>
 
     <ParamField body="includeRules" type="boolean" default="false">
@@ -42,7 +44,7 @@ Use this API to run a semantic vector search over the **content of your ingested
     </ParamField>
 
     <Note>
-      This endpoint is **workspace-scoped**. `organizationId` and `documentId` are not accepted; the strict schema rejects them rather than silently ignoring them. An unknown or cross-workspace `sourceId` returns empty results (never an error or a cross-tenant read). On embedding failure the endpoint never throws; it falls back to a recency query, returning the most-recently-ingested items (honoring `sourceId`). When `includeRules` is `true`, both corpora fall back to recency independently.
+      This endpoint is **workspace-scoped**. `organizationId` and `documentId` are not accepted; sending them returns `INVALID_ARGUMENT` instead of being silently ignored. The same applies to any other unrecognized field, so a misspelled key is rejected. An unknown or cross-workspace `sourceId` returns empty results (never an error or a cross-tenant read). On embedding failure the endpoint never throws; it falls back to a recency query, returning the most-recently-ingested items (honoring `sourceId`). When `includeRules` is `true`, both corpora fall back to recency independently.
     </Note>
   </Expandable>
 </ParamField>
@@ -106,7 +108,7 @@ curl -X POST https://api.velt.dev/v2/memory/knowledge/search \
 
 # Response
 
-Each result includes the matched `sourceId`, the result `text`, and, when vector search succeeds, a `score`: the cosine distance, where **lower is more relevant**. For the default chunk-only response, `recordsSearched` remains unchanged from the prior contract; when `includeRules` is `true`, it equals the number of returned items after merging and truncating to `limit`.
+Each result includes the result `text`, an optional `sourceId` (present when the matched record carries one), and, when vector search succeeds, a `score`: the cosine distance, where **lower is more relevant**. `recordsSearched` is the number of items returned in `results`; it is not a count of records scanned. That holds whether or not `includeRules` is set.
 
 When `includeRules` is omitted or `false`, the response is byte-identical to the prior contract: items have the shape `{ sourceId?, text, score? }` with no `kind`, `ruleId`, or `category` keys.
 

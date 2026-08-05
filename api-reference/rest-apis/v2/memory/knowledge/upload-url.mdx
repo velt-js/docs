@@ -3,11 +3,13 @@ title: "Get Upload URL"
 api: "POST https://api.velt.dev/v2/memory/knowledge/upload-url"
 ---
 
-Use this API to mint a short-lived signed URL for uploading a file up to 30 MB. Use it for the by-reference ingestion flow: get the URL, PUT the raw file bytes to it, then pass the returned `fileRef` to [Ingest Knowledge](/api-reference/rest-apis/v2/memory/knowledge/ingest).
+Use this API to mint a short-lived signed URL for uploading a file up to 30 MB. Use it for the by-reference ingestion flow: get the URL, PUT the raw file bytes to it with a `Content-Type` header matching the `mimeType` you sent, then pass the returned `fileRef` to [Ingest Knowledge](/api-reference/rest-apis/v2/memory/knowledge/ingest).
 
 # Endpoint
 
 `POST https://api.velt.dev/v2/memory/knowledge/upload-url`
+
+Rate limit: 100 requests per minute per API key.
 
 # Headers
 
@@ -30,7 +32,7 @@ Use this API to mint a short-lived signed URL for uploading a file up to 30 MB. 
     </ParamField>
 
     <ParamField body="fileSize" type="integer" required>
-      File size in bytes. Maximum 30 MB.
+      File size in bytes. Maximum 30 MB (31,457,280 bytes).
     </ParamField>
 
     <ParamField body="fileName" type="string">
@@ -46,6 +48,10 @@ Use this API to mint a short-lived signed URL for uploading a file up to 30 MB. 
     </ParamField>
   </Expandable>
 </ParamField>
+
+<Note>
+  A workspace can hold at most 50 outstanding upload URLs. Past that, this call returns `RESOURCE_EXHAUSTED`. Each URL holds a slot until you ingest its `fileRef`, so request URLs only for files you are about to upload. This endpoint also rejects unrecognized fields, so a misspelled key returns `INVALID_ARGUMENT`.
+</Note>
 
 ## **Example Requests**
 
@@ -63,7 +69,9 @@ Use this API to mint a short-lived signed URL for uploading a file up to 30 MB. 
 
 # Response
 
-Upload the raw file bytes to `uploadUrl` with an HTTP `PUT`, then pass `fileRef` to Ingest Knowledge. The URL expires at `expiresAt` (epoch ms).
+Upload the raw file bytes to `uploadUrl` with an HTTP `PUT`. Set the `Content-Type` header to the same `mimeType` you passed to this endpoint. The signed URL is bound to that value, so a `PUT` with a missing or different `Content-Type` is rejected before it reaches Velt.
+
+Then pass `fileRef` to Ingest Knowledge, repeating the same `organizationId` and `documentId` you sent here. A scope mismatch returns `PERMISSION_DENIED`. The URL expires at `expiresAt` (epoch ms), 15 minutes after it is minted.
 
 #### Success Response
 

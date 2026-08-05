@@ -46,7 +46,7 @@ There is no duplicate endpoint. A definition supports five operations: create, u
   <Step title="Strip the server-owned fields and the explicit nulls">
     A read response carries bookkeeping that is not yours to set: `version`, `createdAt`, `updatedAt`, `status`, and `compiled`. Delete all five before sending.
 
-    Then delete every key whose value is `null`. `description`, `groups`, and `triggers` come back as `null` when you never set them. Create takes each of those as absent or as a real value, never as `null`, so a leftover `null` is rejected.
+    Then delete every key whose value is `null`. Every optional field you never set comes back that way: `description`, `groups`, `triggers`, `tags`, `custom`, and `organizationId` / `documentId` inside `scope`. Create takes each of those as absent or as a real value, never as `null`, so a leftover `null` is rejected.
 
     Create rejects unknown fields outright too, so leaving even one of either kind in fails the whole request with `INVALID_ARGUMENT`. That is the good outcome: you get a loud error, never a silently mangled copy.
   </Step>
@@ -63,7 +63,9 @@ There is no duplicate endpoint. A definition supports five operations: create, u
 </Warning>
 
 <Note>
-  `webhookConfig` is write-only. Create Definition and Update Definition accept it, but Get Definition does not return it. The copy therefore starts with no per-definition webhook target and stops pushing lifecycle events. Re-send `webhookConfig`, with its own fresh secret, on the create call if the copy needs one.
+  `webhookConfig` is write-only. Create Definition and Update Definition accept it, but Get Definition does not return it. The copy therefore starts with no per-definition webhook target. Re-send `webhookConfig`, with its own fresh secret, on the create call if the copy needs one. Dispatch-level `webhookUrl` + `webhookSecret` are a separate path, so a run dispatched with that pair still pushes every lifecycle event. Supplying both on dispatch replaces the definition's `webhookConfig` for that run rather than adding a second target, and it clears any `eventTypes` filter.
+
+  Updates hit the same gap. Update is a full replace, and the object you fetched carries no `webhookConfig`, so a get, edit, update round trip nulls the existing `webhookConfig` on the original definition. Re-send it on every update of a definition that has one.
 </Note>
 
 Everything the read response carries copies safely. Your `edges` come back exactly as you authored them, byte for byte with no reformatting, so the round trip cannot quietly change routing. `scope` echoes the organization and document ids you originally sent, not internal ones, so it is safe to copy or edit as-is.
@@ -222,9 +224,9 @@ Even the last approver needs somewhere to send a rejection. If rejection should 
 }]
 ```
 
-An agent step ends `completed` with `output.decision` set to `approve` when its agent run passes or is skipped, and `failed` with `reject` otherwise. Quorum counts every member that completes with a `decision` of `approve`, whatever the node type. So a passing `agent-summarize` plus an approving `human-legal` meets `quorum: 2`, and the group fires.
+An agent step ends `completed` with `output.decision` set to `approve` when its agent run passes or is skipped, and `failed` when it does not. Quorum counts every member that completes with a `decision` of `approve`, whatever the node type. So a passing `agent-summarize` plus an approving `human-legal` meets `quorum: 2`, and the group fires.
 
-Failure is the real constraint here, not node type. A failing agent contributes a `reject`, which advances the completion counter but not the approval counter. With `quorum` equal to `expectedSteps`, one agent failure keeps the group from firing, exactly as one human rejection would.
+Failure is the real constraint here, not node type. A failed agent step never counts toward the approval counter, whatever shape its output takes. If the agent run finishes unsuccessfully, the step carries `output.decision` set to `reject`. If the step fails before the run starts, its `output` is empty and carries no `decision` at all: a missing `agentId`, neither `url` nor `urlPath`, `blocking: true`, or a failed dispatch call. Other failure paths carry an `output` with neither a `decision` nor an approval. None of them advance the approval counter, only the completion counter. With `quorum` equal to `expectedSteps`, one agent failure keeps the group from firing, exactly as one human rejection would.
 
 <Note>
   Marking the agent `blocking: true` is not available: blocking agent nodes are rejected at runtime with `agent-blocking-not-supported`. To get human review of an agent's findings, put a `human` node downstream of the agent node.

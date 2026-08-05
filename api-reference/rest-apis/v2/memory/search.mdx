@@ -34,15 +34,15 @@ Use this API to run a semantic vector search over past **judgments**: the enrich
     </ParamField>
 
     <ParamField body="scope" type="string">
-      `document`, `organization`, or `apiKey`. Defaults from `organizationId`/`documentId` presence.
+      `document`, `organization`, or `apiKey`. Defaults from `organizationId`/`documentId` presence. Setting it explicitly also clamps the scope ids: `apiKey` ignores both `organizationId` and `documentId`; `organization` ignores `documentId`. Returns `INVALID_ARGUMENT` if `scope` is `organization` without `organizationId`, or `document` without both ids. When `filters.annotationId` is set, `document` scope needs only `organizationId`.
     </ParamField>
 
     <ParamField body="organizationId" type="string">
-      Narrow to one organization.
+      Narrow to one organization. `orgId` is accepted as an alias.
     </ParamField>
 
     <ParamField body="documentId" type="string">
-      Narrow to one document. Requires `organizationId`.
+      Narrow to one document. Only applied when `organizationId` is also set. Without `organizationId`, `documentId` is ignored and the search runs across the whole workspace. `docId` is accepted as an alias.
     </ParamField>
 
     <ParamField body="limit" type="integer">
@@ -50,11 +50,13 @@ Use this API to run a semantic vector search over past **judgments**: the enrich
     </ParamField>
 
     <ParamField body="filters" type="object">
-      `{ decision?, judgeType?, contentType?, reviewerId?, annotationId?, dateRange? }`. `decision` filters by decision value, e.g. `approve` or `reject`. `judgeType` is `human` or `agent`. `dateRange` is `{ start, end }` (ISO-8601 strings or epoch ms; `start` must not be after `end`). `annotationId` requires `organizationId` and reads that one comment thread directly, oldest first.
+      `{ decision?, judgeType?, contentType?, reviewerId?, annotationId?, dateRange? }`. `decision` filters by decision value: `comment`, `resolve`, `approved`, `rejected`, `in_progress`, `agree`, `disagree`, `endorse`, `document_approved`, or `document_rejected`. `judgeType` is `human` or `agent`. `dateRange` is `{ start, end }` as epoch milliseconds; `start` must not be after `end`. `annotationId` requires `organizationId` and reads that one comment thread directly, oldest first.
+
+      Filters are applied after retrieval, over the top matches the search returns (up to `limit * 3` records). A selective filter can return fewer results than `limit`, or none, even when matching judgments exist. For exhaustive metadata-only lookups, use [Query Judgments](/api-reference/rest-apis/v2/memory/judgments/query).
     </ParamField>
 
     <ParamField body="recencyDays" type="integer">
-      1 to 365. Recency-true mode: skips vector search and returns the most-recent activity in the window. Overrides `filters.dateRange`.
+      1 to 365. Recency-true mode: skips vector search and returns activity from the last `recencyDays` complete UTC days. The window ends at the start of the current UTC day, so activity from today is not included. Overrides `filters.dateRange`. If `filters.annotationId` is also set, the annotation shortcut wins and `recencyDays` is ignored.
     </ParamField>
   </Expandable>
 </ParamField>
@@ -68,7 +70,7 @@ Use this API to run a semantic vector search over past **judgments**: the enrich
   "data": {
     "query": "marketing copy with unsupported medical claims",
     "limit": 5,
-    "filters": { "decision": "reject" }
+    "filters": { "decision": "rejected" }
   }
 }
 ```
@@ -98,7 +100,7 @@ Use this API to run a semantic vector search over past **judgments**: the enrich
 
 # Response
 
-Each result includes the reasoning, decision, confidence, who decided (`actionUser`), and a `similarity` score (`1.0` for the annotation and recency shortcut paths). `totalInScope` reports how many judgments were in scope; `searchLatencyMs` reports the search time. An `agent` block is present when the decision came from an AI agent.
+Each result includes the reasoning, decision, confidence, who decided (`actionUser`), and a `similarity` score (`1.0` for the annotation and recency shortcut paths). `totalInScope` is the number of records returned in `results[]` after filtering, so it never exceeds `limit`; it is not a count of every matching judgment in the workspace. `searchLatencyMs` reports the search time. `agent` is always present: `null` for a human decision, otherwise `{ agentId, agentType, executionId, agentFields }`. To retrieve only agent-originated judgments, set `filters.judgeType` to `agent`.
 
 #### Success Response
 
@@ -109,7 +111,7 @@ Each result includes the reasoning, decision, confidence, who decided (`actionUs
       {
         "recordId": "act_8f3...",
         "reasoning": "Claim 'clinically proven' lacks a citation.",
-        "decision": "reject",
+        "decision": "rejected",
         "confidence": 0.92,
         "actionUser": { "name": "Sarah Lee" },
         "createdAt": 1731432000000,
@@ -118,7 +120,7 @@ Each result includes the reasoning, decision, confidence, who decided (`actionUs
         "agent": null
       }
     ],
-    "totalInScope": 128,
+    "totalInScope": 1,
     "searchLatencyMs": 142
   }
 }
@@ -126,11 +128,18 @@ Each result includes the reasoning, decision, confidence, who decided (`actionUs
 
 #### Failure Response
 
+On a validation error, `details.issues` lists every failing field, not just the one in `message`.
+
 ```JSON
 {
   "error": {
     "message": "ERROR_MESSAGE",
-    "status": "INVALID_ARGUMENT"
+    "status": "INVALID_ARGUMENT",
+    "details": {
+      "issues": [
+        { "code": "invalid_type", "path": ["query"], "message": "query is required" }
+      ]
+    }
   }
 }
 ```
@@ -143,7 +152,7 @@ Each result includes the reasoning, decision, confidence, who decided (`actionUs
       {
         "recordId": "act_8f3...",
         "reasoning": "Claim 'clinically proven' lacks a citation.",
-        "decision": "reject",
+        "decision": "rejected",
         "confidence": 0.92,
         "actionUser": { "name": "Sarah Lee" },
         "createdAt": 1731432000000,
@@ -152,7 +161,7 @@ Each result includes the reasoning, decision, confidence, who decided (`actionUs
         "agent": null
       }
     ],
-    "totalInScope": 128,
+    "totalInScope": 1,
     "searchLatencyMs": 142
   }
 }

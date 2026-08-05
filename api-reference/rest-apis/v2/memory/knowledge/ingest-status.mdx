@@ -9,6 +9,8 @@ Use this API to poll the status of an ingestion started with [Ingest Knowledge](
 
 `POST https://api.velt.dev/v2/memory/knowledge/ingest-status`
 
+Rate limit: 600 requests per minute per API key. This endpoint rejects unrecognized fields, so a misspelled key returns `INVALID_ARGUMENT`.
+
 # Headers
 
 <ParamField header="x-velt-api-key" type="string" required>
@@ -45,7 +47,13 @@ Use this API to poll the status of an ingestion started with [Ingest Knowledge](
 
 # Response
 
-`status` is `processing`, `completed`, or `failed`. On `failed`, a `failureReason` is included. `dedupOf` is set when the file was a duplicate of an existing source; when it is, the reported `status`, counts, and download URLs mirror that winning source's live state, not the duplicate's own. A freshly uploaded duplicate therefore reports `processing` until the original finishes converting, then flips to `completed`. Keep polling until the status is terminal before downloading.
+`status` is `processing`, `completed`, or `failed`. `dedupOf` is set when the file was a duplicate of an existing source; when it is, the reported `status`, counts, and download URLs mirror that winning source's live state, not the duplicate's own. A freshly uploaded duplicate therefore reports `processing` until the original finishes converting, then flips to `completed`. Keep polling until the status is terminal before downloading.
+
+`extractedRulesCount`, `chunkCount`, `originalDownloadUrl`, and `canonicalMdDownloadUrl` are returned only when `status` is `completed`. A `processing` or `failed` poll returns `status` and `sourceId`, plus whichever of `startedAt`, `updatedAt`, `mimeType`, `dedupOf`, and `failureReason` apply. A completed response also carries `metadata.usedRawFallback: true` when the converter fell back to raw text.
+
+`originalDownloadUrl` and `canonicalMdDownloadUrl` are signed URLs valid for 15 minutes from the response that returned them. Poll again to mint fresh URLs.
+
+On `failed`, `failureReason` is one of `pdf-llm-conversion-failed`, `storage-upload-failed`, `cloud-tasks-enqueue-failed`, `embedding-failed`, `unsupported-mime-detected-post-validation`, or `workspace-deleted-mid-flow`.
 
 #### Success Response
 
@@ -61,6 +69,21 @@ Use this API to poll the status of an ingestion started with [Ingest Knowledge](
     "chunkCount": 0,
     "originalDownloadUrl": "https://storage.googleapis.com/...",
     "canonicalMdDownloadUrl": "https://storage.googleapis.com/..."
+  }
+}
+```
+
+#### Failed Ingestion Response
+
+```JSON
+{
+  "result": {
+    "status": "failed",
+    "sourceId": "src_9a8...",
+    "startedAt": 1731432000000,
+    "updatedAt": 1731432041000,
+    "mimeType": "application/pdf",
+    "failureReason": "pdf-llm-conversion-failed"
   }
 }
 ```

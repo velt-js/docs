@@ -15,7 +15,7 @@ This list is generated from the Velt SDK and is complete for what it covers: a n
 **The prop INDEX**: every prop on every user-facing Velt component, by name + type + a one-line gloss, so you can scan "which prop do I pass for X / what's it called." `<VeltComments>` (the largest surface, 129 props) is **Part 1**; **Part 2** covers all other components (sidebar, dialog, pin, notifications, presence, recorder, …).
 
 <Note>
-**This page is the index; defaults and behavior live in [`Behaviors`](/ui-customization/reference/behaviors) and the behavior detail pages.** Look up a prop here to find its name and type, then read its runtime behavior and interactions there. For data fields and events behind a prop, see [`Data models`](/ui-customization/reference/data-models); for off-by-default features, see [`Feature flags`](/ui-customization/reference/feature-flags); for layout, mode, and custom-data shapes, see [`Component config`](/ui-customization/reference/component-config). Also review [`APIs`](/ui-customization/reference/apis) and [`Events`](/ui-customization/reference/events).
+**This page is the index; defaults and behavior live in [`Behaviors`](/ui-customization/reference/behaviors) and the behavior detail pages.** Look up a prop here to find its name and type, then read its runtime behavior and interactions there. For data fields and events behind a prop, see [`Data models`](/ui-customization/reference/data-models); for off-by-default features, see [`Feature flags`](/ui-customization/reference/feature-flags); for layout, mode, and custom-data shapes, see [`Layout config`](/ui-customization/reference/props#part-3-layout-config-and-custom-data). Also review [`APIs`](/ui-customization/reference/apis) and [`Events`](/ui-customization/reference/events).
 </Note>
 
 **Notes:** every prop is optional unless marked `(required)`. Booleans serialize to `'true'`/`'false'` only when explicitly set; array/object props (e.g. `customStatus`) are JSON-serialized. Components also accept standard HTML attributes (`className`, `style`, `id`, `children`, `ref`, `key`), not re-listed. Generated from each component's props interface in `@veltdev/react`; exhaustive.
@@ -166,7 +166,7 @@ This list is generated from the Velt SDK and is complete for what it covers: a n
 ---
 
 <Tip>
-For `<VeltComments>` **wireframe slot props** such as `Composer.ActionButton type`, see [`Wireframe components`](/ui-customization/reference/wireframe-components) section 6. For **custom-data shapes** such as `customStatus`, `customPriority`, and `customReactions`, see [`Component config`](/ui-customization/reference/component-config).
+For `<VeltComments>` **wireframe slot props** such as `Composer.ActionButton type`, see [`Wireframe components`](/ui-customization/reference/wireframe-components) section 6. For **custom-data shapes** such as `customStatus`, `customPriority`, and `customReactions`, see [`Layout config`](/ui-customization/reference/props#part-3-layout-config-and-custom-data).
 </Tip>
 
 ---
@@ -833,3 +833,116 @@ Two small utility components for binding/rendering live data and conditionally r
 | VeltPresence | disableFlockNavigation | defaultFlockNavigation |
 | VeltCursor | onCursorUsersChanged | onCursorUserChange |
 | VeltRecorderPlayer | showSummary | summary |
+
+## Part 3: Layout config and custom data
+
+Everything above is a per-component prop list. This part covers the two config surfaces that need more than a table: the sidebar's filter configuration, and replacing Velt's built-in option sets with your own.
+
+<Note>
+**Prop before wireframe.** If a prop gets you the layout you need (`filterPanelLayout="bottomSheet"`, `panelOpenMode="sidebar"`), use it. It's far less work than a wireframe. In non-React frameworks these are kebab-case attributes on the `<velt-*>` element (`filter-panel-layout="bottomSheet"`).
+</Note>
+
+### Sidebar filters
+
+The sidebar has three filter surfaces: the **minimal filter** (the quick all/unread/resolved bar), the **main filter panel** (the full dropdown of categories), and **custom filters** you define. All are customizable.
+
+**1. Choose which filters appear + add your own: the `filters` prop** (a `CommentSidebarFilterConfig`). It's a map of filter keys → a `FilterTypeConfig`:
+
+```ts
+type FilterTypeConfig = {
+  name?: string;            // label shown in the panel
+  enable?: boolean;         // show/hide this filter
+  multiSelection?: boolean; // allow multiple values
+  enableGrouping?: boolean; // group the sidebar list by this filter
+  order?: string[];         // option order
+  placeholder?: string;
+  id?: string;
+  type?: 'system' | 'custom';   // 'custom' = your own filter
+  options?: { id: string; name: string }[];   // the selectable values
+};
+```
+
+Built-in keys: `location`, `document`, `people`, `assigned`, `tagged`, `involved`, `priority`, `status`, `category`, `commentType`, `version`. Toggle/relabel/reorder them, and **add a custom filter** by adding your own key with `type: 'custom'` + `options`:
+
+```tsx
+<VeltCommentsSidebarV2
+  shadowDom={false}
+  filters={{
+    status:   { enable: true,  name: "Status", multiSelection: true },
+    priority: { enable: false },                         // hide a built-in filter
+    severity: {                                          // ← your custom filter
+      type: "custom", name: "Severity", multiSelection: true,
+      options: [
+        { id: "sev1", name: "Sev 1" },
+        { id: "sev2", name: "Sev 2" },
+      ],
+    },
+  }}
+/>
+```
+
+(`miniFilters` / `minimalFilters` configure the quick-bar the same way; `groupConfig` controls list grouping.) A custom filter matches annotations by the option `id` you set on them (via `customListDataOnAnnotation` / annotation metadata). Set filter **values** programmatically with `client.getCommentElement().setCommentSidebarFilters({ status: ["OPEN"], severity: ["sev1"] })`.
+
+**2. Choose the filter layout** (props above): `filterPanelLayout` (`'menu'` panel vs `'bottomSheet'`), `filterOptionLayout` (`'checkbox'` vs `'dropdown'`), `filterOperator` (`'and'`/`'or'`), `filterCount`, `defaultMinimalFilter`.
+
+**3. Fully restyle the filter UI with wireframe slots** ([`Wireframe components`](/ui-customization/reference/wireframe-components)). The V2 sidebar exposes: `FilterButton` (+ `AppliedIcon`), `FilterDropdown` (`Trigger`, `Content → List → Item` / `Category`), and `FilterContainer` (`Title`, `CloseButton`, `GroupBy`, `ResetButton`, `ApplyButton`, `SectionList → Section → Label` / `Field → Control(Value, ChipList→Chip, Search, Chevron)` / `OptionList → Option(Checkbox, Name, Count)`). Fill these to build a **fully custom filter dropdown / panel** while Velt keeps the filtering logic. In wireframes you can read `{appliedFiltersCount}` and `{filterState}` to drive your own filter UI. (See [`Template Variables`](/ui-customization/template-variables).)
+
+> Same trade as everywhere: **config props** for which filters + layout (cheapest); **wireframe slots** to restructure the filter dropdown/panel; the filtering behavior stays Velt's.
+
+### Custom data: your own statuses, priorities, categories, reactions
+
+These props let you **replace Velt's default option sets with your own**. They're a core part of customization: the values flow into the UI (status/priority dropdowns, chips), into the **wireframe variables** (`statusOptions`, `priorityOptions`, `customStatusesShown`, …), and into the **primitive dropdown items** (so your custom dialog dropdown shows *your* statuses). Pass them on `VeltComments`:
+
+```tsx
+<VeltComments
+  customStatus={[
+    { id: "OPEN",  name: "Open",  color: "#625DF5", type: "default",  lightColor: "#EEF" },
+    { id: "WIP",   name: "In progress", color: "#ECB000", type: "ongoing" },
+    { id: "DONE",  name: "Done",  color: "#00C48C", type: "terminal" },
+  ]}
+  customPriority={[
+    { id: "P0", name: "Urgent", color: "#FF7162", lightColor: "#FFF4F2" },
+    { id: "P1", name: "Normal", color: "#625DF5" },
+  ]}
+  customCategory={[{ id: "bug", name: "Bug", color: "#FF7162" }]}
+  customReactions={{ "👍": { label: "Thumbs up", emoji: "👍" } }}
+/>
+```
+
+Exact shapes:
+- **`customStatus`**: `{ id, name, color, type: 'default' | 'ongoing' | 'terminal', lightColor?, svg?, iconUrl? }[]`: `type` controls semantics (`terminal` = resolved-like).
+- **`customPriority`**: `{ id, name, color, lightColor? }[]`.
+- **`customCategory`**: `{ id, name, color }[]`.
+- **`customReactions`**: a map of emoji → `{ label, emoji }` (a `ReactionMap`).
+- **`customListDataOnAnnotation`** (a `CustomAnnotationDropdownData`): the custom chip/dropdown on a **thread** (powers the `CustomAnnotationDropdown` slot). Shape:
+  ```ts
+  {
+    type: 'single' | 'multi';               // single- vs multi-select
+    placeholder?: string;                   // default 'Select'
+    data: { id: string; label: string }[];  // the selectable options
+  }
+  ```
+  The option `id` is what a **custom sidebar filter** matches against (see the `filters` example above): set the option on annotations via this prop, filter by the same `id`.
+- **`customListDataOnComment`** (an `AutocompleteData`): custom list on a **comment** (autocomplete-style). Shape:
+  ```ts
+  {
+    hotkey: string;                          // trigger char, e.g. '#'
+    description?: string;
+    type: 'custom' | 'contact' | 'group';    // default 'custom'
+    data: {                                  // AutocompleteItem[]
+      id: string; name: string;
+      description?: string;
+      icon?: { url?: string; svg?: string };
+      link?: string; groupId?: string;       // groupId ties an item to a group
+    }[];
+    groups?: { id: string; name: string }[]; // optional groups
+  }
+  ```
+
+> When you build a **custom status/priority dropdown** with primitives ([`Primitives`](/ui-customization/primitives)), this is where the `statuses` you map over come from. When you read `{statusOptions}` / `{priorityOptions}` in a wireframe ([`Template Variables`](/ui-customization/template-variables)), these are the values.
+
+---
+
+<Warning>
+**Version differences:** `embedMode` is `boolean` on the V1 sidebar but `string` on V2. Match the type to the component version you're using.
+</Warning>

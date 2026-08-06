@@ -91,7 +91,29 @@ Use this API to record a single reviewer's decision against a human step. When a
 }
 ```
 
-`recorded: false` only on idempotent replay. `aggregatorStatus`: `pending` / `resolved` / `rejected`. `resumeScheduled: true` when this decision triggered the resume task.
+`recorded: true` means the aggregator stored the decision. `aggregatorStatus`: `pending` / `resolved` / `rejected`. `resumeScheduled: true` when this decision triggered the resume task.
+
+#### Not Recorded Response
+
+`recorded: false` means the decision was not applied. `rejectionReason` says why:
+
+- `idempotent`: this `reviewerId` already recorded a decision.
+- `already-terminal`: the aggregator resolved or rejected before this call landed.
+- `unknown-responder`: `reviewerId` is not listed on the node's `reviewers[]`.
+- `aggregator-missing`: no aggregator document exists for the step.
+
+Only `idempotent` is safe to ignore. `aggregatorStatus` is `null` when `rejectionReason` is `aggregator-missing`; otherwise it is the aggregator's unchanged status.
+
+```JSON
+{
+  "result": {
+    "recorded": false,
+    "aggregatorStatus": "resolved",
+    "resumeScheduled": false,
+    "rejectionReason": "already-terminal"
+  }
+}
+```
 
 #### Failure Response
 
@@ -112,15 +134,26 @@ Use this API to record a single reviewer's decision against a human step. When a
 | `NOT_FOUND`           | `executionId` or `stepId` does not exist.                                                                                                          |
 | `INVALID_ARGUMENT`    | Schema validation (missing field, wrong type).                                                                                                     |
 
-A `reviewerId` not listed on the node's `reviewers[]` does not throw — the aggregator records the response as an unknown responder, and the response payload's `aggregatorStatus` reflects whether quorum has shifted.
+A `reviewerId` not listed on the node's `reviewers[]` does not throw. The aggregator discards the decision and returns `recorded: false`, `resumeScheduled: false`, and `rejectionReason: "unknown-responder"`. No response is stored and no counter moves, so `aggregatorStatus` stays `pending` and quorum cannot shift.
 
 <ResponseExample>
-```js
+```js Recorded
 {
   "result": {
     "recorded": true,
     "aggregatorStatus": "resolved",
     "resumeScheduled": true
+  }
+}
+```
+
+```js Not Recorded
+{
+  "result": {
+    "recorded": false,
+    "aggregatorStatus": "resolved",
+    "resumeScheduled": false,
+    "rejectionReason": "already-terminal"
   }
 }
 ```

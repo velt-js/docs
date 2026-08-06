@@ -93,10 +93,10 @@ curl -X POST https://api.velt.dev/v2/workflow/definitions/create \
 
 A successful create returns a `DefinitionView` with `version: 1` and `status: "active"`.
 
-The engine validates the graph at write time. Schema errors, edge-contract errors, cycles, dangling edges, unreachable nodes, and bad quorum settings all fail here rather than at run time. A rejected definition returns `INVALID_ARGUMENT` with the validation key in the message.
+The engine validates the graph at write time. Schema errors, edge-contract errors, cycles, dangling edges, unreachable nodes, and bad quorum settings all fail here rather than at run time. A rejected definition returns `INVALID_ARGUMENT`. The `message` is the human-readable rule text, for example `every human node must have at least one outgoing edge with on="reject" (a forward reject route or a reject back-edge): manager-approval`. Linter failures put everything in `error.message` too: the text `Definition linter failed:` followed by a JSON array whose entries each carry a `code` such as `missing-breach-edge`. Parse `error.message` to read those codes, because `error.details` is not set on a linter failure. Only schema failures populate `error.details`, with an `issues` array of Zod `{ code, path, message }` entries. Match on the linter `code`; the `APPROVAL_*` names are internal rule identifiers and never appear in a response.
 
 <Tip>
-  Two rules catch most first-time authors. A `human` node needs an outgoing `on: "reject"` edge (`APPROVAL_HUMAN_NODE_REQUIRES_REJECT_PATH`). An `agent` node needs either `url` or `urlPath` (`APPROVAL_AGENT_NODE_REQUIRES_URL_OR_URLPATH`).
+  Two rules catch most first-time authors. A `human` node needs an outgoing `on: "reject"` edge (`APPROVAL_HUMAN_NODE_REQUIRES_REJECT_PATH`). An `agent` node needs either `url` or `urlPath` (`APPROVAL_AGENT_NODE_REQUIRES_URL_OR_URLPATH`). Those two names are internal rule identifiers. The response carries the rule text, not the name.
 </Tip>
 
 Full request shape: [Create Definition](/api-reference/rest-apis/v2/approval-engine/definitions/create-definition).
@@ -343,9 +343,8 @@ You do not have to call the dispatch API. Add a `triggers[]` entry to a definiti
 
 | Code | Meaning |
 | --- | --- |
-| `INVALID_ARGUMENT` | The request failed schema or graph validation. The message names the rule. |
-| `UNAUTHENTICATED` | Missing or invalid `x-velt-auth-token`. |
-| `PERMISSION_DENIED` | The token is valid but lacks the required scope. |
+| `INVALID_ARGUMENT` | The request failed schema or graph validation, or `x-velt-auth-token` is missing. Graph failures and rule-based schema failures name the rule in the message. A plain missing or mistyped field returns the bare Zod message, such as `Required`. A missing auth token returns the flat message `Auth token is required`. |
+| `PERMISSION_DENIED` | The `x-velt-auth-token` is not one of the workspace's registered tokens. The `steps/resolve` endpoint also returns it when a `reviewer-approve` or `reviewer-reject` action passes an `actorId` that is not on the step's reviewer list. `recordReviewerDecision` has no reviewer-list check of its own: an undeclared `reviewerId` comes back as `recorded: false`. |
 | `NOT_FOUND` | Unknown `executionId`, `definitionId`, or `stepId`. |
 | `ALREADY_EXISTS` | An active definition already uses that `definitionId`. |
 | `FAILED_PRECONDITION` | State violation, such as resolving a step that is not `waiting`. |
@@ -353,10 +352,12 @@ You do not have to call the dispatch API. Add a `triggers[]` entry to a definiti
 
 The four most common reasons the engine rejects a definition:
 
-- **`APPROVAL_HUMAN_NODE_REQUIRES_REJECT_PATH`:** a human node has no outgoing `on: "reject"` edge.
-- **`APPROVAL_AGENT_NODE_REQUIRES_URL_OR_URLPATH`:** an agent node has neither `url` nor `urlPath`.
-- **`missing-breach-edge`:** a node sets `slaMs` but nothing routes on a breach.
-- **`when` written as JavaScript:** it must be a JSON-AST string, not `"output.decision == 'approve'"`.
+- **A human node has no outgoing `on: "reject"` edge.** The message is `every human node must have at least one outgoing edge with on="reject" (a forward reject route or a reject back-edge)`, then a colon and the offending `nodeId`.
+- **An agent node has neither `url` nor `urlPath`.** The message is `agent node requires either a static "url" or a "urlPath"`.
+- **A node sets `slaMs` but nothing routes on a breach.** The linter rejects it with the `code` `missing-breach-edge`.
+- **`when` written as JavaScript.** It must be a JSON-AST string, not `"output.decision == 'approve'"`.
+
+Linter failures arrive inside `error.message` as `Definition linter failed:` plus a JSON array, and every entry carries a `code`. Parse the message to read them, because `error.details` stays empty on a linter failure. Match on that `code` rather than on the surrounding message text.
 
 See [Linter rules](/ai/approval-engine/customize-behavior#linter-rules) for the full list, and [Anti-patterns](/ai/approval-engine/patterns#anti-patterns) for the mistakes that trigger them.
 

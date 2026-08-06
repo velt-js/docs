@@ -36,17 +36,19 @@ There is no duplicate endpoint. A definition supports five operations: create, u
 
 <Steps>
   <Step title="Fetch the original">
-    Call [Get Definition](/api-reference/rest-apis/v2/approval-engine/definitions/get-definition). You get the whole thing back: nodes, edges, groups, triggers, everything.
+    Call [Get Definition](/api-reference/rest-apis/v2/approval-engine/definitions/get-definition). The response carries `definitionId`, `name`, `description`, `scope`, `nodes`, `edges`, `groups`, `triggers`, `tags`, and `custom`, plus the server-owned `version`, `createdAt`, `updatedAt`, `status`, and `compiled`. It does not carry `webhookConfig`.
   </Step>
 
   <Step title="Change the id and the name">
     `definitionId` is the workflow's permanent handle, and two active definitions cannot share one. Turn `marketing-page-approval` into `marketing-page-approval-eu`. Give the copy a name a human can tell apart too.
   </Step>
 
-  <Step title="Strip the five fields the server owns">
+  <Step title="Strip the server-owned fields and the explicit nulls">
     A read response carries bookkeeping that is not yours to set: `version`, `createdAt`, `updatedAt`, `status`, and `compiled`. Delete all five before sending.
 
-    Create rejects unknown fields outright, so leaving even one in fails the whole request with `INVALID_ARGUMENT`. That is the good outcome: you get a loud error, never a silently mangled copy.
+    Then delete every key whose value is `null`. Every optional field you never set comes back that way: `description`, `groups`, `triggers`, `tags`, `custom`, and `organizationId` / `documentId` inside `scope`. Create takes each of those as absent or as a real value, never as `null`, so a leftover `null` is rejected.
+
+    Create rejects unknown fields outright too, so leaving even one of either kind in fails the whole request with `INVALID_ARGUMENT`. That is the good outcome: you get a loud error, never a silently mangled copy.
   </Step>
 
   <Step title="Send it to create">
@@ -55,12 +57,18 @@ There is no duplicate endpoint. A definition supports five operations: create, u
 </Steps>
 
 <Warning>
-  **Triggers are what bite people.** If the original runs every night at 2am, the copy now runs every night at 2am too, and you have two nightly runs. A copied `webhookConfig` reuses the same secret, so one leaked secret exposes both workflows.
+  **Triggers are what bite people.** If the original runs every night at 2am, the copy now runs every night at 2am too, and you have two nightly runs.
 
-  Before you create the copy, either drop `triggers` and `webhookConfig` entirely and re-add them deliberately, or give the copy fresh `triggerId` values and a fresh secret.
+  Before you create the copy, either drop `triggers` entirely and re-add them deliberately, or give the copy fresh `triggerId` values.
 </Warning>
 
-Everything else copies safely. Your `edges` come back exactly as you authored them, byte for byte with no reformatting, so the round trip cannot quietly change routing. `scope` echoes the organization and document ids you originally sent, not internal ones, so it is safe to copy or edit as-is.
+<Note>
+  `webhookConfig` is write-only. Create Definition and Update Definition accept it, but Get Definition does not return it. The copy therefore starts with no per-definition webhook target. Re-send `webhookConfig`, with its own fresh secret, on the create call if the copy needs one. Dispatch-level `webhookUrl` + `webhookSecret` are a separate path, so a run dispatched with that pair still pushes every lifecycle event. Supplying both on dispatch replaces the definition's `webhookConfig` for that run rather than adding a second target, and it clears any `eventTypes` filter.
+
+  Updates hit the same gap. Update is a full replace, and the object you fetched carries no `webhookConfig`, so a get, edit, update round trip nulls the existing `webhookConfig` on the original definition. Re-send it on every update of a definition that has one.
+</Note>
+
+Everything the read response carries copies safely. Your `edges` come back exactly as you authored them, byte for byte with no reformatting, so the round trip cannot quietly change routing. `scope` echoes the organization and document ids you originally sent, not internal ones, so it is safe to copy or edit as-is.
 
 ## Versioning, and what it does not do
 
@@ -203,10 +211,10 @@ The reject edge never fires on a breach, so the breach would dead-end. Add a bre
 
 Even the last approver needs somewhere to send a rejection. If rejection should end the run, route it to a terminal node explicitly.
 
-### An agent node inside a quorum group
+### Assuming an agent in a quorum group never counts
 
 ```json
-// Accepted, but quorum can never be met
+// Accepted, and the agent does count toward the quorum
 "groups": [{
   "groupId": "x",
   "memberNodeIds": ["agent-summarize", "human-legal"],
@@ -216,10 +224,12 @@ Even the last approver needs somewhere to send a rejection. If rejection should 
 }]
 ```
 
-Quorum counts approvals, and an agent step has no reviewer decision to contribute. The group hangs. Move the agent out of the group and put it upstream or downstream instead.
+An agent step ends `completed` with `output.decision` set to `approve` when its agent run passes or is skipped, and `failed` when it does not. Quorum counts every member that completes with a `decision` of `approve`, whatever the node type. So a passing `agent-summarize` plus an approving `human-legal` meets `quorum: 2`, and the group fires.
+
+Failure is the real constraint here, not node type. A failed agent step never counts toward the approval counter, whatever shape its output takes. If the agent run finishes unsuccessfully, the step carries `output.decision` set to `reject`. If the step fails before the run starts, its `output` is empty and carries no `decision` at all: a missing `agentId`, neither `url` nor `urlPath`, `blocking: true`, or a failed dispatch call. Other failure paths carry an `output` with neither a `decision` nor an approval. None of them advance the approval counter, only the completion counter. With `quorum` equal to `expectedSteps`, one agent failure keeps the group from firing, exactly as one human rejection would.
 
 <Note>
-  The old workaround was to mark the agent `blocking: true`. That is not available: blocking agent nodes are rejected at runtime with `agent-blocking-not-supported`. Sequence the agent and the humans instead of grouping them.
+  Marking the agent `blocking: true` is not available: blocking agent nodes are rejected at runtime with `agent-blocking-not-supported`. To get human review of an agent's findings, put a `human` node downstream of the agent node.
 </Note>
 
 ### `when` written as JavaScript
@@ -239,7 +249,7 @@ You only write this for `on: "custom"`. The `approve`, `reject`, `always`, and `
 
 ### An `on: "exhausted"` target that is reachable another way
 
-This is accepted, and it will surprise you. The engine skips seeding an exhausted-route node as a root only when that node has no other incoming edges. If your escalation node is also reachable by normal fan-out, dispatch spawns it once at the start, and the loop spawns a second copy when the cap is hit. Both run.
+This is accepted, and it will surprise you. Dispatch never seeds an exhausted-route node as a root: it drops any node that has an incoming edge, and separately drops any node named by a loop's `onExhausted.routeToNodeId`. The duplicate shows up later. If your escalation node is also the target of a normal edge, its predecessor's fan-out spawns it when that predecessor completes, and the loop spawns a second copy when the cap is hit. The two steps get different ids, so neither one deduplicates the other. Both run.
 
 Keep `on: "exhausted"` targets as leaves with no other incoming edges. Chain anything else off them.
 

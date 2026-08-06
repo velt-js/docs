@@ -6,7 +6,7 @@ api: "POST https://api.velt.dev/v2/workflow/steps/recordAgentResolution"
 Use this API to record an external resolution for a **blocking** agent step. The agent step parks in `waiting` after dispatch; resolutions arriving through this endpoint advance the aggregator according to its `resolutionPolicy` (`allResolved` or `minResolved`).
 
 <Warning>
-  Blocking agent nodes are not available in beta. Setting `blocking: true` on an agent node passes schema validation but is rejected at run time with `agent-blocking-not-supported`, so no step ever parks for this endpoint. To put a person in front of an agent's findings today, place a `human` node downstream of the agent and use [Record Reviewer Decision](/api-reference/rest-apis/v2/approval-engine/steps/record-reviewer-decision).
+  Blocking agent nodes are not available in beta. `blocking: true` requires a sibling `resolutionPolicy` to pass schema validation, and the pair is then rejected at run time with `agent-blocking-not-supported`, so no step ever parks for this endpoint. To put a person in front of an agent's findings today, place a `human` node downstream of the agent and use [Record Reviewer Decision](/api-reference/rest-apis/v2/approval-engine/steps/record-reviewer-decision).
 </Warning>
 
 # Endpoint
@@ -30,43 +30,43 @@ Use this API to record an external resolution for a **blocking** agent step. The
 <ParamField body="data" type="object" required>
   <Expandable title="properties">
     <ParamField body="executionId" type="string" required>
-      The execution containing the step.
+      The execution containing the step. ≤ 200 chars.
     </ParamField>
 
     <ParamField body="stepId" type="string" required>
-      Must reference a blocking agent step in `waiting`.
+      Must reference a blocking agent step in `waiting`. ≤ 200 chars.
     </ParamField>
 
-    <ParamField body="resolutionId" type="string" required>
-      `^[A-Za-z0-9:_\-.]{1,200}$`. Stable identifier per logical resolution (idempotent across replays).
+    <ParamField body="responseId" type="string" required>
+      Must match one of the response IDs the agent handler generated; read them from the step's output. ≤ 200 chars. Idempotent per `(stepId, responseId)`: a replay returns `recorded: false` with no side effect.
     </ParamField>
 
-    <ParamField body="status" type="string" required>
-      `success` / `failure`.
+    <ParamField body="resolution" type="string" required>
+      `resolved` / `rejected`.
     </ParamField>
 
-    <ParamField body="output" type="object">
-      Agent output. Capped (each value ≤ 16k chars).
+    <ParamField body="actorId" type="string" required>
+      The actor recording the resolution. ≤ 256 chars.
     </ParamField>
 
-    <ParamField body="errorMessage" type="string">
-      Required when `status === "failure"`.
+    <ParamField body="reason" type="string">
+      ≤ 2000 chars.
     </ParamField>
   </Expandable>
 </ParamField>
 
 ## **Example Requests**
 
-#### Successful resolution
+#### Record a resolution
 
 ```JSON
 {
   "data": {
     "executionId": "exec_1777374504255_xzy43k9q",
     "stepId": "step_blocking-agent_...",
-    "resolutionId": "res_42",
-    "status": "success",
-    "output": { "summary": "Generated draft v3", "wordCount": 287 }
+    "responseId": "resp_42",
+    "resolution": "resolved",
+    "actorId": "user-1"
   }
 }
 ```
@@ -96,7 +96,7 @@ Use this API to record an external resolution for a **blocking** agent step. The
 }
 ```
 
-**Errors:** `FAILED_PRECONDITION` (step not waiting or not blocking) / `INVALID_ARGUMENT` / `NOT_FOUND`.
+**Errors:** `FAILED_PRECONDITION` (the step is not an `agent` node, or its status is not `waiting`) / `INVALID_ARGUMENT` / `NOT_FOUND`.
 
 <ResponseExample>
 ```js

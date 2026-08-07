@@ -101,7 +101,7 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
           "summary": "Found 7 issues across 12 pages. 7 annotations created."
         },
         "crawlerResults": { "status": "completed", "totalUrlsFound": 12, "duration": 45000, "pagesVisited": 12 },
-        "llmModel": "claude/claude-sonnet-4-6",
+        "llmModel": "claude/claude-sonnet-5",
         "tokenUsage": { "promptTokens": 12500, "completionTokens": 3200, "thoughtsTokens": 0, "totalTokens": 15700 }
       }
     }
@@ -129,7 +129,7 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
 | `completedAt`                            | number \| null      | Epoch ms when completed. Null while running.                                                                   |
 | `durationMs`                             | number \| null      | Total duration in ms. Null while running.                                                                      |
 | `error`                                  | object \| undefined | Populated when any URL/batch failed: on `"error"` or `"partial"` (and may co-exist with `"failed"`).           |
-| `error.code`                             | string              | Error code (`TIMEOUT`, `LLM_ERROR`, `LLM_RATE_LIMITED`, `MALFORMED_RESPONSE`, `CRAWLER_ERROR`, `EXTRACTION_ERROR`, `POST_PROCESS_ERROR`, `INTERNAL`). |
+| `error.code`                             | string              | Error code (`TIMEOUT`, `LLM_ERROR`, `LLM_RATE_LIMITED`, `MALFORMED_RESPONSE`, `CRAWLER_ERROR`, `CONTEXT_GATHERING_ERROR`, `POST_PROCESS_ERROR`, `INTERNAL`). |
 | `error.message`                          | string              | Human-readable error description.                                                                              |
 | `error.advisoryComment`                  | string \| undefined | Advisory comment text posted to the document.                                                                  |
 | `error.retryable`                        | boolean             | Whether this error can be retried.                                                                             |
@@ -145,10 +145,12 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
 | `resultsSummary.urlsErrored`             | number \| undefined | URLs whose agent run failed. `0 < urlsErrored < urlsProcessed` → `partial`; `urlsErrored >= urlsProcessed` (≥1 processed) → `error`. |
 | `resultsSummary.erroredUrls`             | array \| undefined  | Bounded sample (≤50) of `{ url, message }` for failing URLs.                                                    |
 | `resultsSummary.issuesCreated`           | number              | Equals `totalFindings` (backwards compat).                                                                     |
+| `resultsSummary.severityCounts`          | object              | Finding counts keyed by severity, e.g. `{ "critical": 0, "high": 2, "medium": 5, "low": 1, "info": 0 }`.        |
+| `resultsSummary.findings`                | object[]            | Bounded sample (≤50) of the run's findings for at-a-glance display, each `{ title, description, severity, sourceUrl?, issueType?, url? }`. Use `includeResults: true` for the complete per-URL findings. |
 | `resultsSummary.summary`                 | string \| null      | Human-readable summary. Null while running.                                                                    |
 | `resultsSummary.matchResult`             | object \| undefined | **Legacy.** Match-and-merge outcome (`{ created, skipped, resolved }`) written by the retired match-and-merge dedup. Present only on old execution documents; new executions use per-URL delete-and-recreate and never write this field. |
 | `crawlerResults`                         | object \| undefined | Only populated when `crossPageExecute: true`.                                                                  |
-| `llmModel`                               | string \| undefined | LLM model used (e.g. `"claude/claude-sonnet-4-6"`, `"gemini/gemini-3-flash-preview"`).                          |
+| `llmModel`                               | string \| undefined | LLM model used (e.g. `"claude/claude-sonnet-5"`, `"gemini/gemini-3.6-flash"`).                          |
 | `tokenUsage`                             | object              | `{ promptTokens, completionTokens, thoughtsTokens, totalTokens }`.                                             |
 
 <Note>
@@ -168,28 +170,36 @@ When `includeResults` is true, a `results` array is included alongside `executio
       "execution": { "...same as above..." },
       "results": [
         {
+          "id": "a1b2c3d4e5f6",
           "url": "https://example.com",
           "urlHash": "a1b2c3d4e5f6",
-          "findings": [
-            {
-              "id": "finding-1",
-              "title": "Heading uses wrong font",
-              "description": "The h1 element uses 'Arial' instead of the brand font 'Inter'",
-              "severity": "high",
-              "category": "typography",
-              "targetText": "Welcome to Example",
-              "occurrence": 1,
-              "sourceUrl": "https://example.com",
-              "suggestion": "Change font-family to 'Inter' for the h1 element",
-              "htmlSelector": "h1.hero-title",
-              "htmlXpath": "/html/body/main/section[1]/h1",
-              "isPageLevel": false,
-              "issueType": "brand-font",
-              "confidence": 92
-            }
-          ],
+          "agentId": "abc123def456",
+          "agentName": "Brand Guidelines Checker",
+          "agentResult": {
+            "status": "completed",
+            "summary": "Found 1 typography issue on the hero section.",
+            "issueCount": 1,
+            "findingsCount": 1,
+            "findings": [
+              {
+                "id": "finding-1",
+                "title": "Heading uses wrong font",
+                "description": "The h1 element uses 'Arial' instead of the brand font 'Inter'",
+                "severity": "high",
+                "category": "typography",
+                "targetText": "Welcome to Example",
+                "occurrence": 1,
+                "sourceUrl": "https://example.com",
+                "suggestion": "Change font-family to 'Inter' for the h1 element",
+                "htmlSelector": "h1.hero-title",
+                "htmlXpath": "/html/body/main/section[1]/h1",
+                "isPageLevel": false,
+                "issueType": "brand-font",
+                "confidence": 92
+              }
+            ]
+          },
           "findingCount": 1,
-          "annotationsCreated": 1,
           "processedAt": 1711900050000
         }
       ]
@@ -200,14 +210,31 @@ When `includeResults` is true, a `results` array is included alongside `executio
 
 **Per-URL result fields:**
 
-| Field                | Type     | Description                                 |
-| -------------------- | -------- | ------------------------------------------- |
-| `url`                | string   | The URL that was analyzed.                  |
-| `urlHash`            | string   | MD5 hash of the URL (Firestore doc ID).     |
-| `findings`           | object[] | Array of `AgentFinding` objects (see below).|
-| `findingCount`       | number   | Number of findings for this URL.            |
-| `annotationsCreated` | number   | Annotations created for this URL.           |
-| `processedAt`        | number   | Epoch ms when this URL was processed.       |
+| Field          | Type   | Description                                                                                  |
+| -------------- | ------ | -------------------------------------------------------------------------------------------- |
+| `id`           | string | Result document ID. Same value as `urlHash`.                                                 |
+| `url`          | string | The URL that was analyzed.                                                                   |
+| `urlHash`      | string | MD5 hash of the URL.                                                                         |
+| `agentId`      | string | ID of the agent that produced this result.                                                   |
+| `agentName`    | string | Name of the agent at the time of the run.                                                    |
+| `agentResult`  | object | The agent's output for this URL. Findings live here, not at the top level. See below.        |
+| `findingCount` | number | Number of findings for this URL. Mirrors `agentResult.issueCount`.                           |
+| `processedAt`  | number | Epoch ms when this URL was processed.                                                        |
+
+<Note>
+  Findings are nested under `agentResult.findings`, not on the result row itself. Read `results[i].agentResult.findings`. Annotation counts are not reported per URL; use `resultsSummary.totalAnnotationsCreated` for the run-level total.
+</Note>
+
+**Agent result fields (`agentResult`):**
+
+| Field           | Type                | Description                                                          |
+| --------------- | ------------------- | -------------------------------------------------------------------- |
+| `status`        | string              | `"completed"` or `"failed"` for this URL.                            |
+| `summary`       | string \| undefined | Human-readable summary of what the agent found on this URL.          |
+| `issueCount`    | number              | Number of issues the agent raised for this URL.                      |
+| `findingsCount` | number              | Number of entries in `findings`.                                     |
+| `findings`      | object[]            | Array of `AgentFinding` objects (see below).                         |
+| `error`         | object \| undefined | Populated when `status` is `"failed"`.                               |
 
 **Finding fields (`AgentFinding`):**
 

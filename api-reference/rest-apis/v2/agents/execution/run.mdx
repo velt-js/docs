@@ -68,7 +68,7 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
     </ParamField>
 
     <ParamField body="trigger" type="string">
-      `"standalone"` (default) or `"workflow"`. Use `"workflow"` when running an agent as part of an Review Workflow Builder workflow node.
+      `"standalone"` (default) or `"workflow"`. Use `"workflow"` when running an agent as part of a Review Workflow Builder workflow node.
     </ParamField>
 
     <ParamField body="workflowExecutionId" type="string">
@@ -87,6 +87,35 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 
     <ParamField body="userContext" type="object">
       Runtime values for the agent's `userContextFields`. Keys must match the field IDs declared in the agent's `input.userContextFields`.
+    </ParamField>
+
+    <ParamField body="aiConfig" type="object">
+      Per-execution LLM override. Omit it to run on the provider and model the platform resolves for the agent.
+
+      | Field           | Type   | Description                                                                                                  |
+      | --------------- | ------ | ------------------------------------------------------------------------------------------------------------ |
+      | `provider`      | string | `"gemini"`, `"claude"`, or `"openai"`. Any other value is rejected.                                           |
+      | `model`         | string | Pins one model for this run. Must be on the allowlist (see below).                                            |
+      | `defaultModels` | object | Per-provider model policy, `{ "<provider>": "<model>" }`. Each key must be a valid provider and each value must be on that provider's allowlist. |
+      | `maxToolTurns`  | number | Tool-loop turn budget for the `mcp-tools` execution strategy. Integer `1..16`.                                 |
+
+      **Use `model` or `defaultModels`, not both interchangeably.** `model` pins a single model for this run, which is only correct when you know the agent's provider. `defaultModels` is the per-provider form: supply it when one call fans out across agents stored on different providers, so each provider picks up the right model.
+
+      <Note>
+        **Allowed models.** A request cannot point an execution at an arbitrary model string. `model` is validated against the allowlist for the supplied `provider`, or against the union of every provider's allowlist when `provider` is omitted (the effective provider is only known at execution time). The allowlist is deliberately narrow, currently one model per provider:
+
+        | Provider   | Allowed model      |
+        | ---------- | ------------------ |
+        | `gemini`   | `gemini-3.6-flash` |
+        | `claude`   | `claude-sonnet-5`  |
+        | `openai`   | `gpt-5.6-luna`     |
+      </Note>
+
+      Validation rules specific to this object:
+
+      - Unlike the rest of the request body, `aiConfig` rejects unknown keys. A typo such as `modell` returns `INVALID_ARGUMENT` instead of being silently ignored.
+      - At least one of `provider`, `model`, `defaultModels`, or `maxToolTurns` must be present. An empty `aiConfig: {}` is rejected.
+      - `defaultModels` cannot be an empty object.
     </ParamField>
   </Expandable>
 </ParamField>
@@ -170,7 +199,44 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 }
 ```
 
-#### 5. Minimal request
+#### 5. Pinning a provider and model for one run
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456",
+    "url": "https://example.com/pricing",
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "aiConfig": {
+      "provider": "claude",
+      "model": "claude-sonnet-5"
+    }
+  }
+}
+```
+
+#### 6. Per-provider model policy across mixed agents
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456",
+    "url": "https://example.com",
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "aiConfig": {
+      "defaultModels": {
+        "gemini": "gemini-3.6-flash",
+        "claude": "claude-sonnet-5"
+      },
+      "maxToolTurns": 12
+    }
+  }
+}
+```
+
+#### 7. Minimal request
 
 ```JSON
 {
@@ -214,7 +280,7 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 }
 ```
 
-**Errors:** `INVALID_ARGUMENT` (invalid URL; missing `agentId`, `organizationId`, or `documentId`; invalid `trigger`, `deviceType`, or `annotationVisibility`) / `NOT_FOUND` (store database not found, or the target document does not exist) / `ALREADY_EXISTS` (an execution is already running for this agent + document combination; the error message includes the running execution's ID) / `RESOURCE_EXHAUSTED` (the workspace's AI credits are exhausted).
+**Errors:** `INVALID_ARGUMENT` (invalid URL; missing `agentId`, `organizationId`, or `documentId`; invalid `trigger`, `deviceType`, or `annotationVisibility`; an `aiConfig` that is empty, carries an unknown key, names a provider outside `gemini`/`claude`/`openai`, names a model outside the allowlist, supplies an empty `defaultModels`, or sets `maxToolTurns` outside `1..16`) / `NOT_FOUND` (store database not found, or the target document does not exist) / `ALREADY_EXISTS` (an execution is already running for this agent + document combination; the error message includes the running execution's ID) / `RESOURCE_EXHAUSTED` (the workspace's AI credits are exhausted).
 
 <ResponseExample>
 ```js

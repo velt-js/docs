@@ -3,7 +3,7 @@ title: "Extract Agents from File"
 api: "POST https://api.velt.dev/v2/agents/extract"
 ---
 
-Use this API to extract agent definitions from an uploaded file. The file is parsed by an LLM and the response returns a list of structured agent configurations that can be passed straight into [Create Agent](/api-reference/rest-apis/v2/agents/create).
+Use this API to extract agent definitions from an uploaded file. The file is parsed by an LLM and the response returns a list of draft agent definitions: a name, a description, and a consolidated QA `prompt` for each. Map `prompt` onto the `instructions` field of [Create Agent](/api-reference/rest-apis/v2/agents/create) and supply the remaining config blocks yourself. Extraction does not produce `contextGathering` or `execution` config; use [Resolve Config](/api-reference/rest-apis/v2/agents/config/resolve) to derive those from the extracted prompt.
 
 Useful for migrating an existing QA checklist (CSV / Excel / PDF / plain text) into agents in bulk.
 
@@ -36,7 +36,7 @@ Useful for migrating an existing QA checklist (CSV / Excel / PDF / plain text) i
     </ParamField>
 
     <ParamField body="provider" type="string">
-      LLM provider override: `"gemini"` or `"claude"`.
+      LLM provider override: `"gemini"`, `"claude"`, or `"openai"`. An unrecognized value is not rejected at the request boundary; it falls back to the platform default at the AI layer.
     </ParamField>
 
     <ParamField body="fileName" type="string">
@@ -78,38 +78,70 @@ Useful for migrating an existing QA checklist (CSV / Excel / PDF / plain text) i
 {
   "result": {
     "status": "success",
-    "message": "Agents extracted successfully",
+    "message": "Agents parsed successfully",
     "data": {
       "extractionResult": {
         "agents": [
           {
             "name": "Brand Color Check",
             "description": "Verify all CTAs use the primary brand color",
-            "instructions": "Check that every <a class='cta'> element uses the primary brand color #1A73E8.",
-            "contextGathering": { "strategies": ["web-page-html", "web-page-screenshot"] },
-            "execution": { "executionStrategy": "ai" }
+            "prompt": "Check that every <a class='cta'> element uses the primary brand color {{brandColor}}. Report any CTA rendered in a different color.",
+            "sourceTasks": [
+              "All CTAs must use the primary brand color",
+              "Secondary buttons must not use the CTA color"
+            ],
+            "userContextFields": [
+              {
+                "id": "brandColor",
+                "title": "Primary brand color",
+                "type": "string",
+                "example": "#1A73E8"
+              }
+            ]
           },
           {
             "name": "Heading Font Check",
             "description": "Verify all headings use the brand font",
-            "instructions": "Check that every <h1>, <h2>, and <h3> element uses font-family 'Inter'.",
-            "contextGathering": { "strategies": ["web-page-html"] },
-            "execution": { "executionStrategy": "ai" }
+            "prompt": "Check that every <h1>, <h2>, and <h3> element uses font-family 'Inter'.",
+            "sourceTasks": ["Headings use Inter"]
           }
         ],
         "summary": "Extracted 2 agents from CSV file",
-        "skipped": []
+        "skipped": [
+          {
+            "originalText": "Make the page feel premium",
+            "reason": "Too subjective to express as a checkable rule."
+          }
+        ],
+        "totalTasksParsed": 4,
+        "memory": { "sourceId": "src_8f2b1c94" }
       }
     }
   }
 }
 ```
 
-| Field                           | Type     | Description                                                                                                  |
-| ------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------ |
-| `data.extractionResult.agents`  | object[] | Extracted agent configurations, ready for [Create Agent](/api-reference/rest-apis/v2/agents/create).         |
-| `data.extractionResult.summary` | string   | Human-readable summary of the extraction.                                                                    |
-| `data.extractionResult.skipped` | object[] | Rows the engine could not turn into agents (with the reason for each).                                       |
+| Field                                    | Type     | Description                                                                                                  |
+| ---------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------ |
+| `data.extractionResult.agents`           | object[] | Draft agent definitions. See the field table below.                                                          |
+| `data.extractionResult.summary`          | string   | Human-readable summary of the extraction.                                                                    |
+| `data.extractionResult.skipped`          | object[] | Entries the engine could not turn into agents. Each is `{ originalText, reason }`.                           |
+| `data.extractionResult.totalTasksParsed` | number   | Total individual checks identified in the file, before grouping into agents or skipping.                     |
+| `data.extractionResult.memory`           | object   | Present only when the uploaded file was persisted as a workspace knowledge source: `{ sourceId }`. Omitted otherwise. |
+
+**Extracted agent fields (`agents[]`):**
+
+| Field               | Type     | Description                                                                                                       |
+| ------------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `name`              | string   | Short, descriptive agent name. Maps to `name` on [Create Agent](/api-reference/rest-apis/v2/agents/create).       |
+| `description`       | string   | One-sentence description of what the agent checks. Maps to `description`.                                          |
+| `prompt`            | string   | Consolidated QA instruction covering every check grouped into this agent. Maps to `instructions`.                  |
+| `sourceTasks`       | string[] | The original task texts from the uploaded file that were grouped into this agent. Provenance only; not sent to Create Agent. |
+| `userContextFields` | object[] | Values the agent needs before it can run, each `{ id, title, type, example? }`. Maps to `input.userContextFields`. |
+
+<Note>
+  Extraction returns at most **50 agents** per file. Anything beyond that is dropped from `agents[]`, and `totalTasksParsed` still reflects the full count found in the file.
+</Note>
 
 #### Failure Response
 
@@ -122,19 +154,20 @@ Useful for migrating an existing QA checklist (CSV / Excel / PDF / plain text) i
 }
 ```
 
-**Errors:** `INVALID_ARGUMENT` (missing or empty `fileBase64` / `mimeType`, or an unsupported MIME type).
+**Errors:** `INVALID_ARGUMENT` (missing, empty, or whitespace-only `fileBase64`; missing or empty `mimeType`; an unsupported MIME type; or a file whose decoded size exceeds **5 MB**) / `INTERNAL` (the ingest pipeline failed to process the file, timed out, or produced no readable content).
 
 <ResponseExample>
 ```js
 {
   "result": {
     "status": "success",
-    "message": "Agents extracted successfully",
+    "message": "Agents parsed successfully",
     "data": {
       "extractionResult": {
         "agents": [],
         "summary": "Extracted 0 agents",
-        "skipped": []
+        "skipped": [],
+        "totalTasksParsed": 0
       }
     }
   }

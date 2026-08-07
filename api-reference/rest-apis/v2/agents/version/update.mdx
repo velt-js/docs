@@ -9,6 +9,14 @@ In-flight executions stay pinned to whatever version they started on, so updatin
 
 The schema uses `.passthrough()`, so additional behavioral fields are forwarded to the service layer.
 
+<Warning>
+  **The merge is one level deep.** Each top-level block you send (`contextGathering`, `execution`, `response`, `postProcess`, `input`, `scope`, `setup`) is merged onto its stored counterpart, but anything nested inside is **replaced wholesale**, not merged.
+
+  So sending `{ "scope": { "crossPage": { "enabled": false } } }` does not just flip `enabled`. It replaces the whole `crossPage` object, dropping the stored `targetProperty` and `pageDiscovery`, and the request then fails validation because both are required. The same applies to `execution.mcpServers`, `input.userContextFields`, and `contextGathering.strategyOptions`: send the complete nested object every time, not just the keys you want to change.
+
+  Fetch the current config with [Get Agent](/api-reference/rest-apis/v2/agents/get) first, apply your change to the full nested object, and send that.
+</Warning>
+
 # Endpoint
 
 `POST https://api.velt.dev/v2/agents/version/update`
@@ -42,7 +50,11 @@ The schema uses `.passthrough()`, so additional behavioral fields are forwarded 
     </ParamField>
 
     <ParamField body="phaseTimeoutMs" type="number">
-      Per-phase timeout in ms (positive integer).
+      Per-phase timeout in ms. Positive integer, no upper bound.
+    </ParamField>
+
+    <ParamField body="metadata" type="object">
+      Arbitrary client metadata. Replaces the stored object rather than merging into it.
     </ParamField>
 
     <ParamField body="contextGathering" type="object">
@@ -50,7 +62,9 @@ The schema uses `.passthrough()`, so additional behavioral fields are forwarded 
     </ParamField>
 
     <ParamField body="execution" type="object">
-      Execution config, including `executionStrategy`, the strict `knowledge` (Memory-RAG) block, and `mcpServers` for the `"mcp-tools"` strategy. Same shape as [Create Agent](/api-reference/rest-apis/v2/agents/create#mcp-servers-mcp-tools-strategy). Rotating an MCP/REST auth secret is done by sending the new plaintext value here; omitting it keeps the stored secret.
+      Execution config, including `executionStrategy`, the strict `knowledge` (Memory-RAG) block, and `mcpServers` for the `"mcp-tools"` strategy. Same shape as [Create Agent](/api-reference/rest-apis/v2/agents/create#mcp-servers-mcp-tools-strategy).
+
+      Rotate an MCP or REST auth secret by sending the new plaintext value here. Because `mcpServers` is an array, sending it replaces the stored array in full: a server object sent without its `auth` block **loses** the stored secret. To keep existing secrets, either omit `mcpServers` entirely or re-send every server object with its `auth` intact.
     </ParamField>
 
     <ParamField body="response" type="object">
@@ -154,7 +168,11 @@ The schema uses `.passthrough()`, so additional behavioral fields are forwarded 
 }
 ```
 
-**Errors:** `INVALID_ARGUMENT` (Zod validation failure) / `NOT_FOUND` (agent does not exist).
+**Errors:** `INVALID_ARGUMENT` (validation failure, including a nested block that lost required fields to the one-level merge, or blanking `instructions` on an agent whose effective `executionStrategy` still requires a prompt) / `NOT_FOUND` (agent does not exist).
+
+<Note>
+  `instructions` is re-validated against the **merged** result, not against your patch alone. If the merged `executionStrategy` is `"ai"`, `"service+ai"`, `"stagehand-agent"`, or `"mcp-tools"`, the merged `instructions` must be non-empty, so clearing `instructions` on an existing AI agent is rejected even though the field itself is optional. Whitespace-only counts as empty.
+</Note>
 
 <ResponseExample>
 ```js

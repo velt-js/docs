@@ -6,7 +6,8 @@ api: "POST https://api.velt.dev/v2/agents/config/resolve"
 Use this API to resolve optimal extraction strategies and execution strategy for an agent based on its instructions. The engine analyzes the (optional `rawInstructions` plus the processed `instructions`) and returns:
 
 - A recommended set of `contextGathering.strategies`
-- A recommended `executionStrategy` (`ai`, `service`, `service+ai`, or `stagehand-agent`)
+- A recommended `executionStrategy` (`ai`, `service`, `service+ai`, `stagehand-agent`, or `mcp-tools`)
+- Per-strategy options where a recommended strategy needs them
 - Reasoning for each recommendation
 
 Use this as a starting point when creating a new agent; the response can be passed straight into [Create Agent](/api-reference/rest-apis/v2/agents/create) under the `contextGathering` and `execution` blocks.
@@ -40,7 +41,7 @@ Use this as a starting point when creating a new agent; the response can be pass
     </ParamField>
 
     <ParamField body="provider" type="string">
-      LLM provider override: `"gemini"` or `"claude"`.
+      LLM provider override: `"gemini"`, `"claude"`, or `"openai"`. An unrecognized value is not rejected at the request boundary; it falls back to the platform default at the AI layer.
     </ParamField>
   </Expandable>
 </ParamField>
@@ -79,9 +80,14 @@ Use this as a starting point when creating a new agent; the response can be pass
     "message": "Config resolved successfully",
     "data": {
       "resolvedConfig": {
-        "extraction_strategies": ["web-page-text", "web-page-screenshot", "web-page-html"],
+        "extraction_strategies": ["web-page-text", "web-page-screenshot", "computed-styles"],
         "execution_strategy": "ai",
-        "reasoning": "The instructions describe a static visual + textual check (brand colors and fonts). Screenshots support color verification; HTML supports font detection. AI execution is sufficient; no service delegation needed."
+        "reasoning": "The instructions describe a static visual + textual check (brand colors and fonts). Screenshots support color verification; computed styles resolve the rendered font on the heading elements. AI execution is sufficient; no service delegation needed.",
+        "strategy_options": {
+          "computed-styles": {
+            "selectors": ["h1", ".cta"]
+          }
+        }
       }
     }
   }
@@ -93,6 +99,19 @@ Use this as a starting point when creating a new agent; the response can be pass
 | `data.resolvedConfig.extraction_strategies`    | string[] | Recommended `contextGathering.strategies` values.                         |
 | `data.resolvedConfig.execution_strategy`       | string   | Recommended `execution.executionStrategy` value.                          |
 | `data.resolvedConfig.reasoning`                | string   | Explanation for the recommendations.                                     |
+| `data.resolvedConfig.strategy_options`         | object   | Per-strategy config the resolver derived from the prompt, keyed by strategy name. Maps to `contextGathering.strategyOptions`. Present only when a recommended strategy needs options. |
+
+<Warning>
+  Carry `strategy_options` across to Create Agent along with `extraction_strategies`. Some strategies are inert without it: `computed-styles` requires a `selectors` list, and dropping the resolver's options silently produces an agent that gathers nothing for that strategy.
+</Warning>
+
+Mapping the response onto [Create Agent](/api-reference/rest-apis/v2/agents/create):
+
+| Resolver field           | Create Agent field                       |
+| ------------------------ | ---------------------------------------- |
+| `extraction_strategies`  | `contextGathering.strategies`            |
+| `strategy_options`       | `contextGathering.strategyOptions`       |
+| `execution_strategy`     | `execution.executionStrategy`            |
 
 #### Failure Response
 

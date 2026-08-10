@@ -36,7 +36,7 @@ Useful for migrating an existing QA checklist (CSV / Excel / PDF / plain text) i
     </ParamField>
 
     <ParamField body="provider" type="string">
-      LLM provider override: `"gemini"`, `"claude"`, or `"openai"`. An unrecognized value is not rejected at the request boundary; it falls back to the platform default at the AI layer.
+      LLM provider override: `"gemini"`, `"claude"`, or `"openai"`. Any other value is accepted by the request schema but then fails the call with `INTERNAL`. Omit the field to use the platform default.
     </ParamField>
 
     <ParamField body="fileName" type="string">
@@ -126,8 +126,8 @@ Useful for migrating an existing QA checklist (CSV / Excel / PDF / plain text) i
 | `data.extractionResult.agents`           | object[] | Draft agent definitions. See the field table below.                                                          |
 | `data.extractionResult.summary`          | string   | Human-readable summary of the extraction.                                                                    |
 | `data.extractionResult.skipped`          | object[] | Entries the engine could not turn into agents. Each is `{ originalText, reason }`.                           |
-| `data.extractionResult.totalTasksParsed` | number   | Total individual checks identified in the file, before grouping into agents or skipping.                     |
-| `data.extractionResult.memory`           | object   | Present only when the uploaded file was persisted as a workspace knowledge source: `{ sourceId }`. Omitted otherwise. |
+| `data.extractionResult.totalTasksParsed` | number   | Total individual checks identified in the file, before grouping into agents or skipping. Optional: omitted when the extraction model does not report it. |
+| `data.extractionResult.memory`           | object   | `{ sourceId }`. Always present on a successful extraction. Every uploaded file is persisted as a workspace knowledge source, and `sourceId` identifies it. |
 
 **Extracted agent fields (`agents[]`):**
 
@@ -154,7 +154,12 @@ Useful for migrating an existing QA checklist (CSV / Excel / PDF / plain text) i
 }
 ```
 
-**Errors:** `INVALID_ARGUMENT` (missing, empty, or whitespace-only `fileBase64`; missing or empty `mimeType`; an unsupported MIME type; or a file whose decoded size exceeds **5 MB**) / `INTERNAL` (the ingest pipeline failed to process the file, timed out, or produced no readable content).
+**Errors:**
+
+- `INVALID_ARGUMENT`: missing, empty, or whitespace-only `fileBase64`; missing or empty `mimeType`; an unsupported MIME type; or a file whose decoded size exceeds **5 MB**.
+- `INTERNAL`: the ingest pipeline failed to process the file, or it produced no readable content.
+- `DEADLINE_EXCEEDED`: the ingest pipeline did not finish within the processing budget.
+- `UNAVAILABLE`: the ingest queue is temporarily unavailable. Retry the request.
 
 <ResponseExample>
 ```js
@@ -167,7 +172,8 @@ Useful for migrating an existing QA checklist (CSV / Excel / PDF / plain text) i
         "agents": [],
         "summary": "Extracted 0 agents",
         "skipped": [],
-        "totalTasksParsed": 0
+        "totalTasksParsed": 0,
+        "memory": { "sourceId": "src_8f2b1c94" }
       }
     }
   }

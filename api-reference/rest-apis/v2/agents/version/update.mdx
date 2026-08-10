@@ -12,9 +12,17 @@ The schema uses `.passthrough()`, so additional behavioral fields are forwarded 
 <Warning>
   **The merge is one level deep.** Each top-level block you send (`contextGathering`, `execution`, `response`, `postProcess`, `input`, `scope`, `setup`) is merged onto its stored counterpart, but anything nested inside is **replaced wholesale**, not merged.
 
-  So sending `{ "scope": { "crossPage": { "enabled": false } } }` does not just flip `enabled`. It replaces the whole `crossPage` object, dropping the stored `targetProperty` and `pageDiscovery`, and the request then fails validation because both are required. The same applies to `execution.mcpServers`, `input.userContextFields`, and `contextGathering.strategyOptions`: send the complete nested object every time, not just the keys you want to change.
+  So sending `{ "scope": { "crossPage": { "enabled": false, "targetProperty": "brandConsistency", "pageDiscovery": "auto" } } }` does not just flip `enabled`. It replaces the whole `crossPage` object, silently discarding the stored `pages` list and `sourceOfTruthKnowledgeSourceId`, and returns `200`. Nothing warns you. The same applies to `execution.mcpServers`, `input.userContextFields`, and `contextGathering.strategyOptions`: send the complete nested object every time, not just the keys you want to change.
 
-  Fetch the current config with [Get Agent](/api-reference/rest-apis/v2/agents/get) first, apply your change to the full nested object, and send that.
+  Drop a required key and you get the louder failure instead: `{ "scope": { "crossPage": { "enabled": false } } }` is rejected with `INVALID_ARGUMENT`, because `targetProperty` and `pageDiscovery` are required whenever `crossPage` is present.
+
+  Fetch the current config with [Get Agent](/api-reference/rest-apis/v2/agents/get) first, apply your change to the full nested object, and send that. Read the credential warning below before you do.
+</Warning>
+
+<Warning>
+  **Never send a redacted secret back.** [Get Agent](/api-reference/rest-apis/v2/agents/get) returns auth secrets as the literal string `"__redacted__"`. This endpoint has no special handling for that value, so a fetch-modify-send round trip stores `"__redacted__"` as the real credential and the server starts failing authentication at execution time, not at update time.
+
+  To change something else on an agent that has stored secrets, either omit `execution.mcpServers` and `contextGathering.strategyOptions` from your patch entirely, or re-send every object with its real plaintext secret. Rotating a secret is the same operation: send the new plaintext value.
 </Warning>
 
 # Endpoint
@@ -64,7 +72,7 @@ The schema uses `.passthrough()`, so additional behavioral fields are forwarded 
     <ParamField body="execution" type="object">
       Execution config, including `executionStrategy`, the strict `knowledge` (Memory-RAG) block, and `mcpServers` for the `"mcp-tools"` strategy. Same shape as [Create Agent](/api-reference/rest-apis/v2/agents/create#mcp-servers-mcp-tools-strategy).
 
-      Rotate an MCP or REST auth secret by sending the new plaintext value here. Because `mcpServers` is an array, sending it replaces the stored array in full: a server object sent without its `auth` block **loses** the stored secret. To keep existing secrets, either omit `mcpServers` entirely or re-send every server object with its `auth` intact.
+      Rotate an MCP or REST auth secret by sending the new plaintext value here. Because `mcpServers` is an array, sending it replaces the stored array in full: a server object sent without its `auth` block **loses** the stored secret. To keep existing secrets, either omit `mcpServers` entirely or re-send every server object with its real plaintext secret. Re-sending the `"__redacted__"` placeholder from a [Get Agent](/api-reference/rest-apis/v2/agents/get) response stores that string as the credential.
     </ParamField>
 
     <ParamField body="response" type="object">

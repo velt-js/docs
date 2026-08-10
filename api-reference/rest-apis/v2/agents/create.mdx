@@ -85,7 +85,11 @@ Use this API to create a new custom agent configuration. The engine stores the a
       | `useAiFormatting`  | boolean | no       | Whether to use AI for response formatting.                                           |
       | `formattingPrompt` | string  | no       | Custom prompt for AI formatting.                                                     |
       | `responseAdapter`  | string  | no       | Adapter name: `"broken-links-response"`, `"crawler-response"`, `"screenshot-response"`, `"accessibility-checker-response"`, `"og-image-checker-response"`. |
-      | `aiConfig`         | object  | no       | AI provider/model override for the formatting phase ([see below](#ai-config-provider--model)). |
+      | `aiConfig`         | object  | no       | Accepted and stored, but not consumed. See the note below.                           |
+
+      <Note>
+        AI response formatting is not implemented yet. `useAiFormatting`, `formattingPrompt`, and `response.aiConfig` are accepted and stored, but nothing reads them at runtime, so setting them has no effect on the agent's output.
+      </Note>
     </ParamField>
 
     <ParamField body="postProcess" type="object">
@@ -115,7 +119,7 @@ Use this API to create a new custom agent configuration. The engine stores the a
       Each `userContextFields[]` entry: `id` (min 1), `title` (min 1), `type` (`"string"` / `"number"` / `"boolean"`), optional `required` (boolean), optional `example` (string; sample value surfaced in setup UIs), optional `defaultValue` (string / number / boolean).
 
       <Note>
-        `input.supportedVariables` is **response-only**. It lists the template variables the agent's prompt can reference (e.g. `{{restApiData}}`, `{{memoryContext}}`) and is computed from `contextGathering.strategies` and `input.variableKeys` on every write. Anything you send in this field is discarded.
+        `input.supportedVariables` is **response-only**. It lists the template variables the agent's prompt can reference (e.g. `{{restApiData}}`, `{{memoryContext}}`) and is server-computed from `contextGathering.strategies` and `input.variableKeys`. On create, anything you send in this field is discarded. On a [version update](/api-reference/rest-apis/v2/agents/version/update) it is recomputed only when those inputs change.
       </Note>
     </ParamField>
 
@@ -287,14 +291,20 @@ When `execution.executionStrategy` is `"mcp-tools"`, the agent runs a model-driv
 
 #### AI config (provider / model)
 
-Both `execution.aiConfig` and `contextGathering.aiConfig` accept the same strictly-validated object, letting an agent override the AI provider/model used for that phase. Unknown keys are rejected.
+`execution.aiConfig`, `contextGathering.aiConfig`, and `response.aiConfig` all accept the same strictly-validated object. Unknown keys are rejected.
 
 | Field              | Type   | Description                                                                                     |
 | ------------------ | ------ | ----------------------------------------------------------------------------------------------- |
-| `provider`         | string | LLM provider: `"gemini"`, `"claude"`, or `"openai"`. Defaults to the platform default when omitted. |
-| `model`            | string | Model name for the chosen provider (e.g. `"gemini-3.6-flash"`, `"claude-sonnet-5"`).    |
-| `responseMimeType` | string | Requested response MIME type (e.g. `"application/json"`).                                        |
-| `maxToolTurns`     | number | Tool-loop turn budget for the `mcp-tools` strategy. Integer `1..16`; out-of-range values are rejected at config time. Default: `8`. |
+| `provider`         | string | LLM provider: `"gemini"`, `"claude"`, or `"openai"`. Defaults to the platform default when omitted. Persisted. |
+| `model`            | string | Accepted for backward compatibility and then discarded. Not persisted, and not validated against any allowlist. |
+| `responseMimeType` | string | Accepted for backward compatibility and then discarded. Not persisted.                          |
+| `maxToolTurns`     | number | Tool-loop turn budget for the `mcp-tools` strategy. Integer `1..16`; out-of-range values are rejected at config time. Default: `8`. Persisted on `execution.aiConfig` only. |
+
+<Warning>
+  Only `provider` survives a write here (plus `maxToolTurns` on `execution.aiConfig`). The effective model is resolved on every execution rather than frozen onto the agent, so pinning `model` at create time does nothing and returns `200` without complaint.
+
+  To pin a model, send `aiConfig` on the request instead: see [Run Execution](/api-reference/rest-apis/v2/agents/execution/run). That one **is** validated against a model allowlist and returns `INVALID_ARGUMENT` for anything off it.
+</Warning>
 
 #### Execution strategy options
 

@@ -145,8 +145,8 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
 | `resultsSummary.urlsErrored`             | number \| undefined | URLs whose agent run failed. `0 < urlsErrored < urlsProcessed` → `partial`; `urlsErrored >= urlsProcessed` (≥1 processed) → `error`. |
 | `resultsSummary.erroredUrls`             | array \| undefined  | Bounded sample (≤50) of `{ url, message }` for failing URLs.                                                    |
 | `resultsSummary.issuesCreated`           | number              | Equals `totalFindings` (backwards compat).                                                                     |
-| `resultsSummary.severityCounts`          | object              | Finding counts keyed by severity, e.g. `{ "critical": 0, "high": 2, "medium": 5, "low": 1, "info": 0 }`.        |
-| `resultsSummary.findings`                | object[]            | Bounded sample (≤50) of the run's findings for at-a-glance display, each `{ title, description, severity, sourceUrl?, issueType?, url? }`. Use `includeResults: true` for the complete per-URL findings. |
+| `resultsSummary.severityCounts`          | object \| undefined | Finding counts keyed by severity, e.g. `{ "high": 2, "medium": 5, "low": 1 }`. Sparse: only severities with at least one finding are present, so treat a missing key as `0`. Possible keys are `critical`, `high`, `medium`, `low`, `info`. Absent entirely when the run produced no findings. |
+| `resultsSummary.findings`                | object[] \| undefined | Sample of the run's findings for at-a-glance display, each `{ title, description, severity, sourceUrl?, issueType?, url? }`. Trimmed to the top 50 by severity once the execution reaches a terminal status; may exceed 50 while `status` is `"running"`. Absent when the run produced no findings. Use `includeResults: true` for the complete per-URL findings. |
 | `resultsSummary.summary`                 | string \| null      | Human-readable summary. Null while running.                                                                    |
 | `resultsSummary.matchResult`             | object \| undefined | **Legacy.** Match-and-merge outcome (`{ created, skipped, resolved }`) written by the retired match-and-merge dedup. Present only on old execution documents; new executions use per-URL delete-and-recreate and never write this field. |
 | `crawlerResults`                         | object \| undefined | Only populated when `crossPageExecute: true`.                                                                  |
@@ -186,13 +186,12 @@ When `includeResults` is true, a `results` array is included alongside `executio
                 "title": "Heading uses wrong font",
                 "description": "The h1 element uses 'Arial' instead of the brand font 'Inter'",
                 "severity": "high",
-                "category": "typography",
                 "targetText": "Welcome to Example",
                 "occurrence": 1,
                 "sourceUrl": "https://example.com",
                 "suggestion": "Change font-family to 'Inter' for the h1 element",
                 "htmlSelector": "h1.hero-title",
-                "htmlXpath": "/html/body/main/section[1]/h1",
+                "targetElementXpath": "/html/body/main/section[1]/h1",
                 "isPageLevel": false,
                 "issueType": "brand-font",
                 "confidence": 92
@@ -230,11 +229,13 @@ When `includeResults` is true, a `results` array is included alongside `executio
 | Field           | Type                | Description                                                          |
 | --------------- | ------------------- | -------------------------------------------------------------------- |
 | `status`        | string              | `"completed"` or `"failed"` for this URL.                            |
-| `summary`       | string \| undefined | Human-readable summary of what the agent found on this URL.          |
+| `agentId`       | string              | Duplicate of the row-level `agentId`.                                |
+| `agentName`     | string              | Duplicate of the row-level `agentName`.                              |
+| `summary`       | string \| undefined | Run-level analysis summary, copied onto each URL row. Present only when the agent returned a flat findings list rather than a per-URL breakdown, so it is the same string for every URL in the run. |
 | `issueCount`    | number              | Number of issues the agent raised for this URL.                      |
 | `findingsCount` | number              | Number of entries in `findings`.                                     |
 | `findings`      | object[]            | Array of `AgentFinding` objects (see below).                         |
-| `error`         | object \| undefined | Populated when `status` is `"failed"`.                               |
+| `error`         | string \| null      | Failure message for this URL. `null` when the URL completed successfully. Always present, so test for failure with `status === "failed"`, not with the presence of this field. |
 
 **Finding fields (`AgentFinding`):**
 
@@ -244,13 +245,12 @@ When `includeResults` is true, a `results` array is included alongside `executio
 | `title`        | string  | Short title/summary.                                                     |
 | `description`  | string  | Detailed description.                                                    |
 | `severity`     | string  | `"critical"`, `"high"`, `"medium"`, `"low"`, `"info"`.                   |
-| `category`     | string  | Grouping tag (e.g. `"accessibility"`, `"seo"`, `"content"`, `"layout"`). |
 | `targetText`   | string  | Exact DOM text. Empty string for image/non-text findings.                |
 | `occurrence`   | number  | 1-based occurrence index of `targetText` on the page.                    |
 | `sourceUrl`    | string  | URL where the finding was detected.                                      |
 | `suggestion`   | string  | Suggested fix.                                                           |
 | `htmlSelector` | string  | CSS selector of the DOM element.                                         |
-| `htmlXpath`    | string  | XPath of the DOM element.                                                |
+| `targetElementXpath` | string | XPath of the DOM element.                                          |
 | `isPageLevel`  | boolean | `true` for visual/layout findings; `false` when `targetText` matches DOM text. |
 | `issueType`    | string  | Issue classification tag (e.g. `"casing"`, `"pii"`, `"spelling"`, `"broken-link"`). |
 | `confidence`   | number  | 0–100 confidence score reported by the agent.                            |

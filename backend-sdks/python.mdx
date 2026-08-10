@@ -458,6 +458,36 @@ def get_users(request):
 }
 ```
 
+#### `resolveUserIdsByEmail`
+
+- Resolves a list of email addresses to their user IDs. Backs the frontend's anonymous-user data provider.
+- Params: `ResolveUserIdsByEmailRequest` (from `velt_py.models.user`)
+- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
+
+```python
+from velt_py.models.user import ResolveUserIdsByEmailRequest
+
+def resolve_user_ids_by_email(request):
+    data = request.json
+    resolve_request = ResolveUserIdsByEmailRequest.from_dict(data)
+    result = sdk.selfHosting.users.resolveUserIdsByEmail(resolve_request)
+    return result
+```
+
+Custom `user_schema` field mappings are honoured. Repeated addresses are de-duplicated and blank or `None` entries are dropped.
+
+**Response**
+
+`data` is a map of email to user ID. Addresses that do not match a user are simply absent from the map:
+
+```python
+{
+    'success': True,
+    'statusCode': 200,
+    'data': { 'alice@example.com': 'user-1', 'bob@example.com': 'user-2' }
+}
+```
+
 ### Attachments
 
 #### `saveAttachment`
@@ -1582,7 +1612,7 @@ result = sdk.api.documents.migrateDocumentsStatus(
 
 #### `getDocumentsCount`
 
-- Gets the document count for an organization. Optionally exclude folder docs or scope to a folder.
+- Gets the document count for an organization. Optionally exclude folder docs, scope to a folder, or narrow with metadata `filters`.
 - Params: `GetDocumentsCountRequest` (from `velt_py.models.document`)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
 
@@ -1596,7 +1626,20 @@ result = sdk.api.documents.getDocumentsCount(
         folderId='folder-1'
     )
 )
+
+# Narrow the count with metadata filters (same shape as getDocuments; max 10).
+result = sdk.api.documents.getDocumentsCount(
+    GetDocumentsCountRequest(
+        organizationId='org-123',
+        filters=[
+            {'key': 'projectType', 'operator': '==', 'value': 'design'},
+            {'key': 'category', 'operator': 'in', 'value': ['a', 'b']},
+        ]
+    )
+)
 ```
+
+`filters` cannot be combined with `excludeFolderDocs` — the API rejects the combination. When filters are supplied the response data also carries `filtersApplied`; a `False` value means the filtered aggregate could not be computed and `count` is an unfiltered fallback.
 
 ### Users
 
@@ -2263,7 +2306,22 @@ result = sdk.api.commentAnnotations.getCommentAnnotations(
         pageSize=10
     )
 )
+
+# Scope a listing to agent-authored annotations. Supply at most one agent filter
+# per request: agentId, executionId, agentType, agentSource, agentSuggestions,
+# or agentComments.
+result = sdk.api.commentAnnotations.getCommentAnnotations(
+    GetCommentAnnotationsRequest(
+        organizationId='yourOrganizationId',
+        documentId='yourDocumentId',
+        agentSuggestions=True
+    )
+)
 ```
+
+<Note>
+Agent filtering is annotation-scoped and requires advanced queries to be enabled on your workspace. When they are not enabled, the API fails closed rather than returning unfiltered results.
+</Note>
 
 **Response**
 
@@ -2391,7 +2449,26 @@ result = sdk.api.commentAnnotations.deleteCommentAnnotations(
         annotationIds=['yourAnnotationId1', 'yourAnnotationId2']
     )
 )
+
+# Agent filters combine, so you can scope a sweep precisely — for example
+# "this agent's still-pending suggestions on these pages", which leaves a
+# concurrent crawl's freshly-created annotations untouched.
+result = sdk.api.commentAnnotations.deleteCommentAnnotations(
+    DeleteCommentAnnotationsRequest(
+        organizationId='yourOrganizationId',
+        documentId='yourDocumentId',
+        agentId='agent-7',
+        agentSuggestions=True,
+        agentUrls=['https://app.example.com/page-1', 'https://app.example.com/page-2']
+    )
+)
 ```
+
+`agentUrls` matches annotations scoped to **any** of the supplied pages.
+
+<Warning>
+Agent filters require advanced queries to be enabled on your workspace. When they are not enabled — or when none of the supplied `agentUrls` resolve — the API fails closed and deletes nothing, rather than widening to a document-wide delete.
+</Warning>
 
 **Response**
 
@@ -4273,6 +4350,26 @@ result = sdk.api.agents.runAgentExecution(
 )
 ```
 
+**Per-run options**
+
+- `deviceType` — emulate `'mobile'` or `'desktop'`. Defaults to `'desktop'`.
+- `annotationVisibility` — access posture for the annotations this run creates. `'private'` (the default) means workspace admins and organization users only; `'public'` means any viewer of the document.
+- `aiConfig` — override the provider/model for this run only. Supply at least one of `provider` (`'gemini'`, `'claude'`, or `'openai'`), `model`, `defaultModels`, or `maxToolTurns` (1–16); an empty dict is rejected.
+
+```python
+result = sdk.api.agents.runAgentExecution(
+    RunAgentExecutionRequest(
+        agentId='agent-1',
+        url='https://example.com',
+        deviceType='mobile',
+        annotationVisibility='public',
+        aiConfig={'provider': 'claude', 'maxToolTurns': 8}
+    )
+)
+```
+
+Use `model` when you also know the provider — it pins one model for the run and is validated against that provider's allowlist. Use `defaultModels` to express a standing per-provider policy that stays valid regardless of which provider each agent is stored on.
+
 #### `getAgentExecution`
 
 - Gets a single agent execution.
@@ -4624,7 +4721,7 @@ result = sdk.api.memory.deleteKnowledge(DeleteKnowledgeRequest(sourceId='source-
 
 #### `searchKnowledge`
 
-- Runs a vector search over knowledge, optionally narrowed by `sourceId`.
+- Runs a vector search over knowledge, optionally narrowed by `sourceId`. Pass `includeRules=True` to also search extracted rules and merge rule hits with chunk hits in one relevance-ranked response.
 - Params: `SearchKnowledgeRequest` (from `velt_py.models.memory`)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
 
@@ -4632,7 +4729,14 @@ result = sdk.api.memory.deleteKnowledge(DeleteKnowledgeRequest(sourceId='source-
 result = sdk.api.memory.searchKnowledge(
     SearchKnowledgeRequest(query='refund policy', sourceId=['source-1', 'source-2'], limit=5)
 )
+
+# Also search the workspace's extracted-rules corpus.
+result = sdk.api.memory.searchKnowledge(
+    SearchKnowledgeRequest(query='image format requirements', includeRules=True, limit=5)
+)
 ```
+
+With `includeRules=True` each result carries a `kind` of `'chunk'` or `'rule'`, and rule hits also carry `ruleId` and an optional `category`. Omitting it returns the chunk-only shape. `limit` then becomes the combined cap across both corpora, not a per-corpus quota.
 
 #### `listKnowledgeSources`
 
@@ -4783,6 +4887,14 @@ from velt_py.models.workflow import (
 - Params: `CreateWorkflowDefinitionRequest` (from `velt_py.models.workflow`)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
 - Every `human` node needs at least one outgoing edge with `on: 'reject'`, either a forward reject route or a reject back-edge. Definitions that omit it are rejected.
+
+<Warning>
+**`loops` is deprecated.** Loop regions are no longer part of the workflow definition contract. The field is still accepted for backward compatibility but is stripped before the request is sent, and setting it raises a `DeprecationWarning`. Express loops as edges instead — an `on: 'reject'` back-edge carrying a `loop` object:
+
+```python
+edges=[{'from': 'review', 'to': 'draft', 'on': 'reject', 'loop': {'maxIterations': 3}}]
+```
+</Warning>
 
 ```python
 result = sdk.api.workflow.createDefinition(

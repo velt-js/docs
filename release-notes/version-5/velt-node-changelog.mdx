@@ -7,6 +7,69 @@ description: Release Notes of changes added to the Velt Node.js/TypeScript SDK (
 ### Libraries
 - `@veltdev/node`
 
+<Update label="1.0.9" description="August 10, 2026">
+
+### Breaking Changes
+
+- **Removed request fields that the API does not accept**: Seven fields are removed from request types because the API ignored them — they never had the effect their names implied. Each has a documented replacement:
+
+  | Removed | From | Use instead |
+  |---|---|---|
+  | `agentFields` | `GetCommentAnnotationsRequest`, `GetCommentAnnotationsCountRequest` | The agent filters below (list only; counts do not support agent filtering) |
+  | `veltUserIds`, `veltAllOrganizations` | `DeleteAllUserDataRequest` | The same fields on `GetAllUserDataRequest` |
+  | `resources` | `AddPermissionsRequest`, `RemovePermissionsRequest` | `permissions.resources` (nested, as the API expects) |
+  | `skipResourceExistenceValidation` | `AddPermissionsRequest` | The same field on `GetPermissionsRequest` |
+
+  No working request changes behaviour — these fields were inert. TypeScript will flag every affected call site at compile time. [Learn more →](/backend-sdks/node#comment-annotations)
+
+### New Features
+
+- **Agent filters on `getCommentAnnotations`**: `sdk.api.commentAnnotations.getCommentAnnotations()` now accepts `agentId`, `executionId`, `agentType`, `agentSource`, `agentSuggestions`, and `agentComments` to scope a listing to agent-authored annotations. Supply at most one per request. Agent filtering is annotation-scoped and requires advanced queries to be enabled on your workspace. [Learn more →](/backend-sdks/node#comment-annotations)
+
+- **`veltUserIds`, `veltAllOrganizations` and `uniqueId` on `getAllUserData`**: `sdk.api.gdpr.getAllUserData()` accepts `veltUserIds` to fetch data for a set of Velt-side user IDs, `veltAllOrganizations` to span every organization rather than one, and `uniqueId` as a correlation value echoed back on the response. [Learn more →](/backend-sdks/node#gdpr)
+
+- **`skipResourceExistenceValidation` on `getPermissions`**: `sdk.api.accessControl.getPermissions()` accepts `skipResourceExistenceValidation` to skip the existence check on the supplied folder/document IDs. When `false` (the default) the API errors if any ID does not resolve. [Learn more →](/backend-sdks/node#access-control)
+
+### Bug Fixes
+
+- **Agent-filtered annotation counts no longer return unfiltered totals**: `getCommentAnnotationsCount()` previously accepted an `agentFields` filter that the API silently ignored, so the returned count covered *all* annotations rather than the agent-scoped subset — with nothing in the response to indicate it. The count endpoint does not support agent filtering; to count a filtered subset, list with the agent filters above and count the result. [Learn more →](/backend-sdks/node#comment-annotations)
+
+</Update>
+
+<Update label="1.0.8" description="August 10, 2026">
+
+### Breaking Changes
+
+- **Approval loop types removed**: `ApprovalLoop`, `ApprovalLoopRejectTrigger`, `ApprovalLoopExhaustionPolicy`, `ApprovalHumanNodeOnReject`, and `ApprovalHumanNodeOnRejectLoopBack` are removed. Loop regions are no longer part of the workflow definition contract — the API had already been rejecting definitions that carried a `loops` array or a per-node `onReject`, so no working definition changes behaviour. Express loops as edges instead: an `on: 'reject'` back-edge carrying a `loop` object, for example `{ from: 'review', to: 'draft', on: 'reject', loop: { maxIterations: 3 } }`. [Learn more →](/backend-sdks/node#approval-workflows)
+
+### New Features
+
+- **Approval Workflows — notification nodes**: New `ApprovalNotificationNode` and `ApprovalNotificationNodeConfig` send a formatted email or Slack message built from upstream step output. `recipients` is required for `channel: 'email'`, `slackTarget` for `channel: 'slack'`, and `format` accepts `'text'`, `'html'`, or `'slack-blocks'` (Slack only). [Learn more →](/backend-sdks/node#approval-workflows)
+
+- **Approval Workflows — installable-app triggers**: New `ApprovalAppTrigger` binds a definition to a connected GitHub App or Vercel Integration, with `repoFilter`, `projectFilter`, `allowedEvents`, and `payloadFilters` (`ApprovalAppTriggerPayloadFilter`) to gate on values inside the provider's webhook body. A trigger drives at most one mechanism — `inboundWebhook`, `schedule`, and `appTrigger` are mutually exclusive. [Learn more →](/backend-sdks/node#approval-workflows)
+
+- **Approval Workflows — scheduled triggers**: New `ApprovalScheduleTrigger` starts an execution on a cron schedule, with `cron`, `timezone` (IANA), `enabled`, and an optional static `payloadTemplate` merged into the dispatched trigger context. [Learn more →](/backend-sdks/node#approval-workflows)
+
+- **Approval Workflows — `purge` on `deleteDefinition`**: Pass `purge: true` to hard-delete a definition and its version snapshots instead of leaving a tombstone. Both paths free the definition ID for re-creation; the response echoes `purged` so you can tell which ran. [Learn more →](/backend-sdks/node#approval-workflows)
+
+- **Approval Workflows — static agent-node URLs**: Agent nodes accept a static `url`, and `urlPath` is relaxed from required to optional. One of the two must be present; `url` takes precedence when both are supplied. [Learn more →](/backend-sdks/node#approval-workflows)
+
+- **Comment Annotations — agent-scoped delete filters**: `deleteCommentAnnotations()` accepts `agentSuggestions` (fresh, unaccepted suggestions), `agentId` (a specific agent's annotations), and `agentUrls` (a list of page URLs, matched as an OR-group). All three combine, so a crawl can delete "this agent's still-pending suggestions for these pages" without affecting a concurrent batch. They require advanced queries on your workspace; when unavailable the API fails closed rather than widening to a document-wide delete. [Learn more →](/backend-sdks/node#comment-annotations)
+
+- **Comment Annotations — suggestion payloads**: New `CommentAnnotationSuggestion` and `CommentAnnotationSuggestionStatus` types, plus `pageInfo`, on the add and update paths. On add, `status` is server-owned and always stamped `'pending'`; on update (`updatedData.suggestion`) the object is replaced wholesale and `status` is honored. `documentIds` is also accepted on the annotation count request. [Learn more →](/backend-sdks/node#comment-annotations)
+
+- **Agents — per-execution AI configuration**: New `AgentAiConfig` on an agent's execution settings (`provider`, `responseMimeType`, `maxToolTurns`), and `AgentAiConfigOverride` with `AgentLlmProvider` (`'gemini' | 'claude' | 'openai'`) on `runExecution()` for per-run overrides including a `defaultModels` per-provider policy map. The override requires at least one field — an empty object is rejected. [Learn more →](/backend-sdks/node#agents)
+
+- **Agents — `deviceType` and `annotationVisibility`**: `runExecution()` accepts `deviceType` (`'mobile' | 'desktop'`, defaults to desktop) to choose the emulated device, and `annotationVisibility` (`'public' | 'private'`, defaults to private) to control who can see the annotations the run creates. [Learn more →](/backend-sdks/node#agents)
+
+- **Agents — `partial` execution status**: `AgentExecutionStatus` adds `'partial'` for a mixed outcome, where the run produced usable results but at least one URL or batch failed. It is distinct from `'error'`, which is reserved for total failures. [Learn more →](/backend-sdks/node#agents)
+
+- **Documents — metadata filters on `getDocumentsCount`**: `getDocumentsCount()` accepts the same `filters` array as `getDocuments()` (up to 10 entries; keys auto-prefixed with `metadata.` unless already prefixed). It cannot be combined with `excludeFolderDocs`. When filters are sent the response includes `filtersApplied` — a `false` value means the filtered aggregate failed and `count` is an unfiltered fallback. [Learn more →](/backend-sdks/node#documents)
+
+- **Memory — `includeRules` on `searchKnowledge`**: Set `includeRules: true` to additionally search the workspace's extracted-rules corpus and merge those hits with knowledge-chunk results. Each result then carries a `kind` of `'chunk'` or `'rule'`, and rule hits also carry `ruleId` and an optional `category`. Omitting it returns the previous chunk-only shape, and `limit` becomes the combined cap across both corpora. [Learn more →](/backend-sdks/node#memory)
+
+</Update>
+
 <Update label="1.0.7" description="June 19, 2026">
 
 ### New Features

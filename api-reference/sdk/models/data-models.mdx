@@ -10731,6 +10731,11 @@ Request payload for `sdk.api.commentAnnotations.deleteCommentAnnotations`.
 | `organizationId` | `string` | Yes | Organization context. |
 | `documentId` | `string` | Yes | Document the annotations belong to. |
 | `annotationIds` | `string[]` | Yes | Annotations to delete. |
+| `agentSuggestions` | `boolean` | No | Narrow the delete to fresh (unaccepted) agent suggestions. |
+| `agentId` | `string` | No | Narrow the delete to annotations authored by this agent. |
+| `agentUrls` | `string[]` | No | Narrow the delete to annotations scoped to any of these page URLs. |
+
+The three agent filters combine (AND), so a delete can be scoped to, for example, one agent's still-pending suggestions on a specific set of pages. They require advanced queries to be enabled on the workspace; when unavailable — or when none of the supplied `agentUrls` resolve — the API fails closed and deletes nothing rather than widening to a document-wide delete.
 
 ### `DeleteCommentRequest` SH (Node)
 
@@ -10955,6 +10960,9 @@ Request payload for `sdk.api.gdpr.getAllUserData`.
 | `organizationId` | `string` | Yes | Organization to export from. |
 | `userId` | `string` | Yes | User to export. |
 | `pageToken` | `string` | No | Pagination cursor returned from a previous call. |
+| `veltUserIds` | `string[]` | No | Export data for these Velt-side user IDs instead of the single `userId`. |
+| `veltAllOrganizations` | `boolean` | No | Return data across all organizations rather than just `organizationId`. |
+| `uniqueId` | `string` | No | Correlation value echoed back on the response. |
 
 ### `GetAllUserDataResponse` (Node)
 
@@ -11058,6 +11066,10 @@ Request payload for `sdk.api.commentAnnotations.getCommentAnnotationsCount`.
 | `documentIds` | `string[]` | Yes | Documents to count annotations for. |
 | `userId` | `string` | No | Filter counts to a specific user. |
 
+<Warning>
+The count endpoint does not support agent filtering, and agent filter fields sent to it are ignored rather than rejected — the response would be unfiltered totals with no error. To count an agent-scoped subset, list with an agent filter via `getCommentAnnotations` and count the result.
+</Warning>
+
 ### `GetCommentAnnotationsCountResponse` (Node)
 
 Response shape for `sdk.api.commentAnnotations.getCommentAnnotationsCount`.
@@ -11085,6 +11097,14 @@ Request payload for `sdk.api.commentAnnotations.getCommentAnnotations`.
 | `documentId` | `string` | Yes | Document to query. |
 | `statusIds` | `string[]` | No | Filter annotations by status IDs. |
 | `pageSize` | `number` | No | Maximum number of annotations to return. |
+| `agentId` | `string` | No | Agent filter — annotations stamped with this agent ID. |
+| `executionId` | `string` | No | Agent filter — annotations produced by this execution. |
+| `agentType` | `string` | No | Agent filter — annotation agent type. |
+| `agentSource` | `string` | No | Agent filter — annotation agent source. |
+| `agentSuggestions` | `boolean` | No | Agent filter — return only fresh (unaccepted) agent suggestions. |
+| `agentComments` | `boolean` | No | Agent filter — return all agent comments regardless of status. |
+
+Supply at most **one** agent filter per request. Agent filtering is annotation-scoped and requires advanced queries to be enabled on the workspace; when unavailable the API fails closed rather than returning unfiltered results.
 
 ### `GetCommentAnnotationsResponse` (Node)
 
@@ -11446,6 +11466,8 @@ Request payload for `sdk.api.accessControl.getPermissions`.
 | `organizationId` | `string` | Yes | Organization context. |
 | `userIds` | `string[]` | No | Filter to these users. |
 | `documentIds` | `string[]` | No | Filter to these documents. |
+| `folderIds` | `string[]` | No | Filter to these folders. |
+| `skipResourceExistenceValidation` | `boolean` | No | Skip the existence check on the supplied folder/document IDs. When `false` (the default) the API errors if any ID does not resolve. |
 
 ### `GetPermissionsResponse` (Node)
 
@@ -12120,6 +12142,11 @@ Request payload for `sdk.api.agents.runExecution`. Accepts additional passthroug
 | `workflowExecutionId` | `string` | No | Parent workflow execution ID. |
 | `ranBy` | `AgentRunBy` | No | Who/what initiated the run. |
 | `userContext` | `Record<string, unknown>` | No | Arbitrary user context. |
+| `deviceType` | `'mobile' \| 'desktop'` | No | Device mode to emulate. Defaults to `'desktop'`. |
+| `annotationVisibility` | `'public' \| 'private'` | No | Access posture for the annotations this execution creates. `'private'` (the default) is visible to workspace admins and organization users; `'public'` is visible to any viewer of the document. |
+| `aiConfig` | `AgentAiConfigOverride` | No | Per-execution AI config override. Omit to run on the platform-resolved provider/model. |
+
+`AgentAiConfigOverride` accepts `provider` (`'gemini' \| 'claude' \| 'openai'`), `model`, `defaultModels` (a per-provider model map), and `maxToolTurns` (integer 1–16). At least one field is required — an empty object is rejected. `model` is validated against the effective provider's allowlist.
 
 ### `GetAgentExecutionRequest` (Node)
 
@@ -12610,6 +12637,7 @@ Request payload for `sdk.api.approval.deleteDefinition`.
 | `definitionId` | `string` | Yes | Definition to delete. |
 | `organizationId` | `string` | No | Organization context. |
 | `documentId` | `string` | No | Document context. |
+| `purge` | `boolean` | No | Hard-delete the definition document and its version snapshots instead of the default tombstone. Both paths free the definition ID for re-creation; the response echoes `purged` to indicate which ran. |
 
 ### `ApprovalGetDefinitionRequest` (Node)
 
@@ -12818,7 +12846,8 @@ Request payload for `sdk.api.documents.getDocumentsCount`.
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization context. |
 | `folderId` | `string` | No | Restrict count to this folder. |
-| `excludeFolderDocs` | `boolean` | No | Exclude documents inside folders from the count. |
+| `excludeFolderDocs` | `boolean` | No | Exclude documents inside folders from the count. Cannot be combined with `filters`. |
+| `filters` | `DocumentFilter[]` | No | Metadata filters, same shape and semantics as `GetDocumentsRequest.filters`; max 10. Keys are auto-prefixed with `metadata.` unless already prefixed. When set, the response data includes `filtersApplied` — `false` means the filtered aggregate failed and `count` is an unfiltered fallback. |
 
 ### `GetUsersCountRequest` (Node)
 

@@ -669,6 +669,8 @@ Use `visibility` to limit who can see the annotation.
 
 # Response
 
+`data` is a map of results, keyed per annotation, not an array.
+
 #### Success Response
 
 ```JSON
@@ -691,6 +693,36 @@ Use `visibility` to limit who can see the annotation.
 
 ```
 
+#### Result fields
+
+<ResponseField name="success" type="boolean">
+  Outcome for this annotation. The envelope reports `success` only when every entry succeeded and no user was permission denied.
+</ResponseField>
+
+<ResponseField name="annotationId" type="string">
+  The annotation ID. `annotationId` is optional on input, so the server generates one when you do not supply it.
+</ResponseField>
+
+<ResponseField name="commentIds" type="number[]">
+  IDs of the comments created inside this annotation.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Success message, or the reason this annotation failed.
+</ResponseField>
+
+<ResponseField name="findingId" type="string">
+  Agent annotations only. Echoes back `commentData[0].agent.reason.findingId` exactly as you sent it. The field is omitted for non agent annotations.
+</ResponseField>
+
+#### Correlating results back to your own records
+
+Read `entry.annotationId` from each result, never the map key.
+
+The server generates `annotationId`, and results are written into the map as each write completes, so the map order does not match the order you submitted. For agent annotations, `findingId` is the reliable way to match a created annotation back to the record it came from.
+
+Entries for annotations rejected by permission checks are recorded before an ID exists. When you did not supply an `annotationId` for one of those, its key falls back to `__velt_denied:<index>`, where `<index>` is its position in the `commentAnnotations` array you sent, and the entry has no `annotationId` field to read. That key is reserved: annotation IDs cannot contain a colon, so it never collides with one of yours.
+
 #### Failure Response
 
 ```JSON
@@ -698,6 +730,31 @@ Use `visibility` to limit who can see the annotation.
   "error": {
     "message": "ERROR_MESSAGE",
     "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+When some annotations fail or a user is permission denied, the error carries the same per annotation map in `details`. Entries marked `"success": true` inside `details` **were created**, so treat a failed request as a partial write and read `details` instead of assuming nothing was saved.
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "PERMISSION_DENIED",
+    "details": {
+        "-O0mpUziLcBwzREvZKs6": {
+            "success": true,
+            "annotationId": "-O0mpUziLcBwzREvZKs6",
+            "commentIds": [
+                126535
+            ],
+            "message": "Added Successfully"
+        },
+        "deniedAnnotation-1": {
+            "success": false,
+            "message": "ERROR_MESSAGE"
+        }
+    }
   }
 }
 ```

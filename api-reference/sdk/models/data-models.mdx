@@ -49,6 +49,7 @@
 | `basicAnchorData`         | `{ xpath: string; topPercentage: number; leftPercentage: number }`        | No       | Client-safe anchor data derived from the target element's xpath. `xpath` is sourced from `targetElement.anchor.fXPath`, falling back to the legacy `targetElement.fXpath`. `topPercentage` and `leftPercentage` default to `0` when not set. Omitted entirely when no xpath source is present. |
 | `involvedUserIds`         | `string[]`                                                                | No       | All user IDs involved in the annotation (subscribed + unsubscribed participants). Read-only, server-derived. |
 | `mentionedUserIds`        | `string[]`                                                                | No       | User IDs @mentioned across the annotation's comments. Read-only, server-derived. |
+| `actions`                 | [`CommentAction[]`](#commentaction)                                       | No       | Default action chips for every comment row that does not set its own `comment.actions`. |
 
 #### Enum
 
@@ -1714,6 +1715,8 @@ Logical anchor stored in `annotation.context.textEditorConfig`. Physical rectang
 | `sourceType`            | `string`                               | No       | Origin of the comment; `'agent'` indicates AI-agent-authored. Read-only. |
 | `agent`                 | [`AgentData`](#agentdata)              | No       | AI agent identity + output for an agent-authored comment. Read-only.    |
 | `metadata`              | `any`                                  | No       | Customer-supplied metadata bag, persisted as-is when provided.          |
+| `progress`              | [`CommentProgress`](#commentprogress)  | No       | Renders a live progress row instead of the comment's content while set and `state` is `'active'`. |
+| `actions`               | [`CommentAction[]`](#commentaction)    | No       | Action chips rendered on this comment row. Overrides `CommentAnnotation.actions` for this row. |
 
 #### AddCommentEvent
 
@@ -1794,6 +1797,65 @@ Logical anchor stored in `annotation.context.textEditorConfig`. Physical rectang
 | -------------- | ---------------- | -------- | -------------------- |
 | `annotationId` | `string`         | Yes      | ID of the annotation |
 | `options`      | `RequestOptions` | No       | Request options      |
+
+#### CommentProgress
+
+---
+
+Set on [`Comment.progress`](#comment) to render a live progress row instead of the comment's content.
+
+| Property           | Type                                                | Required | Description                                                                 |
+| ------------------ | ---------------------------------------------------- | -------- | ---------------------------------------------------------------------------------- |
+| `state`             | `'active' \| 'completed' \| 'failed' \| 'cancelled'` | Yes      | Current state of the run. The progress row renders only while this is `'active'`.  |
+| `steps`             | [`CommentProgressStep[]`](#commentprogressstep)      | No       | The full step list. Each `updateComment` call replaces this array; there is no server-side appending. |
+| `visibleToUserIds`  | `string[]`                                           | No       | Display-only hint for which users should see the row. Not a security boundary.     |
+| `startedAt`         | `number`                                              | No       | Customer-supplied start time. Never used for staleness or ordering.                |
+
+#### CommentProgressStep
+
+---
+
+One entry in `CommentProgress.steps`.
+
+| Property      | Type                                              | Required | Description                                                                 |
+| ------------- | -------------------------------------------------- | -------- | ---------------------------------------------------------------------------------- |
+| `id`          | `string`                                            | No       | Optional identifier for the step.                                                  |
+| `label`       | `string`                                            | Yes      | Label shown on the progress row. Rendered verbatim, never translated.              |
+| `state`       | `'pending' \| 'active' \| 'completed' \| 'failed'`  | No       | State of this step. The rendered label is the last step marked `'active'`, else the last step's label. |
+| `startedAt`   | `number`                                            | No       | Timestamp when the step started.                                                   |
+| `completedAt` | `number`                                            | No       | Timestamp when the step completed.                                                 |
+| `metadata`    | `any`                                                | No       | Customer-supplied metadata bag.                                                    |
+
+#### CommentAction
+
+---
+
+An action chip rendered on a comment row. Set on [`Comment.actions`](#comment) or [`CommentAnnotation.actions`](#commentannotation). Velt renders the chip and emits [`commentActionClicked`](/api-reference/sdk/api/api-methods#on) on click; it never mutates the comment itself.
+
+| Property   | Type      | Required | Description                                                                                             |
+| ---------- | --------- | -------- | --------------------------------------------------------------------------------------------------------------- |
+| `id`       | `string`  | Yes      | Stable, opaque, customer-owned identifier. The only identity Velt uses for the chip.                            |
+| `label`    | `string`  | No       | Chip text. Also the accessible name when `icon` is set.                                                         |
+| `icon`     | `string`  | No       | A raw SVG string (trimmed value starting with `<`), or a URL / data URI rendered as an `<img>`. Anything else resolves to no icon. |
+| `disabled` | `boolean` | No       | Renders the chip non-interactive without hiding it. A disabled chip emits no click.                             |
+| `hidden`   | `boolean` | No       | Omits the chip entirely.                                                                                        |
+| `metadata` | `any`     | No       | Customer-owned bag, persisted as-is and echoed back verbatim on the click event.                                |
+
+#### CommentActionClickedEvent
+
+---
+
+| Property            | Type                                            | Required | Description                                                                                  |
+| ------------------- | ------------------------------------------------ | -------- | ---------------------------------------------------------------------------------------------------- |
+| `action`            | [`CommentAction`](#commentaction)                | Yes      | The full action object, including its `metadata`.                                                    |
+| `actionId`          | `string`                                          | Yes      | ID of the clicked action.                                                                             |
+| `scope`             | `'comment' \| 'annotation'`                       | Yes      | Where the action was defined. Independent of `commentId`.                                             |
+| `annotationId`      | `string`                                          | Yes      | ID of the annotation.                                                                                  |
+| `commentId`         | `number`                                          | No       | ID of the row that was clicked. Omitted, not `undefined`, when it does not apply.                     |
+| `commentAnnotation` | [`CommentAnnotation`](#commentannotation)         | Yes      | Comment annotation object.                                                                             |
+| `comment`           | [`Comment`](#comment)                             | No       | Comment object for the clicked row. Same presence rule as `commentId`.                                |
+| `actionUser`        | [`User`](#user)                                   | Yes      | The user who clicked the chip. Named `actionUser`, not `user`, because on a machine-written row the author and the clicker differ. |
+| `metadata`          | [`VeltEventMetadata`](#velteventmetadata)         | Yes      | Velt event metadata. Distinct from `action.metadata`.                                                  |
 
 ### @Mentions
 

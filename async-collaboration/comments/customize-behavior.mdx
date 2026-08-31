@@ -1434,6 +1434,233 @@ subscription?.unsubscribe();
 </Tab>
 </Tabs>
 
+# Comment Progress
+
+Render a live progress row on a comment while you write its content asynchronously, for example while an AI response streams in. The row shows three animated dots and a step label between the thread and the composer. Progress is not agent-specific: any multi-step write to a comment can use it.
+
+**How it works:**
+
+<Steps>
+<Step title="Start the comment">
+Call `addComment` with `progress: { state: 'active' }` and no content. The comment renders as a progress row instead of a reply.
+</Step>
+<Step title="Push step updates">
+Call `updateComment` on the same `commentId` as many times as you need, each time setting `progress.steps` to the current step list. The row shows the label of the last step marked `active`.
+</Step>
+<Step title="Complete the comment">
+Call `updateComment` again on the same `commentId`, with `progress.state: 'completed'` and the real `commentText` / `commentHtml`. The progress row disappears and the comment renders as a normal reply.
+</Step>
+</Steps>
+
+A comment that carries `progress` and has no renderable content does not count toward the annotation's reply count, sidebar preview, or resolve state. A comment that has both `progress` and content, for example a completed run or a failed run that produced partial output, always renders as a normal comment.
+
+#### progress
+
+Adds a progress row to a comment.
+
+- Params: `progress:` [`CommentProgress`](/api-reference/sdk/models/data-models#commentprogress)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const commentElement = client.getCommentElement();
+const commentId = Date.now();
+
+await commentElement.addComment({
+  annotationId,
+  comment: {
+    commentId,
+    progress: { state: 'active', steps: [{ label: 'Getting data', state: 'active' }] },
+  },
+});
+
+await commentElement.updateComment({
+  annotationId,
+  comment: {
+    commentId,
+    progress: { state: 'completed', steps: [{ label: 'Getting data', state: 'completed' }] },
+    commentText: 'This is the answer for your question.',
+    commentHtml: '<p>This is the answer for your question.</p>',
+  },
+});
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+const commentId = Date.now();
+
+await commentElement.addComment({
+  annotationId,
+  comment: {
+    commentId,
+    progress: { state: 'active', steps: [{ label: 'Getting data', state: 'active' }] },
+  },
+});
+
+await commentElement.updateComment({
+  annotationId,
+  comment: {
+    commentId,
+    progress: { state: 'completed', steps: [{ label: 'Getting data', state: 'completed' }] },
+    commentText: 'This is the answer for your question.',
+    commentHtml: '<p>This is the answer for your question.</p>',
+  },
+});
+```
+</Tab>
+</Tabs>
+
+**Behavior:**
+
+- Send the full `steps` array on every `updateComment` call. There is no server-side appending, so whatever you send replaces the previous list.
+- The rendered label is the label of the last step marked `state: 'active'`, else the last step's label, else a default "Processing…" label. Keep at most one step `active` at a time.
+- Progress rows render after the sorted thread, anchored to the composer. They are not sorted into the thread with the other replies.
+- Multiple concurrent runs on the same annotation each get their own row, ordered by `createdAt`.
+
+<Note>
+`addComment` always sets `comment.from` to the acting signed-in user on the frontend SDK. To post a progress comment authored by an agent, write it through the backend REST API instead.
+</Note>
+
+#### commentProgressStaleAfter
+
+Set how long a progress row can go without its comment's `lastUpdated` changing before the SDK treats it as stale and stops rendering it. Use this as a fail-safe for a run that dies mid-flight; it does not cancel anything or start a timer.
+
+- Params: `commentProgressStaleAfter: number` (milliseconds)
+- Returns: `void`
+
+Default: `600000` (10 minutes). Non-positive and non-finite values fall back to the default. Raise the value for longer-running operations.
+
+<Tabs>
+<Tab title="React / Next.js">
+Using Props:
+```jsx
+<VeltComments commentProgressStaleAfter={1800000} />
+```
+
+Using API:
+```jsx
+const commentElement = client.getCommentElement();
+commentElement.setCommentProgressStaleAfter(1800000); // 30 minutes
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+Using Props:
+```html
+<velt-comments comment-progress-stale-after="1800000"></velt-comments>
+```
+
+Using API:
+```js
+const commentElement = Velt.getCommentElement();
+commentElement.setCommentProgressStaleAfter(1800000); // 30 minutes
+```
+</Tab>
+</Tabs>
+
+Customize the progress row with the [Comment Dialog Progress wireframes](/ui-customization/features/async/comments/comment-dialog/wireframes#progress) or [primitives](/ui-customization/features/async/comments/comment-dialog/primitives#veltcommentdialogprogress).
+
+# Comment Actions
+
+Render clickable chips on a comment row that you define and own. Velt renders each chip and emits a click event; it never writes to the annotation or the comment on your behalf.
+
+#### actions
+
+Add action chips to a comment row. Set `actions` on `CommentAnnotation` for a thread-wide default that every row without its own `comment.actions` inherits, or set `actions` on an individual `Comment` to override the row.
+
+- Params: `actions:` [`CommentAction[]`](/api-reference/sdk/models/data-models#commentaction)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const commentElement = client.getCommentElement();
+
+await commentElement.updateComment({
+  annotationId,
+  comment: {
+    commentId,
+    commentText: 'This is the answer for your question.',
+    actions: [
+      { id: 'dig-deeper', label: 'Dig Deeper', metadata: { kind: 'followup' } },
+      { id: 'copy-response', label: 'Copy Response' },
+    ],
+  },
+});
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+
+await commentElement.updateComment({
+  annotationId,
+  comment: {
+    commentId,
+    commentText: 'This is the answer for your question.',
+    actions: [
+      { id: 'dig-deeper', label: 'Dig Deeper', metadata: { kind: 'followup' } },
+      { id: 'copy-response', label: 'Copy Response' },
+    ],
+  },
+});
+```
+</Tab>
+</Tabs>
+
+**Behavior:**
+
+- An explicitly empty comment-level list (`actions: []`, or a list where every entry is `hidden`) shows no chips and does not fall back to the built-in accept/reject buttons.
+- Actions render on any row regardless of who authored it. There is no author gate.
+- A progress row never inherits annotation-level actions. Only a comment-level list set directly on that row renders there.
+- Each entry needs a non-empty `id`, must not be `hidden`, and needs a non-empty `label` or `icon`. A malformed entry is skipped without affecting its siblings.
+- `disabled` keeps the chip visible but non-interactive; it does not hide the row.
+
+#### commentActionClicked
+
+Listen for a click on an action chip. Velt does not mutate the annotation or record the click; handle it yourself.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+// Hook
+const eventData = useCommentEventCallback('commentActionClicked');
+
+useEffect(() => {
+  if (eventData) {
+    console.log(eventData.actionId, eventData.scope, eventData.commentId);
+    console.log(eventData.action.metadata, eventData.actionUser.userId);
+  }
+}, [eventData]);
+
+// API Method
+const commentElement = client.getCommentElement();
+const subscription = commentElement.on('commentActionClicked').subscribe((event) => {
+  console.log(event.actionId, event.scope, event.annotationId, event.commentId);
+});
+subscription?.unsubscribe();
+```
+</Tab>
+
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+const subscription = commentElement.on('commentActionClicked').subscribe((event) => {
+  console.log(event.actionId, event.scope, event.annotationId, event.commentId);
+});
+subscription?.unsubscribe();
+```
+</Tab>
+</Tabs>
+
+**Event Type**: [`CommentActionClickedEvent`](/api-reference/sdk/models/data-models#commentactionclickedevent)
+
+`scope` says where the action was defined, `'comment'` or `'annotation'`. `commentId` says which row was clicked. Both can be present together, for example an annotation-scoped action clicked on one reply in a thread.
+
+Customize the action chips with the [Comment Dialog Actions wireframes](/ui-customization/features/async/comments/comment-dialog/wireframes#actions) or [primitives](/ui-customization/features/async/comments/comment-dialog/primitives#veltcommentdialogactions).
+
 # @Mentions
 
 #### assignUser
@@ -3715,6 +3942,7 @@ Subscribe to Comment Events. Here is the list of events you can subscribe to and
 | Messages | `addComment` | Add a new comment | [AddCommentEvent](/api-reference/sdk/models/data-models#addcommentevent) |
 | Messages | `updateComment` | Update an existing comment | [UpdateCommentEvent](/api-reference/sdk/models/data-models#updatecommentevent) |
 | Messages | `deleteComment` | Delete a comment | [DeleteCommentEvent](/api-reference/sdk/models/data-models#deletecommentevent) |
+| Comment Actions | `commentActionClicked` | Triggered when a comment action chip is clicked | [CommentActionClickedEvent](/api-reference/sdk/models/data-models#commentactionclickedevent) |
 | @Mentions | `assignUser` | Assign a user to a comment | [AssignUserEvent](/api-reference/sdk/models/data-models#assignuserevent) |
 | @Mentions | `subscribeCommentAnnotation` | Subscribe to a comment annotation | [SubscribeCommentAnnotationEvent](/api-reference/sdk/models/data-models#subscribecommentannotationevent) |
 | @Mentions | `unsubscribeCommentAnnotation` | Unsubscribe from a comment annotation | [UnsubscribeCommentAnnotationEvent](/api-reference/sdk/models/data-models#unsubscribecommentannotationevent) |

@@ -11,9 +11,9 @@ Two components are covered:
 - **`VeltNotificationsPanel`**: the full notification list, rendered **statically** where you place it (it is *not* a Velt-anchored overlay; you control its position in your layout). It owns the tab bar (For You / Documents / All / People), the notification list with paging, a read-all action, and an optional settings view. Use it when you want notifications permanently visible in your own layout (e.g. a dashboard column).
 - **`VeltNotificationsTool`**: a bell/launcher button that shows an unread badge and **opens a panel on click**. The opened panel is the same notification UI as `VeltNotificationsPanel`. The tool owns the unread-count read path and the panel's open mode (`popover` vs `sidebar`); panel-affecting props are mostly forwarded to the panel it opens. Use it when notifications should live behind a single bell icon.
 
-Both resolve `darkMode` through the shared v2 themed base, render their default markup unless a matching **wireframe `variant`** is registered, and read/write all feature toggles (`settings`, `selfNotifications`, `readNotificationsOnForYouTab`, `enableCrossOrganization`, `enableSettingsAtOrganizationLevel`, `maxDays`) through the **shared notification service**, so these flags are effectively global: setting one on either component changes the data stream for both. Per-instance state (`tabConfig`, `pageSize`, `panelOpenMode`, `settingsLayout`, `variant`, `shadowDom`) lives on the component's own config signal.
+Both resolve `darkMode` through the shared v2 themed base, render their default markup unless a matching **wireframe `variant`** is registered, and read/write all feature toggles (`settings`, `selfNotifications`, `readNotificationsOnForYouTab`, `enableCrossOrganization`, `enableUserScopedNotifications`, `enableSettingsAtOrganizationLevel`, `maxDays`) through the **shared notification service**, so these flags are effectively global: setting one on either component changes the data stream for both. Per-instance state (`tabConfig`, `pageSize`, `panelOpenMode`, `settingsLayout`, `variant`, `shadowDom`) lives on the component's own config signal.
 
-> The React wrappers serialize props to attributes: booleans only emit `'true'`/`'false'` when explicitly `true`/`false` (an omitted boolean emits **nothing**, so the web-component default applies); `pageSize`/`maxDays` only emit when `> 0`; `tabConfig` is JSON-stringified; `enableCrossOrganization` is stringified when an object. This is why "unset" and "explicit `false`" can differ.
+> The React wrappers serialize props to attributes: booleans only emit `'true'`/`'false'` when explicitly `true`/`false` (an omitted boolean emits **nothing**, so the web-component default applies); `pageSize`/`maxDays` only emit when `> 0`; `tabConfig` is JSON-stringified; `enableCrossOrganization` and `enableUserScopedNotifications` are stringified when an object. This is why "unset" and "explicit `false`" can differ.
 
 ---
 
@@ -39,6 +39,7 @@ The exhaustive per-prop behavior for both notification entry points is organized
 | `enableSettingsAtOrganizationLevel` | off | Scopes settings changes to the **organization** (org-wide notification preferences) instead of per-user. Toggles `enableSettingsConfigByOrganization()`. | **Global via the service.** Pairs with `settings`; only affects where the chosen preferences are stored/applied. |
 | `defaultCondition` | `true` | Visibility gate from the v2 themed base (`input(true)`). When `false`, the component does not render. | Accepts boolean or stringified boolean. Use it to conditionally mount the panel declaratively without unmounting in your own framework. |
 | `enableCrossOrganization` | off | Includes notifications from **other organizations** the user belongs to. Accepts `true` (enable with defaults), a string, or a `CrossOrganizationConfig` object. An object with `enabled: false` **disables**; any other object enables with that config; a plain truthy value enables with defaults. | **Global via the service.** Arrays are treated as "object" by `typeof` but are excluded from the config branch, so a malformed array binding falls through to the plain-enable path rather than being read as config (this reference documents the fallback behavior, not the implementation intent). |
+| `enableUserScopedNotifications` | off | Fetches the signed-in user's own newest notifications for the current organization directly, independent of the 15-document recently-active window, so unread notifications on documents outside that window stay visible. Accepts `true` (enable with defaults), a string, or a `UserScopedNotificationsConfig` object. An object with `enabled: false` **disables** and keeps the previously configured `limit`; any other object enables with that config; a plain truthy value enables with defaults. | **Global via the service.** Same array-falls-through-to-plain-enable note as `enableCrossOrganization`. Setting the prop and calling the API method both write to the same state; whichever runs last wins. |
 
 **Default behaviors (VeltNotificationsPanel, no prop needed):**
 
@@ -46,14 +47,14 @@ The exhaustive per-prop behavior for both notification entry points is organized
 - **Tabs:** all four tabs (For You, Documents, All, People) are **on** by default; `tabCount` starts at 3 and is recomputed when `tabConfig` is set. The initially selected tab is **For You**; if For You is disabled, selection falls back to Documents, then All.
 - **Read-all:** the read-all action marks **unread** notifications as read **scoped to the active tab**: on the For You tab it marks the for-you unread set; on any other tab it marks the full unread set. (Logged-out/no-org users go through the views service by id.)
 - **Settings:** off (`settingsEnabled: false`); when enabled it defaults to the `'accordion'` layout and includes a mute-all toggle plus per-category options.
-- **Self notifications:** off. **Cross-organization:** off. **Read-on-view (For You):** off.
+- **Self notifications:** off. **Cross-organization:** off. **User-scoped "For You" fetch:** off. **Read-on-view (For You):** off.
 - **Paging:** `pageSize` 5 per tab. **Theme:** light (`darkMode: false`). **Shadow DOM:** on. **Settings org-level:** off.
 
 ---
 
 ## VeltNotificationsTool
 
-The tool is a launcher button: it tracks the unread count, renders a bell + badge, and opens the notification panel on click. Props that affect the *panel it opens* (`tabConfig`, `settings`, `selfNotifications`, `readNotificationsOnForYouTab`, `settingsLayout`, `enableSettingsAtOrganizationLevel`, `enableCrossOrganization`, `pageSize`) drive the **same shared notification service / panel** as `VeltNotificationsPanel`, so their semantics match the table above; the rows below focus on the tool-specific behavior and the few props unique to the tool.
+The tool is a launcher button: it tracks the unread count, renders a bell + badge, and opens the notification panel on click. Props that affect the *panel it opens* (`tabConfig`, `settings`, `selfNotifications`, `readNotificationsOnForYouTab`, `settingsLayout`, `enableSettingsAtOrganizationLevel`, `enableCrossOrganization`, `enableUserScopedNotifications`, `pageSize`) drive the **same shared notification service / panel** as `VeltNotificationsPanel`, so their semantics match the table above; the rows below focus on the tool-specific behavior and the few props unique to the tool.
 
 | Prop | Default | Behavior | Interactions & gotchas |
 |---|---|---|---|
@@ -75,6 +76,7 @@ The tool is a launcher button: it tracks the unread count, renders a bell + badg
 | `enableSettingsAtOrganizationLevel` | off | Org-level settings scope. Same `enableSettingsConfigByOrganization()` flag as the panel. | **Global via the service.** |
 | `defaultCondition` | `true` | Visibility gate (v2 themed base). `false` â†’ tool does not render. | Accepts boolean or stringified boolean. |
 | `enableCrossOrganization` | off | Cross-org notifications; same `true`/string/`CrossOrganizationConfig` handling as the panel (object `enabled: false` disables). | **Global via the service.** Same array-falls-through-to-plain-enable note as the panel; this reference documents the fallback behavior, not implementation intent. |
+| `enableUserScopedNotifications` | off | User-scoped "For You" fetch; same `true`/string/`UserScopedNotificationsConfig` handling as the panel (object `enabled: false` disables and keeps the previously configured `limit`). | **Global via the service.** Same array-falls-through-to-plain-enable note as the panel. Setting the prop and calling the API method both write to the same state; whichever runs last wins. |
 
 **Default behaviors (VeltNotificationsTool, no prop needed):**
 
@@ -82,7 +84,7 @@ The tool is a launcher button: it tracks the unread count, renders a bell + badg
 - **Open mode:** `'popover'`: the panel opens as a CDK-overlay popover anchored to the button.
 - **Unread count source:** `considerAllNotifications: false`, so the badge shows the count of **unread For You** notifications. Set `considerAllNotifications: true` to count all unread.
 - **Data window:** `maxDays` 15 (older notifications excluded). **Tabs:** all four on; initial tab For You with the same disabled-tab fallback.
-- **Settings:** off (accordion when enabled). **Self notifications / cross-org / read-on-view / org-level settings:** off.
+- **Settings:** off (accordion when enabled). **Self notifications / cross-org / user-scoped fetch / read-on-view / org-level settings:** off.
 - **Theme:** light. **Shadow DOM:** both the button (`shadowDom`) and opened panel (`panelShadowDom`) isolated by default. **Paging:** `pageSize` 5.
 
 ---
@@ -93,7 +95,7 @@ Each component's zero-prop baseline is documented in its **Default behaviors (â€
 
 ## Prop-interaction matrix
 
-There is no separate multi-prop matrix for this group: pairwise effects are documented in each prop's **Interactions & gotchas** column above. The one cross-cutting rule to note: the feature toggles (`settings`, `selfNotifications`, `readNotificationsOnForYouTab`, `enableCrossOrganization`, `enableSettingsAtOrganizationLevel`, `maxDays`) are read/written through the **shared notification service**, so setting any of them on either component changes the data stream for **both** (they are effectively global); per-instance props (`tabConfig`, `pageSize`, `panelOpenMode`, `settingsLayout`, `variant`, `shadowDom`/`panelShadowDom`) stay scoped to the component they are set on.
+There is no separate multi-prop matrix for this group: pairwise effects are documented in each prop's **Interactions & gotchas** column above. The one cross-cutting rule to note: the feature toggles (`settings`, `selfNotifications`, `readNotificationsOnForYouTab`, `enableCrossOrganization`, `enableUserScopedNotifications`, `enableSettingsAtOrganizationLevel`, `maxDays`) are read/written through the **shared notification service**, so setting any of them on either component changes the data stream for **both** (they are effectively global); per-instance props (`tabConfig`, `pageSize`, `panelOpenMode`, `settingsLayout`, `variant`, `shadowDom`/`panelShadowDom`) stay scoped to the component they are set on.
 
 ## Positioning & composition
 

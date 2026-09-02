@@ -49,6 +49,7 @@
 | `basicAnchorData`         | `{ xpath: string; topPercentage: number; leftPercentage: number }`        | No       | Client-safe anchor data derived from the target element's xpath. `xpath` is sourced from `targetElement.anchor.fXPath`, falling back to the legacy `targetElement.fXpath`. `topPercentage` and `leftPercentage` default to `0` when not set. Omitted entirely when no xpath source is present. |
 | `involvedUserIds`         | `string[]`                                                                | No       | All user IDs involved in the annotation (subscribed + unsubscribed participants). Read-only, server-derived. |
 | `mentionedUserIds`        | `string[]`                                                                | No       | User IDs @mentioned across the annotation's comments. Read-only, server-derived. |
+| `actions`                 | [`CommentAction[]`](#commentaction)                                       | No       | Per-row default action chips, inherited by every comment on the annotation that doesn't set its own `comment.actions`. |
 
 #### Enum
 
@@ -1714,6 +1715,79 @@ Logical anchor stored in `annotation.context.textEditorConfig`. Physical rectang
 | `sourceType`            | `string`                               | No       | Origin of the comment; `'agent'` indicates AI-agent-authored. Read-only. |
 | `agent`                 | [`AgentData`](#agentdata)              | No       | AI agent identity + output for an agent-authored comment. Read-only.    |
 | `metadata`              | `any`                                  | No       | Customer-supplied metadata bag, persisted as-is when provided.          |
+| `actions`               | [`CommentAction[]`](#commentaction)    | No       | Action chips rendered on this comment row. Overrides any `CommentAnnotation.actions` default for this row. |
+| `progress`              | [`CommentProgress`](#commentprogress)  | No       | Turns this comment into a live progress row while `state` is `'active'`. |
+
+#### CommentAction
+
+---
+
+| Property   | Type      | Required | Description                                                                 |
+| ---------- | --------- | -------- | ---------------------------------------------------------------------------- |
+| `id`       | `string`  | Yes      | Stable, opaque, customer-owned identifier. The only field used as identity. |
+| `label`    | `string`  | No       | Chip text. Also the accessible name when `icon` is set.                    |
+| `icon`     | `string`  | No       | Raw SVG string (trimmed value starting with `<`), or a URL / data URI rendered as an `<img>`. Anything else resolves to no icon. |
+| `disabled` | `boolean` | No       | Renders the chip non-interactive. A disabled chip emits nothing when clicked. |
+| `hidden`   | `boolean` | No       | Omits the chip entirely.                                                    |
+| `metadata` | `any`     | No       | Customer-owned data, persisted as-is and echoed back on `commentActionClicked`. |
+
+#### CommentActionClickedEvent
+
+---
+
+| Property           | Type                                       | Required | Description                                                                 |
+| ------------------ | ------------------------------------------- | -------- | ---------------------------------------------------------------------------- |
+| `action`           | [`CommentAction`](#commentaction)          | Yes      | The full action object, including `action.metadata`.                       |
+| `actionId`         | `string`                                   | Yes      | ID of the clicked action.                                                   |
+| `scope`            | `'comment' \| 'annotation'`                | Yes      | Where the action was defined. Independent of `commentId`.                  |
+| `annotationId`     | `string`                                   | Yes      | ID of the annotation.                                                       |
+| `commentId`        | `number`                                   | No       | ID of the row that was clicked. Omitted when the click isn't tied to a row. |
+| `commentAnnotation`| [`CommentAnnotation`](#commentannotation)  | Yes      | The comment annotation object.                                              |
+| `comment`          | [`Comment`](#comment)                      | No       | The clicked row's comment object. Same presence rule as `commentId`.       |
+| `actionUser`       | [`User`](#user)                            | Yes      | The user who clicked. Distinct from the row's author on a machine-written row. |
+| `metadata`         | `VeltEventMetadata`                        | Yes      | Velt event metadata. Distinct from `action.metadata`.                      |
+
+#### CommentProgress
+
+---
+
+| Property           | Type                                            | Required | Description                                                            |
+| ------------------ | ------------------------------------------------ | -------- | -------------------------------------------------------------------------- |
+| `state`            | [`CommentProgressState`](#commentprogressstate) | Yes      | Lifecycle state of the progress row.                                   |
+| `steps`            | [`CommentProgressStep[]`](#commentprogressstep) | No       | Step list. Replaces the previous array wholesale on every `updateComment`. |
+| `visibleToUserIds` | `string[]`                                       | No       | Display-only. Not a security boundary and not used to scope anything.  |
+| `startedAt`        | `number`                                         | No       | Customer-supplied start time. Never used for staleness or ordering.    |
+
+**CommentProgressState**
+
+| Value | Description |
+| --- | --- |
+| `active` | The row renders with animated dots and the current step label. |
+| `completed` | The row stops rendering. The comment renders as a normal reply once it has content. |
+| `failed` | The row stops rendering. Any content already written on the comment stays visible. |
+| `cancelled` | The row stops rendering. Any content already written on the comment stays visible. |
+
+#### CommentProgressStep
+
+---
+
+| Property      | Type                                                     | Required | Description                                            |
+| ------------- | --------------------------------------------------------- | -------- | ---------------------------------------------------------- |
+| `id`          | `string`                                                  | No       | Step identifier.                                        |
+| `label`       | `string`                                                  | Yes      | Customer-authored label. Rendered verbatim, never translated. |
+| `state`       | [`CommentProgressStepState`](#commentprogressstepstate)  | No       | Step's own state.                                        |
+| `startedAt`   | `number`                                                  | No       | Step start time.                                         |
+| `completedAt` | `number`                                                  | No       | Step completion time.                                    |
+| `metadata`    | `any`                                                      | No       | Customer-owned data.                                     |
+
+**CommentProgressStepState**
+
+| Value | Description |
+| --- | --- |
+| `pending` | Step hasn't started. |
+| `active` | Step is in progress. Its `label` is what the progress row shows. |
+| `completed` | Step finished. |
+| `failed` | Step failed. |
 
 #### AddCommentEvent
 
@@ -4517,6 +4591,16 @@ Configuration for cross-organization "For You" notifications. Merges For You not
 | `organizationIds`          | `string[]`                    | No       | Allowlist of org IDs to include. When omitted, all indexed orgs are eligible.     |
 | `excludeOrganizationIds`   | `string[]`                    | No       | Org IDs to exclude. The current org is always excluded regardless of this field.  |
 | `feeds`                    | `('forYou' \| 'all')[]`       | No       | Feed targets. Only `'forYou'` is supported; `'all'` is ignored with a warning.    |
+
+#### UserScopedNotificationsConfig
+
+---
+
+Configuration for the user-scoped "For You" notifications fetch. Fetches the current user's newest notifications for the current organization directly, independent of the recently-active-documents window. Used with [`enableUserScopedNotifications()`](/async-collaboration/notifications/customize-behavior#enableuserscopednotifications).
+
+| Property | Type     | Required | Description                                                                                                                        |
+| -------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `limit`  | `number` | No       | Maximum user-scoped notifications fetched. Defaults to `25` and is clamped to `[1, 200]`; non-numeric, non-finite, or values below `1` fall back to `25`. |
 
 #### FirestorePaths
 

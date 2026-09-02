@@ -543,55 +543,100 @@ const subscription = notificationElement.getCrossOrganizationConfig$().subscribe
 
 - By default, the "For You" tab and the unread count are derived from the organization's 15 most recently active documents. An unread notification whose document falls outside that window is not fetched, so it disappears from the tab and the count until the document becomes active again.
 - When enabled, the SDK also fetches the signed-in user's newest notifications for the current organization directly, independent of that window. Those notifications are merged into the "For You" store, deduped by `notificationId`, and merged additively into the "All" tab.
-- This is methods-only: there is no prop and no HTML attribute, matching `enableSelfNotifications` and `enableCrossOrganization`.
+- The `enableUserScopedNotifications` prop accepts a `boolean`, a `UserScopedNotificationsConfig` object, or a JSON config string; the `enable-user-scoped-notifications` attribute accepts `"true"` / `"false"` or a JSON config string.
 
 Default: `false`.
 
 <Tabs>
 <Tab title="React / Next.js">
+Using Props:
 ```jsx
-const notificationElement = client.getNotificationElement();
+{/* Enable with the default limit of 25 */}
+<VeltNotificationsTool enableUserScopedNotifications={true} />
+<VeltNotificationsPanel enableUserScopedNotifications={true} />
 
-// Opt in with the default limit of 25
+{/* Enable with a custom limit */}
+<VeltNotificationsTool enableUserScopedNotifications={{
+    limit: 60,
+}} />
+<VeltNotificationsPanel enableUserScopedNotifications={{
+    limit: 60,
+}} />
+```
+
+Using APIs:
+```jsx
+const notificationElement = useNotificationUtils();
+
+// Enable with the default limit of 25
 notificationElement.enableUserScopedNotifications();
 
-// Or set an explicit limit
-notificationElement.enableUserScopedNotifications({ limit: 50 });
+// Enable with a custom limit
+notificationElement.enableUserScopedNotifications({
+    limit: 60,
+});
 
-// Opt back out and return to the windowed behavior
+// Disable, keeping the configured limit
 notificationElement.disableUserScopedNotifications();
 ```
 </Tab>
 
 <Tab title="Other Frameworks">
-```js
-const notificationElement = Velt.getNotificationElement();
+Using Props:
+```html
+<!-- Enable with the default limit of 25 -->
+<velt-notifications-tool enable-user-scoped-notifications="true">
+</velt-notifications-tool>
+<velt-notifications-panel enable-user-scoped-notifications="true">
+</velt-notifications-panel>
 
-// Opt in with the default limit of 25
-notificationElement.enableUserScopedNotifications();
+<!-- Enable with a custom limit (JSON string) -->
+<velt-notifications-tool enable-user-scoped-notifications='{"limit":60}'>
+</velt-notifications-tool>
+<velt-notifications-panel enable-user-scoped-notifications='{"limit":60}'>
+</velt-notifications-panel>
+```
 
-// Or set an explicit limit
-notificationElement.enableUserScopedNotifications({ limit: 50 });
+Using APIs:
+```html
+<script>
+  const notificationElement = Velt.getNotificationElement();
 
-// Opt back out and return to the windowed behavior
-notificationElement.disableUserScopedNotifications();
+  // Enable with the default limit of 25
+  notificationElement.enableUserScopedNotifications();
+
+  // Enable with a custom limit
+  notificationElement.enableUserScopedNotifications({
+      limit: 60,
+  });
+
+  // Disable, keeping the configured limit
+  notificationElement.disableUserScopedNotifications();
+</script>
 ```
 </Tab>
 </Tabs>
 
 **`UserScopedNotificationsConfig` fields:** See [`UserScopedNotificationsConfig`](/api-reference/sdk/models/data-models#userscopednotificationsconfig) for the full type definition.
 
-| Property | Type     | Default | Notes                                                                                                     |
-| -------- | -------- | ------- | --------------------------------------------------------------------------------------------------------- |
-| `limit`  | `number` | `25`    | Maximum user-scoped notifications fetched. Clamped to `[1, 200]`; non-numeric, non-finite, or values below `1` fall back to `25`. |
+| Property  | Type      | Default | Notes                                                                                                     |
+| --------- | --------- | ------- | ----------------------------------------------------------------------------------------------------------- |
+| `enabled` | `boolean` | `true`  | Set to `false` to disable (equivalent to calling `disableUserScopedNotifications()`). Keeps the configured `limit`. |
+| `limit`   | `number`  | `25`    | Maximum user-scoped notifications fetched. Clamped to `[1, 200]`; non-numeric, non-finite, or values below `1` fall back to `25`. |
 
 **Behavior:**
 
+- Setting the prop and calling the API method write to the same setting, so the last write wins. Drive it from one place only, and note that setting it on either `VeltNotificationsTool` or `VeltNotificationsPanel` is equivalent.
 - Calling `enableUserScopedNotifications()` before initialization or `setDocument()` is safe. The setting latches and takes effect on the first full fetch after the organization pipeline initializes.
 - The user-scoped fetch runs on full fetches only, and is suppressed under `currentDocumentOnly`. Narrowing the scope explicitly wins over this setting.
 - Switching organization or document clears the stores as before, and the next full fetch re-sends the setting, so user-scoped notifications never carry across organizations.
 - In the "For You" store, a notification that arrives through both the per-document path and the user-scoped path appears once. In the "All" tab, document notifications win on ID collision and user-scoped notifications outrank cross-organization ones; the result is sorted by timestamp descending.
 - Cross-organization "For You" behavior and the `maxNotificationDays` retention bound are unchanged.
+- The fetch requires matching backend support. Against an older backend it falls back to the windowed behavior instead of failing.
+
+<Note>
+Passing `{ enabled: false }` as the config to `enableUserScopedNotifications()` routes to disable and keeps the previously configured `limit`. Passing `null` or calling without arguments opts in with all defaults.
+</Note>
 
 <Note>
 The first load after opting in at a busy organization surfaces previously invisible unread notifications in one batch. This is the intended correction. The unread count is capped at the configured `limit`.
@@ -604,7 +649,7 @@ Turn the user-scoped fetch back off. The "For You" tab and the unread count retu
 <Tabs>
 <Tab title="React / Next.js">
 ```jsx
-const notificationElement = client.getNotificationElement();
+const notificationElement = useNotificationUtils();
 notificationElement.disableUserScopedNotifications();
 ```
 </Tab>

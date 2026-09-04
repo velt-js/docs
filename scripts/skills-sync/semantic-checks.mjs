@@ -7,7 +7,7 @@
  * humans.
  */
 
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const cwd = process.cwd();
@@ -462,6 +462,7 @@ const output = {
   },
 };
 
+mkdirSync(outDir, { recursive: true });
 writeFileSync(semanticPath, `${JSON.stringify(output, null, 2)}\n`);
 
 if (failures.length > 0) {

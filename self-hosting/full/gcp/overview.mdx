@@ -1,0 +1,179 @@
+---
+title: "Get Started on GCP"
+sidebarTitle: "Get Started"
+description: "Deploy Velt full self-hosting into your own GCP project. Hand the install guide to an AI coding agent, answer a handful of inputs, and complete the five human steps."
+---
+
+You do not run this deployment by hand. You give an AI coding agent the [Install guide](/self-hosting/full/gcp/install), and it executes the phases, stopping to ask you whenever a step needs a human.
+
+Budget roughly 2 to 4 hours of wall clock. Most of that is waiting on Terraform and Firestore index creation, not typing.
+
+<Note>
+  New to full self-hosting? Read the [Overview](/self-hosting/full/overview) first for what the deployment contains and how it differs from [partial self-hosting](/self-hosting/partial/overview).
+</Note>
+
+<Steps titleSize="h2">
+
+<Step title="Check the prerequisites">
+
+**People and access**
+
+- A GCP project you can administer (or create), with billing enabled.
+- Ability to create a Google OAuth client for console sign-in. This is one human console step.
+- Someone available to run an AI coding agent, or the shell commands themselves, for the duration.
+
+**Tooling**
+
+| Tool | Why |
+| --- | --- |
+| `gcloud`, `firebase` CLI | Project bootstrap, Hosting, Auth |
+| Terraform ≥ 1.5 | Backend apply |
+| `oras` | Pull manifest, module, console, and SDK artifacts |
+| `cosign` | Verify signatures |
+| Node ≥ 20 | Deployment-profiles CLI inside the module archive |
+| `curl`, `python3`, `jq` | Verify steps |
+
+The agent checks exact versions itself in Phase 0 and stops if anything is missing.
+
+</Step>
+
+<Step title="Decide your inputs">
+
+Decide these once, up front. The agent asks for all of them at the start of Phase 0 rather than interrupting you later.
+
+| Input | Meaning |
+| --- | --- |
+| `PROJECT_ID` / `REGION` | Where Cloud Run and Firebase live (`us-central1` recommended) |
+| `PROFILE` + `OPT_IN_MODULES` | Feature surface, see [Deployment profiles](/self-hosting/full/gcp/reference#deployment-profiles) |
+| `OWNER_EMAIL` / admin emails | Console login identities |
+| `appDomains` | Production API key `allowedDomains` (SDK gate) |
+| `GOOGLE_GEN_AI_API_KEY` / `ANTHROPIC_API_KEY` | Operator-owned LLM keys |
+| Console host + SDK CDN base | Where static assets are served |
+
+<Warning>
+  The Gemini and Anthropic keys are **required even on the `core` profile**. Memory embeddings and knowledge search run on Gemini; agent paths use Anthropic. Placeholder values pass the install and then fail at runtime, so use real keys you control.
+</Warning>
+
+</Step>
+
+<Step title="Give your agent the guides">
+
+This is the step that does the work. Point your AI coding agent at these two pages:
+
+- [Install guide](/self-hosting/full/gcp/install), the phase-by-phase procedure it executes.
+- [Reference](/self-hosting/full/gcp/reference), the field-level contract it checks shapes against.
+
+Then start it with a prompt like this, filled in with the values you decided in step 2:
+
+```text
+You are deploying Velt full self-hosting into our own GCP project.
+
+Read the Velt full self-hosting Install guide and Reference pages I linked
+before you begin, and follow the Install guide phase by phase. Do not invent
+your own procedure.
+
+Inputs:
+  PROJECT_ID      = <your-gcp-project-id>
+  REGION          = us-central1
+  PROFILE         = core
+  OPT_IN_MODULES  =
+  OWNER_EMAIL     = <admin@example.com>
+  CONSOLE_BASE    = <https origin where the console will be served>
+  CDN_BASE        = <https origin where the SDK will be served>
+
+Maintain velt-selfhost-state.json after every phase so this run can be
+resumed in a fresh session. Stop and ask me whenever a step needs a human.
+```
+
+Keep `velt-selfhost-state.json` in your working directory. It is what lets a fresh session pick up where the last one stopped.
+
+</Step>
+
+<Step title="Stay available for the human steps">
+
+Five moments need a person. The agent pauses and asks at each one.
+
+| Moment | What you do |
+| --- | --- |
+| Billing | Link a billing account to the GCP project |
+| OAuth client | Create the Google OAuth client for console sign-in |
+| Infosec scan | Sign off the image scan against the manifest's signed findings |
+| DNS | Add the record, only if you use a custom domain |
+| Sign-in test | Sign in to the console for the first time |
+
+</Step>
+
+<Step title="Wire your app">
+
+Serving the SDK from your CDN only moves **code**. Runtime still defaults to SaaS until you pass `selfHosted`.
+
+```tsx
+import selfHosted from './velt-selfhosted-config.json';
+
+<VeltProvider
+  apiKey="<production key from install Phase 3>"
+  config={{
+    proxyDomain: 'https://static.acme.com',  // origin only — path stays /lib/sdk@…/velt.js
+    version: '6.0.0',                        // must match the hosted folder
+    selfHosted,                              // generated in install Phase 5.1
+  }}
+>
+```
+
+Vanilla and Vue use `initVelt(apiKey, { proxyDomain, version, selfHosted })`.
+
+**Rules that break production if violated:**
+
+1. Path on the CDN is exactly `/lib/sdk@<version>/velt.js` with **all** chunks flat in that directory (`@` is literal).
+2. CORS: `Access-Control-Allow-Origin` on every `.js` file (app origin or `*`). This is the number one failure mode.
+3. `selfHosted.strict: true` and `deploymentProfile` set to Terraform's resolved `enabledModules`, never hand-derived.
+4. CSP: allow your CDN in `script-src`, and remove `cdn.velt.dev` once you cut over.
+
+Field-level shape: [Reference, `selfHosted` config](/self-hosting/full/gcp/reference#sdk-selfhosted-config).
+
+</Step>
+
+<Step title="Confirm it is done">
+
+The deployment is complete only when all four pass:
+
+1. Console sign-in as a seeded admin lands on the dashboard with the workspace and keys.
+2. The app loads `velt.js` and its chunks from **your** CDN, and `window.Velt.version` matches the pin.
+3. Creating a comment in the app persists and appears in the console data browser.
+4. A Network audit on both the app and console sessions shows **no** requests to `velt.dev` or other Velt-owned hosts.
+
+</Step>
+
+</Steps>
+
+## What the agent does
+
+| Phase | What happens | You care because |
+| --- | --- | --- |
+| **0** | Pull and cosign-verify the umbrella manifest; collect inputs; preflight tooling | A wrong or unsigned release means stop |
+| **1** | Bootstrap GCP/Firebase; copy the image **by digest** into *your* Artifact Registry; infosec scan sign-off | The image never runs from Velt's registry long-term |
+| **2** | Terraform apply (Cloud Run, queues, IAM, secrets, console config emission) | The profile decides which services exist |
+| **3** | Provision CLI: workspace, API keys, seeded `planInfo` | First admin and keys for the app |
+| **4** | Deploy console bundle and `velt-console-config.json`; OAuth; sign-in test | Admin surface on your domain |
+| **5** | Host the SDK on your CDN; generate `velt-selfhosted-config.json`; wire the app | Zero-egress requires `selfHosted`, `proxyDomain`, and a pinned `version` |
+| **6** | Acceptance: console login, create a comment, see it in the console data browser, Network audit | Done only when all four pass |
+
+Maintain `velt-selfhost-state.json` after every phase so a fresh session can resume without guessing.
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+| --- | --- |
+| SDK never loads | Missing CORS on CDN `.js` files, or path is not `/lib/sdk@<version>/velt.js` |
+| SDK loads but data goes to Velt, or features are dead | Missing or incomplete `selfHosted`; `strict` is false; `deploymentProfile` is wrong |
+| Console boots but can't sign in | OAuth client or authorized domains not pointing at the console host |
+| Callable returns "Api key not found" from a hand-built curl | Expected. Callables need a Firebase ID token, so use the app or console instead |
+| Comment create fails with index errors | Check `velt-sa` Cloud Run logs for index-creation links, and report gaps to Velt |
+
+Full tables live in the [Install guide's troubleshooting appendix](/self-hosting/full/gcp/install#troubleshooting).
+
+## Upgrading later
+
+Upgrades are a delta, not a reinstall. The [Upgrade guide](/self-hosting/full/gcp/upgrade) pulls and verifies the target manifest, diffs it against the `release` recorded in your state file, and runs only the tracks that changed.
+
+Releases are **migration-free** today: new backend code reads existing data shapes. If that ever changes, the release notes and the manifest call it out and ship a dedicated migration runbook.

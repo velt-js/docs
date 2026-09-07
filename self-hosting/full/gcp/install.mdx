@@ -1,0 +1,1326 @@
+---
+title: "Install Guide"
+sidebarTitle: "Install"
+description: "Agent-executable procedure for a greenfield Velt full self-hosting deployment on GCP. Covers release verification, project bootstrap, Terraform apply, workspace provisioning, console, SDK hosting, and acceptance."
+---
+
+<Note>
+  This guide is written to be executed by an AI coding agent with shell access. Hand it the page and let it work. A human can also follow it manually, since every step is a plain command. Want the short version first? Read [Get Started on GCP](/self-hosting/full/gcp/overview).
+</Note>
+
+> **Doc set.** Human orientation + concepts: [Overview](/self-hosting/full/overview).
+> Field-level contracts (manifest, profiles, configs, trust): [Reference](/self-hosting/full/gcp/reference).
+> After install, upgrades: [Upgrade guide](/self-hosting/full/gcp/upgrade).
+> This file is the **executable install procedure**. Paste it to an agent, or follow the commands yourself.
+
+**Audience:** an AI coding agent with shell access, working for a Velt customer. A human
+operator pastes this document (or its URL) to you as instructions. A human can also
+follow it manually, since every step is a plain command.
+
+**Outcome:** the complete Velt platform running entirely on the customer's own
+infrastructure:
+
+1. **Backend**: Velt's signed container deployed as Cloud Run services in the
+   customer's GCP project (Terraform), with a bootstrapped workspace and API keys.
+2. **Console**: the Velt admin console served from a static host the customer
+   chooses (their existing host, a GCP-native stack, or Firebase Hosting), talking
+   only to their own project.
+3. **SDK**: the Velt client SDK served from the customer's own CDN/static host.
+
+When finished, the customer's app and admin surface make **zero runtime requests to any
+Velt-owned host**.
+
+---
+
+## To the AI agent: read this first
+
+- **Execute phases in order** (Phase 5 may run in parallel with Phase 4). Each phase
+  ends with a **Verify** block; do not proceed until it passes.
+- **Maintain the state file** (`velt-selfhost-state.json`, contract below) after every
+  step. If your session is interrupted at any point, a fresh session resumes by reading
+  this guide plus the state file, never by memory.
+- **Never run commands against any project other than `$PROJECT_ID`.**
+- **All versions come from the release manifest** (Phase 0). Never substitute a
+  different component version than the manifest pins.
+- **Human-in-the-loop moments are known in advance.** Show the operator the table in
+  Phase 0 §"When you'll be needed" before starting, and when a moment arrives, hand
+  them the *exact* command or console URL, never a vague ask.
+- **Retryable errors:** these are expected and must be retried with backoff, not
+  reported as failures, (a) Eventarc "Permission denied while using the Eventarc
+  Service Agent" within ~10 min of enabling the Eventarc API (wait 5 min, re-apply);
+  (b) 401s mid-`terraform apply` from an expired access token (refresh auth,
+  re-apply, Terraform state makes it idempotent); (c) `webApps`/service listings
+  empty seconds after creation (propagation; wait 10 s, re-list); (d) a
+  just-created service account returning "does not exist" on an IAM binding
+  (wait ~15 s, retry).
+- **Long waits are normal.** The full run is ~2–4 hours of wall clock, most of it
+  waiting on applies and index creation. Flagged inline. Tell the operator when a
+  long wait starts so the run doesn't look hung.
+- **Shell quirks:** commands are written for bash/zsh. In zsh, `$VAR:something`
+  is parsed as a parameter modifier and silently corrupts the value, always write
+  `${VAR}` when a colon (or any word character) follows. When a pipeline's last
+  command succeeds, earlier failures are masked; check the command you care about,
+  not just the pipeline's exit code.
+- If a command fails and it isn't in the retryable list, check the Troubleshooting
+  appendix before escalating to the operator.
+
+### State file contract: `velt-selfhost-state.json`
+
+Keep it in the working directory (or the operator's config repo). It is the single
+source of truth for resume and for cross-phase handoffs. Shape:
+
+```jsonc
+{
+  "guideVersion": 1,
+  "release": { /* the full manifest fetched in Phase 0 */ },
+  "inputs": {
+    "projectId": "", "projectNumber": "", "region": "us-central1",
+    "profile": "core", "optInModules": [],
+    "ownerEmail": "", "workspaceName": "", "adminEmails": [], "appDomains": [],
+    "consoleHost": "", "consoleBase": "", "consoleSiteId": "",
+    "sdkHost": "", "cdnBase": ""
+  },
+  "phases": {
+    "0-preflight": "pending|done",
+    "1-project-bootstrap": "pending|in-progress|done",
+    "2-backend": "…", "3-workspace": "…", "4-console": "…",
+    "5-sdk-cdn": "…", "6-acceptance": "…"
+  },
+  "artifacts": {
+    "moduleDir": "",            // where the backend module archive was extracted
+    "imageRef": "",             // customer-registry ref, pinned BY DIGEST
+    "rtdbUrls": {},             // default + plugin/integrations/demo/notifications
+    "storageBucket": "",
+    "cacheddataUrl": "",
+    "serviceUrls": {},          // terraform output (or its file path)
+    "bootstrapResultPath": "",  // provision-cli JSON — SECRET, path only, never inline
+    "consoleUrl": "",
+    "sdkCdnPath": "",           // e.g. https://static.acme.com/lib/sdk@6.0.0
+    "selfHostedConfigPath": ""  // velt-selfhosted-config.json (Phase 5.1) — the app's config.selfHosted object
+  },
+  "humanSteps": { "billing": "pending|done", "oauthClient": "pending|done", "infosecScan": "pending|done|waived", "dnsRecord": "pending|done|n/a", "signInTest": "pending|done" },
+  "log": [ { "ts": "…", "phase": "…", "note": "…" } ]
+}
+```
+
+Secrets (API keys, auth tokens, the provision-cli result JSON, SA keys) go in the
+operator's secret store. Record **paths/references** in the state file, never values.
+
+---
+
+## Phase 0: Release resolution, inputs, preflight
+
+### 0.1 Resolve the release
+
+All release artifacts live in ONE public Artifact Registry repo, the same registry
+the container image is pulled from. Non-image artifacts (manifest, module archive,
+console bundle) are OCI artifacts fetched with `oras` (anonymous, no auth needed):
+
+```bash
+RELEASE_REGISTRY="us-docker.pkg.dev/velt-sdk/velt-releases"
+
+# Latest release (or pin a version: velt-selfhost-manifest:<X.Y.Z>)
+oras pull -o . "$RELEASE_REGISTRY/velt-selfhost-manifest:latest"    # writes manifest.json
+
+# MANDATORY: verify the manifest's cosign signature — resolve the pulled tag to its
+# digest, then verify. Only deploy releases that verify successfully.
+MANIFEST_DIGEST=$(oras manifest fetch --descriptor "$RELEASE_REGISTRY/velt-selfhost-manifest:latest" | python3 -c "import json,sys;print(json.load(sys.stdin)['digest'])")
+cosign verify \
+  --certificate-identity-regexp 'https://github\.com/[^/]+/shared-firebase-function/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "$RELEASE_REGISTRY/velt-selfhost-manifest@$MANIFEST_DIGEST"
+```
+
+The signed manifest is the trust root for everything else: its sha256 fields pin the
+module archive and console bundle, and `backend.digest` pins the image (which gets its
+own cosign verification in Phase 1). The manifest pins everything you will deploy:
+
+| Manifest field | Used in |
+|---|---|
+| `registry` | all `oras` pulls below (same value as `RELEASE_REGISTRY`) |
+| `backend.imageByDigest` | Phase 1 (copy + verify), Phase 2 (`velt_image`) |
+| `backend.moduleRef` + `backend.moduleSha256` | Phase 2: the Terraform module archive (pull, verify, extract) |
+| `console.bundleRef` + `console.sha256` | Phase 4 |
+| `sdk.testedVersion` / `sdk.minVersion` + `sdk.bundleRef` + `sdk.sha256` | Phase 5 |
+| `releaseNotes` | show the operator |
+
+Store the whole manifest in the state file. **Verify:** the manifest parses, has
+`schemaVersion: 2`, and all fields above are non-empty. If `schemaVersion` is higher
+than `2`, re-fetch this guide from the Velt docs site before continuing.
+
+### 0.2 Inputs to collect from the operator (all up front, once)
+
+| Input | Meaning | Example |
+|---|---|---|
+| `PROJECT_ID` | GCP project to deploy into (existing, or a name to create) | `acme-velt` |
+| `REGION` | Home region for Cloud Run/queues (`us-central1` recommended; RTDB only exists in us-central1 / europe-west1 / asia-southeast1). On a reused project this MUST match the previous deployment; see the reused-project gate below | `us-central1` |
+| `PROFILE` | Backend feature profile: `core` \| `core+recording` \| `core+ai+agents` \| `full` | `core` |
+| `OPT_IN_MODULES` | Extra modules (recommend `migrations,ai` for the full console experience) | `migrations,ai` |
+| `OWNER_EMAIL` | Workspace owner (console login identity) | `admin@acme.com` |
+| `WORKSPACE_NAME` | Company / workspace display name (provision-cli `--workspace-name`, Phase 3) | `Acme Inc` |
+| `ADMIN_EMAILS` | Additional console admins (comma-separated, may be empty) | `dev@acme.com` |
+| `APP_DOMAINS` | Domains the customer's app runs on (SDK `allowedDomains`) | `app.acme.com` |
+| `CONSOLE_HOST` | **Ask, never assume:** where the console SPA will be served from: the operator's existing static host / a GCP-native stack they want provisioned (GCS + LB + CDN, Cloud Run) or a Firebase Hosting site in this project (the zero-extra-infra option; offer it, don't default to it) | `existing host` \| `firebase-hosting` |
+| `CONSOLE_BASE` | HTTPS origin the console is served from (follows from `CONSOLE_HOST`; for Firebase Hosting it is `https://<CONSOLE_SITE_ID>.web.app`) | `https://velt-console.acme.com` |
+| `CONSOLE_SITE_ID` | Only if `CONSOLE_HOST = firebase-hosting`: the Hosting site id (globally unique) | `acme-velt-console` |
+| `SDK_HOST` | **Ask, never assume:** where the SDK files will be served from: the operator's existing CDN/static host (Cloudflare, CloudFront+S3, Fastly, nginx, …) or, if they have none, a Firebase Hosting site in this project (offer it as the zero-extra-accounts option, not the default) | `existing CDN` \| `firebase-hosting` |
+| `CDN_BASE` | HTTPS origin the SDK will be served from (follows from `SDK_HOST`; for Firebase Hosting it is `https://<site-id>.web.app`) | `https://static.acme.com` |
+| `GOOGLE_GEN_AI_API_KEY` | **MANDATORY**: the operator's own Gemini API key (memory embeddings + knowledge search run on Gemini even on core profiles; a placeholder fails at runtime with API_KEY_INVALID). https://aistudio.google.com/apikey | `AIza…` |
+| `ANTHROPIC_API_KEY` | **MANDATORY**: the operator's own Anthropic API key (AI/agent execution paths). https://console.anthropic.com/settings/keys | `sk-ant-…` |
+
+`CONSOLE_HOST` and `SDK_HOST` are explicit operator decisions. Both artifacts are
+plain static files; any host meeting the phase's serving rules works (Phase 4.2 for
+the console, Phase 5 for the SDK), and most customers have a static host they'd
+prefer over a new Firebase site. Present the choice; only pick for them if they say
+"you choose". The console has one extra serving requirement the SDK doesn't: it is a
+SPA, so unknown paths must fall back to `index.html` (Phase 4.2).
+
+**DNS feasibility check (do this NOW, not in Phase 5):** if `CDN_BASE` or
+`CONSOLE_BASE` uses a custom hostname (anything that isn't `*.web.app` or an
+already-live host), ask the operator explicitly: *"Do you control the DNS zone for
+`<hostname>`, and can you (or someone reachable now) create an A/CNAME record within
+the hour?"* A hostname in a zone the operator can't touch (e.g. the company's
+production apex zone managed by another team) is the single biggest wall-clock risk
+in this guide. If the answer is no or unsure,
+resolve the hostname choice **before** starting Phase 1; a Google-managed cert cannot
+go ACTIVE until the DNS record is visible.
+
+**Reused-project gate (do this NOW if `PROJECT_ID` has hosted a Velt deployment
+before, even one that was fully `terraform destroy`ed):** a previously-deployed
+project carries two invisible constraints that will otherwise fail Phase 2 hours in:
+
+1. **Cloud Tasks queue-name tombstones.** Deleting a queue blocks re-creating a
+   queue with the same name in the same region, Terraform fails with
+   `FAILED_PRECONDITION: … existed too recently`. Google documents ~7 days;
+   observed sometimes shorter (~3 days), never assume less than 7.
+2. **Cloud Run regions-per-project cap, and destroy does NOT release it.** The
+   default `setencrypteddata_regions = null` layout pins 4 extra regions
+   (europe-west1, asia-southeast1, australia-southeast1, asia-northeast1); with the
+   home region that is 5: exactly the default Cloud Run per-project region cap,
+   zero headroom. Region *initialization* survives a destroy, so switching the home
+   region on a reused project asks for a 6th region and every service fails with
+   `Project failed to initialize in this region due to quota exceeded` /
+   `Resource readiness deadline exceeded`. **Switching regions is never the escape
+   route from a tombstone.**
+
+Decision rule: **prefer a fresh project** for any re-run within ~7 days of a
+destroy. If the project must be reused, keep `REGION` identical to the previous
+deployment and either wait out the tombstone window or accept that the Phase 2
+queue-create step may fail until it clears. If a new home region is genuinely
+required, that is a Cloud Run quota-increase request (regions per project) plus the
+operator's sign-off, not a tfvars tweak.
+
+### 0.3 When you'll be needed (show the operator this table now)
+
+| # | Moment | What | Time |
+|---|---|---|---|
+| 1 | Phase 1, start | **Billing**: link a billing account to the project (if the deploying identity lacks `roles/billing.user`, a billing admin runs one link command) | 2–5 min |
+| 2 | **Now** (used in Phase 4) | **OAuth client**: create one OAuth 2.0 Web client in the Cloud console and paste its id/secret (Google does not allow creating OAuth clients via API) | 3 min |
+| 3 | Phase 1.5 | **Infosec scan sign-off**: if org policy requires image scanning, review the scan findings against the signed manifest's known-findings list and approve (or waive scanning explicitly) | 5–15 min |
+| 4 | Phase 6 | **Sign-in test**: sign in to the console and the demo app in a browser | 5 min |
+| - | If a custom hostname is used (Phase 4/5) | **DNS record**: create the A/CNAME record for the console/SDK hostname the moment the IP is handed over (feasibility confirmed in 0.2; the managed cert waits on this) | 2 min + propagation |
+| - | If AI modules enabled | Provide LLM API keys (OpenAI/Anthropic/Google) as secret values | 2 min |
+
+**Issue the OAuth ask (moment #2) right now, at Phase 0.** Every value it needs is
+already known (`PROJECT_ID`, `CONSOLE_BASE`), the exact wording is in Phase 4.3,
+and the operator can create the client while you deploy. Collecting it up front turns
+what is otherwise the single largest idle wait of the run (deployment done, waiting on
+a human) into a parallel task. Note: the project must exist before the operator can
+open the credentials page, if you are creating the project in Phase 1, issue the ask
+immediately after `gcloud projects create`.
+
+Everything else is automated. Expected total wall clock: **2–5 hours** (≈ 15 min
+Terraform applies, ≈ 10 min–2.5 h workspace bootstrap, index creation dominates and
+varies run to run; the rest verification and waiting).
+Expected idle cost of the deployed stack: Cloud Run scales per catalog min-instances;
+Secret Manager/Artifact Registry are cents per month. Ask the operator whether this is
+a production deployment (keep catalog min-instances) or an evaluation
+(`min_instances_override = 0` → near-$0 idle).
+
+### 0.4 Tooling preflight (hard requirements: check ALL before starting)
+
+| Tool | Why | Check |
+|---|---|---|
+| Node.js ≥ 20 | deployment-profiles CLI under Terraform | `node --version` |
+| Docker daemon | provision-cli container, image copy | `docker info` |
+| terraform CLI | the deployment | `terraform version` (install: `brew install hashicorp/tap/terraform`, not in homebrew core) |
+| gcloud CLI | all provisioning | see auth probes below |
+| firebase CLI (only if a Firebase Hosting host was chosen in 0.2) | Hosting deploy (Phase 4/5) | `firebase --version` |
+| cosign | manifest + image signature verification (MANDATORY) | `cosign version` |
+| oras | pulling release artifacts from the OCI registry (Phase 0/2/4) | `oras version` (install: `brew install oras`) |
+| crane (optional, recommended) | digest-preserving image copy in Phase 1.4 without pulling multi-GB layers locally | `crane version` (install: `brew install crane`; docker fallback documented in 1.4) |
+| curl, python3, npm | verification, SDK packaging | - |
+
+(Install hints show Homebrew; on Linux/CI use your package manager or each tool's
+official installer; any current version works.)
+
+**Auth probes: a listed account is NOT proof of working auth, so probe with real calls:**
+
+```bash
+gcloud projects list --limit=1               # fails on stale token → gcloud auth login
+gcloud auth application-default print-access-token >/dev/null \
+  || echo "ADC MISSING → gcloud auth application-default login (Terraform needs ADC, NOT the CLI token)"
+firebase projects:list >/dev/null 2>&1 \
+  || echo "firebase CLI has its OWN token store → firebase login --reauth"
+```
+
+Non-interactive fallback if ADC can't be refreshed right now:
+`export GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)`, but tokens live
+~60 min and a long apply can outlive one; prefer real ADC.
+
+**Verify (phase gate):** every tool present; all three auth probes pass; manifest
+stored; inputs recorded in the state file; operator has acknowledged the
+human-moments table. Mark `0-preflight: done`.
+
+---
+
+## Phase 1: GCP project bootstrap
+
+Everything here is project-lifecycle infrastructure that the Terraform module
+deliberately does not model.
+
+### 1.1 Project + billing (human moment #1)
+
+```bash
+gcloud projects create "$PROJECT_ID"        # skip if using an existing project
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")   # → state file
+```
+
+Billing must be linked before most APIs can be enabled. Test permission first
+(side-effect-free), then act or escalate precisely:
+
+```bash
+gcloud billing accounts list    # if empty/no permission → operator ask below
+gcloud billing projects link "$PROJECT_ID" --billing-account="$BILLING_ACCOUNT_ID"
+```
+
+> **Operator ask (verbatim, if the link fails):** "I need billing linked to
+> `$PROJECT_ID`. Either grant me `roles/billing.user` on your billing account, or have
+> a billing admin run:
+> `gcloud billing projects link $PROJECT_ID --billing-account=<ACCOUNT_ID>`"
+
+### 1.2 Firebase + APIs
+
+```bash
+TOKEN=$(gcloud auth print-access-token)
+AUTH=(-H "Authorization: Bearer $TOKEN" -H "X-Goog-User-Project: $PROJECT_ID" -H "Content-Type: application/json")
+# The X-Goog-User-Project header is MANDATORY on every firebase*/identitytoolkit REST
+# call made with user credentials (403 SERVICE_DISABLED without it).
+# Content-Type is MANDATORY on every POST carrying a -d body. Harmless on GETs.
+
+# Enable APIs FIRST — addFirebase below needs firebase.googleapis.com already on.
+gcloud services enable --project="$PROJECT_ID" \
+  firebase.googleapis.com firestore.googleapis.com firebasedatabase.googleapis.com \
+  firebaserules.googleapis.com identitytoolkit.googleapis.com eventarc.googleapis.com \
+  iam.googleapis.com run.googleapis.com cloudscheduler.googleapis.com \
+  cloudtasks.googleapis.com secretmanager.googleapis.com artifactregistry.googleapis.com \
+  firebasestorage.googleapis.com storage.googleapis.com pubsub.googleapis.com
+
+# Attach Firebase (REST — works even when the firebase CLI token is stale).
+# ⚠ ALWAYS brace variables followed by a colon: in zsh, $PROJECT_ID:addFirebase
+# triggers the `:a` (absolute-path) parameter modifier and silently mangles the URL
+# into an HTML-404-producing path. ${PROJECT_ID}: is safe.
+# ⚠ If the project-ID form errors, retry with the PROJECT NUMBER — on fresh projects
+# the ID form has been seen to fail where the number form succeeds.
+curl -sf -X POST "${AUTH[@]}" \
+  "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}:addFirebase" \
+|| curl -sf -X POST "${AUTH[@]}" \
+  "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_NUMBER}:addFirebase"
+
+# addFirebase is async — poll until state=ACTIVE before continuing (≤ ~2 min):
+until curl -s "${AUTH[@]}" "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID" \
+  | python3 -c "import json,sys; exit(0 if json.load(sys.stdin).get('state')=='ACTIVE' else 1)"; do
+  sleep 10
+done
+```
+
+### 1.3 Firestore, Realtime Databases, Auth, default bucket
+
+```bash
+# Firestore native — LOCATION IS IRREVERSIBLE. nam5 (US multi-region) / eur3 (EU).
+gcloud firestore databases create --project="$PROJECT_ID" \
+  --location=nam5 --type=firestore-native
+# Record firestore_location in the state file — tfvars needs it to match EXACTLY.
+
+# Default RTDB instance
+curl -sf -X POST "${AUTH[@]}" -H "Content-Type: application/json" \
+  "https://firebasedatabase.googleapis.com/v1beta/projects/$PROJECT_ID/locations/$REGION/instances?databaseId=$PROJECT_ID-default-rtdb" \
+  -d '{"type":"DEFAULT_DATABASE"}'
+
+# Four additional RTDB instances (plugin / integrations / demo / notifications)
+for name in plugin integrations demo notifications; do
+  curl -sf -X POST "${AUTH[@]}" -H "Content-Type: application/json" \
+    "https://firebasedatabase.googleapis.com/v1beta/projects/$PROJECT_ID/locations/$REGION/instances?databaseId=$PROJECT_ID-$name" \
+    -d '{"type":"USER_DATABASE"}'
+done
+# Record all five URLs (https://<databaseId>.firebaseio.com) in the state file.
+
+# Firebase Auth (Identity Platform)
+curl -sf -X POST "${AUTH[@]}" \
+  "https://identitytoolkit.googleapis.com/v2/projects/$PROJECT_ID/identityPlatform:initializeAuth" -d '{}'
+
+# ⚠ VERIFY it actually initialized — `curl -sf` swallows failures, and a silently
+# failed initializeAuth surfaces much later as a confusing Phase 2.3 import failure
+#. Expect HTTP 200 with a config JSON:
+curl -s -o /dev/null -w "%{http_code}\n" "${AUTH[@]}" \
+  "https://identitytoolkit.googleapis.com/admin/v2/projects/$PROJECT_ID/config"
+# 200 → initialized. 404 (CONFIGURATION_NOT_FOUND) → NOT initialized; re-run
+# initializeAuth. Record the outcome — Phase 2.3's import step is conditional on it.
+
+# Default storage bucket. ⚠ New projects get <project>.firebasestorage.app,
+# NOT <project>.appspot.com — record the ACTUAL name; tfvars must set it explicitly.
+curl -sf -X POST "${AUTH[@]}" \
+  "https://firebasestorage.googleapis.com/v1beta/projects/$PROJECT_ID/defaultBucket"
+
+# ⚠ FALLBACK: on some fresh projects the POST above fails on every
+# variant tried — seen as both 404s AND 400 INVALID_ARGUMENT. Creating App Engine
+# provisions the default bucket instead (as <project>.appspot.com — App Engine region
+# choice is PERMANENT, match $REGION):
+#   gcloud app create --region=us-central --project="$PROJECT_ID"
+# ⚠ The App-Engine-created bucket is NOT automatically linked to Firebase Storage —
+# the GET on defaultBucket keeps 404ing until you link it explicitly:
+#   curl -sf -X POST "${AUTH[@]}" \
+#     "https://firebasestorage.googleapis.com/v1beta/projects/$PROJECT_ID/buckets/${PROJECT_ID}.appspot.com:addFirebase" -d '{}'
+# Then confirm with a GET on defaultBucket and record the ACTUAL bucket name.
+```
+
+### 1.4 Verify + copy the signed image
+
+Verify **against Velt's registry, before copying** (signatures attach to the digest in
+the source repo), then copy by digest into the customer's own Artifact Registry:
+
+```bash
+IMAGE_BY_DIGEST=$(python3 -c "import json;print(json.load(open('manifest.json'))['backend']['imageByDigest'])")
+
+cosign verify \
+  --certificate-identity-regexp 'https://github.com/.*/shared-firebase-function/\.github/workflows/container-release\.yml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "$IMAGE_BY_DIGEST"
+# MUST print Verified OK. If it fails, STOP — do not deploy an unverifiable image.
+
+gcloud artifacts repositories create velt --project="$PROJECT_ID" \
+  --repository-format=docker --location="$REGION"
+gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+
+LOCAL_IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/velt/velt-functions:$(python3 -c "import json;print(json.load(open('manifest.json'))['selfHostVersion'])")"
+
+# Preferred: registry-to-registry copy — digest-preserving, no multi-GB round-trip
+# through the local machine, no architecture pitfalls (`brew install crane`):
+crane copy "$IMAGE_BY_DIGEST" "$LOCAL_IMAGE"
+
+# Fallback (no crane): docker pull/tag/push. ⚠ The image is linux/amd64-only — on an
+# Apple Silicon / arm64 host a bare `docker pull <digest>` fails with "no matching
+# manifest for linux/arm64". Always pass the platform explicitly:
+docker pull --platform linux/amd64 "$IMAGE_BY_DIGEST"
+docker tag "$IMAGE_BY_DIGEST" "$LOCAL_IMAGE"
+docker push "$LOCAL_IMAGE"
+
+# Confirm the pushed digest matches the manifest digest, then pin BY DIGEST:
+gcloud artifacts docker images describe "$LOCAL_IMAGE" --format="value(image_summary.digest)"
+```
+
+Record `artifacts.imageRef` in the state file as
+`<local repo path>@<digest>`. Terraform gets the digest form, never the tag.
+
+### 1.5 Vulnerability-scan the image copy (operator's infosec policy)
+
+**Ask the operator whether their organization requires vulnerability scanning of
+third-party images before deployment** (most enterprises do; the AWS equivalent is
+ECR scan-on-push). If yes, run it now against THEIR registry copy and get their
+sign-off before Phase 2; a finding dispute discovered mid-deploy is far more
+expensive than one found here.
+
+GCP-native flow (Artifact Analysis): either enable auto-scan-on-push in the
+customer project (each pushed image version is scanned automatically, ~$0.26/image):
+
+```bash
+gcloud services enable containerscanning.googleapis.com --project="$PROJECT_ID"
+# then push (1.4) and read results once analysis completes:
+gcloud artifacts docker images list-vulnerabilities "$LOCAL_IMAGE" --project="$PROJECT_ID"
+```
+
+or run a one-shot on-demand scan (no per-project API cost surprises; ~2–4 min on
+this image):
+
+```bash
+gcloud services enable ondemandscanning.googleapis.com --project="$PROJECT_ID"
+SCAN=$(gcloud artifacts docker images scan "$LOCAL_IMAGE" --remote \
+  --project="$PROJECT_ID" --quiet --format="value(response.scan)")
+# --quiet matters: the first run installs gcloud's local-extract component and
+# otherwise hangs forever on an interactive Y/n prompt.
+gcloud artifacts docker images list-vulnerabilities "$SCAN" --project="$PROJECT_ID"
+```
+
+If the org routes all third-party images through a central scanner (ECR, Harbor,
+Prisma, …), hand their infosec team the image digest plus Velt's signed SBOM; it is
+attached to the image as a cosign SPDX attestation and verifiable offline:
+
+```bash
+cosign verify-attestation --type spdxjson \
+  --certificate-identity-regexp 'https://github.com/.*/shared-firebase-function/\.github/workflows/container-release\.yml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "$IMAGE_BY_DIGEST" | python3 -c "import json,sys,base64;print(base64.b64decode(json.load(sys.stdin)['payload']).decode())" > velt-sbom.spdx.json
+```
+
+**Setting expectations (show the operator):** a full Node.js runtime image will
+never scan clean. Findings cluster as (a) Debian base-OS packages with **no fix
+available** upstream (the majority of CRITICAL/HIGH findings are this class);
+(b) npm/application findings, Velt's release gate blocks on fixable CRITICAL/HIGH.
+**Decision rule:** compare your scan's CRITICAL/HIGH findings against the release's
+known-findings list, which ships inside the **signed manifest** as
+`backend.knownFindings` (each entry: `{id, package, severity, fixAvailable}`):
+
+```bash
+python3 -c "import json;print(json.dumps(json.load(open('manifest.json'))['backend'].get('knownFindings','ABSENT'),indent=2))"
+```
+
+Findings in that list = accepted risk, proceed on operator sign-off; a CRITICAL/HIGH
+NOT in the list = stop and contact Velt before deploying. If `knownFindings` is
+missing or empty, fall back to the manifest's `releaseNotes` URL; if that is also
+unavailable, present the raw findings to the operator for judgment (unfixable
+Debian base-OS packages are the expected class) and record their explicit decision.
+Record the scan result reference and the operator's decision in the state file
+(`humanSteps.infosecScan: done`).
+
+**Verify (phase gate):** Firestore ACTIVE; 5 RTDB instances ACTIVE
+(`curl -sf "${AUTH[@]}" https://firebasedatabase.googleapis.com/v1beta/projects/$PROJECT_ID/locations/-/instances`);
+Identity Platform probe outcome recorded (200 vs 404, drives the Phase 2.3 import);
+default bucket name recorded; cosign Verified OK captured; pushed digest ==
+manifest digest; infosec scan done + signed off (or operator explicitly waived it).
+Mark `1-project-bootstrap: done`.
+
+---
+
+## Phase 2: Backend deployment (Terraform)
+
+### 2.1 Download + verify the backend module archive
+
+The manifest's `backend.moduleRef` is a self-contained archive: `terraform/` (the
+deployment blueprint; its `README.md` is the authoritative variable reference) and the
+precompiled `functions/lib/` (the deployment-profiles CLI that Terraform runs; no npm
+install or build needed, only Node ≥ 20). Always use this guide from the Velt docs
+site (or your current copy), not any snapshot that may ship inside an older archive.
+
+```bash
+MODULE_REF=$(python3 -c "import json;print(json.load(open('manifest.json'))['backend']['moduleRef'])")
+MODULE_SHA=$(python3 -c "import json;print(json.load(open('manifest.json'))['backend']['moduleSha256'])")
+oras pull -o . "$MODULE_REF"                     # writes velt-backend-module-<version>.tar.gz
+MODULE_TAR=$(ls velt-backend-module-*.tar.gz)
+echo "$MODULE_SHA  $MODULE_TAR" | shasum -a 256 -c -   # MUST print OK — hard-fail otherwise
+export MODULE_DIR="$(pwd)/velt-backend-module"   # exported: Phase 5.1's config generator reads it from the environment
+mkdir -p "$MODULE_DIR" && tar -xzf "$MODULE_TAR" -C "$MODULE_DIR"
+cd "$MODULE_DIR/terraform"
+# Record artifacts.moduleDir in the state file.
+```
+
+⚠ **Never run Terraform in a directory that already carries state from another
+install** (a reused module dir, or a checked-out source tree that may hold live
+state for a different project). Foreign state turns a fresh install into a
+destroy-and-recreate plan against the other project. Always extract into a fresh
+`MODULE_DIR`; if `terraform plan` shows ANY destroys on a fresh project, stop , 
+you are on the wrong state.
+
+### 2.2 tfvars
+
+Write `velt.auto.tfvars` (keep it in the operator's config repo):
+
+```hcl
+project_id                     = "<PROJECT_ID>"
+region                         = "<REGION>"
+velt_image                     = "<artifacts.imageRef — the BY-DIGEST ref>"
+profile                        = "<PROFILE>"
+opt_in_modules                 = [<OPT_IN_MODULES>]
+
+firebase_database_url          = "https://<PROJECT_ID>-default-rtdb.firebaseio.com"
+velt_plugin_database_url       = "https://<PROJECT_ID>-plugin.firebaseio.com"
+velt_integrations_database_url = "https://<PROJECT_ID>-integrations.firebaseio.com"
+velt_demo_database_url         = "https://<PROJECT_ID>-demo.firebaseio.com"
+velt_notifications_db_instance = "<PROJECT_ID>-notifications"
+velt_cacheddata_url            = "https://pending.invalid"   # bootstrap — fed back in 2.5
+
+# THIS project's Firebase WEB API key (MANDATORY — the identitytoolkit
+# signInWithCustomToken exchange must hit this deployment's own Firebase Auth).
+# Fetch after Phase 1 enabled Firebase. NOTE: `api-keys list` does NOT populate
+# keyString — list the resource name, then
+# get-key-string it:
+#   KEY_NAME=$(gcloud services api-keys list --project="$PROJECT_ID" \
+#     --filter="displayName:'Browser key'" --format='value(name)' | head -1)
+#   gcloud services api-keys get-key-string "$KEY_NAME" --format='value(keyString)'
+# (any of the project's web API keys works — they are project-level; expect "AIza…")
+velt_firebase_web_api_key      = "<AIza… from the command above>"
+
+firestore_location             = "nam5"          # MUST match the Firestore DB location
+rtdb_location                  = "<REGION>"      # MUST match the RTDB instances' region
+# (rtdb_location also feeds VELT_RTDB_LOCATION at runtime: non-us-central1 RTDB
+# instances are only reachable at <instance>.<region>.firebasedatabase.app, and
+# the backend builds notification-hub URLs from this region.)
+firebase_storage_bucket        = "<the ACTUAL default bucket from Phase 1 — usually <PROJECT_ID>.firebasestorage.app>"
+
+# Console (frontend infra; the console backend functions always deploy)
+# velt_portal_url = the console's serving origin (CONSOLE_BASE from Phase 0.2) —
+# it drives CORS origin admission, magic-link URLs, and Identity Platform
+# authorized_domains. console_hosting_site_id only when CONSOLE_HOST=firebase-hosting
+# (leave "" for any other host; the module skips the Hosting site resource).
+# TIMING: if the operator has not yet answered CONSOLE_HOST/CONSOLE_BASE (Phase
+# 0.2), ASK NOW — before writing this file. Do not write a placeholder and defer
+# the question to the Phase 2.4 key-collection stop: velt_portal_url feeds env
+# vars on every service, so changing it after apply forces a broad re-apply
+#.
+console_hosting_site_id        = "<CONSOLE_SITE_ID or \"\">"
+velt_portal_url                = "<CONSOLE_BASE>"
+console_manage_identity_platform = true
+console_database_url           = "https://<PROJECT_ID>-sdktest.firebaseio.com"  # shared testing-key infra;
+console_storage_url            = "gs://<PROJECT_ID>-sdktest"                    # provision-cli creates these in Phase 3
+
+# min_instances_override      = 0   # EVALUATION ONLY — scale-to-zero, ~$0 idle
+```
+
+### 2.3 Static gates
+
+```bash
+terraform init
+terraform validate
+terraform plan   # review: service count follows the profile; NO resources outside $PROJECT_ID
+```
+
+If the plan fails naming a missing `VELT_*` variable or an unknown profile, that is the
+the module validates fail-closed. Fix the tfvars, do not work around it.
+
+Export these before ANY apply: the firebaserules provider calls route their quota
+through the billing project, and the later apply 403s without them:
+
+```bash
+export USER_PROJECT_OVERRIDE=true GOOGLE_BILLING_PROJECT="$PROJECT_ID"
+```
+
+⚠ **Identity Platform import (CONDITIONAL, key off the Phase 1.3 verify probe):**
+if the probe returned 200 (Auth initialized), the singleton config already exists and
+MUST be imported (creating it fails ALREADY_EXISTS). If it returned 404
+(`CONFIGURATION_NOT_FOUND`: initializeAuth never took), SKIP the import. The module
+creates the config from scratch, and importing a non-existent config fails:
+
+```bash
+terraform import 'google_identity_platform_config.console[0]' "$PROJECT_ID"
+```
+
+### 2.4 Three-pass apply
+
+Cloud Run refuses a revision that mounts a secret with no enabled version, so:
+containers first, seed, then services.
+
+```bash
+# PASS 1 — secret containers + IAM + Velt-only placeholders (~1 min)
+terraform apply -target=google_secret_manager_secret.required \
+                -target=google_secret_manager_secret_iam_member.runtime_accessor \
+                -target=google_secret_manager_secret_version.optional_placeholder
+
+# PASS 2 — seed every id in the secrets_to_seed output with a value, out-of-band
+# (secret material never enters Terraform state).
+# ⚠ THE OUTPUT LIST IS AUTHORITATIVE — the per-key notes below are illustrative and
+# vary by module version; seed exactly what the output lists, nothing more or less.
+terraform output -json secrets_to_seed
+#   Value rules by key (apply to whichever keys the output actually lists):
+#   PLUGIN_CRYPTO_KEY : exactly 32 chars  → openssl rand -hex 16
+#   PLUGIN_CRYPTO_IV  : exactly 16 chars  → openssl rand -hex 8
+#   JWT_SECRET_KEY    : per-deployment    → openssl rand -base64 32 (NEVER share across installs)
+#   GOOGLE_GEN_AI_API_KEY : MANDATORY — a REAL Gemini key from the operator.
+#     Memory embeddings (knowledge indexing + /memory search) run on Gemini even on
+#     core/rest-api profiles; a placeholder fails at runtime with API_KEY_INVALID
+#    . Get one: https://aistudio.google.com/apikey
+#   ANTHROPIC_API_KEY : MANDATORY — a REAL Anthropic key from the operator
+#     (AI/agent execution paths). Get one: https://console.anthropic.com/settings/keys
+#   OPEN_AI_API_KEY :
+#     - ai/agents/recorder modules ENABLED → real key from the operator
+#     - modules NOT enabled but the key is still in the list (seen on 0.9.1 core) →
+#       seed a placeholder string (e.g. "placeholder-not-configured"). Cloud Run
+#       refuses to mount a secret with no enabled version, so listed = must be seeded
+#       even if no code path reads it. Do NOT invent real-looking values.
+#   SVIX_API_KEY / SVIX_API_KEY_US : N/A on self-host — advanced webhooks (the
+#     Svix-backed WebhookV2 feature) are not offered on self-hosted deployments.
+#     If listed by the output, seed a placeholder; do NOT provision a Svix account.
+openssl rand -base64 32| tr -d '\n' | gcloud secrets versions add JWT_SECRET_KEY --project="$PROJECT_ID" --data-file=-
+# (seed every remaining secrets_to_seed id the same way, per the value rules above)
+
+# PASS 3 — full apply (~10–15 min for a core profile; tell the operator)
+terraform apply
+```
+
+Expected retryables during pass 3: the Eventarc service-agent propagation error
+(wait ~5 min, re-apply) and expired-token 401s (refresh, re-apply). Both converge.
+
+### 2.5 Close the cacheddata bootstrap loop
+
+```bash
+terraform output -json service_urls | python3 -c "import json,sys;print(json.load(sys.stdin)['cacheddata'])"
+# → set velt_cacheddata_url in tfvars to this URL, then:
+terraform apply          # picks the env change up on every service (~5–10 min)
+terraform plan           # MUST end: "No changes. Your infrastructure matches the configuration."
+```
+
+Save `terraform output -json service_urls > service-urls.json` and record the path in
+the state file (Phase 4 and the final report use it).
+
+### 2.6 Backend smoke tests
+
+```bash
+VALIDATE_URL=$(python3 -c "import json;print(json.load(open('service-urls.json'))['validateclient'])")
+CACHED_URL=$(python3 -c "import json;print(json.load(open('service-urls.json'))['cacheddata'])")
+
+# callable envelope (inner app-level error is EXPECTED — no workspace exists yet)
+curl -s -X POST "$VALIDATE_URL" -H 'Content-Type: application/json' -d '{"data":{"apiKey":"smoke"}}'
+#   → HTTP 200 {"result": ...}
+
+# http kind — express routing (400 INVALID_ARGUMENT expected for an empty payload)
+curl -s -o /dev/null -w "%{http_code}\n" -X POST "$CACHED_URL" -H 'Content-Type: application/json' -d '{}'
+#   → 400
+```
+
+**Verify (phase gate):** all services Ready=True
+(`gcloud run services list --project="$PROJECT_ID" | grep -c False` → 0); final plan
+converged ("No changes"); both smokes return the expected envelopes;
+`velt-console-config.json` + `console-firebase.json` were emitted next to the module.
+Mark `2-backend: done`.
+
+---
+
+## Phase 3: First-workspace bootstrap (provision-cli)
+
+A freshly deployed backend has no owner. This CLI mints the first workspace, a
+testing API key, and the first production API key **with its real per-workspace
+infrastructure**. Run it ONCE.
+
+```bash
+# Short-lived key for the runtime SA (delete immediately after — step below).
+# ⚠ Host path: use a directory Docker actually shares into its VM (macOS Docker
+# Desktop / colima do NOT share host /tmp by default — the mount silently arrives
+# empty and the CLI fails with "SA key not found"). $HOME/velt-provision-keys is safe.
+KEYDIR="$HOME/velt-provision-keys" && mkdir -p "$KEYDIR"
+gcloud iam service-accounts keys create "$KEYDIR/sa.json" \
+  --iam-account="velt-functions-runtime@$PROJECT_ID.iam.gserviceaccount.com" --project="$PROJECT_ID"
+
+# --entrypoint node is REQUIRED: the image's default entrypoint is the
+# functions-framework launcher, which fail-louds on a missing FUNCTION_TARGET
+# before your command ever runs.
+# --platform linux/amd64 is REQUIRED on arm64 hosts (Apple Silicon): the image is
+# amd64-only; without the flag the run fails at pull. Emulated execution is fine —
+# the CLI is I/O-bound.
+docker run --rm --entrypoint node --platform linux/amd64 \
+  -e GCLOUD_PROJECT="$PROJECT_ID" \
+  -e PROJECT_NUMBER="<project number from state file>" \
+  -e FIREBASE_CONFIG="{\"projectId\":\"$PROJECT_ID\",\"databaseURL\":\"https://$PROJECT_ID-default-rtdb.firebaseio.com\",\"storageBucket\":\"<default bucket>\"}" \
+  -e VELT_PLUGIN_DATABASE_URL="https://$PROJECT_ID-plugin.firebaseio.com" \
+  -e VELT_INTEGRATIONS_DATABASE_URL="https://$PROJECT_ID-integrations.firebaseio.com" \
+  -e VELT_DEMO_DATABASE_URL="https://$PROJECT_ID-demo.firebaseio.com" \
+  -e VELT_NOTIFICATIONS_DB_INSTANCE="$PROJECT_ID-notifications" \
+  -e VELT_CACHEDDATA_URL="<cacheddata URL>" \
+  -e VELT_HAS_PRODUCTION=true \
+  -e CONSOLE_DATABASE_URL="https://$PROJECT_ID-sdktest.firebaseio.com" \
+  -e CONSOLE_STORAGE_URL="gs://$PROJECT_ID-sdktest" \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/keys/sa.json \
+  -v "$KEYDIR/sa.json":/keys/sa.json:ro \
+  "<artifacts.imageRef>" \
+  lib/deployment-profiles/provision-cli.js \
+    --owner-email "<OWNER_EMAIL>" \
+    --workspace-name "<WORKSPACE_NAME>" \
+    --admin-emails "<ADMIN_EMAILS>" \
+    --allowed-domains "<APP_DOMAINS>" \
+    > bootstrap-result.json
+# stdout carries ONLY the result JSON (progress goes to stderr) — the redirect captures it.
+
+# CLEAN UP THE KEY (both sides) as soon as the run ends:
+gcloud iam service-accounts keys list --iam-account="velt-functions-runtime@$PROJECT_ID.iam.gserviceaccount.com" --project="$PROJECT_ID"
+gcloud iam service-accounts keys delete <KEY_ID> --iam-account="velt-functions-runtime@$PROJECT_ID.iam.gserviceaccount.com" --project="$PROJECT_ID" --quiet
+rm -rf "$KEYDIR"
+```
+
+Operational notes:
+
+- **Mount the SA key under a dedicated path like `/keys`**: mounting under `/tmp`
+  inside the container fails oddly (and see the host-side `/tmp` sharing warning
+  above, both sides of the mount have `/tmp` traps).
+- **Expect a long "silent but busy" stretch** after progress stops: composite-index
+  creation for the new databases runs in-process and the CLI exits only when it
+  drains. Wall clock is typically tens of minutes and can exceed two hours , 
+  index build time varies with Firestore load and is not a hang. Tell the operator
+  up front; do not kill it. (Poll `gcloud firestore operations list --database=<storeDbId>`
+  in another shell if you want visible progress.)
+- The result JSON goes to stdout, but **stray log lines may leak into it**, so do not
+  assume the captured file is pure JSON. Extract the LAST top-level JSON object
+  (brace-match from the final `"schemaVersion": 1` occurrence) into
+  `bootstrap-result.json` before parsing. Its exact shape (`schemaVersion: 1`):
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "workspaceId": "…",            // with workspaceAuthToken = the x-velt-workspace-id /
+  "workspaceAuthToken": "…",     //   x-velt-auth-token REST header pair
+  "testingApiKey": "…",
+  "testingAuthToken": "…",       // testing key auth token (API tests / console playground)
+  "productionApiKey": "…",       // the key the customer's app uses
+  "productionAuthToken": "…",
+  "firebaseConfig": { … },       // the production key's provisioned infra
+  "planInfo": { … },
+  "adminEmails": [ … ],
+  "productionStoreDb": {         // converge report — exit 0 implies both flags true
+    "storeDbId": "…",
+    "metadataSeeded": true,
+    "compositeIndexesConverged": true
+  },
+  "sharedTestInfra": { "databaseUrl": "…", "storageBucket": "…", "storeDbId": "…" }  // absent with --skip-test-infra
+}
+```
+
+  **Move it to the operator's secret store**; record only its location in the state
+  file.
+
+**Verify (phase gate):** exit 0; result JSON has non-empty workspace id, testing
+key, and production key; `productionStoreDb.compositeIndexesConverged` and
+`productionStoreDb.metadataSeeded` are both `true` when present. **Still verify
+the production DB's composite indexes and apiKey metadata doc below**. Treat
+those checks as defense-in-depth even when the CLI reports converge success.
+
+Confirm the production store DB's composite-index count matches the `sdktest`
+database (the CLI awaits and fail-louds the sdktest pass; use it as ground truth):
+
+```bash
+STORE_DB=$(python3 -c "import json;print(json.load(open('bootstrap-result.json'))['firebaseConfig']['storeDbId'])")
+EXPECTED=$(gcloud firestore indexes composite list --project="$PROJECT_ID" --database=sdktest --format="value(name)" | wc -l)
+ACTUAL=$(gcloud firestore indexes composite list --project="$PROJECT_ID" --database="$STORE_DB" --format="value(name)" | wc -l)
+echo "prod DB $ACTUAL / expected $EXPECTED"
+# If ACTUAL < EXPECTED, re-run the pass via the deployed handler (idempotent —
+# existing indexes 409 as success; takes ~10 s per index, so ~20-25 min for a full pass):
+curl -s -X POST "$(python3 -c "import json;print(json.load(open('service-urls.json'))['documentmigrationhandler'])")" \
+  -H 'Content-Type: application/json' \
+  -d "{\"eventType\":\"create_firestore_indexes\",\"dbId\":\"$STORE_DB\"}"
+# → 200 when complete; 500 means a create failed — re-run until 200, then re-count.
+```
+
+**Also verify the apiKey metadata doc exists in the production store DB.** Security
+rules `get()` this doc to resolve the effective access type; a missing doc makes
+the rules deny everything (SDK: "Documents provided are all denied"):
+
+```bash
+PROD_KEY=$(python3 -c "import json;print(json.load(open('bootstrap-result.json'))['productionApiKey'])")
+TOKEN=$(gcloud auth print-access-token)
+DOC_URL="https://firestore.googleapis.com/v1/projects/$PROJECT_ID/databases/$STORE_DB/documents/apiKey/$PROD_KEY"
+curl -s "$DOC_URL" -H "Authorization: Bearer $TOKEN"
+# → must return fields.metadata.defaultDocumentAccessType = "public".
+# If it 404s, create it (byte-identical to what provisioning should have written):
+curl -s -X PATCH "$DOC_URL?updateMask.fieldPaths=metadata" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"fields":{"metadata":{"mapValue":{"fields":{"defaultDocumentAccessType":{"stringValue":"public"}}}}}}'
+```
+
+Then prove the mint end-to-end:
+
+```bash
+PROD_KEY=$(python3 -c "import json;print(json.load(open('bootstrap-result.json'))['productionApiKey'])")
+VALIDATE_URL=$(python3 -c "import json;print(json.load(open('service-urls.json'))['validateclient'])")
+# The payload needs a full `user` OBJECT (top-level userId alone returns an app-level error):
+curl -s -X POST "$VALIDATE_URL" -H 'Content-Type: application/json' -H "Origin: https://<first APP_DOMAIN>" \
+  -d "{\"data\":{\"apiKey\":\"$PROD_KEY\",\"user\":{\"userId\":\"smoke-user\",\"userSnippylyId\":\"smoke-user\",\"email\":\"smoke@example.com\"}}}"
+# → HTTP 200 with a Firebase custom token whose claims carry the provisioned firebaseConfig.
+# With min_instances_override = 0 the first hit is a COLD START — retry up to ~5× with
+# 15 s backoff before treating an internal error as real.
+```
+
+Mark `3-workspace: done`.
+
+---
+
+## Phase 4: Console
+
+The backend apply already produced the two artifacts the console needs:
+`velt-console-config.json` (runtime config: the project's real `firebaseConfig`, every
+service URL in `functionUrls`, the `sendLoginLink`/`aiChat` endpoints) and
+`console-firebase.json` (Hosting config with the SPA rewrite).
+
+### 4.1 Fetch + verify the console bundle (pins from the manifest)
+
+```bash
+BUNDLE_REF=$(python3 -c "import json;print(json.load(open('manifest.json'))['console']['bundleRef'])")
+BUNDLE_SHA=$(python3 -c "import json;print(json.load(open('manifest.json'))['console']['sha256'])")
+oras pull -o . "$BUNDLE_REF"                     # writes console-dist-<version>.tar.gz
+BUNDLE_TAR=$(ls console-dist-*.tar.gz)
+echo "$BUNDLE_SHA  $BUNDLE_TAR" | shasum -a 256 -c -    # MUST print OK — hard-fail otherwise
+mkdir -p console-bundle && tar -xzf "$BUNDLE_TAR" -C console-bundle
+```
+
+### 4.2 Stage + deploy to the host the operator chose (`CONSOLE_HOST`, Phase 0.2)
+
+Stage first, identical for every host:
+
+```bash
+DEPLOY_DIR=$(mktemp -d)
+cp -R console-bundle "$DEPLOY_DIR/dist"                    # the folder containing index.html
+cp "$MODULE_DIR/terraform/velt-console-config.json" "$DEPLOY_DIR/dist/velt-console-config.json"
+
+# CRITICAL check before deploying: firebaseConfig.authDomain in the runtime config must
+# be the domain the console is SERVED from (the CONSOLE_BASE hostname), NOT
+# <project>.firebaseapp.com. Cross-origin auth handlers break sign-in silently under
+# modern browser storage partitioning. Patch the JSON if needed.
+python3 -c "import json;print(json.load(open('$DEPLOY_DIR/dist/velt-console-config.json'))['firebaseConfig'].get('authDomain'))"
+```
+
+Non-negotiable serving rules for ANY console host (each one, if violated, breaks
+the console at runtime):
+
+| Rule | Why |
+|---|---|
+| SPA fallback: every unknown path serves `dist/index.html` (200, not 301/404) | the console is a client-routed SPA; deep links like `/dashboard/config` must load the app |
+| `velt-console-config.json` served at the root with `Cache-Control: no-cache` | runtime config; config changes must take effect without a bundle redeploy |
+| HTTPS on the exact `CONSOLE_BASE` origin | it is baked into CORS admission, magic-link URLs, OAuth origins, and Identity Platform authorized domains |
+| `Content-Type: text/javascript` on `.js`, correct types on other assets | browsers refuse module scripts with wrong MIME |
+| `/__/auth/*` and `/__/firebase/*` reverse-proxied to `https://<PROJECT_ID>.firebaseapp.com` (Firebase Hosting hosts: automatic, no action) | the `authDomain` patch above makes the Firebase Auth SDK load its sign-in helper iframe/handler from the console's OWN domain; any host that isn't Firebase Hosting serves 404s there and Google sign-in dies silently |
+
+Then deploy per the operator's choice, **this was their decision; do not silently
+substitute another host**:
+
+- **Operator's existing static host / GCP-native stack** (e.g. GCS bucket + external
+  HTTPS LB + Cloud CDN, or Cloud Run): upload `$DEPLOY_DIR/dist/` with their tooling
+  (or provision the stack in this project if they asked you to), honoring the serving
+  rules above. On a GCS+LB setup the SPA fallback is the one that needs care: set the
+  backend bucket's `not_found_page` (`errorDocument`) to `index.html`, and note GCS
+  serves it with a 404 status, which browsers render fine but naive health checks
+  flag; probe `/` (200) rather than a deep link. A Google-managed cert on the LB
+  needs the operator's DNS record and can take 15–60 min to go ACTIVE after DNS
+  resolves. Start it early and continue Phase 5 in parallel. (If Phase 5 also
+  provisions a GCP-native host, share ONE LB across both surfaces: one IP, one
+  managed cert covering both hostnames, and a host-routed URL map with a backend
+  bucket per surface, this halves cert wait and IP/DNS churn.)
+
+  **The `/__/auth/*` proxy on a GCS+LB console host** (the serving rule above , 
+  GCS buckets can't serve these paths themselves):
+
+```bash
+# Internet NEG pointing at the project's firebaseapp.com origin, with a Host rewrite:
+gcloud compute network-endpoint-groups create firebase-auth-neg --global \
+  --network-endpoint-type=internet-fqdn-port --default-port=443 --project="$PROJECT_ID"
+gcloud compute network-endpoint-groups update firebase-auth-neg --global \
+  --add-endpoint="fqdn=${PROJECT_ID}.firebaseapp.com,port=443" --project="$PROJECT_ID"
+gcloud compute backend-services create firebase-auth-backend --global \
+  --load-balancing-scheme=EXTERNAL --protocol=HTTPS \
+  --custom-request-header="Host: ${PROJECT_ID}.firebaseapp.com" --project="$PROJECT_ID"
+gcloud compute backend-services add-backend firebase-auth-backend --global \
+  --network-endpoint-group=firebase-auth-neg --global-network-endpoint-group --project="$PROJECT_ID"
+# Then add path rules on the console host in the URL map (export → edit → import):
+# pathRules: /__/auth/* and /__/firebase/* → firebase-auth-backend.
+# ⚠ If Cloud CDN fronted the console BEFORE the rule existed, it has CACHED the 404s —
+# invalidate after importing: gcloud compute url-maps invalidate-cdn-cache <lb> --path "/__/*"
+# (a cache-busted curl, e.g. ?cb=$(date +%s), proves the rule works while stale
+# entries are still being purged).
+```
+- **Firebase Hosting site in this project** (only if the operator chose it) , 
+  `CONSOLE_BASE` becomes `https://<CONSOLE_SITE_ID>.web.app`; the Terraform-emitted
+  `console-firebase.json` already carries the SPA rewrite:
+
+```bash
+cp "$MODULE_DIR/terraform/console-firebase.json" "$DEPLOY_DIR/firebase.json"
+
+# Ensure the hosting site exists first. The REST form takes siteId as a QUERY PARAM
+# (a JSON-body siteId is rejected). Refresh the token — Phase 1's is hours stale by now:
+TOKEN=$(gcloud auth print-access-token)
+AUTH=(-H "Authorization: Bearer $TOKEN" -H "X-Goog-User-Project: $PROJECT_ID" -H "Content-Type: application/json")
+curl -s -X POST "${AUTH[@]}" \
+  "https://firebasehosting.googleapis.com/v1beta1/projects/$PROJECT_ID/sites?siteId=<CONSOLE_SITE_ID>" -d '{}'
+
+cd "$DEPLOY_DIR" && firebase deploy --only hosting --project "$PROJECT_ID"
+```
+
+If the firebase CLI rejects its stored token and interactive `firebase login --reauth`
+isn't possible, deploy non-interactively with a short-lived service account instead:
+mint an SA with `roles/firebasehosting.admin`, `export GOOGLE_APPLICATION_CREDENTIALS=<key.json>`,
+and run `npx --yes firebase-tools deploy --only hosting --project "$PROJECT_ID" --non-interactive`
+(delete the SA key immediately after, same hygiene as Phase 3).
+
+Also give `velt-console-config.json` a `no-cache` header if editing `firebase.json`
+(config changes then take effect without redeploying the bundle).
+
+**Custom (non-`web.app`) console domains, one extra step:** Terraform already
+authorizes the `velt_portal_url` hostname on Identity Platform
+(`console_manage_identity_platform = true` derives `authorized_domains` from it), but
+verify after apply: Identity Platform → Settings → Authorized domains must list the
+`CONSOLE_BASE` hostname, or Google sign-in will reject the origin.
+
+### 4.3 Google sign-in (human moment #2: cannot be automated)
+
+You should have issued this ask back in Phase 0 (all its values are known up front) , 
+if so, just collect the id/secret now. If not, issue it verbatim:
+
+> **Operator ask (verbatim):** "Open
+> `https://console.cloud.google.com/apis/credentials?project=<PROJECT_ID>` → Create
+> Credentials → OAuth client ID → Web application. Authorized JavaScript origins:
+> `<CONSOLE_BASE>`. Authorized redirect URIs:
+> `https://<PROJECT_ID>.firebaseapp.com/__/auth/handler` AND
+> `<CONSOLE_BASE>/__/auth/handler`. Save, then paste me the client
+> id and secret."
+
+Feed them to Terraform and apply (enables the `google.com` provider on Identity
+Platform):
+
+```bash
+# add to velt.auto.tfvars:
+#   console_google_oauth_client_id     = "<id>"
+#   console_google_oauth_client_secret = "<secret>"
+terraform apply
+```
+
+(Email-link sign-in is already enabled by `console_manage_identity_platform = true`,
+but the magic-link email sends via Customer.io, without a real `CUSTOMER_IO_API_KEY`
+secret version it fails at send time. Google OAuth is the primary path.)
+
+**Verify (phase gate):**
+
+```bash
+HOST="<CONSOLE_BASE>"     # e.g. https://<CONSOLE_SITE_ID>.web.app for firebase-hosting
+curl -sf "$HOST/velt-console-config.json" | python3 -m json.tool > /dev/null && echo "config OK"
+curl -sf "$HOST/dashboard/config" | grep -q "app-root" && echo "SPA rewrite OK"
+# CORS: the backend must admit the console origin
+curl -s -o /dev/null -w "%{http_code}\n" -X OPTIONS \
+  "$(python3 -c "import json;print(json.load(open('service-urls.json'))['consolehandler'])")" \
+  -H "Origin: $HOST" -H "Access-Control-Request-Method: POST"    # → 204
+```
+
+Mark `4-console: done`. (The sign-in itself is proven in Phase 6.)
+
+---
+
+## Phase 5: SDK on the customer's CDN
+
+May run in parallel with Phase 4. Choose the SDK version: the manifest's
+`sdk.testedVersion` unless the operator pins another one, anything `>= sdk.minVersion`
+is supported. **The version must equal what the app's installed wrapper targets**
+(`npm ls @veltdev/client @veltdev/react` in the app).
+
+The release registry carries the testedVersion's SDK files as `sdk.bundleRef` (the
+pristine npm tarball, sha256-pinned by the signed manifest), prefer it:
+
+```bash
+VELT_VERSION=$(python3 -c "import json;print(json.load(open('manifest.json'))['sdk']['testedVersion'])")
+SDK_REF=$(python3 -c "import json;print(json.load(open('manifest.json'))['sdk']['bundleRef'])")
+SDK_SHA=$(python3 -c "import json;print(json.load(open('manifest.json'))['sdk']['sha256'])")
+WORKDIR=$(mktemp -d)
+oras pull -o "$WORKDIR" "$SDK_REF"               # writes veltdev-sdk-<version>.tgz
+cd "$WORKDIR"
+SDK_TGZ=$(ls veltdev-sdk-*.tgz)
+echo "$SDK_SHA  $SDK_TGZ" | shasum -a 256 -c -   # MUST print OK — hard-fail otherwise
+tar -xzf "$SDK_TGZ"
+mkdir -p "staging/lib/sdk@$VELT_VERSION"
+cp -R package/. "staging/lib/sdk@$VELT_VERSION/"
+```
+
+If the operator pinned a version OTHER than `testedVersion`, the registry has no
+artifact for it, fetch that version from npm instead (same staging steps):
+`npm pack "@veltdev/sdk@$VELT_VERSION" && tar -xzf veltdev-sdk-*.tgz`.
+
+Deploy `staging/` to the host the operator chose in `SDK_HOST` (Phase 0.2, **this was
+their decision; do not silently substitute another host**):
+
+- **Operator's existing CDN / static host** (the common case): upload `staging/`
+  preserving the `lib/sdk@<version>/` layout, using their normal upload tooling
+  (`aws s3 sync`, `rsync`, `wrangler`, CI job, …). If you don't have their upload
+  credentials, hand them the `staging/` directory plus the serving-rules table below
+  as a checklist and wait for the URL.
+- **GCS + external HTTPS LB + Cloud CDN in this project**: recipe below. Start it as EARLY as Phase 5 allows: the managed cert is the
+  long pole (15–60 min after the DNS record is visible), and the DNS record is an
+  operator action (hand them the IP the moment it's reserved; feasibility was
+  confirmed in Phase 0.2).
+
+```bash
+SDK_DOMAIN=<hostname from CDN_BASE, e.g. sdk.acme.com>
+BUCKET="$PROJECT_ID-velt-sdk"
+
+gcloud storage buckets create "gs://$BUCKET" --project="$PROJECT_ID" --location="$REGION"
+gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" \
+  --member=allUsers --role=roles/storage.objectViewer
+gcloud storage cp -r staging/* "gs://$BUCKET/"
+# Set the serving metadata on every .js (content-type + cache-control):
+gcloud storage objects update "gs://$BUCKET/lib/**.js" \
+  --content-type="text/javascript" \
+  --cache-control="public, max-age=31536000, immutable"
+
+gcloud compute addresses create velt-sdk-ip --global --project="$PROJECT_ID"
+gcloud compute addresses describe velt-sdk-ip --global --project="$PROJECT_ID" \
+  --format="value(address)"    # → HAND THIS TO THE OPERATOR NOW: A record for $SDK_DOMAIN
+
+# ⚠ cache-mode MUST be USE_ORIGIN_HEADERS: the default (CACHE_ALL_STATIC) silently
+# REWRITES the client-facing Cache-Control to max-age=3600, overriding the object
+# metadata you just set. The custom response header supplies ACAO
+# on every object without per-object CORS config.
+gcloud compute backend-buckets create velt-sdk-backend --gcs-bucket-name="$BUCKET" \
+  --enable-cdn --cache-mode=USE_ORIGIN_HEADERS \
+  --custom-response-header='Access-Control-Allow-Origin: *' --project="$PROJECT_ID"
+gcloud compute url-maps create velt-sdk-lb --default-backend-bucket=velt-sdk-backend --project="$PROJECT_ID"
+gcloud compute ssl-certificates create velt-sdk-cert --domains="$SDK_DOMAIN" --global --project="$PROJECT_ID"
+gcloud compute target-https-proxies create velt-sdk-proxy \
+  --url-map=velt-sdk-lb --ssl-certificates=velt-sdk-cert --project="$PROJECT_ID"
+gcloud compute forwarding-rules create velt-sdk-fr --global --address=velt-sdk-ip \
+  --target-https-proxy=velt-sdk-proxy --ports=443 --project="$PROJECT_ID"
+
+# Poll the cert until ACTIVE (only starts progressing once the DNS record is visible;
+# FAILED_NOT_VISIBLE in the meantime is harmless — it keeps retrying on its own):
+gcloud compute ssl-certificates describe velt-sdk-cert --global --project="$PROJECT_ID" \
+  --format="value(managed.status)"
+# After ACTIVE, first requests may still throw TLS errors for a few minutes while the
+# cert propagates to the edge — retry with backoff before diagnosing.
+```
+
+- **Firebase Hosting site in this project** (only if the operator chose it): create a
+  site and deploy, site id must be globally unique; `CDN_BASE` becomes
+  `https://<site-id>.web.app`:
+
+```bash
+TOKEN=$(gcloud auth print-access-token)
+AUTH=(-H "Authorization: Bearer $TOKEN" -H "X-Goog-User-Project: $PROJECT_ID" -H "Content-Type: application/json")
+curl -s -X POST "${AUTH[@]}" \
+  "https://firebasehosting.googleapis.com/v1beta1/projects/$PROJECT_ID/sites?siteId=<SDK_SITE_ID>" -d '{}'
+cat > "$WORKDIR/firebase.json" << 'EOF'
+{ "hosting": { "site": "<SDK_SITE_ID>", "public": "staging",
+  "headers": [ { "source": "**/*.js", "headers": [
+    { "key": "Access-Control-Allow-Origin", "value": "*" },
+    { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" } ] } ] } }
+EOF
+cd "$WORKDIR" && firebase deploy --only hosting --project "$PROJECT_ID"
+```
+
+Non-negotiable serving rules for ANY host (each one, if violated,
+breaks the SDK at runtime):
+
+| Rule | Why |
+|---|---|
+| Path is exactly `${CDN_BASE}/lib/sdk@<version>/velt.js`, all files flat in that dir, `@` literal | wrapper hard-codes the path shape; chunks resolve relative to `velt.js` |
+| `Access-Control-Allow-Origin` on every `.js` (app origin or `*`) | ES-module fetches are CORS-mode; this is the #1 failure mode |
+| `Content-Type: text/javascript` on `.js` | browsers refuse module scripts with wrong MIME |
+| HTTPS + no auth wall | browser fetches anonymously |
+| `Cache-Control: public, max-age=31536000, immutable` (recommended) | version-pinned path = cache-forever safe. ⚠ Verify the header **as served**, not just at the origin, because CDN layers can rewrite it (Cloud CDN's default cache mode caps it at 3600; see the recipe above) |
+
+### 5.1 Assemble the app's `selfHosted` config (deliverable: always produce this)
+
+Serving the SDK from the customer's CDN only moves the *code*; the SDK's **runtime
+endpoints** still default to Velt SaaS. The `config.selfHosted` object repoints every
+endpoint at the customer's own deployment, without it there is no zero-egress. Every
+value is already on disk from earlier phases; generate it, don't hand-type it:
+
+```bash
+cd <main working directory>   # where manifest.json / service-urls.json / the state file live
+# Fresh shell? Re-export the Phase 2.1 module dir first:
+#   export MODULE_DIR="$(pwd)/velt-backend-module"
+terraform -chdir="$MODULE_DIR/terraform" output -json enabled_modules > enabled-modules.json
+python3 - << 'PYEOF'
+import json
+urls    = json.load(open('service-urls.json'))
+modules = json.load(open('enabled-modules.json'))
+# firebaseConfig: the Terraform-EMITTED file inside $MODULE_DIR (NOT the
+# console-deployed copy, whose authDomain was patched to the console domain in Phase 4).
+import os
+fb = json.load(open(os.path.join(os.environ.get('MODULE_DIR', 'velt-backend-module'),
+                                 'terraform', 'velt-console-config.json')))['firebaseConfig']
+project = fb['projectId']
+
+cfg = {
+  # Fail-closed: any endpoint not explicitly injected resolves to an inert
+  # velt://self-hosted-disabled/* sentinel (zero egress) instead of Velt SaaS.
+  'strict': True,
+  # MUST be the resolved closure from Terraform (CLI output) — never hand-derive it;
+  # endpoints of modules missing from this list degrade to inert sentinels by design.
+  'deploymentProfile': modules,
+  'firebaseConfig': fb,
+  'firebaseNotificationsDatabaseURL': f'https://{project}-notifications.firebaseio.com',
+  'cloudFunction': {
+    # The strict-core set — all served by `core`-module services, always provisioned:
+    'validateClient':               urls['validateclient'],
+    'sdkProxy':                     urls['foldersapibe'] + '/v2/core/a',
+    'setEncryptedData':             urls['setencrypteddata'],   # single-region collapse of the x5 regional split
+    'getNotificationsForDocuments': urls['getnotificationsfordocuments'],
+    'getPlanDetails':               urls['getplandetails'],
+    'getAllowedDocuments':          urls['getalloweddocuments'],
+    'sa':                           urls['sa'],
+  },
+}
+# Module-gated endpoints — add ONLY when the service was provisioned (present in
+# service_urls). Undeployed ones need no entry: strict mode already inert-sentinels
+# them, and their modules are absent from deploymentProfile anyway.
+for cf_key, svc in [('chatgptCompletion', 'chatgptcompletion'),        # ai
+                    ('getIceServers', 'geticeservers'),                # huddle-webrtc
+                    ('whisperTranscription', 'whispertranscription')]: # recorder-media
+    if svc in urls:
+        cfg['cloudFunction'][cf_key] = urls[svc]
+# recorder-media's remaining endpoints (convertRecording / processRecording /
+# videoBackend / screenshot) sit behind SaaS URL-map paths whose self-host mapping
+# ships with the recorder deployment notes — consult Velt release notes if the
+# deployment includes recorder-media rather than guessing service names.
+# If tfvars set data_regions, mirror it VERBATIM as cfg['dataRegions'] ([] and null are
+# DIFFERENT fleets — never coalesce). If data_regions was never set, omit the key.
+
+json.dump(cfg, open('velt-selfhosted-config.json', 'w'), indent=2)
+print('wrote velt-selfhosted-config.json')
+PYEOF
+```
+
+Record the path as `artifacts.selfHostedConfigPath` in the state file. Point the app at
+it. `proxyDomain` is origin-only, and **always pin `version`**:
+
+```tsx
+import selfHosted from './velt-selfhosted-config.json';
+
+<VeltProvider apiKey="<production key from Phase 3>"
+  config={{ proxyDomain: "<CDN_BASE>", version: "<VELT_VERSION>", selfHosted }}>
+```
+
+(Vue/vanilla: `initVelt(apiKey, { proxyDomain, version, selfHosted })`.) If the app has
+a CSP, add `CDN_BASE` to `script-src` and remove `cdn.velt.dev`. Without `selfHosted`
+the SDK code loads from the CDN but every API call still goes to Velt SaaS; the Phase 6
+zero-egress audit would fail.
+
+**Verify (phase gate):**
+
+```bash
+# Fresh temp path — a fixed /tmp filename survives failed curls from earlier runs and
+# a stale file will pass `head` with the WRONG version banner:
+CHECK_JS=$(mktemp)
+curl -sS -D - -o "$CHECK_JS" "$CDN_BASE/lib/sdk@$VELT_VERSION/velt.js" -H "Origin: https://<APP_DOMAIN>" | head -20
+head -c 60 "$CHECK_JS"               # starts with: var SNIPPYLY_VERSION = '<version>';
+curl -s -o /dev/null -w "%{http_code}\n" "$CDN_BASE/lib/sdk@$VELT_VERSION/velt-comment.js"   # 200 — chunks uploaded too
+```
+
+Mark `5-sdk-cdn: done`.
+
+---
+
+## Phase 6: End-to-end acceptance (the payoff)
+
+Human moment #4: the operator (or you, with browser tooling) proves the full loop.
+
+**First, ASK the operator: "Do you have a test app (or a dev build of your real app)
+we can wire the SDK into?"** Do not silently spin up a synthetic page.
+
+- **They have one (preferred):** apply the Phase 5 changes there, swap the SDK
+  source to `proxyDomain` + pinned `version`, add the generated `selfHosted` object
+  and the production key, and run the checks below in THAT app. A real app also
+  exercises what a synthetic page can't: CSP headers, the bundler/framework wrapper
+  (`@veltdev/react` etc.), and the app's own auth flow.
+- **They don't:** create a minimal test page yourself (plain HTML, SDK loaded from
+  `CDN_BASE`, the same Phase 5 config, an identified test user + test document, the
+  comments + comment-tool components. Follow the SDK quickstart for the current
+  init shape) and serve it on a localhost port. Tell the operator it's a stand-in
+  and that the loop should be re-proven inside their app when one exists.
+
+Diagnostic rule either way: if comments misbehave, read the SDK's `sa` error
+telemetry (Cloud Run logs of `velt-sa`, which carries Firestore listener errors with
+index-creation links) BEFORE probing backend endpoints by hand. Hand-built curl
+calls to callable endpoints carry no Firebase ID token, so auth-gated endpoints
+return errors like "Api key not found" that look like product bugs but aren't
+.
+
+1. **Console sign-in:** open `<CONSOLE_BASE>`, sign in with Google
+   as `OWNER_EMAIL` → lands on the dashboard showing the bootstrapped workspace and
+   both API keys. (Admins are matched by email; the first sign-in with a seeded email
+   lands in the workspace.)
+2. **SDK loop:** open the app chosen above (with the Phase 5 config, `proxyDomain` +
+   `version` + the generated `selfHosted` object, and the production key),
+   DevTools → Network, filter `velt`:
+   - `velt.js` + chunks load from `CDN_BASE`, **nothing from `cdn.velt.dev`**;
+   - `window.Velt.version` === the pinned version;
+   - create a comment → it renders; the API calls in the Network tab go to the
+     customer's own `*.run.app` services.
+3. **Cross-surface proof:** the comment created in step 2 is visible in the console's
+   data browser (comments/documents view), SDK → customer backend → customer console,
+   one loop, zero Velt infrastructure.
+4. **Zero-egress audit:** across both browser sessions, the network log contains **no
+   request to any `velt.dev` or Velt-owned host** (no `cdn.velt.dev`,
+   `console.velt.dev`, `api.velt.dev`, Velt Sentry/analytics).
+
+**Verify (final gate):** all four pass. Mark `6-acceptance: done`.
+
+### Final report: deliver this to the operator
+
+- Console URL, and where `velt-console-config.json` lives.
+- Workspace id + where the bootstrap secrets are stored (testing key, production key,
+  REST header pair), plus the reminder that the production key's `allowedDomains` is
+  the SDK gate (managed in the console thereafter).
+- SDK CDN base + pinned version, and the app config snippet in use, **including the
+  full generated `selfHosted` config object** (`velt-selfhosted-config.json` contents
+  inline in the report; it contains no secrets: only public URLs, the web-app
+  firebaseConfig, and the module list). This is the artifact the customer's app team
+  actually needs to integrate.
+- Deployed self-host release version (from the manifest), profile + opt-in modules,
+  and the tfvars/state-file locations.
+- Anything skipped or degraded (e.g. email-link sign-in pending a Customer.io key;
+  optional modules not enabled), and any FAILED_PRECONDITION index warnings seen in
+  logs (report these to Velt, Velt uses them to keep indexes complete in future releases).
+
+### Upgrades (summary)
+
+A new self-host release = a new manifest. Diff the new manifest against
+`release` in the state file; re-run only the phases whose pins changed
+(backend → Phase 1.4 image copy + Phase 2 applies with the new module archive;
+console → Phase 4; SDK → Phase 5 into a NEW `lib/sdk@<version>/` folder, keeping the
+old one for instant rollback). The full agent-executable procedure (delta
+computation, compatibility fences for `sdk.minVersion` and console config schema,
+secrets-delta seeding, Terraform state carry-over, and per-component rollback
+anchors) is the companion [Upgrade guide](/self-hosting/full/gcp/upgrade).
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Any firebase*/identitytoolkit REST call → 403 `SERVICE_DISABLED` mentioning a quota project | Missing header | Add `X-Goog-User-Project: $PROJECT_ID` |
+| `gcloud artifacts docker images scan` hangs indefinitely with no output | First run wants to install the `local-extract` gcloud component and is waiting on a hidden interactive Y/n prompt | Always pass `--quiet` (or pre-install: `gcloud components install local-extract --quiet`) |
+| Image scan reports CRITICAL/HIGH findings | Expected for a full Node runtime image; most are unfixed Debian base-OS CVEs | Compare against the signed manifest's `backend.knownFindings` (Phase 1.5 decision rule); only NOT-listed findings are a stop-and-contact-Velt condition |
+| `gcloud` works but Terraform 401s | ADC ≠ CLI token | `gcloud auth application-default login` (or the 60-min `GOOGLE_OAUTH_ACCESS_TOKEN` fallback) |
+| `firebase` CLI "credentials no longer valid" | Separate token store from gcloud | `firebase login --reauth` (or use the REST equivalents shown in Phase 1) |
+| API enable fails `UREQ_PROJECT_BILLING_NOT_FOUND` | Billing not linked | Human moment #1 |
+| RTDB instance create → `Blaze plan required` | Billing not linked | Human moment #1 |
+| `addFirebase` fails on a fresh project | `firebase.googleapis.com` not yet enabled, or the project-ID form flaking | Enable APIs first (Phase 1.2 order); retry with the project NUMBER |
+| A `curl` to a `…/$VAR:someMethod` REST URL returns an HTML 404 | zsh parameter modifier: `$VAR:a…` is parsed as the `:a` (absolute path) modifier and the URL is silently mangled | Brace every variable followed by a colon: `${VAR}:someMethod` |
+| `defaultBucket` POST fails (404 OR 400 INVALID_ARGUMENT) on every variant | Fresh-project quirk | App Engine fallback in Phase 1.3 (`gcloud app create`), then link the bucket with `buckets/<bucket>:addFirebase` (also in 1.3); GET on defaultBucket 404s until linked |
+| `docker pull <digest>` → "no matching manifest for linux/arm64" | Image is linux/amd64-only; bare pull fails on Apple Silicon (may falsely succeed if a stale local cache has the layers) | `docker pull --platform linux/amd64`, or better `crane copy` (Phase 1.4) |
+| Managed cert stuck `FAILED_NOT_VISIBLE` | DNS record not created yet / not propagated; harmless, the cert keeps retrying on its own | Confirm the A record exists and resolves; cert goes ACTIVE 15–60 min after visibility. No LB-side action needed |
+| SDK hostname must change mid-run (zone turned out untouchable) | Phase 0.2 DNS feasibility check skipped or answer changed | Create a NEW managed cert for the new hostname, swap it onto the existing HTTPS proxy (`target-https-proxies update --ssl-certificates=<new>`), delete the old cert, update `CDN_BASE` in the state file; LB/bucket/IP all survive unchanged |
+| Cert just went ACTIVE but curl throws TLS/SSL errors | Edge propagation lag after activation | Retry with backoff for a few minutes before diagnosing |
+| Served `Cache-Control` ≠ the object metadata you set (e.g. `max-age=3600`) | Cloud CDN backend-bucket default cache mode `CACHE_ALL_STATIC` rewrites the client-facing header | `gcloud compute backend-buckets update <name> --cache-mode=USE_ORIGIN_HEADERS` |
+| provision-cli exits instantly, log mentions `FUNCTION_TARGET` | Image's default entrypoint is the functions-framework launcher | `--entrypoint node` on the `docker run` (Phase 3) |
+| provision-cli: SA key file empty/missing despite correct `-v` flag | Host path (e.g. `/tmp`) not shared into the Docker VM (macOS Docker Desktop / colima) | Mount from a shared dir, e.g. `$HOME/velt-provision-keys` |
+| `bootstrap-result.json` fails to parse | Stray log lines leaked into stdout around the result JSON | Extract the last top-level JSON object (brace-match from the final `"schemaVersion": 1`) |
+| First service calls return internal errors, then succeed | Cold start with `min_instances_override = 0` | Retry ~5× with 15 s backoff before diagnosing |
+| Hosting site create REST → error about siteId | siteId passed in the JSON body | Pass it as a query param: `…/sites?siteId=<id>` |
+| First Eventarc trigger: "Permission denied … Eventarc Service Agent" | Async agent-permission propagation after API enable | Wait ~5 min, re-apply (retryable by design) |
+| Cloud Tasks queue create → `FAILED_PRECONDITION: … existed too recently` | Reused project + same region within ~7 days of a `terraform destroy` (queue-name tombstone) | Phase 0 reused-project gate: fresh project, or wait out the tombstone in the SAME region; do NOT switch regions (see next row) |
+| Cloud Run services fail `Project failed to initialize in this region due to quota exceeded` + `Resource readiness deadline exceeded` on every service in a NEW region | Regions-per-project cap (default 5): 4 pinned `setencrypteddata` regions + the original home region already fill it, and destroy does not release region initialization | Go back to the original region (or a fresh project); a genuinely new region needs a Cloud Run quota increase first |
+| Cloud Run revision rejected on memory quota | Fresh-project `MemAllocPerProjectRegion` = 400 GiB | The module caps instances to fit (`region_memory_quota_gib`); raise the variable only if your quota was raised |
+| Apply never converges, perpetual diffs every plan | Provider/API echo drift | Should not happen on the pinned module version; capture `terraform plan` output and report to Velt |
+| `terraform apply` fails creating Identity Platform config | Singleton already exists (Phase 1 initializeAuth) | The `terraform import` step in Phase 2.3 |
+| `terraform import` of Identity Platform config fails "not found" | Phase 1 initializeAuth silently no-oped (e.g. missing Content-Type on the POST); the singleton does NOT exist | Skip the import and let the module create it; the Phase 1.3 verify probe (admin/v2 config GET) tells you which case you are in |
+| `terraform apply` 403s on firebaserules with a quota-project error | `USER_PROJECT_OVERRIDE` / `GOOGLE_BILLING_PROJECT` not exported (they were previously only shown inside the import snippet) | `export USER_PROJECT_OVERRIDE=true GOOGLE_BILLING_PROJECT="$PROJECT_ID"` before any apply (Phase 2.3) |
+| Service revision fails on a missing secret version | A `secrets_to_seed` id wasn't seeded | Seed it (`gcloud secrets versions add`), re-apply |
+| Calls fail `CACHEDDATA_URL_NOT_CONFIGURED` | Between the two cacheddata applies | Finish Phase 2.5 (fail-closed by design, never a Velt URL) |
+| provision-cli: SA key "not found" inside container | Key mounted under `/tmp` | Mount under `/keys` |
+| provision-cli silent for many minutes after result computed | In-process composite-index creation | Normal; wait for exit 0 (often tens of minutes; can exceed two hours depending on Firestore load) |
+| Production DB has fewer composite indexes than sdktest (partial set despite exit 0) | Index converge incomplete on the production store DB | Phase 3 gate: compare counts vs sdktest; re-run via `documentmigrationhandler` `{"eventType":"create_firestore_indexes","dbId":"<storeDbId>"}` until 200 |
+| Google sign-in on a non-Firebase-Hosting console: popup opens then nothing / handler 404 | `/__/auth/*` + `/__/firebase/*` not served on the console domain (authDomain = own domain requires them) | Phase 4.2 proxy recipe (internet NEG + Host rewrite to `<project>.firebaseapp.com`); if CDN-fronted, invalidate cached 404s after adding the path rules |
+| Comments render then vanish / never persist; SDK `sa` telemetry shows Firestore listener errors "The query requires an index" (`allMultiThreads`, `allDocumentUsers`, `allOrganizationUsers`) | Partial composite-index set on the production DB (see the Phase 3 gate; the CLI's prod-key index pass can silently end early) | Compare index counts vs sdktest; re-run via `documentmigrationhandler` `{"eventType":"create_firestore_indexes","dbId":"<storeDbId>"}` until 200, then re-test |
+| SDK logs "Documents provided are all denied"; every document probe PERMISSION_DENIED despite valid auth | `apiKey/<PROD_KEY>` doc missing from the production store DB; security rules `get()` this doc, and a missing doc fails the rule outright (a missing field would fall back to `public`) | Phase 3 gate: `curl` the doc; if 404, PATCH it with `metadata.defaultDocumentAccessType = "public"` (recipe in the gate), then re-test |
+| Manual probe of `getalloweddocuments` returns "Api key not found" despite `apiKey` in the body | The endpoint authenticates via the Firebase ID token ONLY (`request.auth.token` claims); body `apiKey` is ignored by design. The SDK itself never calls this endpoint | Not a product failure, so don't chase it. Diagnose comment issues via the SDK's `sa` error telemetry (Firestore listener errors) instead |
+| Console boots but sign-in fails oddly / placeholder project | `velt-console-config.json` missing at web root or invalid (app fails soft onto build defaults, one `[self-host-config]` console error) | `curl $HOST/velt-console-config.json`; must be valid JSON with apiKey/projectId/appId/databaseURL |
+| Console CORS error on `cloudfunctions.net/<fn>` | Function missing from `functionUrls` → name-based dispatch fallback | Redeploy the Terraform-emitted config; the emitted file lists every provisioned service |
+| Google login "succeeds" then returns to the sign-in page | `authDomain` is `<project>.firebaseapp.com` (cross-origin credential handoff dropped by browser partitioning) | Set `authDomain` to the console's own domain (Phase 4.2 check) |
+| Google `Error 400: redirect_uri_mismatch` | Console-domain redirect URI not on the OAuth client | Human moment #2: add `https://<console-domain>/__/auth/handler` |
+| `auth/unauthorized-domain` | Console origin not in Auth authorized domains | `console_manage_identity_platform` manages these; re-apply, or add the custom domain |
+| SDK: CORS error on `velt.js` | Missing ACAO header on the CDN | Add to ALL files, not just `velt.js` |
+| SDK: "Failed to load module script… MIME" | `.js` served as `text/plain` | Set `Content-Type: text/javascript` |
+| SDK: 404 on `/lib/sdk@<v>/velt.js` | Path layout wrong, `@` mangled by upload tool, or pinned version ≠ uploaded folder | Curl the exact URL; fix layout; pin == folder |
+| SDK loads, one feature silently missing | Not all package files uploaded | Re-upload the complete `package/` contents |
+| Backend logs show `FAILED_PRECONDITION` needing a composite index | Missing composite index on the default DB | Add the index to `default_db_composite_indexes` in tfvars, apply; report to Velt |
+| Works, then breaks after an app npm upgrade | Wrapper bumped but CDN folder/version pin not updated | Follow the Upgrade guide: new `lib/sdk@<new>/` folder first, then repoint `version` |
+
+---
+
+*This guide is evergreen: every version-specific value (image digest, module sha,
+console/SDK versions, registry) comes from the signed release manifest at run time,
+so the guide text itself does not change per release. The canonical copy lives on the
+Velt docs site. (`guideVersion` in the state file tags the state-file contract for
+resume, not a release.) Release enumeration:
+`oras pull -o . us-docker.pkg.dev/velt-sdk/velt-releases/velt-selfhost-index:latest`
+(writes `index.json`, newest first).*

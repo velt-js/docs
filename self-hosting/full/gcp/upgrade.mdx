@@ -1,0 +1,294 @@
+---
+title: "Upgrade Guide"
+sidebarTitle: "Upgrade"
+description: "Agent-executable procedure for moving an existing Velt full self-hosting deployment to a newer umbrella release. Computes the component delta and runs only the tracks that changed."
+---
+
+<Note>
+  This guide is written to be executed by an AI coding agent with shell access. Hand it the page and let it work. A human can also follow it manually, since every step is a plain command. Setting up a deployment for the first time? Use the [Install guide](/self-hosting/full/gcp/install) instead.
+</Note>
+
+**Doc set.** Human orientation and concepts: [Overview](/self-hosting/full/overview). Field-level contracts (manifest, profiles, configs, trust): [Reference](/self-hosting/full/gcp/reference). Greenfield install: [Install guide](/self-hosting/full/gcp/install).
+
+**Audience:** an AI coding agent with shell access, working for a Velt customer that already has a running self-hosted deployment (installed via the [Install guide](/self-hosting/full/gcp/install)).
+
+**Outcome:** the deployment moved to a newer self-host release (backend image + Terraform module, console bundle, and/or SDK files) with signature verification, scan sign-off, and rollback anchors at every step. Components upgrade independently: a release that only changes the backend touches nothing else.
+
+**Prerequisite:** the install's `velt-selfhost-state.json` (and the tfvars + Terraform state from Phase 2). If the state file is lost, reconstruct it first: the installed release version is in the deployed manifest recorded at install time, `terraform output` reproduces the service URLs, and the pinned SDK version is readable from the app's `lib/sdk@<version>/` path. Do not guess, because an upgrade computed against the wrong installed version applies the wrong delta.
+
+---
+
+## To the AI agent, read this first
+
+- **The upgrade is a delta, not a reinstall.** Phase U0 computes which components changed; you run only the tracks whose pins changed. Most releases are backend-only, and that is the expected common case, not a shortcut.
+- **Backend image and Terraform module upgrade together, always.** Every Cloud Run service runs the same image with `FUNCTION_TARGET` selecting the export; the module at a given version knows which function set to deploy. Splitting them can point a service at an export that no longer exists. The signed manifest binds `backend.digest` and `backend.moduleRef`, so take both or neither.
+- **Roll forward is the primary recovery strategy.** Rollback anchors exist at every step (old image digest stays in the customer registry, old module dir plus a pre-upgrade Terraform state backup are kept, old SDK folder is never deleted), but a backend rollback re-applies an older module against a state the newer module already mutated. Treat it as an emergency move, not a routine one.
+- **Maintain the state file** after every step, same contract as the install guide. Log each upgrade in `log` and replace `release` only at the very end (U4), so an interrupted upgrade resumes knowing the old release is still the one of record.
+- **Never run commands against any project other than `$PROJECT_ID`.**
+- The install guide's retryable-error list, shell quirks (zsh `${VAR}:` bracing), and Troubleshooting appendix all apply here unchanged.
+
+---
+
+## Phase U0: Resolve the target release and compute the delta
+
+### U0.1 Fetch and verify the target manifest
+
+```bash
+RELEASE_REGISTRY="us-docker.pkg.dev/velt-sdk/velt-releases"
+
+# Enumerate releases (newest first) and pick the target with the operator —
+# default to the newest, but the operator may pin an intermediate version.
+oras pull -o . "$RELEASE_REGISTRY/velt-selfhost-index:latest"      # writes index.json
+python3 -c "import json;[print(r['selfHostVersion'], r['releasedAt']) for r in json.load(open('index.json'))['releases']]"
+
+TARGET_VERSION="<chosen X.Y.Z>"
+oras pull -o . "$RELEASE_REGISTRY/velt-selfhost-manifest:$TARGET_VERSION"   # writes manifest.json
+
+# MANDATORY: verify the manifest signature (same rule as install Phase 0.1).
+# Only deploy releases that verify successfully.
+MANIFEST_DIGEST=$(oras manifest fetch --descriptor "$RELEASE_REGISTRY/velt-selfhost-manifest:$TARGET_VERSION" | python3 -c "import json,sys;print(json.load(sys.stdin)['digest'])")
+cosign verify \
+  --certificate-identity-regexp 'https://github\.com/[^/]+/shared-firebase-function/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "$RELEASE_REGISTRY/velt-selfhost-manifest@$MANIFEST_DIGEST"
+```
+
+**Read `releaseNotes` before anything else.** The current release contract is **migration-free**: a release never requires a customer-side data migration, because new backend code reads existing data shapes. If a future release ever breaks this rule, its release notes and manifest will say so explicitly and ship a dedicated migration runbook. In that case STOP here and follow that runbook's ordering instead of this guide's.
+
+### U0.2 Compute the component delta
+
+Compare the target manifest against the installed one (`release` in the state file):
+
+```bash
+python3 - <<'EOF'
+import json
+new = json.load(open('manifest.json'))
+old = json.load(open('velt-selfhost-state.json'))['release']
+def row(name, o, n): print(f"{name:10} {'CHANGED' if o != n else 'same':8} {o} -> {n}" if o != n else f"{name:10} same     {o}")
+row('backend',  old['backend']['digest'],        new['backend']['digest'])
+row('module',   old['backend']['moduleSha256'],  new['backend']['moduleSha256'])
+row('console',  old['console']['version'],       new['console']['version'])
+row('sdk',      old['sdk']['testedVersion'],     new['sdk']['testedVersion'])
+EOF
+```
+
+| Delta | Upgrade track to run |
+|---|---|
+| `backend` or `module` changed | **U1** (they always change together; a mismatch where only one changed is a malformed release, so stop and contact Velt) |
+| `console` changed | **U2** |
+| `sdk` changed | **U3** (operator may defer, see the fence below) |
+| Nothing changed | You're done, the target is already installed |
+
+Always finish with **U4** (re-acceptance and state file update) regardless of which tracks ran.
+
+### U0.3 Compatibility fences (hard gates, check BEFORE touching anything)
+
+**Fence 1: deployed SDK vs the target's `sdk.minVersion`.** A backend-only upgrade is safe only while the SDK the customer's app currently pins is inside the new release's supported window:
+
+```bash
+DEPLOYED_SDK="<from state file artifacts.sdkCdnPath, e.g. 6.0.0-beta.11>"
+MIN_SDK=$(python3 -c "import json;print(json.load(open('manifest.json'))['sdk']['minVersion'])")
+# sort -V: the min version must sort first (or equal) for the fence to pass
+[ "$(printf '%s\n%s\n' "$MIN_SDK" "$DEPLOYED_SDK" | sort -V | head -1)" = "$MIN_SDK" ] \
+  && echo "SDK FENCE: PASS" || echo "SDK FENCE: FAIL — U3 is MANDATORY in this upgrade"
+```
+
+If the fence fails, the SDK track (U3) is no longer optional: plan the backend apply and the app's SDK repoint as one coordinated window with the operator. Note `sdk.testedVersion` too, because a deployed SDK above `minVersion` but below `testedVersion` is *supported but untested*. Recommend U3 in that case, don't force it.
+
+**Fence 2: console config schema.** The new Terraform module re-emits `velt-console-config.json` on apply. The deployed console bundle must support the schema the new module emits:
+
+```bash
+python3 -c "import json;print('console configSchemaVersion:', json.load(open('manifest.json'))['console']['configSchemaVersion'])"
+# Compare against the installed console's configSchemaVersion (state file release.console).
+# Different → U2 is MANDATORY and must complete before or immediately after U1's apply.
+```
+
+**Fence 3: manifest schema.** `schemaVersion` must be one this guide understands (currently `2`). A higher number means the docs have moved on since your copy of this guide was saved, so re-fetch the current guide from the Velt docs site before proceeding.
+
+### U0.4 Preflight
+
+- Tooling: same table as install Phase 0.4 (`cosign`, `oras`, `crane`/docker, `terraform`, `gcloud`, `node`, `python3`) and the same three auth probes.
+- **Back up before any mutation:** copy `velt-selfhost-state.json`, the tfvars file, and the Terraform state (`terraform state pull > tfstate-pre-${TARGET_VERSION}.json` from the *old* module dir) somewhere outside the working tree.
+- Show the operator the human-moment table for this upgrade: infosec scan sign-off (if U1 runs and org policy requires it, roughly 5 to 15 minutes), and the app team's SDK repoint (only if U3 runs). There is no billing, OAuth, or DNS moment in an upgrade, because all of that infrastructure survives untouched.
+
+**Verify (phase gate):** target manifest verified and stored; delta table computed and agreed with the operator; all three fences pass (or their mandatory tracks are scheduled); backups taken. Record `upgrade: { from, to, tracks }` in the state file log.
+
+---
+
+## Phase U1: Backend upgrade (image + module, one track)
+
+### U1.1 Copy and verify the new image
+
+Same mechanics as install Phase 1.4: digest-preserving copy into the customer's own registry, then cosign-verify the copy.
+
+```bash
+NEW_DIGEST=$(python3 -c "import json;print(json.load(open('manifest.json'))['backend']['digest'])")
+SRC=$(python3 -c "import json;print(json.load(open('manifest.json'))['backend']['imageByDigest'])")
+DEST="us-docker.pkg.dev/$PROJECT_ID/velt/velt-functions"   # the SAME dest repo the install used
+
+crane copy "$SRC" "$DEST:${TARGET_VERSION}"                 # (docker pull/tag/push fallback: install 1.4 — remember --platform linux/amd64 on arm hosts)
+crane digest "$DEST:${TARGET_VERSION}"                       # MUST equal $NEW_DIGEST
+cosign verify \
+  --certificate-identity-regexp 'https://github\.com/[^/]+/shared-firebase-function/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "$DEST@$NEW_DIGEST"                                        # MUST print Verified OK — STOP otherwise
+NEW_IMAGE_REF="$DEST@$NEW_DIGEST"                            # pin BY DIGEST, as always
+```
+
+<Warning>
+  Do **not** delete or retag the currently-deployed image. It is the backend rollback anchor. Both digests coexist in the customer registry.
+</Warning>
+
+### U1.2 Scan the new image (operator's infosec policy, human moment)
+
+Identical to install Phase 1.5: scan the copy, compare CRITICAL/HIGH findings against the **new** manifest's `backend.knownFindings`. Findings **in** the list are Velt-accepted (unfixable base-OS CVEs); findings **not** in the list are a stop-and-contact-Velt condition. The operator signs off (or explicitly waives scanning) before the apply.
+
+### U1.3 Extract the new module next to the old one, migrate tfvars and state
+
+```bash
+MODULE_REF=$(python3 -c "import json;print(json.load(open('manifest.json'))['backend']['moduleRef'])")
+MODULE_SHA=$(python3 -c "import json;print(json.load(open('manifest.json'))['backend']['moduleSha256'])")
+oras pull -o . "$MODULE_REF"
+MODULE_TAR=$(ls velt-backend-module-${TARGET_VERSION}.tar.gz)
+echo "$MODULE_SHA  $MODULE_TAR" | shasum -a 256 -c -         # MUST print OK
+
+OLD_MODULE_DIR="<artifacts.moduleDir from the state file>"
+export MODULE_DIR="$(pwd)/velt-backend-module-${TARGET_VERSION}"
+mkdir -p "$MODULE_DIR" && tar -xzf "$MODULE_TAR" -C "$MODULE_DIR"
+
+# The Terraform STATE and tfvars are the deployment's memory — carry them over.
+# (If the operator configured a remote state backend at install time, skip the
+# state copy; init below will find it. The tfvars copy is always needed.)
+cp "$OLD_MODULE_DIR/terraform/velt.auto.tfvars" "$MODULE_DIR/terraform/"
+cp "$OLD_MODULE_DIR/terraform/terraform.tfstate"* "$MODULE_DIR/terraform/" 2>/dev/null || true
+
+cd "$MODULE_DIR/terraform"
+# Point the image pin at the new digest:
+#   velt_image = "<NEW_IMAGE_REF>"
+# Leave every other tfvars value alone unless the new module README says otherwise.
+terraform init && terraform validate
+```
+
+<Warning>
+  Keep `$OLD_MODULE_DIR` intact until U4 passes. It is the module-side rollback anchor. No Identity Platform re-import is needed, because the resource is already in the carried-over state.
+</Warning>
+
+### U1.4 Plan review, the upgrade's delta detector
+
+```bash
+terraform plan -out=upgrade.plan
+```
+
+Read the plan, don't skim it. Expected shape: in-place updates and replacements of Cloud Run services (new image), possibly new resources the new module version adds (new secrets, new services, new indexes). Red flags, STOP and investigate before applying:
+
+- **Destroy of a data-bearing resource** (Firestore database, RTDB instance, storage bucket). No upgrade should ever destroy one.
+- Resources outside `$PROJECT_ID`.
+- A destroy/create of *every* service, which suggests the state didn't carry over. You are about to duplicate the stack, not upgrade it.
+
+### U1.5 Secrets delta (the seed-before-apply rule from install 2.4 still binds)
+
+```bash
+# New module versions may ADD entries to secrets_to_seed. Cloud Run refuses a
+# revision mounting a secret with no enabled version — seed NEW ids before the apply.
+terraform apply -target=google_secret_manager_secret.required \
+                -target=google_secret_manager_secret_iam_member.runtime_accessor \
+                -target=google_secret_manager_secret_version.optional_placeholder
+terraform output -json secrets_to_seed
+# Diff against what exists: any id in the output with no enabled version needs seeding.
+for id in $(terraform output -json secrets_to_seed | python3 -c "import json,sys;print(' '.join(json.load(sys.stdin)))"); do
+  gcloud secrets versions list "$id" --project="$PROJECT_ID" --filter="state=enabled" --limit=1 --format="value(name)" | grep -q . \
+    || echo "NEEDS SEEDING: $id"
+done
+# Seed per the install guide 2.4 value rules (real keys for enabled AI modules,
+# "placeholder-not-configured" for listed-but-unused, fresh random for crypto keys —
+# NEVER regenerate an EXISTING crypto secret: JWT_SECRET_KEY / PLUGIN_CRYPTO_* rotate
+# only via a deliberate, separately-planned rotation, not as an upgrade side effect).
+```
+
+### U1.6 Apply, converge, and smoke
+
+```bash
+terraform apply upgrade.plan          # rolling Cloud Run revisions — near-zero downtime
+terraform plan                        # MUST end "No changes." (retryables: install guide list)
+terraform output -json service_urls > service-urls.json
+```
+
+Re-run the install guide's Phase 2.6 smoke tests (callable envelope on `validateclient`, HTTP 400 on empty `cacheddata` POST). Then watch the logs for roughly 10 minutes of normal traffic for `FAILED_PRECONDITION` composite-index errors, because a new release may query patterns the deployed indexes don't cover yet. If seen: add the index to `default_db_composite_indexes` in tfvars and re-apply (default DB), and report it to Velt (Velt uses the report to keep indexes complete in future releases; workspace-DB gaps need a Velt-shipped fix).
+
+**Verify (track gate):** plan converged; all services Ready=True; smokes pass; the serving revisions reference `$NEW_DIGEST` (`gcloud run services describe <svc> --format="value(spec.template.spec.containers[0].image)"`, spot-check 2 or 3 services). Update `artifacts.imageRef` and `artifacts.moduleDir` in the state file.
+
+**Rollback (emergency only):** repoint `velt_image` to the old digest and run the apply from `$OLD_MODULE_DIR/terraform` with the pre-upgrade state backup restored (`terraform state push tfstate-pre-${TARGET_VERSION}.json`, and coordinate with Velt if the new module already created resources the old one doesn't know). Prefer rolling forward to a fixed release.
+
+---
+
+## Phase U2: Console upgrade (only if the console pin changed)
+
+```bash
+BUNDLE_REF=$(python3 -c "import json;print(json.load(open('manifest.json'))['console']['bundleRef'])")
+CONSOLE_SHA=$(python3 -c "import json;print(json.load(open('manifest.json'))['console']['sha256'])")
+oras pull -o . "$BUNDLE_REF"
+echo "$CONSOLE_SHA  $(ls console-dist-*.tar.gz)" | shasum -a 256 -c -    # MUST print OK
+```
+
+Stage and deploy exactly as install Phase 4.2, to the **same host** the install chose, with two upgrade-specific rules:
+
+1. **Preserve the runtime config.** `velt-console-config.json` at the web root is deployment-specific (it was emitted by Terraform, with `authDomain` patched to the console's own domain). Deploy the new bundle files, then re-place the existing config. If U1 ran and re-emitted a fresh config, re-apply the `authDomain` check from install 4.2 before uploading it.
+2. **Bust the SPA cache.** After deploy, a hard refresh must show the new build. Verify `curl $CONSOLE_BASE/velt-console-config.json` still returns the valid config, then sign in and load any data view.
+
+**Verify (track gate):** console loads, sign-in works, a data view renders. Update the `artifacts.consoleUrl` bundle version note in the state file. Rollback: redeploy the previous bundle (keep the old `console-dist-*.tar.gz` until U4 passes).
+
+---
+
+## Phase U3: SDK upgrade (only if the SDK pin changed, or Fence 1 failed)
+
+The SDK ships as static files under a **versioned folder**, so upgrades are additive by design:
+
+```bash
+SDK_REF=$(python3 -c "import json;print(json.load(open('manifest.json'))['sdk']['bundleRef'])")
+SDK_SHA=$(python3 -c "import json;print(json.load(open('manifest.json'))['sdk']['sha256'])")
+SDK_VERSION=$(python3 -c "import json;print(json.load(open('manifest.json'))['sdk']['testedVersion'])")
+oras pull -o . "$SDK_REF"
+echo "$SDK_SHA  $(ls veltdev-sdk-*.tgz)" | shasum -a 256 -c -            # MUST print OK
+```
+
+1. Upload the package contents to a **NEW** `lib/sdk@${SDK_VERSION}/` folder on the same CDN or static host, with the same serving metadata as install Phase 5 (`Content-Type: text/javascript`, ACAO header, cache-control). **Never overwrite or delete the currently-pinned folder**, because it is the instant rollback.
+2. Verify: `curl -sI "$CDN_BASE/lib/sdk@${SDK_VERSION}/velt.js"` returns 200 with the correct content-type and ACAO.
+3. **Hand the repoint to the app team** (this is their change, not yours): bump the `@veltdev/*` wrapper packages to `${SDK_VERSION}` **and** the `version` pin in the app's `selfHosted` config in the same deploy. A wrapper/pin mismatch is the "works, then breaks after an npm upgrade" failure in the install guide's troubleshooting table. Rollback is repointing the pin to the old folder.
+
+**Verify (track gate):** new folder serves correctly; the app team has the repoint instructions (or has completed them, if this upgrade is a coordinated window from Fence 1). Update `artifacts.sdkCdnPath` when the repoint lands.
+
+---
+
+## Phase U4: Re-acceptance and record the upgrade
+
+Run the subset of install Phase 6 matching the tracks that ran:
+
+- **U1 ran:** demo-app comment loop against the upgraded backend (create a comment, it renders, API calls go to the customer's `*.run.app` services) plus no new errors in service logs.
+- **U2 ran:** the comment or data from the loop above is visible in the console's data browser.
+- **U3 ran (and repoint landed):** `window.Velt.version` equals the new pinned version.
+- **Always:** zero-egress spot check, with no requests to any `velt.dev` host in the browser network log.
+
+Then close the books:
+
+```bash
+# State file: replace `release` with the new manifest, keep the old one on disk
+mv manifest.json "manifest-${TARGET_VERSION}.json"
+# update velt-selfhost-state.json: release = new manifest, log += upgrade record
+```
+
+Report to the operator: versions moved (from and to, per component), scan sign-off outcome, anything deferred (for example an SDK repoint pending on the app team), and the rollback anchors now in place (old image digest, `$OLD_MODULE_DIR` plus state backup, old SDK folder). After a soak period the operator is comfortable with (suggest at least 1 week), the old module dir and pre-upgrade state backup can be archived and the old image untagged, never before.
+
+---
+
+## Upgrade troubleshooting (deltas from the install guide's table)
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Plan wants to destroy/create every service | Terraform state didn't carry into the new module dir | Stop; copy `terraform.tfstate*` from the old module dir (U1.3), re-init |
+| Apply fails mounting a secret | New `secrets_to_seed` id not seeded | U1.5 diff loop; seed, re-apply |
+| Services Ready but errors on one endpoint post-upgrade | `FAILED_PRECONDITION` composite-index gap in the new release | U1.6: add to `default_db_composite_indexes` (default DB) / report to Velt (workspace DB) |
+| Console blank or auth-broken after U2 | `velt-console-config.json` overwritten by the bundle deploy, or `authDomain` regressed to `<project>.firebaseapp.com` | Re-place the preserved config; re-run the install 4.2 authDomain check |
+| App breaks right after U3 repoint | Wrapper version and CDN pin moved separately | Both move in the same app deploy; rollback = repoint the pin |
+| Old SDK erroring against new backend | Deployed SDK below the new `sdk.minVersion` (Fence 1 skipped) | Complete U3 and repoint now; the fence exists to catch this before the apply |
+
+*This guide is evergreen: every version-specific value comes from the signed release manifest the operator selects in Phase U0, so the guide text itself does not change per release. Pairs with the [Install guide](/self-hosting/full/gcp/install).*

@@ -1,0 +1,381 @@
+---
+title: "Primitives"
+sidebarTitle: "Primitives"
+description: "Compose Velt primitive components for custom layouts and UI library integration."
+---
+
+Velt's **building-block components**, composed by you. Each one ships Velt's default design *and* full behavior, and there's a sub-component for nearly every child piece. You fetch the data, loop it, arrange the pieces into any layout, and wrap them in any UI library. **Most control, most effort.**
+
+**Use it when** you need your own UI component library inside the comment UI, your own interactivity, to place Velt pieces anywhere in your tree, or layouts beyond what wireframe slots offer. **Don't** when a wireframe already expresses the layout: Velt does the data-fetching and looping there, so it's less work.
+
+<Tip>
+**Have this design in Figma?** The [UI Customization Plugin](/get-started/ui-customization-plugin) for Cursor and Claude Code runs this whole loop for you: it picks the approach, builds it in your app, and verifies the result against the design in a real browser (comments and notifications today).
+</Tip>
+
+## The model
+
+A primitive is a **real component**: `VeltCommentDialog` in React, `<velt-comment-dialog>` as a custom element everywhere else. Because it's real, your design-system components work normally around it, and your own state and click handlers keep working.
+
+The trade versus [wireframes](/ui-customization/layout) is the data plumbing: **you** write what Velt would otherwise do. To show every thread you fetch the annotations, loop them, and pass each `annotationId` into a `VeltCommentDialog`. In exchange you get full layout control and your UI library.
+
+<Note>
+**The one limit:** *leaf* pieces (the deepest components, with no children) can't be restructured as primitives. Customize a leaf with **that leaf's wireframe**, even inside an otherwise-primitive build.
+</Note>
+
+**Where to look things up:** the full prop list for every primitive is in [`Props`](/ui-customization/reference/props) (e.g. `IVeltCommentDialogProps` under `VeltCommentDialog`), the component and sub-component names are in [`Component catalog`](/ui-customization/reference/component-catalog), and layout and mode config is in [`Layout config`](/ui-customization/reference/props#part-3-layout-config-and-custom-data). You can also explore every primitive interactively in [Storybook](https://storybook.velt.dev/).
+
+## Steps
+
+<Steps titleSize="h3">
+<Step title="Drop in the component">
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+import { VeltComments, VeltCommentsSidebar } from '@veltdev/react';
+
+<VeltComments shadowDom={false} />
+<VeltCommentsSidebar shadowDom={false} />
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comments shadow-dom="false"></velt-comments>
+<velt-comments-sidebar shadow-dom="false"></velt-comments-sidebar>
+```
+</Tab>
+</Tabs>
+
+That alone gives you fully working comments with Velt's default design. Keep `shadowDom={false}` if you'll style them (see [`CSS`](/ui-customization/styling)).
+
+</Step>
+
+<Step title="Toggle features with props">
+
+Trim the UI to your design by switching features off, **never** by hiding them with CSS:
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+<VeltComments
+  shadowDom={false}
+  userMentions={true}
+  reactions={false}
+  recordings="none"
+  attachments={false}
+  status={false}
+  priority={false}
+  commentTool={false}
+  collapsedComments={true}
+  commentPlaceholder="Add a comment…"
+  replyPlaceholder="Reply…"
+/>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comments
+  shadow-dom="false"
+  user-mentions="true"
+  reactions="false"
+  recordings="none"
+  attachments="false"
+  status="false"
+  priority="false"
+  comment-tool="false"
+  collapsed-comments="true"
+  comment-placeholder="Add a comment…"
+  reply-placeholder="Reply…"
+></velt-comments>
+```
+</Tab>
+</Tabs>
+
+Every `<VeltComments>` prop is in [`Props`](/ui-customization/reference/props); layout and mode props for the sidebar, dialog, and notifications are in [`Layout config`](/ui-customization/reference/props#part-3-layout-config-and-custom-data). Don't guess prop names.
+
+</Step>
+
+<Step title="Fetch, loop, render">
+
+For your **own** layout, you do the data plumbing: fetch the annotations, loop them, and render a dialog per annotation by passing its `annotationId`.
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+import { VeltCommentDialog, useCommentAnnotations, useVeltInitState } from '@veltdev/react';
+import type { CommentAnnotation } from '@veltdev/types';
+
+function MyCommentsList() {
+  const ready = useVeltInitState();
+  // 1) FETCH: reactive; re-renders when comments change (incl. other users live)
+  const annotations: CommentAnnotation[] = useCommentAnnotations() ?? [];
+
+  if (!ready) return <MySkeleton />;
+  if (annotations.length === 0) return <MyEmptyState />;
+
+  return (
+    <div className="my-list">
+      {/* 2) LOOP: one row per annotation */}
+      {annotations.map((a) => (
+        <section key={a.annotationId} className="my-row">
+          <header>{a.comments?.[0]?.from?.name}</header>
+          {/* 3) RENDER: Velt fills in the thread (comments, composer, reactions,
+                 resolve) with full behavior, inside YOUR row layout. */}
+          <VeltCommentDialog annotationId={a.annotationId} fullExpanded defaultCondition={false} />
+        </section>
+      ))}
+    </div>
+  );
+}
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<div id="my-list" class="my-list"></div>
+
+<script>
+const commentElement = Velt.getCommentElement();
+
+// 1) FETCH: reactive; fires again whenever comments change (incl. other users live)
+const subscription = commentElement.getAllCommentAnnotations().subscribe((annotations) => {
+  const list = document.getElementById('my-list');
+  list.innerHTML = '';
+
+  // 2) LOOP: one row per annotation
+  (annotations || []).forEach((a) => {
+    const row = document.createElement('section');
+    row.className = 'my-row';
+    // 3) RENDER: Velt fills in the thread with full behavior, inside YOUR row layout.
+    row.innerHTML = `
+      <header>${a.comments?.[0]?.from?.name ?? ''}</header>
+      <velt-comment-dialog
+        annotation-id="${a.annotationId}"
+        full-expanded="true"
+        default-condition="false"></velt-comment-dialog>
+    `;
+    list.appendChild(row);
+  });
+});
+
+// when your list is destroyed:
+subscription?.unsubscribe();
+</script>
+```
+</Tab>
+</Tabs>
+
+You can filter, sort, or group the annotations before rendering. To create a thread from your own composer, pair this with the action hooks (`useAddCommentAnnotation`, `useAddComment`: see [headless](/ui-customization/headless)).
+
+<Note>
+**Prefer `VeltCommentDialog` for new code.** It's the actively developed per-thread primitive with the same `annotationId` API. `VeltCommentThread` still works but is no longer the recommended path (see [Comment Thread](/async-collaboration/comments/standalone-components/comment-thread/overview)).
+</Note>
+
+</Step>
+
+<Step title="Wrap in your UI library">
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// MUI, shadcn, Radix, Ant, Chakra, Tailwind: all fine
+<Card className="my-thread-card">
+  <CardHeader title="Discussion" />
+  <CardContent>
+    <VeltCommentDialog annotationId={annotationId} fullExpanded />
+  </CardContent>
+</Card>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<div class="my-thread-card">
+  <h3 class="my-thread-card-header">Discussion</h3>
+  <div class="my-thread-card-content">
+    <velt-comment-dialog
+      annotation-id="ANNOTATION_ID"
+      full-expanded="true"></velt-comment-dialog>
+  </div>
+</div>
+```
+</Tab>
+</Tabs>
+
+Your `<Card>` keeps its own state, handlers, and styling. This is exactly what wireframes cannot do: their slot markup is cloned, so interactive components inside them go dead.
+
+</Step>
+</Steps>
+
+## Scoping: standalone vs context wrapper
+
+A primitive needs to know **which thread it belongs to**. You tell it with `annotationId`, and there are two ways to pass it. You can mix both across a page.
+
+**Standalone: pass the ID on the primitive itself.** Add `commentId` too for the pieces that render one comment rather than the whole thread (a thread card, its options, its edit composer).
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+<VeltCommentDialogHeader annotationId="abc123" />
+<VeltCommentDialogComposer annotationId="abc123" />
+<VeltCommentDialogThreadCard annotationId="abc123" commentId={456} />
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comment-dialog-header annotation-id="abc123"></velt-comment-dialog-header>
+<velt-comment-dialog-composer annotation-id="abc123"></velt-comment-dialog-composer>
+<velt-comment-dialog-thread-card annotation-id="abc123" comment-id="456"></velt-comment-dialog-thread-card>
+```
+</Tab>
+</Tabs>
+
+**Context wrapper: pass the IDs once and let children inherit.** Every nested primitive picks them up, so you don't repeat the ID on each one. Use this whenever you're composing more than a couple of pieces for the same thread.
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+<VeltCommentDialogContextWrapper annotationId="abc123">
+  <VeltCommentDialogHeader />
+  <VeltCommentDialogComposer />
+</VeltCommentDialogContextWrapper>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comment-dialog-context-wrapper annotation-id="abc123">
+  <velt-comment-dialog-header></velt-comment-dialog-header>
+  <velt-comment-dialog-composer></velt-comment-dialog-composer>
+</velt-comment-dialog-context-wrapper>
+```
+</Tab>
+</Tabs>
+
+<Note>
+**If you use both, the context wrapper wins.** An `annotationId` set on a nested primitive does not override the one it inherits, so don't rely on a per-child ID to opt out of the wrapper's scope: render that child outside the wrapper instead.
+</Note>
+
+The wrapper also carries `commentId`, `attachmentId`, and `commentPinSelected`, plus any custom attributes you add: see [`CommentDialogContextWrapperProps`](/api-reference/sdk/models/data-models#commentdialogcontextwrapperprops). Per-component scoping details are on each feature's primitives page, for example [Comment Dialog primitives](/ui-customization/features/async/comments/comment-dialog/primitives#usage-patterns).
+
+## `defaultCondition`: you control show/hide
+
+Every primitive has an **internal visibility condition**: `VeltCommentDialog`, for example, renders only when its annotation is selected. Setting `defaultCondition={false}` bypasses that gate, so the component renders whenever you mount it and **you** own the show/hide logic (your own `{show && …}`, routing, tabs).
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+<VeltCommentDialog annotationId={annotationId} defaultCondition={false} fullExpanded />
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comment-dialog
+  annotation-id="ANNOTATION_ID"
+  default-condition="false"
+  full-expanded="true"></velt-comment-dialog>
+```
+</Tab>
+</Tabs>
+
+Omit it and the primitive uses its own built-in condition. This is what makes the fetch-loop-render pattern above work: you're deliberately rendering a dialog per row, so none of them should wait to be selected.
+
+<Warning>
+**Wireframes have no equivalent.** A wireframe always renders through Velt's internal condition; `velt-if` only reacts to Velt's state, it can't override whether Velt renders the component at all. If your design needs to force show or hide on your own logic, that's a reason to pick a primitive.
+</Warning>
+
+## What it can and can't do
+
+| ✅ Primitives can | ❌ Primitives can't |
+|---|---|
+| Render fully working Velt UI | Restructure a **leaf** piece: use that leaf's wireframe instead |
+| Restructure layout by composing sub-components (custom header, thread card, …) | Save you from writing the composition: you fetch, loop, and pass props |
+| Be composed inside your own UI library, with your own interactivity | |
+| Be placed anywhere in your tree, toggled via props, themed with CSS | |
+
+The two reasons *not* to reach for primitives: a wireframe already expresses the layout with less work, or you only need to restructure a single leaf.
+
+## Worked example: a custom dropdown in a custom header
+
+A common need: you build your own comment dialog from primitives, and its header needs **status / priority / options** dropdowns that use **your** UI-library dropdown for the open/close shell while still driving Velt's real behavior.
+
+Velt ships a primitive dropdown family for each (`…Trigger` with name/icon/arrow parts, plus `…Content` with per-item children). Exact names: [`Component catalog`](/ui-customization/reference/component-catalog). You have three ways to make it yours:
+
+**Option A: Velt's shell, your item styling (least effort).** Use the primitive dropdown as-is and restyle each item by registering its wireframe content (`VeltCommentDialogStatusDropdownContentWireframe` → `.Item` → `.Icon` / `.Name`). Velt keeps the open/close and set-status behavior; the items look fully custom.
+
+**Option B: your shell, Velt's items.** Render your library's dropdown, and inside it render Velt's **primitive content items**, which carry the click-to-set behavior. They work interactively here because primitives are real components, so the wireframe cloning limit doesn't apply. Keep them inside the Velt dropdown container so they receive the annotation context.
+
+<Tabs>
+<Tab title="React / Next.js">
+```tsx
+// `statuses` is your customStatus config
+<VeltCommentDialogStatusDropdown
+  annotationId={annotationId}
+  onChangeStatus={(e) => setMyLabel(e.status)}   // keep your trigger label in sync
+>
+  <VeltCommentDialogStatusDropdownTrigger>
+    <MyLibraryDropdownButton>{myLabel}</MyLibraryDropdownButton>   {/* YOUR shell */}
+  </VeltCommentDialogStatusDropdownTrigger>
+
+  <VeltCommentDialogStatusDropdownContent>
+    <MyLibraryMenu>                                                {/* YOUR popover */}
+      {statuses.map((s, i) => (
+        // Velt primitive item = carries the set-status behavior
+        <VeltCommentDialogStatusDropdownContentItem
+          key={s.id} annotationId={annotationId} statusObj={s} statusId={s.id} statusIndex={i}
+        >
+          <VeltCommentDialogStatusDropdownContentItemIcon />
+          <VeltCommentDialogStatusDropdownContentItemName />
+        </VeltCommentDialogStatusDropdownContentItem>
+      ))}
+    </MyLibraryMenu>
+  </VeltCommentDialogStatusDropdownContent>
+</VeltCommentDialogStatusDropdown>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comment-dialog-status-dropdown annotation-id="ANNOTATION_ID">
+  <velt-comment-dialog-status-dropdown-trigger>
+    <button class="my-dropdown-button">Status</button>   <!-- YOUR shell -->
+  </velt-comment-dialog-status-dropdown-trigger>
+
+  <velt-comment-dialog-status-dropdown-content>
+    <div class="my-menu">                                <!-- YOUR popover -->
+      <!-- Repeat one item per status in your customStatus config -->
+      <velt-comment-dialog-status-dropdown-content-item
+        annotation-id="ANNOTATION_ID"
+        status-id="OPEN"
+        status-index="0">
+        <velt-comment-dialog-status-dropdown-content-item-icon></velt-comment-dialog-status-dropdown-content-item-icon>
+        <velt-comment-dialog-status-dropdown-content-item-name></velt-comment-dialog-status-dropdown-content-item-name>
+      </velt-comment-dialog-status-dropdown-content-item>
+    </div>
+  </velt-comment-dialog-status-dropdown-content>
+</velt-comment-dialog-status-dropdown>
+```
+
+`onChangeStatus` is a React prop; in other frameworks read the current status from the annotation data (`getAllCommentAnnotations()`).
+</Tab>
+</Tabs>
+
+The `statuses` list is the same one you pass to the `customStatus` prop (see [Layout config](/ui-customization/reference/props#part-3-layout-config-and-custom-data)). To restyle the item internals, register the item's wireframe (`VeltCommentDialogStatusDropdownContentWireframe.Item`). The same shape works for Priority and the Options actions.
+
+**Option C: fully headless (max control).** Render your own dropdown entirely and set the value with hooks: `useUpdateStatus()`, `useUpdatePriority()`, and the options actions (`useResolveCommentAnnotation`, `useDeleteComment`, `useAssignUser`). No Velt dropdown component at all. See [`Headless`](/ui-customization/headless).
+
+<Tip>
+Want Velt's behavior with your looks? Option A or B. Want to own everything? Option C. All three keep Velt's data and sync intact.
+</Tip>
+
+## Troubleshooting
+
+Common primitive symptoms, in [`Debugging`](/ui-customization/debugging):
+
+- ["A primitive layout won't compose, or a child won't restructure"](/ui-customization/debugging#a-primitive-layout-wont-compose-or-a-child-wont-restructure)
+- ["My custom dropdown doesn't set status or priority"](/ui-customization/debugging#my-custom-dropdown-doesnt-set-status-or-priority)
+- ["My dialog, pin, or primitive renders in the wrong place"](/ui-customization/debugging#my-dialog-pin-or-primitive-renders-in-the-wrong-place-top-left-escaping-its-box)
+- ["My UI shows stale data after someone else changes a comment"](/ui-customization/debugging#my-ui-shows-stale-data-after-someone-else-changes-a-comment)
+
+## Checklist
+
+- [ ] Used real component and prop names (from [`Component catalog`](/ui-customization/reference/component-catalog) and [`Layout config`](/ui-customization/reference/props#part-3-layout-config-and-custom-data)).
+- [ ] Features trimmed with **props**, not `display:none`.
+- [ ] `shadowDom={false}` on anything you style, and theming done with `--velt-*` variables ([`CSS`](/ui-customization/styling)).
+- [ ] UI-library wrappers go *around* the primitive, never as interactivity inside a wireframe.

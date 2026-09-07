@@ -1,0 +1,209 @@
+---
+title: "SAML Single Sign-On (SSO)"
+sidebarTitle: "SAML SSO"
+description: "Connect your identity provider to the Velt Console so your team signs in with SSO instead of passwords. This guide uses Okta as the example provider."
+---
+
+SAML SSO controls how your team signs in to the Velt Console. It does not affect the Velt SDK running in your product, and no integration code changes are required. Setup takes about 15 minutes.
+
+## How it works
+
+1. You create a SAML 2.0 app in Okta for the Velt Console.
+2. You copy three values from that Okta app (Issuer, Sign-on URL, Certificate) into the Velt Console SAML settings page.
+3. Velt provisions the SSO connection when you click **Save Configuration**. There are no extra steps on the Velt side.
+4. Your team signs in at a dedicated SSO URL such as `https://console.velt.dev/saml/acme/login`, authenticates with Okta, and lands back in the Velt Console.
+
+## Before you begin
+
+You need:
+
+- **Okta admin access:** permission to create a new App Integration in your Okta org.
+- **Velt workspace owner access:** only the workspace owner can manage SAML settings. The SAML tab is hidden from workspace members, so ask your owner to complete Step 3.
+- **Your company email domain** (for example `acme.com`). All users signing in through SSO must have emails on this domain, and a domain can be linked to only one Velt workspace.
+
+### Values cheat sheet
+
+You exchange values in both directions. Fill this in as you go.
+
+**Velt to Okta:** copy these from the Velt Console SAML page, under **Values for you**.
+
+| Okta field | Value |
+|---|---|
+| Single sign-on URL (ACS) | `https://console.velt.dev/__/auth/handler` |
+| Audience URI (SP Entity ID) | `console.velt.dev` (must match the Velt Service Provider ID exactly) |
+
+**Okta to Velt:** copy these from Okta after you create the app.
+
+| Okta value | Velt field |
+|---|---|
+| Identity Provider Issuer | Entity ID |
+| Identity Provider SSO URL | SSO URL |
+| X.509 Certificate | X.509 Certificate |
+
+**Choices you make in Velt:**
+
+| Velt field | Example |
+|---|---|
+| Display Name | `Acme` |
+| Email Domain | `acme.com` |
+| URL Slug | `acme` (lowercase letters, numbers, and dashes only) |
+
+<Tip>
+The exact callback URL and domain to whitelist for your environment are shown with copy buttons in the Velt Console under **Team → SAML → Values for you**. Always copy from there. The values in this guide assume the production console at `console.velt.dev`.
+</Tip>
+
+## Setup
+
+<Steps titleSize="h2">
+
+<Step title="Create the SAML app in Okta">
+
+1. Sign in to your Okta Admin Console.
+2. Go to **Applications → Applications → Create App Integration**.
+3. Select **SAML 2.0** and click **Next**.
+4. Under **General Settings**, set **App name** to `Velt Console` or anything your team will recognize, then click **Next**.
+5. Under **Configure SAML**, fill in the **General** section:
+
+| Okta field | What to enter |
+|---|---|
+| Single sign-on URL | `https://console.velt.dev/__/auth/handler` |
+| Use this for Recipient URL and Destination URL | Keep checked |
+| Audience URI (SP Entity ID) | `console.velt.dev` |
+| Default RelayState | Leave blank |
+| Name ID format | `EmailAddress` |
+| Application username | `Email` |
+
+6. Leave **Attribute Statements** empty. None are required.
+7. Click **Next**, choose **I'm an Okta customer adding an internal app**, then click **Finish**.
+
+<Warning>
+The Name ID must be the user's email address. Velt identifies each user by the email Okta sends in the SAML response, so leaving Name ID format as `Unspecified` with a non-email username breaks sign-in.
+</Warning>
+
+<Note>
+The Audience URI is a shared identifier. It only has to match byte for byte what you enter as **Service Provider ID** in Velt in Step 3. Use `console.velt.dev` with no `https://`, no trailing slash, and no spaces.
+</Note>
+
+</Step>
+
+<Step title="Copy the Okta values">
+
+After the app is created:
+
+1. Open the app's **Sign On** tab.
+2. Find the SAML 2.0 metadata and setup details. Click **More details**, or **View SAML setup instructions** on older Okta versions.
+3. Copy these three values into your cheat sheet:
+
+| Okta value | Paste it into this Velt field |
+|---|---|
+| Issuer (Identity Provider Issuer / Entity ID) | Entity ID |
+| Sign on URL (Identity Provider Single Sign-On URL) | SSO URL |
+| Signing Certificate (download or copy the PEM) | X.509 Certificate |
+
+The certificate must be the full PEM block, including the header and footer lines:
+
+```text
+-----BEGIN CERTIFICATE-----
+[certificate content]
+-----END CERTIFICATE-----
+```
+
+</Step>
+
+<Step title="Enter the configuration in the Velt Console">
+
+1. Sign in to the [Velt Console](https://console.velt.dev) as the workspace owner.
+2. Go to **Team → SAML**.
+3. Fill in **Basic Settings**:
+
+| Field | What to enter | Example |
+|---|---|---|
+| Display Name | Your company name, shown on your team's branded SSO login page | `Acme` |
+| Email Domain | Your company email domain, with no `@` and no `https://` | `acme.com` |
+| URL Slug | A short identifier used in your SSO login link. Lowercase letters, numbers, and dashes only | `acme` |
+
+4. Fill in **SAML Settings** with the values you copied from Okta in Step 2:
+
+| Field | What to enter |
+|---|---|
+| Entity ID | The Okta Issuer (Identity Provider Issuer) |
+| SSO URL | The Okta Sign on URL. Must start with `https://` |
+| X.509 Certificate | The full PEM certificate, including the BEGIN and END CERTIFICATE lines |
+| Service Provider ID | The exact Audience URI you entered in Okta (recommended: `console.velt.dev`) |
+
+5. Click **Save Configuration**. You should see "SAML configuration saved."
+
+Saving the form provisions the SSO connection. There is nothing else to enable on the Velt side.
+
+</Step>
+
+<Step title="Assign users in Okta">
+
+Back in Okta, open your new app's **Assignments** tab and assign the people or groups who should have access to the Velt Console. Users who are not assigned get an Okta error when they try to sign in.
+
+</Step>
+
+<Step title="Test sign-in">
+
+Your team can sign in through either URL:
+
+| URL | Best for |
+|---|---|
+| `https://console.velt.dev/saml/<your-slug>/login` (for example `/saml/acme/login`) | Recommended. Your branded login page. Bookmark this and share it with your team |
+| `https://console.velt.dev/saml/login` | Generic SSO page. Users enter their work email and are routed to your Okta based on the email domain |
+
+To test:
+
+1. Open your branded URL in a private or incognito window.
+2. Enter a work email on your configured domain, for example `you@acme.com`.
+3. You are redirected to Okta. Authenticate there, and you land back in the Velt Console dashboard.
+
+</Step>
+
+</Steps>
+
+## Updating your configuration
+
+Any value can be changed later. Return to **Team → SAML**, edit, and click **Save Configuration** again. Changes take effect immediately.
+
+- **Certificate rotation:** when your Okta signing certificate is renewed, paste the new certificate into the **X.509 Certificate** field and save. Do this before the old certificate expires to avoid sign-in interruptions.
+- **Changing the URL Slug:** this updates your branded login URL to `/saml/<new-slug>/login`. Share the new link with your team. Existing sessions are unaffected.
+- **Removing SSO:** contact Velt support at `support@velt.dev` to disable SAML for your workspace.
+
+## Troubleshooting
+
+| Problem | Cause and fix |
+|---|---|
+| "Only the workspace owner can manage SAML configuration." | You are signed in as a workspace member. Ask the workspace owner to make the change. |
+| "SAML slug is already in use by another workspace." | Another Velt workspace already claimed that slug. Pick a different one, for example `acme-corp`. |
+| "SAML email domain is already in use by another workspace." | Each email domain can be linked to only one workspace. If you believe your domain is claimed in error, contact Velt support. |
+| "Certificate must be a valid X.509 PEM block." | The pasted certificate is missing the BEGIN or END CERTIFICATE lines, or extra characters were introduced. Re-copy the full PEM from Okta. |
+| "SSO URL must start with http:// or https://." | Paste the full Okta Sign-on URL including `https://`. |
+| "SAML is not set up for this email domain." at login | The email entered does not match the Email Domain configured in Velt. The match is exact, so subdomains such as `mail.acme.com` count as different domains. |
+| Okta shows a 400 error or "The app returned an error" after entering credentials | Usually an Audience URI mismatch. The Okta Audience URI (SP Entity ID) and the Velt Service Provider ID must match exactly. Check for `https://`, trailing slashes, or stray whitespace on either side. |
+| Redirected to Okta but returned to the login page with an error | Check that the user is assigned to the app in Okta, and that the app's Single sign-on URL is exactly `https://console.velt.dev/__/auth/handler`. |
+| Sign-in works for some users but not others | Those users are unassigned in Okta, or their Okta email is on a different domain than the configured Email Domain. |
+
+Still stuck? Contact `support@velt.dev` with your workspace name, your URL slug, and a screenshot of the error.
+
+## FAQ
+
+<AccordionGroup>
+
+<Accordion title="Does this affect my Velt SDK integration or my end users?">
+No. SAML SSO only controls how your team signs in to the Velt Console, which is the admin dashboard. It has no effect on the Velt SDK running in your product.
+</Accordion>
+
+<Accordion title="Can team members still sign in with Google or a password after SSO is enabled?">
+Yes. Enabling SAML adds an SSO sign-in path. It does not block other sign-in methods.
+</Accordion>
+
+<Accordion title="We use an identity provider other than Okta (Entra ID, OneLogin, Google Workspace).">
+The Velt side is identical. Any SAML 2.0 identity provider works. In your IdP, set the ACS or Reply URL to `https://console.velt.dev/__/auth/handler`, set the SP Entity ID or Audience to the same value as the Velt **Service Provider ID** field, and make sure the Name ID is the user's email. Then copy your IdP's Issuer, SSO URL, and certificate into the Velt form as described in Step 3.
+</Accordion>
+
+<Accordion title="Is Single Logout (SLO) supported?">
+No. Signing out of the Velt Console does not sign the user out of Okta, and signing out of Okta does not sign the user out of the Velt Console.
+</Accordion>
+
+</AccordionGroup>

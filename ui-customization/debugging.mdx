@@ -1,0 +1,86 @@
+---
+title: "Debugging: when you're blocked"
+sidebarTitle: "Debugging"
+description: "Troubleshoot common Velt UI customization issues with ordered symptom-to-fix guidance."
+---
+
+A fast, ordered playbook for the things that actually go wrong. Find your symptom, apply the fix.
+
+## First, always
+
+1. **Turn on debug logs.** Set `forceDebugMode` in `sessionStorage` (`sessionStorage.setItem('forceDebugMode','true')`) and reload: Velt logs verbosely.
+2. **Confirm Velt is initialized.** Gate on `useVeltInitState()`. If it's never `true`, fix setup (API key, `identify`, `setDocuments`) before debugging UI: you can't style what isn't rendering.
+3. **Compare against default.** Temporarily remove your customization. If the default works and yours doesn't, it's your customization; if the default is also broken, it's setup or data.
+4. **Inspect the element.** With `shadowDom={false}`, open DevTools on the element: read its real `velt-*` classes and attributes, and where it sits in the DOM.
+
+## Symptom → cause → fix
+
+### "My CSS does nothing"
+- **Shadow DOM is on.** Variables cross it, but class and selector CSS doesn't → either set `shadowDom={false}`, or keep it on and push your CSS into the shadow root with `client.injectCustomCss({ type:'styles', value:'…' })`.
+- **Specificity.** Velt injects high-specificity styles → add `!important`. Inspect → target the `velt-*` class → `!important`.
+- **Wrong class.** You guessed a class name → inspect and use the actual `velt-*` class ([`CSS classes`](/ui-customization/reference/css-classes)).
+
+### "My wireframe renders nothing"
+- **Feature component not mounted.** A `Velt…Wireframe` only registers a template: you must also mount the live feature (`VeltComments` / `VeltCommentsSidebar` / `VeltCommentDialog`).
+- **Two `<VeltWireframe>` roots.** Merge is first-with-content-wins → your template may be ignored. Use one.
+- **Wrong slot name.** Verify against [`Wireframe components`](/ui-customization/reference/wireframe-components).
+- **List/repeater slot.** Custom layout around a list slot is ignored: customize the **item** wireframe instead ([`Wireframes`](/ui-customization/layout#list-and-repeater-slots)).
+
+### "My wireframe markup renders inline on the page, and the component still shows defaults"
+- **No `<VeltWireframe>` registry root wrapping your slot templates.** A slot element placed directly in the page renders its children **inline where it sits**, and the live component falls back to its **default** UI because the template was never registered. Wrap all slot templates in exactly one `<VeltWireframe>` root (in plain HTML: one `<velt-wireframe>`).
+
+### "My wireframe's empty state works, but the header, search, and list vanished"
+- **You declared a container slot and omitted its structural children.** Declaring `velt-comments-sidebar-v2-wireframe` with *only* a custom empty-placeholder renders the empty state but **drops the search, filter, and list**. Container slots replace their layout: re-declare every structural child you want (`panel → header(search, filter) → list → empty-placeholder`). Leaf slots fall back to Velt's default; containers do not ([`Wireframes`](/ui-customization/layout#slot-granularity)).
+
+### "My wireframe applies in the wrong places, or not where I want"
+- **Scoping.** A nested child wireframe is scoped to that parent's render; a root-level child is global. Move it accordingly ([`Wireframes`](/ui-customization/layout#scoping-global-vs-scoped-wireframes)).
+- **First-with-content-wins.** If the same component is registered both nested and at root, the first one with content wins: don't register it both ways.
+
+### "A button, onClick, or hook inside my wireframe does nothing"
+- **Expected.** Wireframe markup is cloned and React interactivity is stripped (the [interactivity rule](/ui-customization/layout#the-interactivity-rule)). Use the Velt **slot** for built-in actions, or `VeltButtonWireframe` + `useVeltEventCallback('veltButtonClick')` for custom actions ([`Action Components`](/ui-customization/wireframes/action-components)). For real interactive components, use [primitives](/ui-customization/primitives).
+
+### "`velt-data` shows blank, or `velt-if` never matches"
+- **Wrong or undefined variable.** Names are case-sensitive and finite: check [`Template Variables`](/ui-customization/template-variables). A wrong name resolves to `undefined`.
+- **Wrong context.** Some variables exist only in certain slots (`{comment}` and `{commentIndex}` only inside a thread card; `{notification}` only in the notifications panel; `{focusedAnnotation}` only in the sidebar).
+- **Nested access not supported.** Only the roots in the nested-access list allow `{root.nested}`; others resolve to the root only.
+- **Flat-config feature.** Try the explicit `{componentConfig.<name>}` form (cursor, presence, huddle, recording, reactions, area, arrow, tag, autocomplete).
+
+### "`velt-class` toggles, but nothing looks different"
+- **You haven't defined the class.** `velt-class` only adds and removes the class **name**; the styling is yours to write. Define it in your own CSS, with `!important` if it competes with Velt's ([`Conditional Classes`](/ui-customization/conditional-classes)).
+
+### "Default styling is still there even though I wireframed it"
+- **Expected.** A wireframe replaces a slot's *content*, not the surrounding default styling (borders, padding, backgrounds, fixed widths, popover chrome). **Inspect → find the `velt-*` class → override with `!important`.** Treat this as part of every wireframe pass ([recipe](/ui-customization/styling#recipes)).
+
+### "My sidebar or list won't scroll, or won't take the available height"
+- **Broken flex/height chain, including Velt's internal elements.** Every element from your wrapper down to the scroll container needs `min-height:0` (plus `flex:1` or `height:100%`), *including Velt's own internal containers* (e.g. `app-comment-sidebar-panel`) that sit between your layout and the list. **Inspect** to find the hidden link and force it, often with `!important`. One missing link kills the scroll ([full recipe](/ui-customization/styling#recipes)). Re-test that scrolling actually works: it's easy to get 90% right and still have a dead scroll.
+
+### "My dialog, pin, or primitive renders in the wrong place (top-left, escaping its box)"
+- **Absolute positioning needs a positioned ancestor.** Some Velt pieces use `position: absolute`. Give the parent you mount them in `position: relative` so they anchor correctly ([recipe](/ui-customization/styling#recipes)).
+
+### "Dark mode colors are wrong"
+- **Hard-coded colors.** Move dark values under `:root[data-velt-theme="dark"]` using `--velt-dark-mode-*`.
+
+### "A primitive layout won't compose, or a child won't restructure"
+- **Leaf component.** Leaf primitives have no sub-components → restructure via that leaf's **wireframe** instead ([`Primitives`](/ui-customization/primitives)).
+- **You forgot the composition.** Primitives don't auto-loop: fetch the data, `.map()`, and pass `annotationId` or `comment` yourself.
+
+### "My custom dropdown doesn't set status or priority"
+- **Non-Velt items.** Your own menu items carry no behavior. Render Velt's primitive `…DropdownContentItem` components inside your shell, or set the value yourself with `useUpdateStatus()` / `useUpdatePriority()`.
+- **Missing annotation context.** The items need to know the annotation: pass `annotationId`, or keep them inside the Velt dropdown container so they inherit it ([`Primitives`](/ui-customization/primitives#scoping-standalone-vs-context-wrapper)).
+
+### "Headless mutation does nothing, or errors"
+- **Object shape.** A hand-built `Comment` or `CommentAnnotation` is missing required fields → fill every field the action needs; read the type in `@veltdev/types`.
+- **Wrong hook usage.** Most hooks return an object: `const { addComment } = useAddComment()`. Read-hook returns are often wrappers (e.g. `…Count` → `{ count }`): read the field ([`Hooks`](/ui-customization/reference/hooks)).
+
+### "My UI shows stale data after someone else changes a comment"
+- **You snapshotted a reactive value.** `useCommentAnnotations()` and its siblings update when other users change data. Render the hook's current value; don't copy the array into your own state and render that.
+
+### "SSR or hydration error (Next.js)"
+- Mark customization and hook components `'use client'`, gate on `useVeltInitState()`, and don't expect Velt UI during SSR.
+
+## When you're still stuck
+
+- **Re-check the reference pages:** [`Wireframe components`](/ui-customization/reference/wireframe-components) (slots and props), [`Template Variables`](/ui-customization/template-variables) (tokens), [`CSS classes`](/ui-customization/reference/css-classes) (stateful classes), [`Layout config`](/ui-customization/reference/props#part-3-layout-config-and-custom-data) (props).
+- **Inspect the running UI** in DevTools (`shadowDom={false}`) to see the real elements, classes, and structure Velt rendered.
+- **Isolate:** reproduce the one surface in a minimal setup with default everything, then add your customization back piece by piece.
+- **Confirm it's fixable at all.** If every cause above is ruled out, the design may need something the SDK's customization surface doesn't expose. Record what you needed and what you shipped instead, rather than hacking against Velt's internal DOM.

@@ -6,7 +6,9 @@ api: "POST https://api.velt.dev/v2/agents/groups/create"
 Use this API to create an agent group. Groups let you bundle custom and/or built-in agents together and filter execution/list responses by group. Agents remain independent documents; a group only stores an `agentIds` array that references them, and an agent can belong to multiple groups.
 
 <Note>
-  Groups are stored at the Firestore path `apiKey/{apiKey}/agentGroup/{groupId}`. A workspace may have at most **50 groups** (`MAX_GROUPS_PER_API_KEY`), and each group may contain at most **100 agents** (`MAX_AGENTS_PER_GROUP`).
+  A workspace may have at most **50 groups**, and each group may contain at most **100 agents**.
+
+  The 50-group limit counts **every** group in the workspace, including the system groups the platform auto-provisions (`copy-qa`, `seo`, `design-checks`, `performance`, `brand-checks`). Those occupy up to 5 of your 50 slots, so a workspace can hit `RESOURCE_EXHAUSTED` at 45 self-created groups.
 </Note>
 
 <Warning>
@@ -42,7 +44,7 @@ Use this API to create an agent group. Groups let you bundle custom and/or built
     </ParamField>
 
     <ParamField body="agentIds" type="string[]">
-      Initial members. Each id must be min 1 char. Deduped server-side and capped at 100. Unknown custom-agent ids return `NOT_FOUND`; built-in agent ids (e.g. `spell-check`) are accepted without a lookup.
+      Initial members. Each id must be min 1 char. The 100-entry cap is applied to the array **as sent**, before duplicates are removed, so 120 ids that would dedupe to 90 are still rejected. Unknown custom-agent ids return `NOT_FOUND`; built-in agent ids (e.g. `spell-check`) are accepted without a lookup.
     </ParamField>
 
     <ParamField body="metadata" type="object">
@@ -81,7 +83,7 @@ Unknown top-level fields are rejected (`.strict()`).
     "message": "Agent group created successfully",
     "data": {
       "group": {
-        "id": "grp_9f3ac2",
+        "id": "K3mR7pQxN2vB9wLdT4sY",
         "name": "Brand QA",
         "description": "All brand-quality agents",
         "agentIds": ["abc123def456", "spell-check"],
@@ -122,10 +124,13 @@ Unknown top-level fields are rejected (`.strict()`).
 
 **Errors:**
 
-- `RESOURCE_EXHAUSTED`: workspace already has `MAX_GROUPS_PER_API_KEY` (50) groups.
-- `RESOURCE_EXHAUSTED`: initial `agentIds` exceeds `MAX_AGENTS_PER_GROUP` (100).
+- `RESOURCE_EXHAUSTED`: the workspace already has 50 groups (system groups included).
 - `NOT_FOUND`: one of the initial `agentIds` does not exist.
-- `INVALID_ARGUMENT`: validation failure (missing/empty `name`, unknown fields, over-length values).
+- `INVALID_ARGUMENT`: validation failure (missing/empty `name`, unknown fields, over-length values, or an `agentIds` array with more than 100 entries).
+
+<Note>
+  An oversized `agentIds` array is `INVALID_ARGUMENT`, not `RESOURCE_EXHAUSTED`. The 100-entry cap is enforced during schema validation on the array as sent, so it fails before the group is created. `RESOURCE_EXHAUSTED` on this endpoint means only that the workspace is at its 50-group limit.
+</Note>
 
 <ResponseExample>
 ```js
@@ -135,7 +140,7 @@ Unknown top-level fields are rejected (`.strict()`).
     "message": "Agent group created successfully",
     "data": {
       "group": {
-        "id": "grp_9f3ac2",
+        "id": "K3mR7pQxN2vB9wLdT4sY",
         "name": "Brand QA",
         "agentIds": ["abc123def456", "spell-check"],
         "metadata": { "apiKey": "ak_xxx" },

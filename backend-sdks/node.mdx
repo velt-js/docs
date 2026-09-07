@@ -1333,19 +1333,36 @@ await sdk.api.documents.migrateDocumentsStatus({
 
 #### `getDocumentsCount`
 
-- Return a document count for an organization (optionally scoped to a folder).
+- Return a document count for an organization (optionally scoped to a folder, or narrowed by metadata filters).
 - Params: [GetDocumentsCountRequest](/api-reference/sdk/models/data-models#getdocumentscountrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
 
 ```ts
 await sdk.api.documents.getDocumentsCount({ organizationId: 'org-123' });
 await sdk.api.documents.getDocumentsCount({ organizationId: 'org-123', folderId: 'folder-1', excludeFolderDocs: true });
+
+// Narrow the count with metadata filters (same shape as getDocuments; max 10).
+await sdk.api.documents.getDocumentsCount({
+  organizationId: 'org-123',
+  filters: [
+    { key: 'projectType', operator: '==', value: 'design' },
+    { key: 'category', operator: 'in', value: ['a', 'b'] },
+  ],
+});
 ```
+
+`filters` cannot be combined with `excludeFolderDocs` — the API rejects the combination.
 
 **Response**
 
 ```ts
 { result: { status: 'success', message: 'Documents count retrieved successfully.', data: { count: 42 } } }
+```
+
+When `filters` is supplied, the response data also carries `filtersApplied`. A `false` value means the filtered aggregate could not be computed and `count` is an unfiltered fallback, so check it if you need the count to be exact:
+
+```ts
+{ result: { status: 'success', message: 'Documents count retrieved successfully.', data: { count: 7, filtersApplied: true } } }
 ```
 
 ### Users
@@ -1867,6 +1884,30 @@ await sdk.api.commentAnnotations.getCommentAnnotations({
 });
 ```
 
+**Agent filters**
+
+Scope a listing to agent-authored annotations with one of `agentId`, `executionId`, `agentType`, `agentSource`, `agentSuggestions`, or `agentComments`. Supply **at most one per request**.
+
+```ts
+// All annotations authored by a specific agent
+await sdk.api.commentAnnotations.getCommentAnnotations({
+  organizationId: 'org-123',
+  documentId: 'doc-1',
+  agentId: 'agent-7',
+});
+
+// Only fresh (unaccepted) agent suggestions
+await sdk.api.commentAnnotations.getCommentAnnotations({
+  organizationId: 'org-123',
+  documentId: 'doc-1',
+  agentSuggestions: true,
+});
+```
+
+<Note>
+Agent filtering is annotation-scoped and requires advanced queries to be enabled on your workspace. When they are not enabled, the API fails closed rather than returning unfiltered results.
+</Note>
+
 **Response**
 
 ```ts
@@ -1906,6 +1947,10 @@ await sdk.api.commentAnnotations.getCommentAnnotationsCount({
   userId: 'user-1',
 });
 ```
+
+<Warning>
+The count endpoint does **not** support agent filtering, and agent filter fields sent to it are ignored rather than rejected — you would receive unfiltered totals with no error. To count an agent-scoped subset, call [`getCommentAnnotations`](#getcommentannotations) with an agent filter and count the result.
+</Warning>
 
 **Response**
 
@@ -1957,6 +2002,26 @@ await sdk.api.commentAnnotations.deleteCommentAnnotations({
   annotationIds: ['annotation-id-1'],
 });
 ```
+
+**Agent filters**
+
+`agentSuggestions`, `agentId`, and `agentUrls` narrow a delete to agent-authored annotations. They combine, so you can scope a sweep precisely — for example, "this agent's still-pending suggestions on these pages", which leaves a concurrent crawl's freshly-created annotations untouched.
+
+```ts
+await sdk.api.commentAnnotations.deleteCommentAnnotations({
+  organizationId: 'org-123',
+  documentId: 'doc-1',
+  agentId: 'agent-7',
+  agentSuggestions: true,
+  agentUrls: ['https://app.example.com/page-1', 'https://app.example.com/page-2'],
+});
+```
+
+`agentUrls` matches annotations scoped to **any** of the supplied pages.
+
+<Warning>
+Agent filters require advanced queries to be enabled on your workspace. When they are not enabled — or when none of the supplied `agentUrls` resolve — the API fails closed and deletes nothing, rather than widening to a document-wide delete.
+</Warning>
 
 **Response**
 
@@ -2222,6 +2287,17 @@ await sdk.api.accessControl.getPermissions({
   organizationId: 'org-123',
   userIds: ['user-1'],
   documentIds: ['doc-1'],
+});
+```
+
+By default the API errors if any supplied folder or document ID does not resolve. Pass `skipResourceExistenceValidation: true` to skip that check and return whatever permissions exist:
+
+```ts
+await sdk.api.accessControl.getPermissions({
+  organizationId: 'org-123',
+  userIds: ['user-1'],
+  documentIds: ['doc-1', 'doc-might-not-exist'],
+  skipResourceExistenceValidation: true,
 });
 ```
 
@@ -2648,6 +2724,18 @@ await sdk.api.gdpr.getAllUserData({
   organizationId: 'org-123',
   userId: 'user-1',
   pageToken: 'next-page-token',
+});
+```
+
+Pass `veltUserIds` to export data for a set of Velt-side user IDs instead of the single `userId`, `veltAllOrganizations` to span every organization rather than just `organizationId`, and `uniqueId` as a correlation value echoed back on the response:
+
+```ts
+await sdk.api.gdpr.getAllUserData({
+  organizationId: 'org-123',
+  userId: 'user-1',
+  veltUserIds: ['velt-user-1', 'velt-user-2'],
+  veltAllOrganizations: true,
+  uniqueId: 'export-request-42',
 });
 ```
 
@@ -3532,6 +3620,32 @@ await sdk.api.agents.getAgentAnalytics({ agentId: 'agent-123' });
 await sdk.api.agents.runExecution({ agentId: 'agent-123', url: 'https://example.com/checkout', ranBy: { userId: 'user-1', name: 'John Doe', email: 'john@example.com' } });
 ```
 
+**Per-run options**
+
+- `deviceType` — emulate `'mobile'` or `'desktop'`. Defaults to `'desktop'`.
+- `annotationVisibility` — access posture for the annotations this run creates. `'private'` (the default) means workspace admins and organization users only; `'public'` means any viewer of the document.
+- `aiConfig` — override the provider/model for this run only. Supply at least one of `provider` (`'gemini' | 'claude' | 'openai'`), `model`, `defaultModels`, or `maxToolTurns` (1–16); an empty object is rejected.
+
+```ts
+await sdk.api.agents.runExecution({
+  agentId: 'agent-123',
+  url: 'https://example.com/checkout',
+  deviceType: 'mobile',
+  annotationVisibility: 'public',
+  aiConfig: { provider: 'claude', maxToolTurns: 8 },
+});
+```
+
+Use `model` when you also know the provider — it pins one model for the run and is validated against that provider's allowlist. Use `defaultModels` to express a standing per-provider policy that stays valid regardless of which provider each agent is stored on:
+
+```ts
+await sdk.api.agents.runExecution({
+  agentId: 'agent-123',
+  url: 'https://example.com/checkout',
+  aiConfig: { defaultModels: { claude: 'claude-sonnet-4-5', gemini: 'gemini-2.5-pro' } },
+});
+```
+
 #### `getExecution`
 
 - Fetch a single execution by id.
@@ -3983,7 +4097,80 @@ interface MemoryIngestInlineFile { base64: string; mimeType: MemoryKnowledgeMime
 
 **Namespace:** `sdk.api.approval`
 
-A new service for defining approval/review workflows (graphs of agent, human, and webhook nodes) and dispatching/resolving their executions and steps. 14 methods (routes live under `/v2/workflow/*`). Every type is `Approval`-prefixed. `ApprovalService` is also exported directly from `@veltdev/node`.
+A new service for defining approval/review workflows (graphs of agent, human, webhook, and notification nodes) and dispatching/resolving their executions and steps. 14 methods (routes live under `/v2/workflow/*`). Every type is `Approval`-prefixed. `ApprovalService` is also exported directly from `@veltdev/node`.
+
+#### Routing and loops
+
+Routing is expressed entirely as edges. Each edge carries a semantic `on` role — `'approve'`, `'reject'`, `'custom'` (with a `when` predicate), or `'exhausted'` — and endpoints may be a bare node ID or an object targeting a node or a parallel group.
+
+Loops are edges too: an `on: 'reject'` back-edge carrying a `loop` object sends work back for rework with an iteration cap.
+
+```ts
+edges: [
+  { from: 'draft', to: 'review', on: 'approve' },
+  // Send rejected work back to 'draft', at most 3 times.
+  { from: 'review', to: 'draft', on: 'reject', loop: { maxIterations: 3 } },
+  // Fan out from a node into a parallel group on a custom predicate.
+  {
+    from: { kind: 'node', nodeId: 'review' },
+    to: { kind: 'group', groupId: 'legal-and-brand' },
+    on: 'custom',
+    when: "output.decision == 'escalate'",
+  },
+]
+```
+
+#### Notification nodes
+
+A `notification` node sends a formatted email or Slack message built from upstream step output.
+
+```ts
+nodes: [
+  {
+    nodeId: 'notify-ops',
+    type: 'notification',
+    config: {
+      channel: 'slack',
+      slackTarget: 'C0123456',           // channel ID or an incoming-webhook URL
+      bodyTemplate: 'Review completed for {{document.title}}',
+      format: 'slack-blocks',
+    },
+  },
+]
+```
+
+`recipients` is required when `channel` is `'email'`; `slackTarget` is required when it is `'slack'`. `format` accepts `'text'`, `'html'`, or `'slack-blocks'` — the last is valid only for Slack.
+
+#### Triggers
+
+A trigger starts an execution. Each trigger drives **at most one** mechanism — `inboundWebhook`, `schedule`, and `appTrigger` are mutually exclusive, and the API rejects a trigger that combines them.
+
+```ts
+triggers: [
+  // Run on a cron schedule, in a named IANA timezone.
+  {
+    triggerId: 'weekly-audit',
+    schedule: { cron: '0 9 * * 1', timezone: 'America/New_York', enabled: true },
+  },
+  // Start from a connected GitHub App or Vercel Integration.
+  {
+    triggerId: 'deploy-gate',
+    appTrigger: {
+      provider: 'github',
+      installationRef: '41234567',
+      repoFilter: ['acme/web', 'acme/api'],
+      allowedEvents: ['workflow_run'],
+      // Fire only when ALL payload filters match.
+      payloadFilters: [
+        { path: 'workflow_run.name', in: ['deploy'] },
+        { path: 'workflow_run.conclusion', in: ['success'] },
+      ],
+    },
+  },
+]
+```
+
+An `appTrigger` carries no secret — the connected app is authenticated at the app-level webhook. `payloadFilters` resolve dot-paths against the provider's raw webhook body, so you can gate on a specific workflow name plus its conclusion.
 
 #### `createDefinition`
 
@@ -4031,7 +4218,12 @@ await sdk.api.approval.updateDefinition({
 
 ```ts
 await sdk.api.approval.deleteDefinition({ definitionId: 'doc-publish-review' });
+
+// Hard-delete the definition document and its version snapshots.
+await sdk.api.approval.deleteDefinition({ definitionId: 'doc-publish-review', purge: true });
 ```
+
+By default a delete leaves a tombstone. `purge: true` removes the definition and its version snapshots outright. Both paths free the definition ID for re-creation, and the response echoes `purged` so you can tell which ran.
 
 #### `getDefinition`
 

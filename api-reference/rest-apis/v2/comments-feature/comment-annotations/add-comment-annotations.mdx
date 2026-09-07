@@ -5,7 +5,7 @@ api: "POST https://api.velt.dev/v2/commentannotations/add"
 ---
 
 Use this API to add comment annotations to a document within an organization.
-- You can add comments on an elemement, text or page.
+- You can add comments on an element, text or page.
 - You can provide HTML or text content.
 - Additional filters can be applied using location IDs.
 
@@ -115,6 +115,14 @@ Use this API to add comment annotations to a document within an organization.
 
             <ParamField body="isCommentTextAvailable" type="boolean">
               Use this for self-hosting comments data. Set this as true if this comment will have text content. Sometimes, comments might only have attachments and in that case, set this as false.
+            </ParamField>
+
+            <ParamField body="progress" type="CommentProgress">
+              Turns this comment into a live progress row while `progress.state` is `active`. Absence leaves the comment unaffected. See [CommentProgress](/api-reference/sdk/models/data-models#commentprogress) for the full shape. `steps` is capped at 100 entries.
+            </ParamField>
+
+            <ParamField body="actions" type="CommentAction[]">
+              Customer-defined action chips rendered on this comment row. Overrides the annotation-level `actions` default for this row. Capped at 20 entries. See [CommentAction](/api-reference/sdk/models/data-models#commentaction) for the full shape.
             </ParamField>
 
             <ParamField body="triggerNotification" type="boolean">
@@ -353,6 +361,10 @@ Use this API to add comment annotations to a document within an organization.
             </ParamField>
           </Expandable>
         </ParamField>
+
+        <ParamField body="actions" type="CommentAction[]">
+          Per-row default action chips, inherited by every comment on the annotation that doesn't set its own `commentData[].actions`. Capped at 20 entries. See [CommentAction](/api-reference/sdk/models/data-models#commentaction) for the full shape.
+        </ParamField>
       </Expandable>
     </ParamField>
   </Expandable>
@@ -483,6 +495,41 @@ When `verifyUserPermissions` is enabled, the API verifies the user has access to
               "userId": "user-1",
               "email": "user@example.com",
               "name": "User Name"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### Add a content-less progress comment with action chips
+
+Create a comment with no text and `progress.state: "active"` to reserve a spot for a running task. Push step updates with subsequent [Update Comments](/api-reference/rest-apis/v2/comments-feature/comments/update-comments) calls on the same `commentId`, then finish by writing the real content with `state: "completed"`. `actions` renders customer-defined chips; Velt performs no write of its own when one is clicked.
+
+```JSON
+{
+  "data": {
+    "organizationId": "acme-corp",
+    "documentId": "design-mockup-v2",
+    "commentAnnotations": [
+      {
+        "commentData": [
+          {
+            "isCommentTextAvailable": false,
+            "progress": {
+              "state": "active",
+              "steps": [
+                { "label": "Fetching data", "state": "active" }
+              ]
+            },
+            "actions": [
+              { "id": "approve", "label": "Approve" }
+            ],
+            "from": {
+              "userId": "agent-1",
+              "name": "Review Agent"
             }
           }
         ]
@@ -669,6 +716,8 @@ Use `visibility` to limit who can see the annotation.
 
 # Response
 
+`data` is a map of results, keyed per annotation, not an array.
+
 #### Success Response
 
 ```JSON
@@ -691,6 +740,36 @@ Use `visibility` to limit who can see the annotation.
 
 ```
 
+#### Result fields
+
+<ResponseField name="success" type="boolean">
+  Outcome for this annotation. The envelope reports `success` only when every entry succeeded and no user was permission denied.
+</ResponseField>
+
+<ResponseField name="annotationId" type="string">
+  The annotation ID. `annotationId` is optional on input, so the server generates one when you do not supply it.
+</ResponseField>
+
+<ResponseField name="commentIds" type="number[]">
+  IDs of the comments created inside this annotation.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Success message, or the reason this annotation failed.
+</ResponseField>
+
+<ResponseField name="findingId" type="string">
+  Agent annotations only. Echoes back `commentData[0].agent.reason.findingId` exactly as you sent it. The field is omitted for non-agent annotations.
+</ResponseField>
+
+#### Correlating results back to your own records
+
+Read `entry.annotationId` from each result, never the map key.
+
+The server generates `annotationId`, and results are written into the map as each write completes, so the map order does not match the order you submitted. For agent annotations, `findingId` is the reliable way to match a created annotation back to the record it came from.
+
+Entries for annotations rejected by permission checks are recorded before an ID exists. When you did not supply an `annotationId` for one of those, its key falls back to `__velt_denied:<index>`, where `<index>` is its position in the `commentAnnotations` array you sent, and the entry has no `annotationId` field to read. That key is reserved: annotation IDs cannot contain a colon, so it never collides with one of yours.
+
 #### Failure Response
 
 ```JSON
@@ -698,6 +777,31 @@ Use `visibility` to limit who can see the annotation.
   "error": {
     "message": "ERROR_MESSAGE",
     "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+When some annotations fail or a user is permission denied, the error carries the same per-annotation map in `details`. Entries marked `"success": true` inside `details` **were created**, so treat a failed request as a partial write and read `details` instead of assuming nothing was saved.
+
+```JSON
+{
+  "error": {
+    "message": "ERROR_MESSAGE",
+    "status": "PERMISSION_DENIED",
+    "details": {
+        "-O0mpUziLcBwzREvZKs6": {
+            "success": true,
+            "annotationId": "-O0mpUziLcBwzREvZKs6",
+            "commentIds": [
+                126535
+            ],
+            "message": "Added Successfully"
+        },
+        "deniedAnnotation-1": {
+            "success": false,
+            "message": "ERROR_MESSAGE"
+        }
+    }
   }
 }
 ```

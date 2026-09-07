@@ -7,6 +7,7 @@ Use this API to resolve optimal extraction strategies and execution strategy for
 
 - A recommended set of `contextGathering.strategies`
 - A recommended `executionStrategy` (`ai`, `service`, `service+ai`, or `stagehand-agent`)
+- Per-strategy options where a recommended strategy needs them
 - Reasoning for each recommendation
 
 Use this as a starting point when creating a new agent; the response can be passed straight into [Create Agent](/api-reference/rest-apis/v2/agents/create) under the `contextGathering` and `execution` blocks.
@@ -40,7 +41,7 @@ Use this as a starting point when creating a new agent; the response can be pass
     </ParamField>
 
     <ParamField body="provider" type="string">
-      LLM provider override: `"gemini"` or `"claude"`.
+      LLM provider override: `"gemini"`, `"claude"`, or `"openai"`. Any other value is accepted by the request schema, but the resolver then fails internally and returns its hardcoded default recommendation under a `success` status. Omit the field to use the platform default.
     </ParamField>
   </Expandable>
 </ParamField>
@@ -79,9 +80,14 @@ Use this as a starting point when creating a new agent; the response can be pass
     "message": "Config resolved successfully",
     "data": {
       "resolvedConfig": {
-        "extraction_strategies": ["web-page-text", "web-page-screenshot", "web-page-html"],
+        "extraction_strategies": ["web-page-text", "web-page-screenshot", "computed-styles"],
         "execution_strategy": "ai",
-        "reasoning": "The instructions describe a static visual + textual check (brand colors and fonts). Screenshots support color verification; HTML supports font detection. AI execution is sufficient; no service delegation needed."
+        "reasoning": "The instructions describe a static visual + textual check (brand colors and fonts). Screenshots support color verification; computed styles resolve the rendered font on the heading elements. AI execution is sufficient; no service delegation needed.",
+        "strategy_options": {
+          "computed-styles": {
+            "selectors": ["h1", ".cta"]
+          }
+        }
       }
     }
   }
@@ -93,6 +99,19 @@ Use this as a starting point when creating a new agent; the response can be pass
 | `data.resolvedConfig.extraction_strategies`    | string[] | Recommended `contextGathering.strategies` values.                         |
 | `data.resolvedConfig.execution_strategy`       | string   | Recommended `execution.executionStrategy` value.                          |
 | `data.resolvedConfig.reasoning`                | string   | Explanation for the recommendations.                                     |
+| `data.resolvedConfig.strategy_options`         | object   | Per-strategy config the resolver derived from the prompt. Today the only key emitted is `computed-styles` (`{ selectors, properties? }`). Maps to `contextGathering.strategyOptions`. Omitted when no recommended strategy needs options. |
+
+<Warning>
+  Carry `strategy_options` across to Create Agent along with `extraction_strategies`. Some strategies are inert without it: `computed-styles` requires a `selectors` list, and dropping the resolver's options silently produces an agent that gathers nothing for that strategy.
+</Warning>
+
+Mapping the response onto [Create Agent](/api-reference/rest-apis/v2/agents/create):
+
+| Resolver field           | Create Agent field                       |
+| ------------------------ | ---------------------------------------- |
+| `extraction_strategies`  | `contextGathering.strategies`            |
+| `strategy_options`       | `contextGathering.strategyOptions`       |
+| `execution_strategy`     | `execution.executionStrategy`            |
 
 #### Failure Response
 
@@ -106,6 +125,10 @@ Use this as a starting point when creating a new agent; the response can be pass
 ```
 
 **Errors:** `INVALID_ARGUMENT` (missing or empty `instructions`).
+
+<Warning>
+  The resolver never surfaces an AI failure as an error. If the model call fails for any reason, the endpoint still returns `200` with `"status": "success"` and a hardcoded fallback recommendation: `extraction_strategies` of `["web-page-text", "web-page-html", "web-page-screenshot"]`, `execution_strategy` of `"ai"`, and `reasoning` of `"Default configuration applied"`. Check for that exact `reasoning` string before treating a response as tailored to your instructions.
+</Warning>
 
 <ResponseExample>
 ```js

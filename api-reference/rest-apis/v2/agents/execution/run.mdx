@@ -5,7 +5,7 @@ api: "POST https://api.velt.dev/v2/agents/execution/run"
 
 Use this API to start an asynchronous agent execution. The engine creates an execution document in Firestore and dispatches a Cloud Task for processing. The response returns immediately with the `executionId`. Poll [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) to track progress and fetch findings.
 
-The `apiKey` is injected from request headers. `organizationId` and `documentId` are required and identify the document the execution runs against: the document must already exist, and findings are persisted to it as comment annotations. Cross-page execution is controlled via the `crossPageExecute` boolean; there is no separate endpoint.
+The `apiKey` is injected from request headers. `organizationId` and `documentId` are required and identify the document the execution runs against: the document must already exist, and findings are persisted to it as comment annotations. Cross-page execution is controlled via the `crossPageExecute` boolean; there is no separate endpoint. To review an exact set of pages instead of crawling, send them in `urls`.
 
 The schema uses `.passthrough()` so any additional fields are forwarded.
 
@@ -34,15 +34,23 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
     </ParamField>
 
     <ParamField body="url" type="string" required>
-      Valid URL. The seed URL to process.
+      Valid URL. The seed URL to process. When `urls` is present, this is the site the list belongs to: relative entries resolve against it and every entry must be on its host.
+    </ParamField>
+
+    <ParamField body="urls" type="string[]">
+      Review exactly these pages instead of crawling. Max 500 entries. Each entry is an absolute `http(s)` URL or a site-relative path starting with `/` (for example `/s/article?id=101`), resolved against `url`. `url` stays required and is never replaced by an entry.
+
+      Entries are normalized before the run: blank entries are skipped, the `#fragment` is dropped, the Superflow toolbar query params (`review`, `feedback`, `sreviewId`, `scommentId`, `sprojectInstall`, `sflivedemo`, `sembed`, `scommentmode`, `sreadonly`, `sagentcomments`, `st`) are removed, every other query param is kept in the order you sent it, and a trailing slash is kept. An entry on another host, an entry that is not a URL or a path (`site.com/x`, `mailto:`), or a repeat of an earlier entry is dropped. The first occurrence of a page is the one that runs.
+
+      When `urls` is present the crawler is skipped and `crossPageExecute` and `maxUrlsToProcess` are derived from the surviving entries. Sending more than 500 entries, a list where nothing survives, or a `url` that is not a usable `http(s)` URL returns `INVALID_ARGUMENT`.
     </ParamField>
 
     <ParamField body="crossPageExecute" type="boolean">
-      When true, the engine crawls the seed URL and processes up to `maxUrlsToProcess` pages. Default: `false`.
+      When true, the engine crawls the seed URL and processes up to `maxUrlsToProcess` pages. Default: `false`. Ignored when `urls` is present: it is then `true` when the list has more than one page.
     </ParamField>
 
     <ParamField body="maxUrlsToProcess" type="number">
-      Max URLs to process when `crossPageExecute: true`. Positive integer. Default: 50.
+      Max URLs to process when `crossPageExecute: true`. Positive integer. Default: 50. Ignored when `urls` is present: it is then the number of pages in the list.
     </ParamField>
 
     <ParamField body="deviceType" type="string">
@@ -240,7 +248,30 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 }
 ```
 
-#### 7. Minimal request
+#### 7. A list of pages, no crawl
+
+Use this for sites whose pages differ only by a query string, such as a Salesforce help site, where a crawl cannot find them. Relative entries resolve against `url`.
+
+```JSON
+{
+  "data": {
+    "agentId": "abc123def456",
+    "url": "https://help.example.com",
+    "urls": [
+      "/s/article?id=101",
+      "/s/article?id=102",
+      "https://help.example.com/s/topic?category=billing&sort=newest"
+    ],
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "ranBy": { "userId": "user_123" }
+  }
+}
+```
+
+The execution then reports `config.pageSource: "list"`, `config.seedUrl` set to the first page in the list, and `crawlerResults.status: "skipped"`. See [Get Execution](/api-reference/rest-apis/v2/agents/execution/get).
+
+#### 8. Minimal request
 
 ```JSON
 {
@@ -287,6 +318,7 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 **Errors:**
 
 - `INVALID_ARGUMENT`: invalid URL; missing `agentId`, `organizationId`, or `documentId`; or an invalid `trigger`, `deviceType`, or `annotationVisibility`.
+- `INVALID_ARGUMENT`: a `urls` list with more than 500 entries, a list where no entry survives normalization (every entry blank, on another host, or not a URL or path), or a `url` that is not a usable `http(s)` URL to resolve the list against.
 - `INVALID_ARGUMENT`: an `aiConfig` that is empty, carries an unknown key, names a provider outside `gemini` / `claude` / `openai`, names a model outside the allowlist, supplies an empty `defaultModels`, or sets `maxToolTurns` outside `1..16`.
 - `NOT_FOUND`: store database not found, or the target document does not exist.
 - `ALREADY_EXISTS`: an execution is already running for this agent and document combination. The error message includes the running execution's ID.

@@ -1,7 +1,7 @@
 ---
 title: "Python SDK for self-hosting and REST API calls"
 sidebarTitle: "Python SDK"
-description: "Integrate the Velt Python SDK to self-host backend data with MongoDB and S3, or call Velt's REST APIs directly without managing a database."
+description: "Integrate the Velt Python SDK to self-host backend data with MongoDB or PostgreSQL and S3, or call Velt's REST APIs directly without managing a database."
 ---
 
 ## Overview
@@ -10,7 +10,7 @@ The [Velt Python SDK](https://pypi.org/project/velt-py) exposes two independent 
 
 | Backend | Namespace | Use case |
 |---------|-----------|----------|
-| Self-hosting | `sdk.selfHosting.*` | Store Velt data in your own MongoDB + AWS S3 |
+| Self-hosting | `sdk.selfHosting.*` | Store Velt data in your own MongoDB or PostgreSQL, plus AWS S3 for attachments |
 | REST API | `sdk.api.*` | Call Velt's REST APIs directly — no database required |
 
 **Self-hosting backend** (`sdk.selfHosting.*`) simplifies backend implementation by **90%**. Instead of writing custom database queries and storage logic, you:
@@ -19,19 +19,31 @@ The [Velt Python SDK](https://pypi.org/project/velt-py) exposes two independent 
 2. Pass the raw request object directly to SDK methods
 3. Return the resulting response object straight to the client
 
-**REST API backend** (`sdk.api.*`) provides parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2). 18 services, typed `@dataclass` request objects, and raw Velt API responses. No database or AWS configuration needed.
+**REST API backend** (`sdk.api.*`) provides parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2). 19 services, typed `@dataclass` request objects, and raw Velt API responses. No database or AWS configuration needed.
 
 ## Installation
 
+Install the extra for the database you self-host on. The core package carries no database driver.
+
 ```bash
-pip install velt-py
+pip install velt-py                # REST API backend only
+pip install 'velt-py[mongodb]'     # + self-hosting on MongoDB
+pip install 'velt-py[postgres]'    # + self-hosting on PostgreSQL
 ```
+
+A `database` config whose driver is not installed fails at `initialize()` with the exact command to run, for example `MongoDB support requires: pip install "velt-py[mongodb]"`.
+
+<Warning>
+**Upgrading from 0.1.x:** versions before 0.2.0 installed `pymongo` with `pip install velt-py`. From 0.2.0, change `velt-py` to `velt-py[mongodb]` in your requirements. Environments upgraded in place keep working; rebuilt environments need the extra. `mongoengine` and `blinker` are no longer installed either; declare them yourself if your application uses them.
+</Warning>
 
 ### Requirements
 
 - Python 3.8+
 - Django 4.2.26+ (only if using the self-hosting backend)
-- MongoDB (Percona Server or MongoDB Atlas) for self-hosting
+- For self-hosting, one of:
+  - MongoDB 6+ (Percona Server or MongoDB Atlas) via `velt-py[mongodb]`
+  - PostgreSQL 14+ via `velt-py[postgres]`
 - `requests` for REST API calls (installed automatically)
 - Optional `velt-py[auth]` extra (PyJWT>=2.8.0, cryptography>=42.0.0) — required only for the built-in JWT/JWKS verifier path of [`verifyToken`](#resolver-token-verification). Install with `pip install 'velt-py[auth]'`. Core install (`pip install velt-py`), the custom-callback verify path, and all non-auth features need no new dependency.
 
@@ -42,7 +54,7 @@ pip install velt-py
 <Tabs>
 <Tab title="Self-hosting">
 
-Self-hosting initialization (MongoDB + optional AWS):
+Self-hosting initialization (MongoDB or PostgreSQL, plus optional AWS S3):
 
 ```python
 from velt_py import VeltSDK
@@ -50,15 +62,12 @@ from velt_py import VeltSDK
 # Initialize with database and AWS config
 config = {
     'database': {
-        # Option 1: Connection string (recommended for MongoDB Atlas)
+        # MongoDB (default type)
         'connection_string': 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
-        
-        # Option 2: Individual components
-        # 'host': 'localhost:27017',
-        # 'username': 'your_username',
-        # 'password': 'your_password',
-        # 'auth_database': 'admin',
-        # 'database_name': 'velt-db'
+
+        # PostgreSQL: set the type and use a PostgreSQL connection string instead
+        # 'type': 'postgresql',
+        # 'connection_string': 'postgresql://user:pass@host:5432/velt',
     },
     # Optional: AWS S3 config for attachments
     'aws': {
@@ -125,14 +134,16 @@ The SDK reads the following environment variables automatically. These can be us
 <Tabs>
 <Tab title="Database">
 
-Configure MongoDB connection for storing comments, reactions, and user data.
+Configure the database that stores comments, reactions, and user data. `type` selects the backend: `mongodb` (default) or `postgresql`. Every `sdk.selfHosting.*` method behaves the same on both.
 
-```python
+<CodeGroup>
+
+```python MongoDB
 config = {
     'database': {
         # Option 1: Connection string (recommended for MongoDB Atlas)
         'connection_string': 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
-        
+
         # Option 2: Individual components (for local MongoDB or custom setup)
         # 'host': 'localhost:27017',
         # 'username': 'your_username',
@@ -142,6 +153,56 @@ config = {
     }
 }
 ```
+
+```python PostgreSQL
+config = {
+    'database': {
+        'type': 'postgresql',
+        # Option 1: Connection string (URI or libpq key/value form)
+        'connection_string': 'postgresql://user:pass@host:5432/velt',
+
+        # Option 2: Individual components
+        # 'host': 'host:5432',
+        # 'username': 'your_username',
+        # 'password': 'your_password',
+        # 'database_name': 'velt',
+
+        # Optional (defaults shown)
+        # 'schema': 'public',
+        # 'sslmode': 'prefer',          # use 'verify-full' with 'sslrootcert' for remote databases
+        # 'sslrootcert': None,
+        # 'connect_timeout': 10,
+        # 'application_name': 'velt-py/<version>',
+        # 'pool_min_size': 1,
+        # 'pool_max_size': 5,
+        # 'pool_timeout': 10,
+        # 'manage_schema': True,
+        # 'connection_options': {},     # any extra libpq parameter
+    }
+}
+```
+
+</CodeGroup>
+
+`database_name` overrides the database named in `connection_string` on both backends.
+
+**How PostgreSQL storage works**
+
+- One table per collection (`comment_annotations`, `reaction_annotations`, `recorder_annotations`, `notifications`, `activities`, `attachments`, `users`) with a single JSONB `data` column that holds the document, plus expression indexes on the fields the SDK queries. The `collections` option renames these tables.
+- On first connection the SDK creates the schema, tables, and indexes (`manage_schema: True`). The role needs `CREATE` on the schema. Concurrent application starts coordinate through an advisory lock, so they do not race.
+- For locked-down roles set `manage_schema: False` and apply the DDL yourself. Generate it for your exact config and hand it to a migration role:
+
+```python
+from velt_py.config import Config
+from velt_py.database.connection import postgres_schema_sql
+
+print(postgres_schema_sql(Config({'database': {'type': 'postgresql', 'connection_string': 'postgresql://...'}})))
+```
+
+- `schema` is the PostgreSQL schema that holds the tables. It is unrelated to the `user_schema` option, which maps user fields.
+- The default `sslmode: prefer` encrypts when the server offers TLS but never verifies the certificate. For any database that is not on the same host, set `'sslmode': 'verify-full'` with `'sslrootcert': '/path/to/ca.pem'`.
+- Multi-process servers (gunicorn, uWSGI) open one pool per worker. Under uWSGI enable threads (`--enable-threads`).
+- The SDK does not migrate data between MongoDB and PostgreSQL.
 
 </Tab>
 <Tab title="AWS (Attachments)">
@@ -162,7 +223,7 @@ config = {
 </Tab>
 <Tab title="Collections">
 
-Customize collection names for storing Velt data.
+Customize collection names for storing Velt data. On PostgreSQL these are the table names.
 
 ```python
 config = {
@@ -225,7 +286,7 @@ See [Resolver Token Verification](#resolver-token-verification) for full detail.
 </Tab>
 <Tab title="Complete Example">
 
-Full configuration with database, AWS, collections, and user schema.
+Full configuration with database, AWS, collections, and user schema. For PostgreSQL, replace the `database` block with `{'type': 'postgresql', 'connection_string': 'postgresql://user:pass@host:5432/velt'}`.
 
 ```python
 from velt_py import VeltSDK
@@ -700,8 +761,8 @@ async def delete_attachment(request: Request):
 
 #### `getToken`
 
-- Generates a Velt auth token for a user. Self-hosting variant.
-- Params: positional — `organizationId`, `userId`, `email` (optional), `isAdmin` (optional)
+- Generates a Velt auth token for a user. Token minting is a call to Velt's API and needs no database, so the same service is also available as `sdk.api.token` under the [REST API backend](#rest-api-backend). Both names return the same shape.
+- Params: keyword arguments `organizationId`, `userId`, `email` (optional), `isAdmin` (optional), `name` (optional), `permissions` (optional dict with a `resources` list)
 - Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
 
 ```python
@@ -718,12 +779,11 @@ result = sdk.selfHosting.token.getToken(
 ```python
 {
     'success': True,
-    'statusCode': 200,
     'data': { 'token': 'eyJhbGciOi...' }
 }
 ```
 
-> Note: `getToken` takes positional / keyword arguments — it does NOT accept a dataclass request object. Signature: `getToken(organizationId, userId, email=None, isAdmin=False)`.
+> Note: `getToken` takes keyword arguments; it does not accept a dataclass request object. Signature: `getToken(organizationId, userId, email=None, isAdmin=None, name=None, permissions=None)`. On failure it returns `{'success': False, 'error': '...', 'errorCode': '...'}`.
 
 ### Resolver Token Verification
 
@@ -906,7 +966,7 @@ async def get_comments(request: Request):
 
 ## REST API Backend
 
-The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 18 services. Each method takes a typed `@dataclass` request object and returns the raw Velt API response.
+The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 19 services, plus token minting. Each method takes a typed `@dataclass` request object and returns the raw Velt API response.
 
 You only need `apiKey` and `authToken` — no database or AWS config.
 
@@ -918,7 +978,7 @@ sdk = VeltSDK.initialize({
     'authToken': 'YOUR_VELT_AUTH_TOKEN'
 })
 
-# All 18 services are accessible under sdk.api.*
+# All 19 services are accessible under sdk.api.*
 # e.g. sdk.api.organizations, sdk.api.documents, sdk.api.workspace,
 #      sdk.api.workflow ...
 ```
@@ -5083,9 +5143,9 @@ result = sdk.api.workflow.recordReviewerDecision(
 
 #### `getToken`
 
-- Generates a Velt auth token for a user.
-- Params: positional — `organizationId`, `userId`, `email` (optional), `isAdmin` (optional)
-- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
+- Generates a Velt auth token for a user. Available from **v0.2.1**; it is the same service as [`sdk.selfHosting.token`](#token) and needs no database, so it works with a REST-only config.
+- Params: keyword arguments `organizationId`, `userId`, `email` (optional), `isAdmin` (optional), `name` (optional), `permissions` (optional dict with a `resources` list)
+- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
 
 ```python
 result = sdk.api.token.getToken(
@@ -5100,14 +5160,12 @@ result = sdk.api.token.getToken(
 
 ```python
 {
-    'result': {
-        'status': 'success',
-        'data': { 'token': 'eyJhbGciOi...' }
-    }
+    'success': True,
+    'data': { 'token': 'eyJhbGciOi...' }
 }
 ```
 
-> Note: `getToken` takes positional / keyword arguments — it does NOT accept a dataclass request object. Signature: `getToken(organizationId, userId, email=None, isAdmin=False)`.
+> Note: `getToken` takes keyword arguments; it does not accept a dataclass request object. Signature: `getToken(organizationId, userId, email=None, isAdmin=None, name=None, permissions=None)`. To call the `/v2/auth/generate_token` endpoint and receive the raw Velt API response instead, use `sdk.api.accessControl.generateToken(GenerateTokenRequest(...))`.
 
 
 ### Data Isolation
@@ -5255,7 +5313,7 @@ annotation = PartialCommentAnnotation(resolvedByUserId=None)
 
 ### `BaseMetadata`
 
-Base metadata attached to every comment annotation. Starting in **v0.1.10**, `sdkVersion` and `documentMetadata` are fully modeled and preserved in MongoDB writes. These fields were previously sent by the frontend on every annotation save but silently dropped.
+Base metadata attached to every comment annotation. Starting in **v0.1.10**, `sdkVersion` and `documentMetadata` are fully modeled and preserved in database writes. These fields were previously sent by the frontend on every annotation save but silently dropped.
 
 ```python
 @dataclass
@@ -5334,7 +5392,7 @@ from velt_py import SaveCommentResolverRequest, CommentResolverSaveEvent
 
 request = SaveCommentResolverRequest.from_dict(data)
 if request.targetComment is not None:
-    print(request.targetComment.commentId)   # request context — NOT written to MongoDB
+    print(request.targetComment.commentId)   # request context only; not written to your database
 sdk.selfHosting.comments.saveComments(request)
 ```
 

@@ -1,0 +1,131 @@
+---
+title: Upgrade Guide
+---
+
+## Overview
+
+Version 6.0.17 changes what the SDK sends to Velt when you self-host data. Three changes can require action, depending on your setup.
+
+## Breaking Changes
+
+### Activity Log Requires an Activity Data Provider
+
+On hosted sessions, the activity log now runs only when you pass an `activity` data provider to `setDataProviders()`. Without one, the SDK creates no activity records, runs no activity reads, and renders an empty log. This applies to every hosted project with the activity log enabled, including projects that do not otherwise self-host. Tier B sessions are not affected.
+
+**Before:**
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{ comment: commentDataProvider }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setDataProviders({ comment: commentDataProvider });
+```
+</Tab>
+</Tabs>
+
+**After:**
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<VeltProvider
+  apiKey='YOUR_API_KEY'
+  dataProviders={{
+    comment: commentDataProvider,
+    activity: activityDataProvider
+  }}
+>
+</VeltProvider>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setDataProviders({
+  comment: commentDataProvider,
+  activity: activityDataProvider
+});
+```
+</Tab>
+</Tabs>
+
+[Learn more →](/self-hosting/partial/activity)
+
+### Comment Data Provider Must Store and Return `context`
+
+For TipTap comments, the comment data provider `save` payload now includes the annotation `context` object, with the anchor at `context.textEditorConfig.text`. Velt no longer stores that anchor. A store that drops unknown fields loses the anchor of every new TipTap comment. Rows created before 6.0.17 keep their anchor in Velt until the next comment add, edit, or delete moves it.
+
+**Before:**
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const save = async (request) => {
+  for (const [id, a] of Object.entries(request.commentAnnotation)) {
+    await db.put(id, { comments: a.comments, targetTextRange: a.targetTextRange, from: a.from });
+  }
+  return { statusCode: 200, success: true };
+};
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const save = async (request) => {
+  for (const [id, a] of Object.entries(request.commentAnnotation)) {
+    await db.put(id, { comments: a.comments, targetTextRange: a.targetTextRange, from: a.from });
+  }
+  return { statusCode: 200, success: true };
+};
+```
+</Tab>
+</Tabs>
+
+**After:**
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const save = async (request) => {
+  for (const [id, a] of Object.entries(request.commentAnnotation)) {
+    await db.put(id, { comments: a.comments, targetTextRange: a.targetTextRange, from: a.from, context: a.context });
+  }
+  return { statusCode: 200, success: true };
+};
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const save = async (request) => {
+  for (const [id, a] of Object.entries(request.commentAnnotation)) {
+    await db.put(id, { comments: a.comments, targetTextRange: a.targetTextRange, from: a.from, context: a.context });
+  }
+  return { statusCode: 200, success: true };
+};
+```
+</Tab>
+</Tabs>
+
+Your `get` handler must also return `context` so the SDK can restore `context.textEditorConfig.text` on read. [Learn more →](/self-hosting/partial/comments)
+
+### Tier B Requires Gateway Image `portable-v0.1.6` or Later
+
+The SDK no longer includes fallbacks for older gateway images. It requires the `ordered-deltas` and `getaccess-any-user` capabilities, the `lastNotificationTimestamp` channel, and a renewal credential on identify. If the gateway `welcome` omits a required capability, the SDK logs one `console.error`.
+
+**Before:** Gateway image earlier than `portable-v0.1.6`.
+
+**After:** Gateway image `portable-v0.1.6` or later. Upgrade the gateway before you roll out SDK 6.0.17.
+
+## How to Upgrade
+
+1. Update `@veltdev/react`, `@veltdev/client`, `@veltdev/sdk`, and `@veltdev/types` to `6.0.17`.
+2. Pass an `activity` data provider to `setDataProviders()` if you use the activity log on a hosted session.
+3. Update your comment data provider `save` and `get` handlers to store and return `context`.
+4. Upgrade your Tier B gateway image to `portable-v0.1.6` or later.
+5. Call `setDataProviders()` before `identify()` so the SDK can strip user profile fields.

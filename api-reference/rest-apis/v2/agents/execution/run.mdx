@@ -106,7 +106,7 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
     </ParamField>
 
     <ParamField body="userContext" type="object">
-      Runtime values for the agent's `userContextFields`. Keys must match the field IDs declared in the agent's `input.userContextFields`. Some built-in agents also read options from it, such as switching a check off: see [Per-run options](/ai/agents/overview#per-run-options).
+      Runtime values for the agent's `userContextFields`. Keys must match the field IDs declared in the agent's `input.userContextFields`. The request is checked against those declarations before any execution is created: a missing required field, or a value of another type, returns `INVALID_ARGUMENT`. Some built-in agents also read options from it, such as switching a check off: see [Per-run options](/ai/agents/overview#per-run-options).
 
       Four optional run-scope keys work with every agent, built-in or custom, whatever fields it declares. Leave them out and the run behaves as before.
 
@@ -115,7 +115,7 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
       | `focusIssueTypes`    | string[] | Reports and annotates only findings whose `issueType` is in the list, compared case-insensitively. 1 to 50 non-blank entries of at most 100 characters each. A finding without an `issueType` is dropped. Built-in values are listed in [Issue types](/ai/agents/overview#issue-types). |
       | `sourceAnnotationId` | string   | The comment that asked for the run. Added to every finding's `agent.reason` as `sourceAnnotationId`, so you can link each finding back to it. |
       | `sourcePageUrl`      | string   | The page that comment is on. Added to `agent.reason` as `sourcePageUrl` when `sourceAnnotationId` is also set. |
-      | `sourceElementXpath` | string   | Full positional XPath of the element that comment is pinned on, for example `/html/body/main/section[2]/img`. A finding pinned on the same element of `sourcePageUrl` is dropped, so the run does not repeat the comment. Requires `sourcePageUrl`. |
+      | `sourceElementXpath` | string   | Full positional XPath of the element that comment is pinned on, for example `/html/body/main/section[2]/img`. A finding pinned on the same element of `sourcePageUrl` is dropped, so the run does not repeat the comment. Has no effect without `sourcePageUrl`. |
 
       The three `source*` keys take non-blank strings of at most 4,096 characters.
 
@@ -123,7 +123,7 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 
       This removal never touches a suggestion a user already resolved, or a page the run could not load. It follows the agent's `postProcess.deletePreviousSuggestions` setting (on by default). The one exception: a `sourceAnnotationId` run without `focusIssueTypes` replaces that comment's earlier suggestions even when the setting is off.
 
-      These four key names are reserved in `userContext`: do not declare a `userContextFields` entry with one of them for another purpose. A key that is present but malformed is not used, and the run fails closed. A malformed `focusIssueTypes` (for example a string or an empty list) reports and pins nothing, and any malformed run-scope key skips the removal of earlier suggestions. The request itself still succeeds.
+      These four key names are reserved in `userContext`: do not declare a `userContextFields` entry with one of them for another purpose. A malformed key, such as `focusIssueTypes` sent as a string or an empty list, returns `INVALID_ARGUMENT` before any run starts. The message states the rule the key breaks, for example `userContext.focusIssueTypes must be a list of 1 to 50 non-blank issue types of at most 100 characters each`.
     </ParamField>
 
     <ParamField body="aiConfig" type="object">
@@ -403,7 +403,7 @@ With `agentIds`, the response lists the executions that started and the agents t
 | Field             | Type     | Description |
 | ----------------- | -------- | ----------- |
 | `data.executions` | object[] | One entry per agent that started, in the order of `agentIds`: `agentId` and `executionId`, plus a `warnings` array when that run started with non-blocking warnings. Poll each `executionId` with [Get Execution](/api-reference/rest-apis/v2/agents/execution/get). |
-| `data.failed`     | object[] | One entry per agent that could not start: `agentId`, `code`, and `message`. `code` is always a lowercase string error code, such as `already-exists`, `not-found`, `permission-denied`, `resource-exhausted`, or `internal`. `message` is the agent's own error message when you can act on it, and `Agent execution failed.` otherwise. |
+| `data.failed`     | object[] | One entry per agent that could not start: `agentId`, `code`, and `message`. `code` is always a lowercase string error code, such as `already-exists`, `invalid-argument` (the agent refuses the `userContext`), `not-found`, `permission-denied`, `resource-exhausted`, or `internal`. `message` is the agent's own error message when you can act on it, and `Agent execution failed.` otherwise. |
 
 The request fails only when no agent could start. It then returns the first agent's error, and `error.details.failed` lists every agent's failure in the same shape as `data.failed`:
 
@@ -443,12 +443,14 @@ The request fails only when no agent could start. It then returns the first agen
 - `INVALID_ARGUMENT`: `agentIds` with `crossPageExecute: true` and no `urls`, or with a `urls` list that names more than one page (`An agent suite runs a single page: omit crossPageExecute and pass at most one entry in urls.`).
 - `INVALID_ARGUMENT`: a `urls` list with more than 500 entries, a list where no entry survives normalization (every entry blank, on another host, or not a URL or path), or a `url` that is not a usable `http(s)` URL to resolve the list against.
 - `INVALID_ARGUMENT`: an `aiConfig` that is empty, carries an unknown key, names a provider outside `gemini` / `claude` / `openai`, names a model outside the allowlist, supplies an empty `defaultModels`, or sets `maxToolTurns` outside `1..16`.
+- `INVALID_ARGUMENT`: a malformed run-scope key in `userContext`. The message names the key and its rule, for example `userContext.sourcePageUrl must be a non-blank string of at most 4096 characters`, and `error.details.issues` lists every malformed key.
+- `INVALID_ARGUMENT`: a `userContext` the agent's `input.userContextFields` refuse: a missing required field (`Validation failed: Missing required userContext field: <id>`) or a value of another type (`Validation failed: userContext field '<id>' expected type '<type>', got '<actual>'`).
 - `NOT_FOUND`: store database not found, or the target document does not exist.
 - `ALREADY_EXISTS`: an execution is already running for this agent and document combination. The error message includes the running execution's ID. An execution that stopped making progress does not count: the new run ends it with `error.code` `STALE_RUN` and starts.
 - `RESOURCE_EXHAUSTED`: the workspace's AI credits are exhausted.
 - `INTERNAL`: the run could not be started after its execution was created (`Failed to dispatch agent execution task.`). Every execution the request created ends with status `error` and `error.code` `TASK_DISPATCH_FAILED`. Send the request again.
 
-With `agentIds`, an error that concerns one agent, such as `NOT_FOUND`, `ALREADY_EXISTS`, or `RESOURCE_EXHAUSTED`, appears in `data.failed` and the other agents still start. The request fails with it only when no agent could start. `INVALID_ARGUMENT` and `INTERNAL` reject the whole request.
+With `agentIds`, an error that concerns one agent, such as `NOT_FOUND`, `ALREADY_EXISTS`, `RESOURCE_EXHAUSTED`, or a `userContext` that agent's `userContextFields` refuse, appears in `data.failed` and the other agents still start. The request fails with it only when no agent could start. Every other `INVALID_ARGUMENT`, and `INTERNAL`, rejects the whole request.
 
 <ResponseExample>
 ```js

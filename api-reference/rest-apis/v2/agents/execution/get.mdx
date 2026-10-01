@@ -115,7 +115,7 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
 | ---------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `id`                                     | string              | Execution ID (Firestore doc ID).                                                                               |
 | `agentId`                                | string              | Agent that was executed.                                                                                       |
-| `agentName`                              | string              | Denormalized agent display name.                                                                               |
+| `agentName`                              | string              | Denormalized agent display name. Built-in display names can change between releases, so identify an agent by `agentId`. |
 | `agentVersion`                           | number              | Agent config version at execution time (pinned).                                                               |
 | `metadata.organizationId`                | string              | The `organizationId` you passed on Run Execution. Empty string when absent.                                    |
 | `metadata.documentId`                    | string              | The `documentId` you passed on Run Execution. Empty string when absent.                                        |
@@ -130,7 +130,7 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
 | `completedAt`                            | number \| null      | Epoch ms when completed. Null while running.                                                                   |
 | `durationMs`                             | number \| null      | Total duration in ms. Null while running.                                                                      |
 | `error`                                  | object \| undefined | Populated when any URL/batch failed: on `"error"` or `"partial"` (and may co-exist with `"failed"`).           |
-| `error.code`                             | string              | Error code (`TIMEOUT`, `LLM_ERROR`, `LLM_RATE_LIMITED`, `MALFORMED_RESPONSE`, `CRAWLER_ERROR`, `CONTEXT_GATHERING_ERROR`, `POST_PROCESS_ERROR`, `INTERNAL`). |
+| `error.code`                             | string              | Error code (`TIMEOUT`, `LLM_ERROR`, `LLM_RATE_LIMITED`, `MALFORMED_RESPONSE`, `CRAWLER_ERROR`, `CONTEXT_GATHERING_ERROR`, `POST_PROCESS_ERROR`, `INTERNAL`, or one of the [run-level codes](#run-level-error-codes) below). |
 | `error.message`                          | string              | Human-readable error description.                                                                              |
 | `error.advisoryComment`                  | string \| undefined | Advisory comment text posted to the document.                                                                  |
 | `error.retryable`                        | boolean             | Whether this error can be retried.                                                                             |
@@ -157,6 +157,20 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
 <Note>
   The legacy execution-document fields `knowledgeRetrieved` / `knowledgeCached` / `degraded` have been **removed**. Memory-RAG runtime signals now live only on the in-memory execution result and are consumed internally by the guardrails processor; they are not persisted on the execution document.
 </Note>
+
+#### Run-level error codes
+
+These codes end the whole execution with status `error` and `error.retryable: true`. To review the page, start a new run.
+
+| `error.code`             | Meaning |
+| ------------------------ | ------- |
+| `TASK_DISPATCH_FAILED`   | The run could not be started after its execution was created, so nothing was reviewed. [Run Execution](/api-reference/rest-apis/v2/agents/execution/run) returned `INTERNAL` for it. |
+| `STALE_RUN`              | The run stopped making progress. A new run of the same agent on the same document ended it and started in its place. |
+| `SUITE_TIMEOUT`          | The agent ran with others through `agentIds` and did not finish within the time limit those agents share. |
+| `RUN_ATTEMPTS_EXHAUSTED` | The run could not finish after several attempts, so it was not tried again. |
+| `MALFORMED_TASK`         | The run could not start because its task was incomplete. |
+
+A run whose crawl fails (`crossPageExecute: true`) ends with status `error` and `error.code` `CRAWLER_ERROR`.
 
 #### Success Response (with results, `includeResults: true`)
 
@@ -250,13 +264,15 @@ When `includeResults` is true, a `results` array is included alongside `executio
 | `occurrence`   | number  | 1-based occurrence index of `targetText` on the page.                    |
 | `sourceUrl`    | string  | URL where the finding was detected.                                      |
 | `suggestion`   | string  | Suggested fix.                                                           |
+| `suggestedFix` | string  | The exact replacement text, when the agent knows it (for example a corrected spelling). Absent otherwise. |
 | `htmlSelector` | string  | CSS selector of the DOM element.                                         |
 | `targetElementXpath` | string | XPath of the DOM element.                                          |
 | `isPageLevel`  | boolean | `true` for visual/layout findings; `false` when `targetText` matches DOM text. |
-| `issueType`    | string  | Issue classification tag (e.g. `"casing"`, `"pii"`, `"spelling"`, `"broken-link"`). |
+| `issueType`    | string  | Issue classification tag (e.g. `"casing"`, `"pii"`, `"spelling"`, `"broken-link"`). Built-in values are listed in [Issue types](/ai/agents/overview#issue-types). |
 | `confidence`   | number  | 0–100 confidence score reported by the agent.                            |
 | `commentId`    | string  | Comment annotation ID (populated after annotation creation).             |
 | `source`       | string  | `"instructions"` or `"knowledge"`.                                       |
+| `reasonExtras` | object  | Agent-specific details, also copied onto the comment annotation's `agent.reason`. Includes `sourceAnnotationId` and `sourcePageUrl` when the run set them in `userContext`. |
 
 #### Failure Response
 

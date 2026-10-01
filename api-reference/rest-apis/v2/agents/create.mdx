@@ -103,6 +103,7 @@ Use this API to create a new custom agent configuration. The engine stores the a
       | `analytics`                 | object   | no       | `{ enabled?: boolean }`: analytics event tracking.                                  |
       | `matchAndMerge`             | object   | no       | **Deprecated / ignored.** `{ enabled?: boolean }`: replaced by `deletePreviousSuggestions`. Still accepted for backward compatibility but has no effect. |
       | `customProcessors`          | string[] | no       | Custom post-processor names.                                                         |
+      | `findingEnrichment`         | object   | no       | `{ commentFormat?: "plain" \| "legacy" }`: the layout of the comment each finding posts. Default for custom agents: `"legacy"`. See [Comment format](#comment-format). |
 
       Unknown keys inside `postProcess` are rejected. Pin resolution (anchoring visual findings to element coordinates) always runs as part of the pipeline and is not configurable via this field.
     </ParamField>
@@ -308,20 +309,24 @@ When `execution.executionStrategy` is `"mcp-tools"`, the agent runs a model-driv
 
 #### Execution strategy options
 
-`execution.strategyOptions["<strategy>"]` carries per-strategy runtime overrides. The `stagehand-agent` strategy accepts:
+`execution.strategyOptions["<strategy>"]` carries per-strategy runtime overrides. The `stagehand-agent` strategy opens the page in a browser, and the agent's model drives it with browser tools in a loop. It accepts:
 
-| Option                | Type    | Default              | Description                                                       |
-| --------------------- | ------- | -------------------- | ----------------------------------------------------------------- |
-| `mode`                | string  | `"hybrid"`           | `"dom"` / `"hybrid"` / `"cua"`.                                   |
-| `maxSteps`            | number  | `25`                 | Max autonomous steps.                                             |
-| `model`               | string  | inherited            | Model override for the agent loop.                                |
-| `systemPrompt`        | string  |                      | System prompt for the agent.                                      |
-| `useStructuredOutput` | boolean | `true`               | Return structured output.                                         |
-| `waitUntil`           | string  | `"networkidle2"`     | `"domcontentloaded"` / `"load"` / `"networkidle2"`.               |
-| `navigationTimeout`   | number  | `30000`              | Navigation timeout in ms.                                         |
+| Option                | Type     | Default          | Description                                                       |
+| --------------------- | -------- | ---------------- | ----------------------------------------------------------------- |
+| `maxSteps`            | number   | `16`             | Most tool-calling turns. A larger value is lowered to 16.         |
+| `systemPrompt`        | string   |                  | Text placed before the prompt the model receives.                 |
+| `useStructuredOutput` | boolean  | `true`           | Return structured output.                                         |
+| `waitUntil`           | string   | `"networkidle2"` | `"domcontentloaded"` / `"load"` / `"networkidle2"`.               |
+| `navigationTimeout`   | number   | `30000`          | Navigation timeout in ms.                                         |
+| `executeTimeout`      | number   | `540000`         | Time limit in ms for the whole run: opening the browser, loading the first page, and the tool loop. Keep it below the agent's phase timeout. |
+| `perStepTimeout`      | number   | `90000`          | Time limit in ms for one step, a model turn plus its tool call. Past it, the model is asked for its final answer, which is kept. |
+| `toolTimeout`         | number   | `30000`          | Time limit in ms for one browser action or page read.             |
+| `excludeTools`        | string[] |                  | Browser tools to withhold from the model: any of `act`, `observe`, `act_on_element`, `snapshot`, `extract`, `goto`, `read_page`, `scroll`, `go_back`, `wait`. |
+
+`mode` and `model` are accepted but ignored: the loop runs on the provider and model resolved for each execution, as for every AI strategy (see [AI config](#ai-config-provider--model)). A value of the wrong type is ignored, and the default applies.
 
 <Note>
-  When using `stagehand-agent`, set `contextGathering.strategies: ["none"]`; the agent handles navigation, interaction, and extraction itself.
+  When using `stagehand-agent`, set `contextGathering.strategies: ["none"]`; the agent handles navigation, interaction, and extraction itself. A run whose first page does not load fails with `The page could not be opened: <url> (<reason>).`
 </Note>
 
 #### Knowledge (Memory-RAG)
@@ -338,6 +343,35 @@ When `execution.executionStrategy` is `"mcp-tools"`, the agent runs a model-driv
 <Warning>
   The legacy `sourceIds` field has been **removed** and `maxChunks` is now capped at **20** (previously 50). Sending `sourceIds` or any other extra key inside `knowledge` returns a `400 INVALID_ARGUMENT`.
 </Warning>
+
+#### Comment format
+
+`postProcess.findingEnrichment.commentFormat` sets how each finding's comment text is laid out when the agent posts it as a comment annotation. Built-in agents use `"plain"`. Custom agents use `"legacy"` unless you set `"plain"`. Any other value returns `INVALID_ARGUMENT`.
+
+| Format     | `commentText` | `commentHtml` |
+| ---------- | ------------- | ------------- |
+| `"legacy"` | `{title}: {description}`. When there is a suggestion, followed by a space, an em dash (U+2014), a space, and `Suggestion: {suggestion}`. | `<b>{title}</b><br/>{description}<br/><br/><b>Suggestion:</b> {suggestion}`. Values are not HTML-escaped. |
+| `"plain"`  | `{title}`, a line break, `{description}`, a blank line, and `{suggestion}`, with no label. Empty parts are left out. | `<b>{title}</b><br/>{description}<br/><br/>{suggestion}`, with every value HTML-escaped. |
+
+For a finding titled "CTA uses non-brand color", the two formats produce:
+
+<CodeGroup>
+```json Plain
+{
+  "commentText": "CTA uses non-brand color\nThe 'Buy now' button uses #FF5722 instead of #1A73E8\n\nChange background-color to #1A73E8",
+  "commentHtml": "<b>CTA uses non-brand color</b><br/>The 'Buy now' button uses #FF5722 instead of #1A73E8<br/><br/>Change background-color to #1A73E8"
+}
+```
+
+```json Legacy
+{
+  "commentText": "CTA uses non-brand color: The 'Buy now' button uses #FF5722 instead of #1A73E8 \u2014 Suggestion: Change background-color to #1A73E8",
+  "commentHtml": "<b>CTA uses non-brand color</b><br/>The 'Buy now' button uses #FF5722 instead of #1A73E8<br/><br/><b>Suggestion:</b> Change background-color to #1A73E8"
+}
+```
+</CodeGroup>
+
+The setting applies to new runs. To change it on an existing agent, send `postProcess.findingEnrichment` to [Update Agent Version](/api-reference/rest-apis/v2/agents/version/update).
 
 #### Response Descriptions
 

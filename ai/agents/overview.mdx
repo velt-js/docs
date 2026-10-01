@@ -20,7 +20,7 @@ You can also put agent creation in your users' hands: ship the [built-in agents]
 
 ## What you get
 
-- **Built-in and custom agents.** Ready-made agents (spell-check, broken-links, PII, Lighthouse, accessibility, [and more](#built-in-agents)), or your own from a prompt.
+- **Built-in and custom agents.** Ready-made agents (Proofreader, Link Checker, Image Inspector, Mobile Inspector, Consistency Checker, PII, Lighthouse, accessibility, [and more](#built-in-agents)), or your own from a prompt.
 
 - **Plain-English agent builder.** Let your users describe a review in simple English; prompt tools ([enhance](/api-reference/rest-apis/v2/agents/prompt/enhance), [validate](/api-reference/rest-apis/v2/agents/prompt/validate), [refine](/api-reference/rest-apis/v2/agents/prompt/refine)) check it, expand it into a full agent config, and iterate on feedback. `userContextFields` render typed inputs in your setup UI.
 
@@ -38,9 +38,15 @@ You can also put agent creation in your users' hands: ship the [built-in agents]
 
 - **Page lists.** Send `urls` to review exactly those pages, with no crawl. Built for sites whose pages differ only by a query string.
 
+- **Several agents, one request.** Send `agentIds` to run up to 10 agents on one page together. Each agent still gets its own execution.
+
+- **Focused rechecks.** Set `userContext.focusIssueTypes` to recheck only some [issue types](#issue-types), for example only blurry images.
+
+- **Per-run options.** Switch individual checks of a built-in agent off, or tune its thresholds, for one run. See [Per-run options](#per-run-options).
+
 - **Device emulation.** Run each execution as `"mobile"` or `"desktop"`.
 
-- **Re-run deduplication.** Re-running an agent replaces the prior run's suggestions instead of piling up duplicates.
+- **Re-run deduplication.** Re-running an agent replaces the prior run's suggestions instead of piling up duplicates. A focused recheck replaces only the suggestions of the issue types it rechecks.
 
 - **Token usage analytics.** Per-agent, per-model, per-month token usage via the Analytics endpoint.
 
@@ -54,7 +60,7 @@ You can also put agent creation in your users' hands: ship the [built-in agents]
   </Card>
 
   <Card title="Pre-launch QA" icon="rocket">
-    Run spell-check, broken-links, and accessibility agents before a release. Findings land on the staging document.
+    Run the Proofreader, Link Checker, and accessibility agents before a release. Findings land on the staging document.
   </Card>
 
   <Card title="Content moderation" icon="shield-halved">
@@ -85,7 +91,7 @@ You can also put agent creation in your users' hands: ship the [built-in agents]
 ## How it works
 
 1. **Define the agent.** Call [Create Agent](/api-reference/rest-apis/v2/agents/create) with a name, instructions, and config (context gathering, execution strategy, post-processing).
-2. **Run an execution.** Call [Run Execution](/api-reference/rest-apis/v2/agents/execution/run) with `agentId` and `url`. Returns an `executionId` immediately.
+2. **Run an execution.** Call [Run Execution](/api-reference/rest-apis/v2/agents/execution/run) with `agentId` and `url`, or with `agentIds` to run several agents on the same page. Returns an `executionId` per agent immediately.
 3. **Poll for results.** Call [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) until `status !== "running"`. Set `includeResults: true` for per-URL findings.
 4. **Findings appear as annotations.** Each finding becomes a comment annotation on the document referenced by `organizationId` / `documentId` (on by default).
 
@@ -130,18 +136,144 @@ Each agent run executes sequential phases:
 
 ## Built-in agents
 
-| Agent ID                | Description                                    |
-| ----------------------- | ---------------------------------------------- |
-| `spell-check`           | Spelling and typo detection                    |
-| `grammar-check`         | Grammar checking                               |
-| `broken-links`          | Broken link validation                         |
-| `pii-detection`         | PII (personal info) detection                  |
-| `profanity-filter`      | Profanity detection                            |
-| `sensitive-data`        | Sensitive data detection                       |
-| `lighthouse`            | Google Lighthouse performance/SEO/a11y audit   |
-| `accessibility-checker` | Accessibility (WCAG) audit                     |
-| `og-image-checker`      | Open Graph image validation                    |
-| `lorem-ipsum`           | Placeholder / lorem-ipsum text detection       |
+Built-in agents are pre-registered for every workspace. Run one by its ID.
+
+| Agent ID                | Name                  | Description |
+| ----------------------- | --------------------- | ----------- |
+| `spell-check`           | Proofreader           | Typos, doubled words ("the the"), punctuation slips (",," or a space before a full stop), brand names written with the wrong casing, a term cased two ways on one page, and leftover placeholder text such as lorem ipsum or "Insert headline here". Accepts British spellings and skips spelling on pages not written in English. It does not check grammar: use `grammar-check`. `aiConfig` does not apply to it. |
+| `grammar-check`         | Grammar Check         | Grammar checking |
+| `broken-links`          | Link Checker          | Every link, button, image, and form on the page: broken links and images, form submits that fail, buttons and links that do nothing when clicked, links to staging, preview, or local hosts, malformed links, a header logo not linked to the home page, phone numbers and emails that are not links, social icons that point at the wrong network, and links that open in the wrong kind of tab. |
+| `image-inspector`       | Image Inspector       | Images that do not show, blurry (upscaled) or stretched images, CSS background images included, empty or placeholder image slots, and images without alt text. |
+| `mobile-inspector`      | Mobile Inspector      | Opens the page at phone width (375 px by default) and flags a desktop layout shrunk to fit, sideways scrolling, content that runs off the screen, cut-off buttons and text, and tap targets that are too small, with phone-width screenshots. Always runs as `"mobile"`. |
+| `consistency-checker`   | Consistency Checker   | Compares phone numbers, addresses, opening hours, emails, prices, and service and business names on the page with other key pages of the same site (6 by default), and flags values that differ. Also flags terms capitalized differently from the rest of the site, on English pages. Uses an AI model. |
+| `ai-visibility`         | AI Visibility         | Scores whether AI answer engines can reach, read, understand, and correctly cite the page, with a fix for every failure. |
+| `pii-detection`         | PII Detection         | PII (personal info) detection |
+| `profanity-filter`      | Profanity Filter      | Profanity detection |
+| `sensitive-data`        | Sensitive Data        | Sensitive data detection |
+| `lighthouse`            | Lighthouse            | Google Lighthouse performance/SEO/a11y audit |
+| `accessibility-checker` | Accessibility Checker | Accessibility (WCAG) audit |
+| `og-image-checker`      | OG Image Checker      | Open Graph image validation |
+| `lorem-ipsum`           | Lorem Ipsum           | Placeholder / lorem-ipsum text detection |
+
+When a finding comes with an exact correction, such as a corrected spelling or link, the agent puts it in `suggestedFix`. The comment annotation carries it as `agent.reason.suggestedFix`.
+
+<Note>
+  Display names can change between releases. Identify agents by their ID.
+</Note>
+
+## Issue types
+
+These built-in agents tag every finding with one of a fixed set of `issueType` values. Use them to filter findings, or pass some of them in `userContext.focusIssueTypes` on [Run Execution](/api-reference/rest-apis/v2/agents/execution/run) to recheck only those issues.
+
+| Agent ID              | Issue types |
+| --------------------- | ----------- |
+| `spell-check`         | `spelling`, `doubled-word`, `punctuation`, `placeholder`, `brand-casing`, `inconsistent-casing` |
+| `broken-links`        | `broken-link`, `broken-image`, `dead-button`, `dead-form`, `staging-link`, `malformed-link`, `unlinked-logo`, `unlinked-phone`, `unlinked-email`, `unlinked-contact`, `social-link-mismatch`, `same-tab-link`, `new-tab-internal-link` |
+| `image-inspector`     | `broken-image`, `empty-image`, `blurry-image`, `stretched-image`, `missing-alt` |
+| `mobile-inspector`    | `desktop-layout-on-phone`, `horizontal-scroll`, `overflowing-element`, `overflowing-text`, `cut-off-button`, `cut-off-text`, `small-tap-target` |
+| `consistency-checker` | `inconsistent-phone`, `inconsistent-address`, `inconsistent-hours`, `inconsistent-email`, `inconsistent-price`, `inconsistent-service-name`, `inconsistent-business-name`, `cross-page-casing` |
+
+<Tip>
+  To have the Link Checker report broken links only, run it with `userContext.focusIssueTypes` set to `["broken-link"]`. To stop it looking for a kind of problem at all, use its [per-run options](#link-checker).
+</Tip>
+
+## Per-run options
+
+Five built-in agents read options from the `userContext` of [Run Execution](/api-reference/rest-apis/v2/agents/execution/run). Use them to switch a check off or tune a threshold for one run. Leave a key out to keep its default: the defaults are the agent's normal behavior. A value of the wrong type is ignored, and the default applies.
+
+Each agent reads only its own keys, so a run with `agentIds` can carry options for several agents in one `userContext`:
+
+```JSON
+{
+  "data": {
+    "agentIds": ["broken-links", "spell-check"],
+    "url": "https://example.com/pricing",
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "userContext": {
+      "clickTest": false,
+      "brandNames": ["AcmeCloud"],
+      "skipChecks": ["placeholder"]
+    }
+  }
+}
+```
+
+### Link Checker
+
+Options for `broken-links`.
+
+| Key                   | Type    | Default | Effect |
+| --------------------- | ------- | ------- | ------ |
+| `clickTest`           | boolean | `true`  | Clicks links and buttons in a separate browser session to find controls that do nothing, and to tell a failing link from one the page handles itself. Requests other than `GET`, `HEAD`, and `OPTIONS` are blocked, so are calls to analytics, advertising, and session-recording endpoints, and controls labeled as destructive or transactional are never clicked. `false` skips the click test, so the run reports no `dead-button` findings. |
+| `pageLinkChecks`      | boolean | `true`  | `false` turns off `checkLogo`, `checkContacts`, `checkSocialIcons`, and `checkTabTargets` together. |
+| `checkLogo`           | boolean | `true`  | A header logo that does not link to the home page (`unlinked-logo`). |
+| `checkContacts`       | boolean | `true`  | Phone numbers and emails written as plain text (`unlinked-phone`, `unlinked-email`, `unlinked-contact`). |
+| `checkSocialIcons`    | boolean | `true`  | Social icons that link to a different network (`social-link-mismatch`). |
+| `checkTabTargets`     | boolean | `true`  | Links that open in the wrong kind of tab (`same-tab-link`, `new-tab-internal-link`). |
+| `checkStagingLinks`   | boolean | `true`  | Links to staging, preview, or local hosts (`staging-link`). |
+| `checkMalformedLinks` | boolean | `true`  | Links written in a way that cannot work (`malformed-link`). |
+| `checkImageUrls`      | boolean | `true`  | Image addresses (`broken-image`). |
+| `checkFormActions`    | boolean | `true`  | Form submit endpoints (`dead-form`). |
+| `checkInternalLinks`  | boolean | `true`  | Links to the same site. |
+| `checkExternalLinks`  | boolean | `true`  | Links to other sites. |
+| `maxLinksToCheck`     | number  | `500`   | Most links checked per page. Whole number, clamped to 1 to 1000. |
+
+### Proofreader
+
+Options for `spell-check`. The Proofreader finds candidates with a dictionary and rules, then asks a verification model to confirm the ones the rules are not certain of. If the model cannot answer, the run still reports the findings the rules are certain of, and its summary says what could not be checked.
+
+| Key             | Type     | Default | Effect |
+| --------------- | -------- | ------- | ------ |
+| `rulesOnly`     | boolean  | `false` | Sends no page text to the verification model. Only findings the rules are certain of are reported. Spelling is not checked, and the run summary says so. |
+| `acceptedWords` | string[] | `[]`    | Words to accept as correctly spelled, in any case, on top of the built-in list. |
+| `brandNames`    | string[] | `[]`    | Brand names and their exact casing, on top of the built-in list. Your casing wins over the built-in one. |
+| `skipChecks`    | string[] | `[]`    | Issue types not to look for: any of `spelling`, `doubled-word`, `punctuation`, `placeholder`, `brand-casing`, `inconsistent-casing`. |
+| `keepAtOrAbove` | number   | `0.6`   | Lowest verification-model confidence at which a candidate the model checked is reported. Greater than 0 and at most 1. |
+
+`acceptedWords` and `brandNames` take single words. The first 500 entries are read, and an entry longer than 64 characters is ignored.
+
+<Tip>
+  The Proofreader also reports lorem ipsum. If you run it together with the `lorem-ipsum` agent, send `skipChecks: ["placeholder"]` to avoid duplicate findings.
+</Tip>
+
+### Consistency Checker
+
+Options for `consistency-checker`. Its keys start with `consistency` because a run with `agentIds` shares one `userContext` across every agent.
+
+| Key                          | Type    | Default | Effect |
+| ---------------------------- | ------- | ------- | ------ |
+| `consistencyCasingCheck`     | boolean | `true`  | Runs the cross-page casing check (`cross-page-casing`). |
+| `consistencyExactValues`     | boolean | `true`  | When this page's phone number or email is a one-character slip of the value the other pages agree on, names that value in the suggestion and in `suggestedFix`. |
+| `consistencyMaxPages`        | number  | `6`     | Other pages of the site to compare with. Whole number, capped at 12. |
+| `consistencyMaxCharsPerPage` | number  | `6000`  | Characters of each other page's text given to the AI model. Whole number, capped at 20,000. |
+
+### Image Inspector
+
+Options for `image-inspector`. A value outside its range is ignored, and the default applies.
+
+| Key                      | Type                  | Default | Effect |
+| ------------------------ | --------------------- | ------- | ------ |
+| `blurMinNaturalRatio`    | number, 0.05 to 1     | `0.6`   | An image is blurry when its file is narrower than this share of the CSS pixels it fills. |
+| `blurHighScale`          | number, 1 to 20       | `2.5`   | Enlargement from which a blurry image is `high` severity instead of `medium`. |
+| `blurMinRenderedWidthPx` | number, 0 to 4000     | `120`   | Narrowest image, in CSS pixels, checked for blur. |
+| `stretchTolerance`       | number, 0 to 1        | `0.08`  | Aspect-ratio difference allowed before an image counts as stretched. |
+| `stretchMinWidthPx`      | number, 0 to 4000     | `64`    | Narrowest box, in CSS pixels, checked for stretching. |
+| `stretchMinHeightPx`     | number, 0 to 4000     | `32`    | Shortest box, in CSS pixels, checked for stretching. |
+| `emptyMinSidePx`         | number, 0 to 4000     | `24`    | Smallest image slot, in CSS pixels, reported as empty. |
+| `altMinSidePx`           | number, 0 to 4000     | `48`    | Smallest image, in CSS pixels, that needs alt text. |
+| `maxPerCategory`         | whole number, 1 to 50 | `6`     | Most findings pinned per issue type on a page. |
+| `linkCheckerOnSamePages` | boolean               | `false` | Set `true` when the Link Checker reviews the same pages in the same run. Broken images the Link Checker also reports are then left to it, so they are not reported twice. |
+
+### Mobile Inspector
+
+Options for `mobile-inspector`. A value outside its range is ignored, and the default applies.
+
+| Key              | Type                     | Default | Effect |
+| ---------------- | ------------------------ | ------- | ------ |
+| `phoneWidthPx`   | whole number, 320 to 480 | `375`   | Phone screen width, in CSS pixels, the page opens at. |
+| `minTapTargetPx` | number, 8 to 96          | `24`    | Smallest tap target, in CSS pixels, that passes. The suggestion names this size. |
+| `maxScreenshots` | whole number, 0 to 10    | `7`     | Screenshots per page, including the first screen. `0` turns screenshots off. |
 
 ## Context gathering strategies
 

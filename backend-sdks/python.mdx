@@ -83,7 +83,7 @@ config = {
         'attachments': 'attachments',
         'users': 'users'
     },
-    # Required for token generation; also enables sdk.api.*
+    # Required for sdk.api.* (including token generation)
     'apiKey': 'YOUR_VELT_API_KEY',
     'authToken': 'YOUR_VELT_AUTH_TOKEN'
 }
@@ -757,34 +757,6 @@ async def delete_attachment(request: Request):
 { 'success': True, 'statusCode': 200, 'data': { ... } }
 ```
 
-### Token
-
-#### `getToken`
-
-- Generates a Velt auth token for a user. Token minting is a call to Velt's API and needs no database, so the same service is also available as `sdk.api.token` under the [REST API backend](#rest-api-backend). Both names return the same shape.
-- Params: keyword arguments `organizationId`, `userId`, `email` (optional), `isAdmin` (optional), `name` (optional), `permissions` (optional dict with a `resources` list)
-- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
-
-```python
-result = sdk.selfHosting.token.getToken(
-    organizationId='org-123',
-    userId='user-1',
-    email='user@example.com',
-    isAdmin=False
-)
-```
-
-**Response**
-
-```python
-{
-    'success': True,
-    'data': { 'token': 'eyJhbGciOi...' }
-}
-```
-
-> Note: `getToken` takes keyword arguments; it does not accept a dataclass request object. Signature: `getToken(organizationId, userId, email=None, isAdmin=None, name=None, permissions=None)`. On failure it returns `{'success': False, 'error': '...', 'errorCode': '...'}`.
-
 ### Resolver Token Verification
 
 `sdk.selfHosting.verifyToken(headers=None, token=None, **overrides) -> VerifyTokenResult` authenticates the credential the Velt frontend forwards to your resolver endpoints. New in **v0.1.14**. It is **opt-in** via the `resolver_auth` config block, **framework-agnostic**, and **fail-closed** — it returns a structured [`VerifyTokenResult`](#verifytokenresult) and never raises for a verification outcome. It is **authentication only**: it never consults `apiKey`, `organizationId`, or the resolver database; resolver services keep their own scoping. `result.claims` is informational — assert tenant claims against the resolver payload's `organizationId` yourself if you need tenant isolation.
@@ -966,7 +938,7 @@ async def get_comments(request: Request):
 
 ## REST API Backend
 
-The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 19 services, plus token minting. Each method takes a typed `@dataclass` request object and returns the raw Velt API response.
+The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 19 services, including token generation with [`sdk.api.accessControl.generateToken`](#generatetoken). Each method takes a typed `@dataclass` request object and returns the raw Velt API response.
 
 You only need `apiKey` and `authToken` — no database or AWS config.
 
@@ -3028,7 +3000,10 @@ result = sdk.api.accessControl.generateSignature(
 
 #### `generateToken`
 
-- Generates a Velt JWT token bound to a user and a set of resource permissions.
+- Generates a Velt JWT token bound to a user and a set of resource permissions. Available since the REST API backend (v0.1.9, April 2026).
+- Calls `POST /v2/auth/generate_token`, the endpoint documented in the [Generate Token REST API](/api-reference/rest-apis/v2/auth/generate-token) and used by the [JWT guide](/security/jwt-tokens).
+- Expects: `GenerateTokenRequest { userId, userProperties: { name, email, isAdmin }, permissions: { resources: [...] } }`.
+- Returns the raw Velt API response: `{ result: { status, message, data: { token } } }`.
 - Params: [GenerateTokenRequest](/api-reference/sdk/models/data-models#generatetokenrequest)
 - Returns: [GenerateTokenResponse](/api-reference/sdk/models/data-models#generatetokenresponse)
 
@@ -5138,35 +5113,6 @@ result = sdk.api.workflow.recordReviewerDecision(
     RecordReviewerDecisionRequest(executionId='execution-id', stepId='step-id', reviewerId='reviewer-1', decision='approve')
 )
 ```
-
-### Token
-
-#### `getToken`
-
-- Generates a Velt auth token for a user. Available from **v0.2.1**; it is the same service as [`sdk.selfHosting.token`](#token) and needs no database, so it works with a REST-only config.
-- Params: keyword arguments `organizationId`, `userId`, `email` (optional), `isAdmin` (optional), `name` (optional), `permissions` (optional dict with a `resources` list)
-- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
-
-```python
-result = sdk.api.token.getToken(
-    organizationId='org-123',
-    userId='user-1',
-    email='user@example.com',
-    isAdmin=False
-)
-```
-
-**Response**
-
-```python
-{
-    'success': True,
-    'data': { 'token': 'eyJhbGciOi...' }
-}
-```
-
-> Note: `getToken` takes keyword arguments; it does not accept a dataclass request object. Signature: `getToken(organizationId, userId, email=None, isAdmin=None, name=None, permissions=None)`. To call the `/v2/auth/generate_token` endpoint and receive the raw Velt API response instead, use `sdk.api.accessControl.generateToken(GenerateTokenRequest(...))`.
-
 
 ### Data Isolation
 

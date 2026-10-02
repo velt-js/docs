@@ -101,7 +101,8 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
           "summary": "Found 7 issues across 12 pages. 7 annotations created."
         },
         "crawlerResults": { "status": "completed", "totalUrlsFound": 12, "duration": 45000, "pagesVisited": 12 },
-        "llmModel": "claude/claude-sonnet-5",
+        "llmModel": "claude/claude-opus-5-5",
+        "llmModels": ["claude/claude-opus-5-5"],
         "tokenUsage": { "promptTokens": 12500, "completionTokens": 3200, "thoughtsTokens": 0, "totalTokens": 15700 }
       }
     }
@@ -135,6 +136,7 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
 | `error.advisoryComment`                  | string \| undefined | Advisory comment text posted to the document.                                                                  |
 | `error.retryable`                        | boolean             | Whether this error can be retried.                                                                             |
 | `error.occurredAt`                       | number              | Epoch ms when the error occurred.                                                                              |
+| `error.providerFailures`                 | object[] \| undefined | Only with `error.code` `LLM_ERROR`, when every model provider failed: one entry per provider, in fallback order, at most 5. See [Provider failures](#provider-failures). |
 | `trigger`                                | string              | `"standalone"` or `"workflow"`.                                                                                |
 | `workflowExecutionId`                    | string \| null      | Parent workflow execution ID (if workflow-triggered).                                                          |
 | `previousExecutionId`                    | string \| null      | Previous execution ID (set on reruns).                                                                         |
@@ -144,14 +146,17 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
 | `resultsSummary.urlsProcessed`           | number              | URLs that were processed.                                                                                      |
 | `resultsSummary.urlsWithFindings`        | number              | URLs that had at least one finding.                                                                            |
 | `resultsSummary.urlsErrored`             | number \| undefined | URLs whose agent run failed. `0 < urlsErrored < urlsProcessed` → `partial`; `urlsErrored >= urlsProcessed` (≥1 processed) → `error`. |
-| `resultsSummary.erroredUrls`             | array \| undefined  | Bounded sample (≤50) of `{ url, message }` for failing URLs.                                                    |
+| `resultsSummary.erroredUrls`             | array \| undefined  | The failing pages, `{ url, message, providerFailures? }`, at most 50, also while the run is still running: the first 50 failing pages are kept. `providerFailures` is set when the page failed because every model provider failed (see [Provider failures](#provider-failures)). |
 | `resultsSummary.issuesCreated`           | number              | Equals `totalFindings` (backwards compat).                                                                     |
 | `resultsSummary.severityCounts`          | object \| undefined | Finding counts keyed by severity, e.g. `{ "high": 2, "medium": 5, "low": 1 }`. Sparse: only severities with at least one finding are present, so treat a missing key as `0`. Possible keys are `critical`, `high`, `medium`, `low`, `info`. Absent entirely when the run produced no findings. |
-| `resultsSummary.findings`                | object[] \| undefined | Sample of the run's findings for at-a-glance display, each `{ title, description, severity, sourceUrl?, issueType?, url? }`. Trimmed to the top 50 by severity once the execution reaches a terminal status; may exceed 50 while `status` is `"running"`. Absent when the run produced no findings. Use `includeResults: true` for the complete per-URL findings. |
+| `resultsSummary.findings`                | object[] \| undefined | Sample of the run's findings for at-a-glance display, each `{ title, description, severity, sourceUrl?, issueType?, url?, evidence? }`. At most 50, the top ones by severity, also while the run is still running. Absent when the run produced no findings. Use `includeResults: true` for the complete per-URL findings. `evidence` is the compact form of the finding's [evidence](#finding-evidence). When the agent wrote no description, `description` is filled from the evidence text as `Found in: "<text around it>"` or `Found: "<text>"`, followed by the viewport in parentheses when it is known, for example `Found: "Lorem ipsum dolor" (phone).` It never quotes a CSS selector, and stays empty when the evidence has no text. |
 | `resultsSummary.summary`                 | string \| null      | Human-readable summary. Null while running.                                                                    |
 | `resultsSummary.matchResult`             | object \| undefined | **Legacy.** Match-and-merge outcome (`{ created, skipped, resolved }`) written by the retired match-and-merge dedup. Present only on old execution documents; new executions use per-URL delete-and-recreate and never write this field. |
 | `crawlerResults`                         | object \| undefined | Only populated when `crossPageExecute: true`. For a run started with `urls`, `status` is `"skipped"` or `"completed"` with `urlsCount` equal to the number of pages in the list: nothing was crawled. |
-| `llmModel`                               | string \| undefined | LLM model used (e.g. `"claude/claude-sonnet-5"`, `"gemini/gemini-3.6-flash"`).                          |
+| `llmModel`                               | string \| undefined | LLM model that answered, as `provider/model` (e.g. `"claude/claude-opus-5-5"`, `"gemini/gemini-3.6-flash"`). On a run over several pages, the model of the last page processed. |
+| `llmModels`                              | string[] \| undefined | Every model that answered across the whole run, in the order first seen, for example `["claude/claude-opus-5-5", "claude/claude-sonnet-5-5"]` for a browser agent and the model of its browser steps, or two models when a call fell back. Absent when no model was called. |
+| `providerFallbacks`                      | object[] \| undefined | Present only when a model call fell back and still succeeded: the requested provider failed and a later one answered, so `llmModel` names the later one. Same entries as `error.providerFailures`. The same failure (provider, model, status, and code) is listed once per run, at most 10 entries, also while the run is still running. See [Provider failures](#provider-failures). |
+| `warnings`                               | object[] \| undefined | Non-blocking warnings stamped when the run started, such as `{ "code": "pages-truncated", "pagesTotal": 1200, "pagesRun": 500 }` when the `pageListTotal` sent to [Run Execution](/api-reference/rest-apis/v2/agents/execution/run) was larger than the pages the run reviews. |
 | `tokenUsage`                             | object              | `{ promptTokens, completionTokens, thoughtsTokens, totalTokens }`.                                             |
 
 <Note>
@@ -160,17 +165,43 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
 
 #### Run-level error codes
 
-These codes end the whole execution with status `error` and `error.retryable: true`. To review the page, start a new run.
+These codes end the whole execution with status `error` and `error.retryable: true`, except on a run over several pages, as described below the table. To review the page, start a new run.
 
 | `error.code`             | Meaning |
 | ------------------------ | ------- |
 | `TASK_DISPATCH_FAILED`   | The run could not be started after its execution was created, so nothing was reviewed. [Run Execution](/api-reference/rest-apis/v2/agents/execution/run) returned `INTERNAL` for it. |
 | `STALE_RUN`              | The run stopped making progress. A new run of the same agent on the same document ended it and started in its place. |
-| `SUITE_TIMEOUT`          | The agent ran with others through `agentIds` and did not finish within the time limit those agents share. |
-| `RUN_ATTEMPTS_EXHAUSTED` | The run could not finish after several attempts, so it was not tried again. |
+| `SUITE_TIMEOUT`          | The agent ran with others through `agentIds` and did not finish within the time limit those agents share (25 minutes per delivery). |
+| `RUN_ATTEMPTS_EXHAUSTED` | The run could not finish after several attempts, for example because its instance kept crashing, so it was not tried again. |
 | `MALFORMED_TASK`         | The run could not start because its task was incomplete. |
 
+On a run over several pages, these two codes can also end a single page instead of the run. A page that runs out of time in an `agentIds` run (`SUITE_TIMEOUT`), or whose deliveries keep failing for 3 deliveries (`RUN_ATTEMPTS_EXHAUSTED`), is counted as an errored page of each execution it belongs to: `resultsSummary.urlsErrored` counts it, `resultsSummary.erroredUrls` lists it with `The run took too long and was stopped.` or `The run could not finish after several tries.`, and `error.code` carries the code. The other pages still count, so the execution ends `partial` when some pages succeed. A crawl that found a single page is the exception: that page is the whole run, and `SUITE_TIMEOUT` ends it.
+
 A run whose crawl fails (`crossPageExecute: true`) ends with status `error` and `error.code` `CRAWLER_ERROR`.
+
+#### Provider failures
+
+Entries of `error.providerFailures`, `resultsSummary.erroredUrls[].providerFailures`, and `providerFallbacks` describe why one model provider failed. They never contain the request: no prompt, page text, or body.
+
+| Field      | Type                | Description |
+| ---------- | ------------------- | ----------- |
+| `provider` | string              | `"claude"`, `"openai"`, or `"gemini"`. |
+| `model`    | string \| undefined | The model the call asked for. |
+| `status`   | number \| undefined | HTTP status the provider answered with. Absent for a network failure. |
+| `code`     | string \| undefined | The provider's error type or code, such as `overloaded_error` or `rate_limit_exceeded`. `"refusal"` when Claude declined the request on a safety classifier, and the call moved to the next provider. |
+| `message`  | string              | The provider's message, at most 200 characters, with keys, tokens, provider account IDs, and request IDs replaced by `[redacted]`. A message about billing, credits, or quota reads `The provider refused the request for an account reason (billing, credits or quota).`, one about a rate limit reads `The provider rate limited the request.`, and a refusal reads `The model declined the request. (<category>)`. `status` and `code` still say what happened. |
+
+```JSON
+"providerFallbacks": [
+  {
+    "provider": "claude",
+    "model": "claude-opus-5-5",
+    "status": 529,
+    "code": "overloaded_error",
+    "message": "Overloaded"
+  }
+]
+```
 
 #### Success Response (with results, `includeResults: true`)
 
@@ -248,8 +279,11 @@ When `includeResults` is true, a `results` array is included alongside `executio
 | `agentName`     | string              | Duplicate of the row-level `agentName`.                              |
 | `summary`       | string \| undefined | Run-level analysis summary, copied onto each URL row. Present only when the agent returned a flat findings list rather than a per-URL breakdown, so it is the same string for every URL in the run. |
 | `issueCount`    | number              | Number of issues the agent raised for this URL.                      |
-| `findingsCount` | number              | Number of entries in `findings`.                                     |
+| `findingsCount` | number              | Number of findings the agent raised for this URL. Equal to the length of `findings` unless `findingsTruncated` is set. |
 | `findings`      | object[]            | Array of `AgentFinding` objects (see below).                         |
+| `evidenceDropped` | boolean \| undefined | `true` when the page's findings were too large for its result document (800 KiB of findings), so they are stored without `evidence`. |
+| `findingsTruncated` | number \| undefined | Set when the findings did not fit even without `evidence`: how many were left out. The first findings that fit are stored, and `issueCount` and `findingsCount` still count every finding. |
+| `report`        | object \| undefined | The agent's own per-page report, for agents whose output is more than findings, such as `migration-parity` and `content-request-list`. See [Migration Parity](/ai/agents/overview#migration-parity) and [Content Request List](/ai/agents/overview#content-request-list). |
 | `error`         | string \| null      | Failure message for this URL. `null` when the URL completed successfully. Always present, so test for failure with `status === "failed"`, not with the presence of this field. |
 
 **Finding fields (`AgentFinding`):**
@@ -273,6 +307,25 @@ When `includeResults` is true, a `results` array is included alongside `executio
 | `commentId`    | string  | Comment annotation ID (populated after annotation creation).             |
 | `source`       | string  | `"instructions"` or `"knowledge"`.                                       |
 | `reasonExtras` | object  | Agent-specific details, also copied onto the comment annotation's `agent.reason`. Includes `sourceAnnotationId` and `sourcePageUrl` when the run set them in `userContext`. |
+| `metadata`     | object  | Agent-specific details kept on the finding, such as `labels` and `differences` on the Consistency Checker's visual findings. |
+| `evidence`     | object  | What the finding rests on. See [Finding evidence](#finding-evidence). Absent when the agent captured nothing. |
+
+#### Finding evidence
+
+`evidence` shows what a finding rests on, so it can be judged without opening the page. Every key is optional and absent when unknown. The compact form in `resultsSummary.findings` uses the smaller limits in parentheses.
+
+| Field       | Type     | Description |
+| ----------- | -------- | ----------- |
+| `selector`  | string   | CSS selector of the element. Left out, never cut, when it is too long. |
+| `text`      | string   | The exact offending text, at most 200 characters (160). |
+| `context`   | string   | The text around it, at most 300 characters (160). |
+| `html`      | string   | The element's markup, at most 500 characters (240), with attributes trimmed to a short allowlist, script and style bodies removed, and URLs stripped of their query and fragment. Render it as text: it is a picture of the markup, never markup to insert into a page. |
+| `ancestors` | string[] | Up to 6 (4) ancestor tokens, nearest first, such as `section.hero[role=region]`. |
+| `viewport`  | string   | Where the facts were captured: `"desktop"`, `"tablet"`, or `"phone"`. |
+| `rect`      | object   | `{ x, y, width, height }`: the element's box at capture, in CSS pixels. |
+| `visible`   | boolean  | Whether the element was rendered at capture. |
+
+The whole object stays under about 2 KB (1 KB). Token-like strings in `text`, `context`, and `html` are redacted, and evidence never carries cookies, typed form values, or full page HTML.
 
 #### Failure Response
 

@@ -185,7 +185,7 @@ A focused run also skips work that cannot produce the listed issue types. A Mobi
 
 ## Per-run options
 
-Five built-in agents read options from the `userContext` of [Run Execution](/api-reference/rest-apis/v2/agents/execution/run). Use them to switch a check off or tune a threshold for one run. Leave a key out to keep its default: the defaults are the agent's normal behavior. A value of the wrong type is ignored, and the default applies.
+Seven built-in agents read options from the `userContext` of [Run Execution](/api-reference/rest-apis/v2/agents/execution/run). Use them to switch a check off or tune a threshold for one run. Leave a key out to keep its default: the defaults are the agent's normal behavior. A value of the wrong type is ignored, and the default applies.
 
 Each agent reads only its own keys, so a run with `agentIds` can carry options for several agents in one `userContext`:
 
@@ -224,6 +224,16 @@ Options for `broken-links`.
 | `checkInternalLinks`  | boolean | `true`  | Links to the same site. |
 | `checkExternalLinks`  | boolean | `true`  | Links to other sites. |
 | `maxLinksToCheck`     | number  | `500`   | Most links checked per page. Whole number, clamped to 1 to 1000. |
+| `stagingNoindexSignal` | boolean | `true` | A same-site `dev.`, `qa.`, or `test.` link whose page answers with a `2xx` status and an `X-Robots-Tag: noindex` header counts as a staging link. Never for a link labeled as a sign-in. `false` lets only the words in the host decide. |
+| `stagingWords`        | string[] | `[]`   | Words that mark a staging host wherever they appear in it, such as `beta` or `acc`, on top of the built-in ones (`staging`, `stage`, `stg`, `dev`, `preview`, `uat`, `qa`, `sandbox`, `test`, and a few more). |
+| `ambiguousStagingWords` | string[] | `[]` | Words that mark a staging host in a subdomain only next to `www` or another staging word, as `dev` does. |
+| `notStagingWords`     | string[] | `[]`   | Built-in staging words your site uses for something public, such as a public `preview.` subdomain. |
+| `ignoreOverlaySelectors` | string[] | `[]` | CSS selectors of overlays your page embeds, such as a review toolbar or a chat widget. A change inside them never counts as the effect of a click. |
+| `skipClickLabels`     | string[] | `[]`   | Labels the click test never clicks, on top of its built-in list of destructive and transactional words. Matched as whole words, in any case and any script. |
+
+The three staging word lists take single host words of 2 to 30 letters or digits, at most 50 per list. `ignoreOverlaySelectors` and `skipClickLabels` take at most 20 entries, of at most 200 and 60 characters. Other entries are ignored.
+
+During the click test, a click that opens a new tab, starts a download, or hands off to an app counts as working. A page that builds its content from data queries the test refuses, such as GraphQL, is not judged for dead controls.
 
 ### Proofreader
 
@@ -236,11 +246,15 @@ Options for `spell-check`. The Proofreader finds candidates with a dictionary an
 | `brandNames`    | string[] | `[]`    | Brand names and their exact casing, on top of the built-in list. Your casing wins over the built-in one. |
 | `skipChecks`    | string[] | `[]`    | Issue types not to look for: any of `spelling`, `doubled-word`, `punctuation`, `placeholder`, `brand-casing`, `inconsistent-casing`. |
 | `keepAtOrAbove` | number   | `0.6`   | Lowest verification-model confidence at which a candidate the model checked is reported. Greater than 0 and at most 1. |
+| `useGuidelines` | boolean  | `true`  | Reads extra accepted words and brand-name casing from the brand guidelines in your workspace's knowledge base. `false` skips that read for this run. |
+| `loremIpsumOnSamePages` | boolean | `false` | With `true`, lorem ipsum and pseudo-Latin filler are left to the `lorem-ipsum` agent, and the run summary says `Lorem ipsum is left to the Lorem Ipsum agent.` The Proofreader's other placeholder checks, such as "Insert headline here", still run. Ignored when you send `skipChecks`. |
 
 `acceptedWords` and `brandNames` take single words. The first 500 entries are read, and an entry longer than 64 characters is ignored.
 
+The verification model checks at most 20,000 candidates per API key per UTC day. Past that, the Proofreader reports only the findings its rules are certain of, and the run summary says `The daily spelling check limit was reached.`
+
 <Tip>
-  The Proofreader also reports lorem ipsum. If you run it together with the `lorem-ipsum` agent, send `skipChecks: ["placeholder"]` to avoid duplicate findings.
+  The Proofreader also reports lorem ipsum. A run with `agentIds` that starts both `spell-check` and `lorem-ipsum` sets `loremIpsumOnSamePages: true` for you, so each lorem ipsum line is reported once, by the Lorem Ipsum agent. It does not when you send `skipChecks` or `loremIpsumOnSamePages` yourself. If you run the two agents on the same pages in separate requests, send `loremIpsumOnSamePages: true` to the Proofreader. The Proofreader cannot see whether the Lorem Ipsum execution succeeds: if it fails, lorem ipsum on those pages goes unreported, so send `loremIpsumOnSamePages: false` when you want both.
 </Tip>
 
 ### Consistency Checker
@@ -249,10 +263,13 @@ Options for `consistency-checker`. Its keys start with `consistency` because a r
 
 | Key                          | Type    | Default | Effect |
 | ---------------------------- | ------- | ------- | ------ |
-| `consistencyCasingCheck`     | boolean | `true`  | Runs the cross-page casing check (`cross-page-casing`). |
+| `consistencyCasingCheck`     | boolean | `true`  | Runs the cross-page casing check (`cross-page-casing`). Brand names you give the Proofreader in `brandNames` are left to the Proofreader. |
+| `consistencyVisualCheck`     | boolean | `true`  | Runs the visual check, which uses no model: buttons and links styled differently from the site's usual style for their kind (`style-mismatch`), with no hover effect while the others have one (`missing-hover`), or whose text matches its background on hover (`hover-invisible`). |
 | `consistencyExactValues`     | boolean | `true`  | When this page's phone number or email is a one-character slip of the value the other pages agree on, names that value in the suggestion and in `suggestedFix`. |
 | `consistencyMaxPages`        | number  | `6`     | Other pages of the site to compare with. Whole number, capped at 12. |
 | `consistencyMaxCharsPerPage` | number  | `6000`  | Characters of each other page's text given to the AI model. Whole number, capped at 20,000. |
+
+A visual finding names the elements it groups in `metadata.labels`. A `style-mismatch` finding also lists what differs in `metadata.differences`, one entry per property: `{ property, value, dominant, dominantCount, css }`, where `css` is the declaration the rest of the site uses, such as `border-radius: 8px`. Its suggestion names the first declaration and counts the others. Read `metadata` on the findings of [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) with `includeResults: true`.
 
 ### Image Inspector
 
@@ -269,7 +286,10 @@ Options for `image-inspector`. A value outside its range is ignored, and the def
 | `emptyMinSidePx`         | number, 0 to 4000     | `24`    | Smallest image slot, in CSS pixels, reported as empty. |
 | `altMinSidePx`           | number, 0 to 4000     | `48`    | Smallest image, in CSS pixels, that needs alt text. |
 | `maxPerCategory`         | whole number, 1 to 50 | `6`     | Most findings pinned per issue type on a page. |
-| `linkCheckerOnSamePages` | boolean               | `false` | With `true`, broken images the Link Checker also reports are left to it, so they are not reported twice. A run with `agentIds` that starts `broken-links` sets it for you whenever the Link Checker checks images in that run. Set it yourself only when you run the two agents on the same pages in separate requests. A value you send always wins. |
+| `linkCheckerOnSamePages` | boolean               | `false` | With `true`, broken images the Link Checker also reports are left to it, so they are not reported twice. A one-page run with `agentIds` that starts `broken-links` sets it for you whenever the Link Checker checks images in that run. Set it yourself when you run the two agents on the same pages in separate requests, or in one `agentIds` run over several pages. A value you send always wins. |
+| `cropCheck`              | boolean               | not set | `true` turns on the bad-crop check (`bad-crop`): screenshots of up to 6 photos per page are sent to an AI model, which flags a head or main subject cut off at an edge. `false` keeps the check off whatever `aiConfig.modelChecks` says. Not set, the check runs only when the run's [`aiConfig.modelChecks`](/api-reference/rest-apis/v2/agents/execution/run) lists `image-crop`. |
+
+Images without alt text are reported as one finding: pinned on the image when there is one, and page-level when there are several. The bad-crop check is the Image Inspector's only model call, and it is off unless turned on. A run focused on other issue types never runs it. When the model gives no usable answer, the run summary says `Photo crops could not be checked.`
 
 ### Mobile Inspector
 
@@ -280,6 +300,47 @@ Options for `mobile-inspector`. A value outside its range is ignored, and the de
 | `phoneWidthPx`   | whole number, 320 to 480 | `375`   | Phone screen width, in CSS pixels, the page opens at. |
 | `minTapTargetPx` | number, 8 to 96          | `24`    | Smallest tap target, in CSS pixels, that passes. The suggestion names this size. |
 | `maxScreenshots` | whole number, 0 to 10    | `7`     | Screenshots per page, including the first screen. `0` turns screenshots off. |
+| `tabletWidthPx`  | whole number, 600 to 1024, or `0` | `768` | Width, in CSS pixels, of the tablet layout pass. `0` turns the tablet pass off. |
+| `skipChecks`     | string[]                 | `[]`    | Checks not to run, any of: `tablet` (the tablet layout pass), `sticky-bar` (content under fixed or sticky bars; it scrolls and taps same-page links), `wrapped-label` (button labels that wrap), `menu` (taps the menu button to see whether it opens anything), and `missing-on-mobile` (content shown on desktop that a phone visitor cannot reach). Unknown entries are ignored. |
+
+The phone checks for sideways scrolling, overflow, cut-off content, and small tap targets always run. With `menu` skipped, the menu is not judged, and links that sit in a hidden phone menu are never reported as missing on phones.
+
+### Migration Parity
+
+Options for `migration-parity`. `liveSiteUrl` is required.
+
+| Key           | Type                  | Default | Effect |
+| ------------- | --------------------- | ------- | ------ |
+| `liveSiteUrl` | string                | none    | Required. The live or old site to compare against: a full address or a bare domain, such as `old.example.com`. Only its origin is used. `liveUrl` is read as the same key when `liveSiteUrl` is absent. |
+| `maxFindings` | whole number, 1 to 20 | `6`     | Most findings per page. A focused recheck (`focusIssueTypes`) caps only the issue types it asks for. |
+| `useSitemap`  | boolean               | `true`  | When the same path does not exist on the live site, looks for the best match by address in the live site's sitemap. |
+
+A run without a usable `liveSiteUrl`, or whose live site is the site of the run's `url`, returns `INVALID_ARGUMENT` before any execution is created, with `Migration Parity needs the live site to compare against: send userContext.liveSiteUrl (a full address or a bare domain)` or `Migration Parity needs a live site other than the project site: userContext.liveSiteUrl names the same site as the run's url`. In a run with `agentIds`, Migration Parity is listed in `data.failed` and the other agents still start.
+
+For each page, the agent finds the same page on the live site and reports what the live page has that the new one lost. Names, numbers, and addresses are compared exactly; a phone number counts as kept in any written form. Contact details the live site shows only in its header or footer are compared once per run, on the run's first page.
+
+Live pages are read without your site access credentials, and only on public addresses. A page that was not compared gets no findings, keeps its earlier suggestions, and says why in the run summary: no matching live page, a live site that could not be read, a live page that timed out or refused the visit, too little text on either page, or a sign-in wall in front of either page. A page skipped for a sign-in wall is not billed.
+
+Each finding carries `livePageUrl` and `missing` (the missing items, at most 20) in `agent.reason`. Each page's result on [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) with `includeResults: true` carries `agentResult.report`: `livePageUrl`, `match` (`"same-path"`, `"sitemap"`, or `"none"`), `compared` (how many bios, reviews, FAQs, phone numbers, emails, addresses, and list items were compared), and `skipped` (`"gated"` or `"live-gated"` when a sign-in wall stood in front of the page or its live page).
+
+### Content Request List
+
+Options for `content-request-list`. All are optional.
+
+| Key                  | Type                   | Default        | Effect |
+| -------------------- | ---------------------- | -------------- | ------ |
+| `includeThreads`     | boolean                | `true`         | Lists the document's open comment threads that ask for content or a confirmation. |
+| `maxItems`           | whole number, 1 to 50  | `25`           | Most checklist items per page. |
+| `minBioWords`        | whole number, 1 to 100 | `10`           | A team member's bio shorter than this is listed as short, when another member of the same team has a full bio. |
+| `clientUserIds`      | string[]               | none           | Up to 1,000 user IDs of the client. A thread the client opened is the client asking your team, so it is left out. Without this key or `clientEmailDomains`, every human ask counts. |
+| `clientEmailDomains` | string[]               | none           | Up to 100 email domains of the client, subdomains included. Works as `clientUserIds` does, on the email of the thread's author. |
+| `audienceLabel`      | string, 1 to 40 characters | `"the client"` | Who the checklist is for, as the finding names them, for example `3 things still need content from the owner`. Angle brackets are not allowed. |
+
+The agent posts one page-level finding per page, with issue type `content-requests`. The whole checklist is on the finding's `agent.reason.contentRequests` and on each page's `agentResult.report.contentRequests` in [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) results: items `{ kind, label, section?, text?, annotationId?, count? }`, where `kind` is `empty-section`, `placeholder-text`, `coming-soon`, `placeholder-image`, `thin-bio`, or `open-question`.
+
+It reads the run document's open comment threads and quotes one only when the run's audience can already see it: a public thread always, an organization-private thread only on a `"private"` run of that same organization, and a thread restricted to named users never. Threads an agent opened, and threads whose last human reply looks like the answer, are left out. It reads up to 2,000 annotations past the agents' own suggestions, and the summary says when older threads were not read.
+
+A page title alone in a banner, a "Coming soon" badge among real content, and stand-in lines in the header, navigation, or footer are not listed. A page behind a sign-in wall is skipped (`report.skipped: "gated"`), is not billed, and keeps its earlier checklist.
 
 ## Context gathering strategies
 

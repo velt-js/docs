@@ -49,6 +49,8 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 
     <ParamField body="url" type="string" required>
       Valid URL. The seed URL to process. When `urls` is present, this is the site the list belongs to: relative entries resolve against it and every entry must be on its host.
+
+      Agents review public pages only. A request to a loopback, link-local, cloud metadata, or private network address (such as `localhost`, `127.0.0.1`, `169.254.169.254`, `10.0.0.5`, `192.168.1.10`, or a `*.local` or `*.internal` host) is refused, whether it is the page itself or something the page loads, so that page or resource does not load.
     </ParamField>
 
     <ParamField body="urls" type="string[]">
@@ -57,6 +59,10 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
       Entries are normalized before the run: blank entries are skipped, the `#fragment` is dropped, the review toolbar query params (`review`, `feedback`, `sreviewId`, `scommentId`, `sprojectInstall`, `sflivedemo`, `sembed`, `scommentmode`, `sreadonly`, `sagentcomments`, `st`) are removed, every other query param is kept in the order you sent it, and a trailing slash is kept. An entry on another host, an entry that is not a URL or a path (`site.com/x`, `mailto:`), or a repeat of an earlier entry is dropped. The first occurrence of a page is the one that runs.
 
       When `urls` is present the crawler is skipped and `crossPageExecute` and `maxUrlsToProcess` are derived from the surviving entries. Sending more than 500 entries, a list where nothing survives, or a `url` that is not a usable `http(s)` URL returns `INVALID_ARGUMENT`.
+    </ParamField>
+
+    <ParamField body="pageListTotal" type="number">
+      How many pages the source of your `urls` list had before you cut it to fit, for example a sitemap of 1,200 pages sent as 500. Whole number, 1 to 10,000,000. Reporting only: when it is larger than the number of pages the run reviews, the run carries a non-blocking warning, `{ "code": "pages-truncated", "pagesTotal": 1200, "pagesRun": 500 }`, in the response's `warnings` and in the execution's `warnings` on [Get Execution](/api-reference/rest-apis/v2/agents/execution/get). Ignored without `urls`.
     </ParamField>
 
     <ParamField body="crossPageExecute" type="boolean">
@@ -110,7 +116,7 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
     </ParamField>
 
     <ParamField body="userContext" type="object">
-      Runtime values for the agent's `userContextFields`. Keys must match the field IDs declared in the agent's `input.userContextFields`. The request is checked against those declarations before any execution is created: a missing required field, or a value of another type, returns `INVALID_ARGUMENT`. Some built-in agents also read options from it, such as switching a check off: see [Per-run options](/ai/agents/overview#per-run-options).
+      Runtime values for the agent's `userContextFields`. Keys must match the field IDs declared in the agent's `input.userContextFields`. The request is checked against those declarations before any execution is created: a missing required field, or a value of another type, returns `INVALID_ARGUMENT`. Some built-in agents also read options from it, such as switching a check off: see [Per-run options](/ai/agents/overview#per-run-options). `migration-parity` needs `liveSiteUrl`: a run without a usable live site, or with the run's own site as the live site, returns `INVALID_ARGUMENT` too.
 
       Four optional run-scope keys work with every agent, built-in or custom, whatever fields it declares. Leave them out and the run behaves as before.
 
@@ -431,6 +437,7 @@ Sending `"userContext": { "cropCheck": true }` instead turns on the same check. 
 | Field              | Type   | Description                                                                                              |
 | ------------------ | ------ | ------------------------------------------------------------------------------------------------------- |
 | `data.executionId` | string | Unique execution ID. Use to poll via [Get Execution](/api-reference/rest-apis/v2/agents/execution/get). |
+| `data.warnings`    | object[] | Present only when the run started with non-blocking warnings, such as `{ "code": "pages-truncated", "pagesTotal": 1200, "pagesRun": 500 }` (see `pageListTotal`). The execution carries the same `warnings`. |
 
 #### Success Response (several agents)
 
@@ -502,12 +509,13 @@ The request fails only when no agent could start. It then returns the first agen
 - `INVALID_ARGUMENT`: an `aiConfig` that is empty, carries an unknown key, names a provider outside `gemini` / `claude` / `openai`, names a model outside the allowlist, supplies an empty `defaultModels`, sets `maxToolTurns` outside `1..16`, or sends a `modelChecks` list that is empty, repeats an entry, or names an unknown check.
 - `INVALID_ARGUMENT`: a malformed run-scope key in `userContext`. The message names the key and its rule, for example `userContext.sourcePageUrl must be a non-blank string of at most 4096 characters`, and `error.details.issues` lists every malformed key.
 - `INVALID_ARGUMENT`: a `userContext` the agent's `input.userContextFields` refuse: a missing required field (`Validation failed: Missing required userContext field: <id>`) or a value of another type (`Validation failed: userContext field '<id>' expected type '<type>', got '<actual>'`).
+- `INVALID_ARGUMENT`: a `migration-parity` run without a usable `userContext.liveSiteUrl` (`Migration Parity needs the live site to compare against: send userContext.liveSiteUrl (a full address or a bare domain)`), or whose live site is the run's own site (`Migration Parity needs a live site other than the project site: userContext.liveSiteUrl names the same site as the run's url`).
 - `NOT_FOUND`: store database not found, or the target document does not exist.
 - `ALREADY_EXISTS`: an execution is already running for this agent and document combination. The error message includes the running execution's ID. An execution that stopped making progress does not count: the new run ends it with `error.code` `STALE_RUN` and starts.
 - `RESOURCE_EXHAUSTED`: the workspace's AI credits are exhausted.
 - `INTERNAL`: the run could not be started after its execution was created (`Failed to dispatch agent execution task.`). Every execution the request created ends with status `error` and `error.code` `TASK_DISPATCH_FAILED`. Send the request again.
 
-With `agentIds`, an error that concerns one agent, such as `NOT_FOUND`, `ALREADY_EXISTS`, `RESOURCE_EXHAUSTED`, or a `userContext` that agent's `userContextFields` refuse, appears in `data.failed` and the other agents still start. The request fails with it only when no agent could start. Every other `INVALID_ARGUMENT`, and `INTERNAL`, rejects the whole request.
+With `agentIds`, an error that concerns one agent, such as `NOT_FOUND`, `ALREADY_EXISTS`, `RESOURCE_EXHAUSTED`, or a `userContext` that agent refuses, appears in `data.failed` and the other agents still start. The request fails with it only when no agent could start. Every other `INVALID_ARGUMENT`, and `INTERNAL`, rejects the whole request.
 
 <ResponseExample>
 ```js

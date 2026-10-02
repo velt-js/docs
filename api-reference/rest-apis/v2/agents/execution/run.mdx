@@ -5,7 +5,7 @@ api: "POST https://api.velt.dev/v2/agents/execution/run"
 
 Use this API to start an asynchronous agent execution. The engine creates an execution document in Firestore and dispatches a Cloud Task for processing. The response returns immediately with the `executionId`. Poll [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) to track progress and fetch findings.
 
-To run several agents on the same page in one request, send `agentIds` instead of `agentId`. Each agent gets its own execution, and the response lists one `executionId` per agent. See [Several agents on one page](#9-several-agents-on-one-page).
+To run several agents in one request, send `agentIds` instead of `agentId`, on one page or on several. Each agent gets its own execution, and the response lists one `executionId` per agent. See [Several agents on one page](#9-several-agents-on-one-page) and [Several agents on several pages](#11-several-agents-on-several-pages).
 
 The `apiKey` is injected from request headers. `organizationId` and `documentId` are required and identify the document the execution runs against: the document must already exist, and findings are persisted to it as comment annotations. Cross-page execution is controlled via the `crossPageExecute` boolean; there is no separate endpoint. To review an exact set of pages instead of crawling, send them in `urls`.
 
@@ -36,11 +36,15 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
     </ParamField>
 
     <ParamField body="agentIds" type="string[]">
-      Runs several agents on the same page in one request. 1 to 10 distinct agent IDs, each min 1 char. A repeated ID runs once and counts once toward the limit.
+      Runs several agents in one request, on one page or on several. 1 to 10 distinct agent IDs, each min 1 char. A repeated ID runs once and counts once toward the limit.
 
       Each agent gets its own execution, validated and created exactly as a single-agent run, and posts its findings as soon as it finishes. One agent that cannot start does not stop the others.
 
-      `agentIds` reviews one page. `crossPageExecute: true` without `urls`, or a `urls` list that names more than one page after normalization, returns `INVALID_ARGUMENT`. Every other field in the request, including `userContext`, `deviceType`, and `aiConfig`, applies to every agent in the list.
+      Every other field in the request, including `urls`, `crossPageExecute`, `userContext`, `deviceType`, and `aiConfig`, applies to every agent in the list.
+
+      **Several pages.** With a `urls` list of more than one page, or with `crossPageExecute: true`, each agent still gets one execution, and that execution covers every page, as a single-agent run over those pages does. The page list is resolved once for all the agents (your list, or one crawl), and each page is reviewed by all the agents together, so it loads once for them. An execution completes when its last page is processed. Whether a run has one page or several is decided after the `urls` list is normalized, so two spellings of one page are one page.
+
+      At most 25 pages of one site start at once; the rest start in waves 30 seconds apart. A page that fails, runs out of time, or keeps failing after 3 deliveries is counted as an errored page of each execution it belongs to (`resultsSummary.urlsErrored`), and the other pages still count, so the execution ends `partial` rather than `error` when some pages succeed.
     </ParamField>
 
     <ParamField body="url" type="string" required>
@@ -353,6 +357,27 @@ Rechecks only blurry and stretched images on two pages, and links each finding t
 }
 ```
 
+#### 11. Several agents on several pages
+
+Runs three agents on ten pages of one site. Each agent gets one execution that covers all ten pages, and each page is reviewed by the three agents together.
+
+```JSON
+{
+  "data": {
+    "agentIds": ["spell-check", "broken-links", "image-inspector"],
+    "url": "https://www.example.com",
+    "urls": ["/", "/pricing", "/about", "/blog", "/contact", "/careers", "/docs", "/docs/start", "/security", "/terms"],
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "ranBy": { "userId": "user_123" }
+  }
+}
+```
+
+The response has the same shape as for one page: one `executionId` per agent. Each execution reports `config.crossPageExecute: true`, `config.maxUrlsToProcess: 10`, `config.pageSource: "list"`, and, when it completes, `resultsSummary.urlsProcessed: 10`. To crawl instead of listing pages, send `crossPageExecute: true` and `maxUrlsToProcess` without `urls`.
+
+On several pages, the Image Inspector does not leave broken images to the Link Checker by itself. Add `"linkCheckerOnSamePages": true` to `userContext` to report each broken image once. The Proofreader still leaves lorem ipsum to `lorem-ipsum` when both run. See [Per-run options](/ai/agents/overview#per-run-options).
+
 # Response
 
 #### Success Response
@@ -439,7 +464,6 @@ The request fails only when no agent could start. It then returns the first agen
 
 - `INVALID_ARGUMENT`: invalid URL; neither `agentId` nor `agentIds` (`agentId or agentIds is required`); missing `organizationId` or `documentId`; or an invalid `trigger`, `deviceType`, or `annotationVisibility`.
 - `INVALID_ARGUMENT`: an `agentIds` list, sent without `agentId`, that names no agent or more than 10 distinct agents (`An agent suite needs between 1 and 10 distinct agentIds.`), or that holds an entry that is not a non-empty string.
-- `INVALID_ARGUMENT`: `agentIds` with `crossPageExecute: true` and no `urls`, or with a `urls` list that names more than one page (`An agent suite runs a single page: omit crossPageExecute and pass at most one entry in urls.`).
 - `INVALID_ARGUMENT`: a `urls` list with more than 500 entries, a list where no entry survives normalization (every entry blank, on another host, or not a URL or path), or a `url` that is not a usable `http(s)` URL to resolve the list against.
 - `INVALID_ARGUMENT`: an `aiConfig` that is empty, carries an unknown key, names a provider outside `gemini` / `claude` / `openai`, names a model outside the allowlist, supplies an empty `defaultModels`, or sets `maxToolTurns` outside `1..16`.
 - `INVALID_ARGUMENT`: a malformed run-scope key in `userContext`. The message names the key and its rule, for example `userContext.sourcePageUrl must be a non-blank string of at most 4096 characters`, and `error.details.issues` lists every malformed key.

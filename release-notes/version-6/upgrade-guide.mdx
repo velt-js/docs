@@ -1,0 +1,124 @@
+---
+title: Upgrade Guide
+---
+
+## Overview
+- **Key changes in this series**:
+  - Customer suggestion metadata moves to `suggestion.metadata`
+  - Self-hosted comment resolvers must persist `suggestion`
+
+## Breaking Changes
+
+### Suggestion metadata moved to `suggestion.metadata`
+
+`CommitSuggestionConfig.metadata` for suggestions created with 6.0.21 is stored at `annotation.suggestion.metadata`, not on `annotation.metadata`. `Suggestion.metadata` now returns only your keys, and no longer includes SDK keys such as `apiKey`, `documentId`, `sdkVersion`, and `pageInfo`.
+
+Suggestions saved before 6.0.21 keep your keys on `annotation.metadata`. `getSuggestions()` and suggestion events still return those keys, with the SDK-owned keys removed. This applies to hosted projects and to projects with a comment resolver.
+
+**Before:**
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+// Stored at annotation.metadata.ticket, mixed with SDK routing keys.
+// getSuggestions().metadata included those SDK keys plus ticket.
+const ticket = annotation.metadata.ticket;
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+// Stored at annotation.metadata.ticket, mixed with SDK routing keys.
+// getSuggestions().metadata included those SDK keys plus ticket.
+const ticket = annotation.metadata.ticket;
+```
+</Tab>
+</Tabs>
+
+**After:**
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+// Stored at annotation.suggestion.metadata.ticket.
+// getSuggestions().metadata is { ticket: 'PROJ-7' }.
+// Read rows written by both versions:
+const ticket = annotation.suggestion?.metadata?.ticket ?? annotation.metadata?.ticket;
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+// Stored at annotation.suggestion.metadata.ticket.
+// getSuggestions().metadata is { ticket: 'PROJ-7' }.
+// Read rows written by both versions:
+const ticket = annotation.suggestion?.metadata?.ticket ?? annotation.metadata?.ticket;
+```
+</Tab>
+</Tabs>
+
+Code that read `Suggestion.metadata.documentId`, `apiKey`, `sdkVersion`, or `pageInfo` now sees those keys only if your own metadata object contains them.
+
+### Self-hosted comment resolvers must persist `suggestion`
+
+With a comment data provider, Velt no longer stores suggestion content (`oldValue`, `newValue`, `summary`, `rejectReason`, `metadata`). Your resolver does. `comment_annotation.suggestion_reject` is now sent without an `additionalSaveEvents` opt-in. `additionalFields: ['suggestion']` no longer leaves content keys in the Velt copy.
+
+Update your comment provider backend before or with this upgrade. See [Suggestion Content](/self-hosting/partial/comments#suggestion-content).
+
+**Before:**
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+// Suggestion content was on the Velt comment document.
+// suggestion_reject arrived only when additionalSaveEvents included it.
+const summary = veltAnnotation.suggestion.summary;
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+// Suggestion content was on the Velt comment document.
+// suggestion_reject arrived only when additionalSaveEvents included it.
+const summary = veltAnnotation.suggestion.summary;
+```
+</Tab>
+</Tabs>
+
+**After:**
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+// Your get and save store the content.
+// Reject is delivered with no opt-in.
+async function save(request) {
+  const annotation = Object.values(request.commentAnnotation)[0];
+  // request.event === 'comment_annotation.suggestion_reject'
+  // annotation.suggestion.status === 'rejected'
+  // annotation.suggestion.rejectReason is the reason
+  const summary = annotation.suggestion?.summary;
+  return { statusCode: 200, success: true, data: undefined };
+}
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+// Your get and save store the content.
+// Reject is delivered with no opt-in.
+async function save(request) {
+  const annotation = Object.values(request.commentAnnotation)[0];
+  // request.event === 'comment_annotation.suggestion_reject'
+  // annotation.suggestion.status === 'rejected'
+  // annotation.suggestion.rejectReason is the reason
+  const summary = annotation.suggestion?.summary;
+  return { statusCode: 200, success: true, data: undefined };
+}
+```
+</Tab>
+</Tabs>
+
+Hosted projects keep suggestion content on the Velt document. No change is required for them.
+
+## How to Upgrade
+
+1. Upgrade to `6.0.21`.
+2. If you use a comment data provider, persist and return `suggestion` in `save` and `get`.
+3. Update code that reads `Suggestion.metadata` for SDK routing keys.

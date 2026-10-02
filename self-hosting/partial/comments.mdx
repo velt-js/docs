@@ -756,6 +756,57 @@ Velt.setDataProviders({ comment: commentDataProvider });
 </Tab>
 </Tabs>
 
+# Suggestion Content
+
+When a comment data provider is set, your resolver stores suggestion content. Velt keeps only the structural keys.
+
+| Role | Keys |
+|------|------|
+| Content (your resolver stores these) | `oldValue`, `newValue`, `summary`, `rejectReason`, `metadata` |
+| Structural (Velt stores these) | `status`, `targetId`, `targetType`, `driftDetected`, `resolvedBy`, `resolvedAt` |
+
+Your `save` and `get` must handle `suggestion`:
+
+- Persist `commentAnnotation[id].suggestion` on every save that includes it. The object is complete: your stored content keys overlaid with the keys of the current write.
+- Return that suggestion from `get`, with the content keys you stored. The SDK reads only the content keys back and keeps Velt's `status`, `resolvedBy`, and `resolvedAt`.
+- Answer `2xx` and upsert for every `event` value. Read `suggestion.status` to see whether the suggestion is pending, accepted, rejected, or stale.
+- `comment_annotation.suggestion_reject` is sent without an `additionalSaveEvents` opt-in. It adds `rejectReason`.
+- `comment_annotation.suggestion_accept` stays opt-in through `additionalSaveEvents`.
+- The stale outcome of an accept is not sent to `save`.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+client.setDataProviders({
+  comment: {
+    config: {
+      additionalSaveEvents: ['comment_annotation.suggestion_accept'],
+    },
+    save,
+    get,
+  },
+});
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+Velt.setDataProviders({
+  comment: {
+    config: {
+      additionalSaveEvents: ['comment_annotation.suggestion_accept'],
+    },
+    save,
+    get,
+  },
+});
+```
+</Tab>
+</Tabs>
+
+`acceptSuggestion()` and `rejectSuggestion()` wait for your `get` response before they change the suggestion. A timeout, error, or non-`2xx` response refuses both and leaves the suggestion pending. `acceptSuggestion()` also returns `null` unless the returned suggestion has `newValue`.
+
+Suggestion content already stored in Velt is not removed by this release. Point webhooks, notification templates, and REST readers that read suggestion content from Velt at your resolver.
+
 # Triggering Email Notifications when Self-Hosting
 
 When you self-host content, use Webhooks to trigger emails from your own system:

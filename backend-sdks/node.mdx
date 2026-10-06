@@ -277,7 +277,7 @@ const sdk = VeltSDK.initialize({
 
 ## Self-Hosting Backend
 
-Each self-hosting service is loaded asynchronously on first access via `await sdk.selfHosting.getXxx()`. The service is cached after the first call. The `token` service is the exception: it is a direct synchronous property, `sdk.selfHosting.token`.
+Each self-hosting service is loaded asynchronously on first access via `await sdk.selfHosting.getXxx()`. The service is cached after the first call.
 
 `await sdk.selfHosting.database` returns the connected `DatabaseAdapter`: the raw adapter for the configured database (`MongoDBAdapter` or `PostgresAdapter`), with `find`, `findOne`, `insertOne`, `updateOne`, `updateMany`, `deleteOne`, and `deleteMany`. The first access connects and creates indexes; later accesses return the same adapter. Use it for a readiness check or to write data the resolvers do not write, such as seeding users. Pass collection names as configured in `collections`. On PostgreSQL the adapter accepts the query operators the SDK itself uses: equality, `$in`, `$nin`, `$eq`, `$ne`, `$exists`, and top-level `$and` and `$or`.
 
@@ -737,31 +737,6 @@ await activitiesService.saveActivities({
 { success: true, statusCode: 200, data: { saved: true } }
 ```
 
-### Token
-
-Access via the synchronous `sdk.selfHosting.token` property (no `await`).
-
-#### `getToken`
-
-- Generates a Velt auth token for a user. Token minting is a call to Velt's API and needs no database, so the same service is also available as `sdk.api.token` under the [REST API backend](#rest-api-backend). Both names send the same request and return the same shape.
-- Params: positional `organizationId` (string), `userId` (string), `email` (string, optional), `isAdmin` (boolean, optional)
-- Returns: `{ success: true, data: { token } }` or `{ success: false, error, errorCode }`
-
-```ts
-const tokenResult = await sdk.selfHosting.token.getToken('org-123', 'user-1', 'john@example.com', false);
-if (tokenResult.success) {
-  const token = tokenResult.data.token;
-}
-```
-
-**Response**
-
-```ts
-{ success: true, data: { token: 'eyJhbGciOiJIUzI1NiIs...' } }
-```
-
-> Note: `getToken` takes positional arguments, not a request object. An empty `organizationId` throws a `VeltValidationError`. A missing `userId`, API key, or auth token, or an error from Velt's API, returns `{ success: false, error: '...', errorCode: '...' }`.
-
 ### verifyToken
 
 `sdk.selfHosting.verifyToken` verifies the auth credential the Velt frontend forwards to endpoint-based resolvers. It is **database-free** (it does not open or query MongoDB), **fail-closed** (every error path returns `{ verified: false }`, never throws), and **authentication only** (claims are returned verbatim; it makes no authorization decision).
@@ -901,7 +876,7 @@ On failure, `result.errorCode` is one of the [`ResolverAuthErrorCode`](/api-refe
 
 ## REST API Backend
 
-The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 19 services, plus token minting. Each method takes a fully-typed TypeScript request object and returns the raw Velt API response. You only need `apiKey` and `authToken`; initialize without a `database` block.
+The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 19 services, including token generation with [`sdk.api.accessControl.generateToken`](#generatetoken). Each method takes a fully-typed TypeScript request object and returns the raw Velt API response. You only need `apiKey` and `authToken`; initialize without a `database` block.
 
 Every `sdk.api.*` method requires an `organizationId` in its request payload. Velt enforces data isolation per-organization server-side.
 
@@ -2451,6 +2426,9 @@ await sdk.api.accessControl.generateSignature({
 #### `generateToken`
 
 - Generates a JWT auth token for a user with embedded permissions.
+- Calls `POST /v2/auth/generate_token`, the endpoint documented in the [Generate Token REST API](/api-reference/rest-apis/v2/auth/generate-token) and used by the [JWT guide](/security/jwt-tokens).
+- Expects `GenerateTokenRequest { userId: string; userProperties: { name?, email?, photoUrl?, color?, textColor?, ... }; permissions: { resources?: Resource[] } }`, passed as a request object like every other `sdk.api.*` method.
+- Returns the raw Velt API envelope `VeltApiResponse`: `{ result: { status, message, data: { token } } }`.
 - Params: [GenerateTokenRequest](/api-reference/sdk/models/data-models#generatetokenrequest-node)
 - Returns: [GenerateTokenResponse](/api-reference/sdk/models/data-models#generatetokenresponse-node)
 
@@ -3556,33 +3534,6 @@ await sdk.api.workspace.getAdvancedWebhookEndpointSecret({ endpointId: 'endpoint
 ```ts
 { result: { status: 'success', message: 'Endpoint secret retrieved successfully.', data: { secret: 'whsec_...' } } }
 ```
-
-### Token
-
-**Namespace:** `sdk.api.token`
-
-Token minting needs no database, so `sdk.api.token` is the recommended name and works with a REST-only config. It is the same service as [`sdk.selfHosting.token`](#token): both names send the same request to `/v2/auth/token/get` and return the same shape.
-
-#### `getToken`
-
-- Generates a Velt auth token for a user.
-- Params: positional `organizationId` (string), `userId` (string), `email` (string, optional), `isAdmin` (boolean, optional)
-- Returns: `{ success: true, data: { token } }` or `{ success: false, error, errorCode }`
-
-```ts
-const tokenResult = await sdk.api.token.getToken('org-123', 'user-1', 'john@example.com', false);
-if (tokenResult.success) {
-  const token = tokenResult.data.token;
-}
-```
-
-**Response**
-
-```ts
-{ success: true, data: { token: 'eyJhbGciOiJIUzI1NiIs...' } }
-```
-
-> Note: `getToken` takes positional arguments, not a request object. To call the `/v2/auth/generate_token` endpoint with embedded permissions and receive the raw Velt API response instead, use [`sdk.api.accessControl.generateToken`](#generatetoken).
 
 <Note>
 Custom agent config supports the `rest-api` context-gathering strategy and the `mcp-tools` execution strategy. Secret-bearing REST API and MCP auth fields are encrypted at rest and redacted on read paths. Create and update-version payloads reject server-managed fields such as `managedBy`, `metadata.type`, `metadata.category`, `metadata.internal`, and `metadata.apiKey`; strategies that require instructions (`ai`, `service+ai`, `stagehand-agent`) reject empty `instructions`.

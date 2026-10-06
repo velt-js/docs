@@ -5,6 +5,8 @@ api: "POST https://api.velt.dev/v2/agents/execution/run"
 
 Use this API to start an asynchronous agent execution. The engine creates an execution document in Firestore and dispatches a Cloud Task for processing. The response returns immediately with the `executionId`. Poll [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) to track progress and fetch findings.
 
+To run several agents in one request, send `agentIds` instead of `agentId`, on one page or on several. Each agent gets its own execution, and the response lists one `executionId` per agent. See [Several agents on one page](#9-several-agents-on-one-page) and [Several agents on several pages](#11-several-agents-on-several-pages).
+
 The `apiKey` is injected from request headers. `organizationId` and `documentId` are required and identify the document the execution runs against: the document must already exist, and findings are persisted to it as comment annotations. Cross-page execution is controlled via the `crossPageExecute` boolean; there is no separate endpoint. To review an exact set of pages instead of crawling, send them in `urls`.
 
 The schema uses `.passthrough()` so any additional fields are forwarded.
@@ -29,20 +31,38 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 
 <ParamField body="data" type="object" required>
   <Expandable title="properties">
-    <ParamField body="agentId" type="string" required>
-      Min 1 char. Agent ID to execute.
+    <ParamField body="agentId" type="string">
+      Min 1 char. The agent to run. Send `agentId` to run one agent, or `agentIds` to run several. One of the two is required. When both are sent, `agentId` wins: `agentIds` is ignored and only `agentId` runs.
+    </ParamField>
+
+    <ParamField body="agentIds" type="string[]">
+      Runs several agents in one request, on one page or on several. 1 to 10 distinct agent IDs, each min 1 char. A repeated ID runs once and counts once toward the limit.
+
+      Each agent gets its own execution, validated and created exactly as a single-agent run, and posts its findings as soon as it finishes. One agent that cannot start does not stop the others.
+
+      Every other field in the request, including `urls`, `crossPageExecute`, `userContext`, `deviceType`, and `aiConfig`, applies to every agent in the list.
+
+      **Several pages.** With a `urls` list of more than one page, or with `crossPageExecute: true`, each agent still gets one execution, and that execution covers every page, as a single-agent run over those pages does. The page list is resolved once for all the agents (your list, or one crawl), and each page is reviewed by all the agents together, so it loads once for them. An execution completes when its last page is processed. Whether a run has one page or several is decided after the `urls` list is normalized, so two spellings of one page are one page.
+
+      At most 25 pages of one site start at once; the rest start in waves 30 seconds apart. A page that fails, runs out of time, or keeps failing after 3 deliveries is counted as an errored page of each execution it belongs to (`resultsSummary.urlsErrored`), and the other pages still count, so the execution ends `partial` rather than `error` when some pages succeed.
     </ParamField>
 
     <ParamField body="url" type="string" required>
       Valid URL. The seed URL to process. When `urls` is present, this is the site the list belongs to: relative entries resolve against it and every entry must be on its host.
+
+      Agents review public pages only. A request to a loopback, link-local, cloud metadata, or private network address (such as `localhost`, `127.0.0.1`, `169.254.169.254`, `10.0.0.5`, `192.168.1.10`, or a `*.local` or `*.internal` host) is refused, whether it is the page itself or something the page loads, so that page or resource does not load.
     </ParamField>
 
     <ParamField body="urls" type="string[]">
       Review exactly these pages instead of crawling. Max 500 entries. Each entry is an absolute `http(s)` URL or a site-relative path starting with `/` (for example `/s/article?id=101`), resolved against `url`. `url` stays required and is never replaced by an entry.
 
-      Entries are normalized before the run: blank entries are skipped, the `#fragment` is dropped, the Superflow toolbar query params (`review`, `feedback`, `sreviewId`, `scommentId`, `sprojectInstall`, `sflivedemo`, `sembed`, `scommentmode`, `sreadonly`, `sagentcomments`, `st`) are removed, every other query param is kept in the order you sent it, and a trailing slash is kept. An entry on another host, an entry that is not a URL or a path (`site.com/x`, `mailto:`), or a repeat of an earlier entry is dropped. The first occurrence of a page is the one that runs.
+      Entries are normalized before the run: blank entries are skipped, the `#fragment` is dropped, the review toolbar query params (`review`, `feedback`, `sreviewId`, `scommentId`, `sprojectInstall`, `sflivedemo`, `sembed`, `scommentmode`, `sreadonly`, `sagentcomments`, `st`) are removed, every other query param is kept in the order you sent it, and a trailing slash is kept. An entry on another host, an entry that is not a URL or a path (`site.com/x`, `mailto:`), or a repeat of an earlier entry is dropped. The first occurrence of a page is the one that runs.
 
       When `urls` is present the crawler is skipped and `crossPageExecute` and `maxUrlsToProcess` are derived from the surviving entries. Sending more than 500 entries, a list where nothing survives, or a `url` that is not a usable `http(s)` URL returns `INVALID_ARGUMENT`.
+    </ParamField>
+
+    <ParamField body="pageListTotal" type="number">
+      How many pages the source of your `urls` list had before you cut it to fit, for example a sitemap of 1,200 pages sent as 500. Whole number, 1 to 10,000,000. Reporting only: when it is larger than the number of pages the run reviews, the run carries a non-blocking warning, `{ "code": "pages-truncated", "pagesTotal": 1200, "pagesRun": 500 }`, in the response's `warnings` and in the execution's `warnings` on [Get Execution](/api-reference/rest-apis/v2/agents/execution/get). Ignored without `urls`.
     </ParamField>
 
     <ParamField body="crossPageExecute" type="boolean">
@@ -55,6 +75,8 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 
     <ParamField body="deviceType" type="string">
       Device mode to emulate for this execution: `"mobile"` or `"desktop"`. Default: `"desktop"`. Drives the Puppeteer viewport/user-agent used by all context-gathering strategies and pin resolution, and sets `pageInfo.deviceInfo.deviceType` on every annotation the execution creates.
+
+      The `mobile-inspector` built-in agent always runs as `"mobile"`, whatever you send, because it measures the page at phone width.
     </ParamField>
 
     <ParamField body="organizationId" type="string" required>
@@ -94,31 +116,61 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
     </ParamField>
 
     <ParamField body="userContext" type="object">
-      Runtime values for the agent's `userContextFields`. Keys must match the field IDs declared in the agent's `input.userContextFields`.
+      Runtime values for the agent's `userContextFields`. Keys must match the field IDs declared in the agent's `input.userContextFields`. The request is checked against those declarations before any execution is created: a missing required field, or a value of another type, returns `INVALID_ARGUMENT`. Some built-in agents also read options from it, such as switching a check off: see [Per-run options](/ai/agents/overview#per-run-options). `migration-parity` needs `liveSiteUrl`: a run without a usable live site, or with the run's own site as the live site, returns `INVALID_ARGUMENT` too.
+
+      Four optional run-scope keys work with every agent, built-in or custom, whatever fields it declares. Leave them out and the run behaves as before.
+
+      | Key                  | Type     | Effect |
+      | -------------------- | -------- | ------ |
+      | `focusIssueTypes`    | string[] | Reports and annotates only findings whose `issueType` is in the list, compared case-insensitively. 1 to 50 non-blank entries of at most 100 characters each. A finding without an `issueType` is dropped. Built-in values are listed in [Issue types](/ai/agents/overview#issue-types). |
+      | `sourceAnnotationId` | string   | The comment that asked for the run. Added to every finding's `agent.reason` as `sourceAnnotationId`, so you can link each finding back to it. |
+      | `sourcePageUrl`      | string   | The page that comment is on. Added to `agent.reason` as `sourcePageUrl` when `sourceAnnotationId` is also set. |
+      | `sourceElementXpath` | string   | Full positional XPath of the element that comment is pinned on, for example `/html/body/main/section[2]/img`. A finding pinned on the same element of `sourcePageUrl` is dropped, so the run does not repeat the comment. Has no effect without `sourcePageUrl`. |
+
+      The three `source*` keys take non-blank strings of at most 4,096 characters.
+
+      **A focused run is a recheck.** With `focusIssueTypes`, the run first removes the agent's earlier pending suggestions of the listed issue types on the pages it reviewed, then pins the ones still present. Suggestions of other issue types stay. Without `focusIssueTypes`, a run that sets `sourceAnnotationId` replaces only the pending suggestions the agent made earlier from that same comment.
+
+      This removal never touches a suggestion a user already resolved, or a page the run could not load. It follows the agent's `postProcess.deletePreviousSuggestions` setting (on by default). The one exception: a `sourceAnnotationId` run without `focusIssueTypes` replaces that comment's earlier suggestions even when the setting is off.
+
+      These four key names are reserved in `userContext`: [Create Agent](/api-reference/rest-apis/v2/agents/create) and [Update Agent Version](/api-reference/rest-apis/v2/agents/version/update) refuse a `userContextFields` entry whose `id` is one of them. A malformed key, such as `focusIssueTypes` sent as a string or an empty list, returns `INVALID_ARGUMENT` before any run starts. The message states the rule the key breaks, for example `userContext.focusIssueTypes must be a list of 1 to 50 non-blank issue types of at most 100 characters each`.
     </ParamField>
 
     <ParamField body="aiConfig" type="object">
-      Per-execution LLM override. Omit it to run on the provider and model the platform resolves for the agent.
+      Per-execution LLM override. Omit it to run on the provider and model the platform resolves for the agent (see the notes below).
 
       | Field           | Type   | Required | Description                                                                                     |
       | --------------- | ------ | -------- | ------------------------------------------------------------------------------------------------ |
-      | `provider`      | string | no       | `"gemini"`, `"claude"`, or `"openai"`. Any other value is rejected.                              |
+      | `provider`      | string | no       | `"gemini"`, `"claude"`, or `"openai"`. Any other value is rejected. Overrides the agent's own provider for this run. |
       | `model`         | string | no       | Pins one model for this run. Must be on the allowlist (see below). Pair it with `provider`.      |
       | `defaultModels` | object | no       | Per-provider model policy, `{ "<provider>": "<model>" }`. Each key must be a valid provider and each value must be on that provider's allowlist. |
       | `maxToolTurns`  | number | no       | Tool-loop turn budget for the `mcp-tools` execution strategy. Integer `1..16`.                   |
+      | `modelChecks`   | string[] | no     | Turns on optional checks that send page content or screenshots to an AI model. These checks are off unless a run turns them on. A non-empty list with no repeated entry. The only value today is `"image-crop"`, the Image Inspector's bad-crop check. An agent's own option wins: `cropCheck: false` keeps that check off. See [Image Inspector](/ai/agents/overview#image-inspector). |
+
+      <Note>
+        **Which provider and model a run uses.** Provider: `aiConfig.provider`, then the provider stored on the agent, then the platform default, which is Claude on Velt's hosted platform. Model: `aiConfig.model`, then `aiConfig.defaultModels` for that provider, then the provider's default model: `claude-opus-5-5` on Claude, `gemini-3.6-flash` on Gemini, and `gpt-5.6-luna` on OpenAI. Most built-in agents store no provider and follow the platform default; the Consistency Checker runs on Claude. Get Execution reports the model that answered in `llmModel`.
+      </Note>
+
+      <Note>
+        **Your own provider keys.** When your workspace stored its own key for some providers (`aiModelApiKey` on [Update API Key Config](/api-reference/rest-apis/v2/workspace/apikeyconfig-update)), a run that does not send `aiConfig.provider` makes its model calls on a provider you have a key for, even when the agent resolves to another provider. Velt's keys are used only when the providers you have a key for fail. A provider you name in `aiConfig.provider` is always tried first: on your key when you stored one, otherwise on Velt's. Tool loops (`mcp-tools`, and the browser loop of `stagehand-agent`) start on the resolved provider whatever keys you stored.
+      </Note>
+
+      <Note>
+        **Fallback.** When a provider fails with an error worth retrying, such as an outage, a rate limit, or a quota, or when Claude declines a request on a safety classifier, the call moves to the next provider. The order starts with the resolved provider, then the others in the order `claude`, `openai`, `gemini`. Get Execution lists every provider a run fell back past in `providerFallbacks`.
+      </Note>
 
       <Note>
         **`model` and `defaultModels` solve different problems.** `model` pins a single model for this run, which is only correct when you know the agent's provider. `defaultModels` is the per-provider form: send it when you reuse one `aiConfig` across many runs whose agents sit on different providers, so each run picks up the right model for whichever provider its agent resolves to. Sending both is allowed.
       </Note>
 
       <Note>
-        **Allowed models.** A request cannot point an execution at an arbitrary model string. `model` is validated against the allowlist for the supplied `provider`, or against the union of every provider's allowlist when `provider` is omitted. The allowlist is deliberately narrow, currently one model per provider:
+        **Allowed models.** A request cannot point an execution at an arbitrary model string. `model` is validated against the allowlist for the supplied `provider`, or against the union of every provider's allowlist when `provider` is omitted. The allowlist is deliberately narrow:
 
-        | Provider   | Allowed model      |
-        | ---------- | ------------------ |
+        | Provider   | Allowed models |
+        | ---------- | -------------- |
         | `gemini`   | `gemini-3.6-flash` |
-        | `claude`   | `claude-sonnet-5`  |
-        | `openai`   | `gpt-5.6-luna`     |
+        | `claude`   | `claude-opus-5-5` (the default), `claude-sonnet-5-5`, `claude-opus-5`, `claude-sonnet-5` |
+        | `openai`   | `gpt-5.6-luna` |
 
         Sending `model` without `provider` only passes a weaker check. The model is re-checked at execution time against the provider the agent actually resolves to, and if it does not match, the override is dropped and the run falls back to that provider's default model. The request still returns `200` and nothing in the response tells you the pin was ignored. Send `provider` alongside `model`, or use `defaultModels`, to guarantee the pin.
       </Note>
@@ -126,8 +178,9 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
       Validation rules specific to this object:
 
       - Unlike the rest of the request body, `aiConfig` rejects unknown keys. A typo such as `modell` returns `INVALID_ARGUMENT` instead of being silently ignored.
-      - At least one of `provider`, `model`, `defaultModels`, or `maxToolTurns` must be present. An empty `aiConfig: {}` is rejected.
+      - At least one of `provider`, `model`, `defaultModels`, `maxToolTurns`, or `modelChecks` must be present. An empty `aiConfig: {}` is rejected with `aiConfig must specify at least one of: provider, model, defaultModels, maxToolTurns, modelChecks`.
       - `defaultModels` cannot be an empty object.
+      - `modelChecks` cannot be empty (`aiConfig.modelChecks cannot be empty`), and each entry must be a known check (`aiConfig.modelChecks entries must be one of: image-crop`).
     </ParamField>
   </Expandable>
 </ParamField>
@@ -222,7 +275,7 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
     "documentId": "doc_001",
     "aiConfig": {
       "provider": "claude",
-      "model": "claude-sonnet-5"
+      "model": "claude-sonnet-5-5"
     }
   }
 }
@@ -240,7 +293,7 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
     "aiConfig": {
       "defaultModels": {
         "gemini": "gemini-3.6-flash",
-        "claude": "claude-sonnet-5"
+        "claude": "claude-sonnet-5-5"
       },
       "maxToolTurns": 12
     }
@@ -284,6 +337,87 @@ The execution then reports `config.pageSource: "list"`, `config.seedUrl` set to 
 }
 ```
 
+#### 9. Several agents on one page
+
+```JSON
+{
+  "data": {
+    "agentIds": ["spell-check", "broken-links", "image-inspector"],
+    "url": "https://example.com/pricing",
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "ranBy": { "userId": "user_123" }
+  }
+}
+```
+
+The response lists one `executionId` per agent. Poll each one with [Get Execution](/api-reference/rest-apis/v2/agents/execution/get). See [Success Response (several agents)](#success-response-several-agents).
+
+This suite runs the Link Checker and the Image Inspector on the same page, so the Image Inspector leaves the Link Checker the broken images it reports, and each one is reported once. You do not set anything for this. See [Per-run options](/ai/agents/overview#image-inspector).
+
+#### 10. Recheck some issue types
+
+Rechecks only blurry and stretched images on two pages, and links each finding to the comment that asked for the recheck. The earlier pending blurry and stretched image suggestions on those pages are replaced; other image suggestions stay.
+
+```JSON
+{
+  "data": {
+    "agentId": "image-inspector",
+    "url": "https://example.com",
+    "urls": ["/services", "/about"],
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "userContext": {
+      "focusIssueTypes": ["blurry-image", "stretched-image"],
+      "sourceAnnotationId": "ann_123",
+      "sourcePageUrl": "https://example.com/services",
+      "sourceElementXpath": "/html/body/main/section[2]/img"
+    }
+  }
+}
+```
+
+#### 11. Several agents on several pages
+
+Runs three agents on ten pages of one site. Each agent gets one execution that covers all ten pages, and each page is reviewed by the three agents together.
+
+```JSON
+{
+  "data": {
+    "agentIds": ["spell-check", "broken-links", "image-inspector"],
+    "url": "https://www.example.com",
+    "urls": ["/", "/pricing", "/about", "/blog", "/contact", "/careers", "/docs", "/docs/start", "/security", "/terms"],
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "ranBy": { "userId": "user_123" }
+  }
+}
+```
+
+The response has the same shape as for one page: one `executionId` per agent. Each execution reports `config.crossPageExecute: true`, `config.maxUrlsToProcess: 10`, `config.pageSource: "list"`, and, when it completes, `resultsSummary.urlsProcessed: 10`. To crawl instead of listing pages, send `crossPageExecute: true` and `maxUrlsToProcess` without `urls`.
+
+On several pages, the Image Inspector does not leave broken images to the Link Checker by itself. Add `"linkCheckerOnSamePages": true` to `userContext` to report each broken image once. The Proofreader still leaves lorem ipsum to `lorem-ipsum` when both run. See [Per-run options](/ai/agents/overview#per-run-options).
+
+#### 12. Turn on an optional model check
+
+Runs the Image Inspector with its bad-crop check, which sends screenshots of the page's photos to an AI model. The check is off unless a run turns it on.
+
+```JSON
+{
+  "data": {
+    "agentId": "image-inspector",
+    "url": "https://example.com/team",
+    "organizationId": "org_001",
+    "documentId": "doc_001",
+    "aiConfig": {
+      "modelChecks": ["image-crop"]
+    }
+  }
+}
+```
+
+Sending `"userContext": { "cropCheck": true }` instead turns on the same check. `cropCheck: false` keeps it off even when `modelChecks` lists `image-crop`.
+
 # Response
 
 #### Success Response
@@ -303,6 +437,58 @@ The execution then reports `config.pageSource: "list"`, `config.seedUrl` set to 
 | Field              | Type   | Description                                                                                              |
 | ------------------ | ------ | ------------------------------------------------------------------------------------------------------- |
 | `data.executionId` | string | Unique execution ID. Use to poll via [Get Execution](/api-reference/rest-apis/v2/agents/execution/get). |
+| `data.warnings`    | object[] | Present only when the run started with non-blocking warnings, such as `{ "code": "pages-truncated", "pagesTotal": 1200, "pagesRun": 500 }` (see `pageListTotal`). The execution carries the same `warnings`. |
+
+#### Success Response (several agents)
+
+With `agentIds`, the response lists the executions that started and the agents that could not start. One agent failing to start does not stop the others.
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Agent suite created successfully",
+    "data": {
+      "executions": [
+        { "agentId": "spell-check", "executionId": "exec_1711900000000_spellcheck" },
+        { "agentId": "image-inspector", "executionId": "exec_1711900000001_imageinspector" }
+      ],
+      "failed": [
+        {
+          "agentId": "broken-links",
+          "code": "already-exists",
+          "message": "Agent execution is already running for this agent+document. Execution ID: exec_1711899990000_brokenlinks"
+        }
+      ]
+    }
+  }
+}
+```
+
+| Field             | Type     | Description |
+| ----------------- | -------- | ----------- |
+| `data.executions` | object[] | One entry per agent that started, in the order of `agentIds`: `agentId` and `executionId`, plus a `warnings` array when that run started with non-blocking warnings. Poll each `executionId` with [Get Execution](/api-reference/rest-apis/v2/agents/execution/get). |
+| `data.failed`     | object[] | One entry per agent that could not start: `agentId`, `code`, and `message`. `code` is always a lowercase string error code, such as `already-exists`, `invalid-argument` (the agent refuses the `userContext`), `not-found`, `permission-denied`, `resource-exhausted`, or `internal`. `message` is the agent's own error message when you can act on it (`Agent could not start.` when it has none), and `Agent execution failed.` otherwise. |
+
+The request fails only when no agent could start. It then returns the first agent's error, and `error.details.failed` lists every agent's failure in the same shape as `data.failed`:
+
+```JSON
+{
+  "error": {
+    "message": "Agent execution is already running for this agent+document. Execution ID: exec_1711899990000_spellcheck",
+    "status": "ALREADY_EXISTS",
+    "details": {
+      "failed": [
+        {
+          "agentId": "spell-check",
+          "code": "already-exists",
+          "message": "Agent execution is already running for this agent+document. Execution ID: exec_1711899990000_spellcheck"
+        }
+      ]
+    }
+  }
+}
+```
 
 #### Failure Response
 
@@ -317,12 +503,19 @@ The execution then reports `config.pageSource: "list"`, `config.seedUrl` set to 
 
 **Errors:**
 
-- `INVALID_ARGUMENT`: invalid URL; missing `agentId`, `organizationId`, or `documentId`; or an invalid `trigger`, `deviceType`, or `annotationVisibility`.
+- `INVALID_ARGUMENT`: invalid URL; neither `agentId` nor `agentIds` (`agentId or agentIds is required`); missing `organizationId` or `documentId`; or an invalid `trigger`, `deviceType`, or `annotationVisibility`.
+- `INVALID_ARGUMENT`: an `agentIds` list, sent without `agentId`, that names no agent or more than 10 distinct agents (`An agent suite needs between 1 and 10 distinct agentIds.`), or that holds an entry that is not a non-empty string.
 - `INVALID_ARGUMENT`: a `urls` list with more than 500 entries, a list where no entry survives normalization (every entry blank, on another host, or not a URL or path), or a `url` that is not a usable `http(s)` URL to resolve the list against.
-- `INVALID_ARGUMENT`: an `aiConfig` that is empty, carries an unknown key, names a provider outside `gemini` / `claude` / `openai`, names a model outside the allowlist, supplies an empty `defaultModels`, or sets `maxToolTurns` outside `1..16`.
+- `INVALID_ARGUMENT`: an `aiConfig` that is empty, carries an unknown key, names a provider outside `gemini` / `claude` / `openai`, names a model outside the allowlist, supplies an empty `defaultModels`, sets `maxToolTurns` outside `1..16`, or sends a `modelChecks` list that is empty, repeats an entry, or names an unknown check.
+- `INVALID_ARGUMENT`: a malformed run-scope key in `userContext`. The message names the key and its rule, for example `userContext.sourcePageUrl must be a non-blank string of at most 4096 characters`, and `error.details.issues` lists every malformed key.
+- `INVALID_ARGUMENT`: a `userContext` the agent's `input.userContextFields` refuse: a missing required field (`Validation failed: Missing required userContext field: <id>`) or a value of another type (`Validation failed: userContext field '<id>' expected type '<type>', got '<actual>'`).
+- `INVALID_ARGUMENT`: a `migration-parity` run without a usable `userContext.liveSiteUrl` (`Migration Parity needs the live site to compare against: send userContext.liveSiteUrl (a full address or a bare domain)`), or whose live site is the run's own site (`Migration Parity needs a live site other than the project site: userContext.liveSiteUrl names the same site as the run's url`).
 - `NOT_FOUND`: store database not found, or the target document does not exist.
-- `ALREADY_EXISTS`: an execution is already running for this agent and document combination. The error message includes the running execution's ID.
+- `ALREADY_EXISTS`: an execution is already running for this agent and document combination. The error message includes the running execution's ID. An execution that stopped making progress does not count: the new run ends it with `error.code` `STALE_RUN` and starts.
 - `RESOURCE_EXHAUSTED`: the workspace's AI credits are exhausted.
+- `INTERNAL`: the run could not be started after its execution was created (`Failed to dispatch agent execution task.`). Every execution the request created ends with status `error` and `error.code` `TASK_DISPATCH_FAILED`. Send the request again.
+
+With `agentIds`, an error that concerns one agent, such as `NOT_FOUND`, `ALREADY_EXISTS`, `RESOURCE_EXHAUSTED`, or a `userContext` that agent refuses, appears in `data.failed` and the other agents still start. The request fails with it only when no agent could start. Every other `INVALID_ARGUMENT`, and `INTERNAL`, rejects the whole request.
 
 <ResponseExample>
 ```js

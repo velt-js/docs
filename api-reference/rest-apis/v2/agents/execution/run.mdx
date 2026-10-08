@@ -116,7 +116,7 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
     </ParamField>
 
     <ParamField body="userContext" type="object">
-      Runtime values for the agent's `userContextFields`. Keys must match the field IDs declared in the agent's `input.userContextFields`. The request is checked against those declarations before any execution is created: a missing required field, or a value of another type, returns `INVALID_ARGUMENT`. Some built-in agents also read options from it, such as switching a check off: see [Per-run options](/ai/agents/overview#per-run-options). `migration-parity` needs `liveSiteUrl`: a run without a usable live site, or with the run's own site as the live site, returns `INVALID_ARGUMENT` too.
+      Runtime values for the agent's `userContextFields`. Keys must match the field IDs declared in the agent's `input.userContextFields`. The request is checked against those declarations before any execution is created: a missing required field, or a value of another type, returns `INVALID_ARGUMENT`. A declared field that is missing, `null`, or an empty string takes its `defaultValue` and then satisfies `required`. Some built-in agents also read options from it, such as switching a check off: see [Per-run options](/ai/agents/overview#per-run-options). `migration-parity` needs `liveSiteUrl`: a run without a usable live site, or with the run's own site as the live site, returns `INVALID_ARGUMENT` too.
 
       Four optional run-scope keys work with every agent, built-in or custom, whatever fields it declares. Leave them out and the run behaves as before.
 
@@ -133,7 +133,20 @@ The schema uses `.passthrough()` so any additional fields are forwarded.
 
       This removal never touches a suggestion a user already resolved, or a page the run could not load. It follows the agent's `postProcess.deletePreviousSuggestions` setting (on by default). The one exception: a `sourceAnnotationId` run without `focusIssueTypes` replaces that comment's earlier suggestions even when the setting is off.
 
-      These four key names are reserved in `userContext`: [Create Agent](/api-reference/rest-apis/v2/agents/create) and [Update Agent Version](/api-reference/rest-apis/v2/agents/version/update) refuse a `userContextFields` entry whose `id` is one of them. A malformed key, such as `focusIssueTypes` sent as a string or an empty list, returns `INVALID_ARGUMENT` before any run starts. The message states the rule the key breaks, for example `userContext.focusIssueTypes must be a list of 1 to 50 non-blank issue types of at most 100 characters each`.
+      A malformed run-scope key, such as `focusIssueTypes` sent as a string or an empty list, returns `INVALID_ARGUMENT` before any run starts. The message states the rule the key breaks, for example `userContext.focusIssueTypes must be a list of 1 to 50 non-blank issue types of at most 100 characters each`.
+
+      Two optional run-control keys change how the run runs, not what an agent reports. They also work with every agent. Leave them out and nothing changes.
+
+      | Key               | Type    | Effect |
+      | ----------------- | ------- | ------ |
+      | `forceFullRun`    | `true`  | Every agent runs on every page, even where change detection would keep the agent's previous findings because the page has not changed. |
+      | `changeDetection` | string or `false` | `"off"`, `"shadow"`, or `"on"`, or `false` for `"off"`. Lowers change detection for this run only, and never raises it. `"off"` skips the change check, so the run makes no extra plain HTTP fetch of each page and asks nothing about changed text. |
+
+      Change detection keeps an eligible built-in agent's previous findings on a page that has not changed since the agent last ran on it, instead of running the agent there. Custom agents, and runs that set `focusIssueTypes`, `sourceAnnotationId`, or `sourcePageUrl`, always run in full. On Velt's hosted platform, change detection only measures today: every agent still runs on every page. Its check of changed page text counts toward the [Proofreader's daily question limit](/ai/agents/overview#proofreader).
+
+      Any other value of a run-control key is ignored. Unlike the run-scope keys, these never return `INVALID_ARGUMENT`.
+
+      These six key names are reserved in `userContext`: [Create Agent](/api-reference/rest-apis/v2/agents/create) and [Update Agent Version](/api-reference/rest-apis/v2/agents/version/update) refuse a `userContextFields` entry whose `id` is one of them.
     </ParamField>
 
     <ParamField body="aiConfig" type="object">

@@ -146,7 +146,7 @@ Built-in agents are pre-registered for every workspace. Run one by its ID.
 | `image-inspector`       | Image Inspector       | Images that do not show, blurry (upscaled) or stretched images, CSS background images included, empty or placeholder image slots, and images without alt text. An optional check for badly cropped photos (a head cut off) sends screenshots of the photos to an AI model, and is off unless you turn it on: see [Image Inspector](#image-inspector). |
 | `mobile-inspector`      | Mobile Inspector      | Opens the page at phone width (375 px by default) and tablet width (768 px), and flags a desktop layout shrunk to fit, sideways scrolling, content that runs off the screen, cut-off buttons and text, tap targets that are too small, button labels that wrap, content hidden under sticky bars, a menu button that opens nothing, and links or headings shown on desktop that a phone visitor cannot reach, with phone-width screenshots. To test the menu and sticky bars it taps the menu button and up to 2 same-page links: switch either off with [`skipChecks`](#mobile-inspector). Always runs as `"mobile"`. |
 | `consistency-checker`   | Consistency Checker   | Compares phone numbers, addresses, opening hours, emails, prices, and service and business names on the page with other key pages of the same site (6 by default), and flags values that differ: this part uses an AI model. Also flags terms capitalized differently from the rest of the site, on English pages, and buttons and links that look or behave differently from the others on the site, without a model. |
-| `ai-visibility`         | AI Visibility         | Scores whether AI answer engines can reach, read, understand, and correctly cite the page, with a fix for every failure. A visible date and author are asked for only on article-like pages, such as blog posts, news, and guides. |
+| `ai-visibility`         | AI Visibility         | Scores whether AI answer engines can reach, read, understand, and correctly cite the page, with a fix for every failure. A visible date and author are asked for only on articles, such as blog posts and guides. A help page is asked for a list, table, or question heading. Home, pricing, product, collection, and landing pages, and news and press items, are not asked. See [AI Visibility](#ai-visibility) for its options. |
 | `migration-parity`      | Migration Parity      | Compares each page with the same page on your live or old site, and flags what the new page lost: team bios, reviews, FAQ questions, phone numbers, emails, street addresses, list items such as services, a page title, and a main heading. Reworded copy is never reported. Needs `userContext.liveSiteUrl`: see [Migration Parity](#migration-parity). No AI model. |
 | `content-request-list`  | Content Request List  | One checklist finding per page of what still waits on the client: empty sections, placeholder text and photos, "Coming soon" lines, short bios, and open comment threads that ask the client for content. See [Content Request List](#content-request-list). No AI model. |
 | `pii-detection`         | PII Detection         | PII (personal info) detection |
@@ -185,7 +185,7 @@ A focused run also skips work that cannot produce the listed issue types. A Mobi
 
 ## Per-run options
 
-Seven built-in agents read options from the `userContext` of [Run Execution](/api-reference/rest-apis/v2/agents/execution/run). Use them to switch a check off or tune a threshold for one run. Leave a key out to keep its default: the defaults are the agent's normal behavior. A value of the wrong type is ignored, and the default applies.
+The built-in agents below read options from the `userContext` of [Run Execution](/api-reference/rest-apis/v2/agents/execution/run). Use them to switch a check off or tune a threshold for one run. Leave a key out to keep its default: the defaults are the agent's normal behavior. A value of the wrong type is ignored, and the default applies. An empty string or `null` also keeps the default. `0` and `false` are values, not blanks.
 
 Each agent reads only its own keys, so a run with `agentIds` can carry options for several agents in one `userContext`:
 
@@ -215,8 +215,12 @@ Options for `broken-links`.
 | `pageLinkChecks`      | boolean | `true`  | `false` turns off `checkLogo`, `checkContacts`, `checkSocialIcons`, and `checkTabTargets` together. |
 | `checkLogo`           | boolean | `true`  | A header logo that does not link to the home page (`unlinked-logo`). |
 | `checkContacts`       | boolean | `true`  | Phone numbers and emails written as plain text (`unlinked-phone`, `unlinked-email`, `unlinked-contact`). |
+| `checkPhoneNumbers`   | boolean | `true`  | Phone numbers written as plain text (`unlinked-phone`). `false` keeps the check for plain-text emails only. Has no effect when `checkContacts` is `false`. |
 | `checkSocialIcons`    | boolean | `true`  | Social icons that link to a different network (`social-link-mismatch`). |
-| `checkTabTargets`     | boolean | `true`  | Links that open in the wrong kind of tab (`same-tab-link`, `new-tab-internal-link`). |
+| `checkTabTargets`     | boolean | `true`  | Links that open in the wrong kind of tab (`same-tab-link`, `new-tab-internal-link`). Any other domain is another site, even a sister brand or another domain you own, so a same-tab link to it is reported. A subdomain of the page's domain is the same site. A same-tab link whose label hands the visitor over to an app or a purchase, such as `Sign in`, `Book now`, or `Checkout`, is not reported. To count other domains as yours, use `ownDomains` or `sameNameIsOwnSite`. |
+| `ownDomains`          | string[] | `[]`   | Your other domains, such as a sister brand or a careers site. A same-tab link to one, or to one of its subdomains, is not reported. Host names or URLs, at most 50. Public suffixes, such as `co.uk` or `vercel.app`, and IP addresses are ignored. |
+| `sameNameIsOwnSite`   | boolean | `false` | `true` counts the same site name of 4 or more letters on another suffix (`brand.jobs` from `brand.com`) and the brand's status-page domain (`brandstatus.com`) as your own site. Never for government, school, or military domains. On by default before October 7, 2026. |
+| `reportOwnFilesInSameTab` | boolean | `false` | `true` also reports a document on your own site, such as a PDF, a spreadsheet, or an archive, that opens in the same tab (`same-tab-link`). A text file is never reported. |
 | `checkStagingLinks`   | boolean | `true`  | Links to staging, preview, or local hosts (`staging-link`). |
 | `checkMalformedLinks` | boolean | `true`  | Links written in a way that cannot work (`malformed-link`). |
 | `checkImageUrls`      | boolean | `true`  | Image addresses (`broken-image`). |
@@ -245,13 +249,16 @@ Options for `spell-check`. The Proofreader finds candidates with a dictionary an
 | `acceptedWords` | string[] | `[]`    | Words to accept as correctly spelled, in any case, on top of the built-in list. |
 | `brandNames`    | string[] | `[]`    | Brand names and their exact casing, on top of the built-in list. Your casing wins over the built-in one. |
 | `skipChecks`    | string[] | `[]`    | Issue types not to look for: any of `spelling`, `doubled-word`, `punctuation`, `placeholder`, `brand-casing`, `inconsistent-casing`. |
-| `keepAtOrAbove` | number   | `0.6`   | Lowest verification-model confidence at which a candidate the model checked is reported. Greater than 0 and at most 1. |
+| `keepAtOrAbove` | number   | `0.75`  | Lowest verification-model confidence at which a candidate the model checked is reported. Greater than 0 and at most 1. To get close to the behavior before October 7, 2026, send `0.6` with `nameChecks: false`. |
+| `nameChecks`    | boolean  | `true`  | Before a spelling candidate is reported, the verification model is asked whether it is a name (a person, place, product, or brand), unless the word has a clear typo pattern such as two swapped letters. `false` turns these name rules off. |
+| `nameAtOrAbove` | number   | `0.75`  | Lowest verification-model confidence that a word is a name at which a spelling candidate is dropped. A capitalized word that reads like a name is dropped at `0.5`, or at this value when it is lower. Greater than 0 and at most 1. Independent of `keepAtOrAbove`. |
 | `useGuidelines` | boolean  | `true`  | Reads extra accepted words and brand-name casing from the brand guidelines in your workspace's knowledge base. `false` skips that read for this run. |
 | `loremIpsumOnSamePages` | boolean | `false` | With `true`, lorem ipsum and pseudo-Latin filler are left to the `lorem-ipsum` agent, and the run summary says `Lorem ipsum is left to the Lorem Ipsum agent.` The Proofreader's other placeholder checks, such as "Insert headline here", still run. Ignored when you send `skipChecks`. |
+| `checkHiddenText` | boolean | `false` | Also proofreads text a visitor cannot see, such as an icon link's off-screen label or screen-reader-only text: what screen-reader users hear. |
 
 `acceptedWords` and `brandNames` take single words. The first 500 entries are read, and an entry longer than 64 characters is ignored.
 
-The verification model checks at most 20,000 candidates per API key per UTC day. Past that, the Proofreader reports only the findings its rules are certain of, and the run summary says `The daily spelling check limit was reached.`
+The verification model answers at most 20,000 questions per API key per UTC day, and a candidate takes one to three. Change detection's check of changed page text counts toward the same limit (see the run-control keys of [Run Execution](/api-reference/rest-apis/v2/agents/execution/run)). Past that, the Proofreader reports only the findings its rules are certain of, and the run summary says `The daily spelling check limit was reached.`
 
 <Tip>
   The Proofreader also reports lorem ipsum. A run with `agentIds` that starts both `spell-check` and `lorem-ipsum` sets `loremIpsumOnSamePages: true` for you, so each lorem ipsum line is reported once, by the Lorem Ipsum agent. It does not when you send `skipChecks` or `loremIpsumOnSamePages` yourself. If you run the two agents on the same pages in separate requests, send `loremIpsumOnSamePages: true` to the Proofreader. The Proofreader cannot see whether the Lorem Ipsum execution succeeds: if it fails, lorem ipsum on those pages goes unreported, so send `loremIpsumOnSamePages: false` when you want both.
@@ -265,9 +272,13 @@ Options for `consistency-checker`. Its keys start with `consistency` because a r
 | ---------------------------- | ------- | ------- | ------ |
 | `consistencyCasingCheck`     | boolean | `true`  | Runs the cross-page casing check (`cross-page-casing`). Brand names you give the Proofreader in `brandNames` are left to the Proofreader. |
 | `consistencyVisualCheck`     | boolean | `true`  | Runs the visual check, which uses no model: buttons and links styled differently from the site's usual style for their kind (`style-mismatch`), with no hover effect while the others have one (`missing-hover`), or whose text matches its background on hover (`hover-invisible`). |
+| `consistencyPeersOnly`       | boolean | `true`  | The visual check compares an element only with its peers. It reports no style difference for a component repeated on the page (unless the same component looks different on another page), for the colors of a promotion, for a button color that buttons on other pages also use (the site's accent color), or for a link colored like the text around it. The selected item of a tab or filter row is left out. `false` compares every element, as before October 7, 2026. |
 | `consistencyExactValues`     | boolean | `true`  | When this page's phone number or email is a one-character slip of the value the other pages agree on, names that value in the suggestion and in `suggestedFix`. |
 | `consistencyMaxPages`        | number  | `6`     | Other pages of the site to compare with. Whole number, capped at 12. |
 | `consistencyMaxCharsPerPage` | number  | `6000`  | Characters of each other page's text given to the AI model. Whole number, capped at 20,000. |
+| `consistencyTextVisibility`  | string  | `"visible"` | `"visible"` compares only the text a visitor sees. `"all"` compares all rendered text, including text hidden with zero opacity. |
+| `consistencyIncludeScreenReaderText` | boolean | `false` | Counts screen-reader-only text, such as an icon link's label, as page text in the comparison and the casing check. |
+| `consistencyRawPagesAsEvidence` | boolean | not set | `true` reports a difference that rests only on pages read without a browser, such as a page that failed to render. A phone number is never reported this way. Not set, it is off when the run renders pages in a browser, which is the usual case. |
 
 A visual finding names the elements it groups in `metadata.labels`. A `style-mismatch` finding also lists what differs in `metadata.differences`, one entry per property: `{ property, value, dominant, dominantCount, css }`, where `css` is the declaration the rest of the site uses, such as `border-radius: 8px`. Its suggestion names the first declaration and counts the others. Read `metadata` on the findings of [Get Execution](/api-reference/rest-apis/v2/agents/execution/get) with `includeResults: true`.
 
@@ -302,6 +313,7 @@ Options for `mobile-inspector`. A value outside its range is ignored, and the de
 | `maxScreenshots` | whole number, 0 to 10    | `7`     | Screenshots per page, including the first screen. `0` turns screenshots off. |
 | `tabletWidthPx`  | whole number, 600 to 1024, or `0` | `768` | Width, in CSS pixels, of the tablet layout pass. `0` turns the tablet pass off. |
 | `skipChecks`     | string[]                 | `[]`    | Checks not to run, any of: `tablet` (the tablet layout pass), `sticky-bar` (content under fixed or sticky bars; it scrolls and taps same-page links), `wrapped-label` (button labels that wrap), `menu` (taps the menu button to see whether it opens anything), and `missing-on-mobile` (content shown on desktop that a phone visitor cannot reach). Unknown entries are ignored. |
+| `closeNotices`   | boolean                  | `true`  | Closes cookie and consent notices and small popups the way a visitor would before each width is measured, and leaves out the ones that stay. `false` leaves every notice alone and judges it as page content, so a button a cookie banner covers is reported as hidden under it. |
 
 The phone checks for sideways scrolling, overflow, cut-off content, and small tap targets always run. With `menu` skipped, the menu is not judged, and links that sit in a hidden phone menu are never reported as missing on phones.
 
@@ -341,6 +353,18 @@ The agent posts one page-level finding per page, with issue type `content-reques
 It reads the run document's open comment threads and quotes one only when the run's audience can already see it: a public thread always, an organization-private thread only on a `"private"` run of that same organization, and a thread restricted to named users never. Threads an agent opened, and threads whose last human reply looks like the answer, are left out. It reads up to 2,000 annotations past the agents' own suggestions, and the summary says when older threads were not read.
 
 A page title alone in a banner, a "Coming soon" badge among real content, and stand-in lines in the header, navigation, or footer are not listed. A page behind a sign-in wall is skipped (`report.skipped: "gated"`), is not billed, and keeps its earlier checklist.
+
+### AI Visibility
+
+Options for `ai-visibility`.
+
+| Key                          | Type              | Default | Effect |
+| ---------------------------- | ----------------- | ------- | ------ |
+| `minVisibleWithoutJs`        | number, 0 to 100  | `90`    | The JavaScript check passes when at least this percent of the page's text is visible without running JavaScript. |
+| `failVisibleWithoutJs`       | number, 0 to 100  | `60`    | The JavaScript check fails below this percent. Between the two thresholds, it warns. |
+| `scoreAnswerShapeOnAllPages` | boolean           | `false` | `true` scores the answer-shape check on every kind of page, as it was scored before October 2026: question headings, a list or table, a date, and an author on an article, and question headings and a list or table on other pages. A page with fewer than half of them fails. With `false`, the check asks only what the [`ai-visibility` row](#built-in-agents) describes, and a gap is a warning. |
+
+`0` is accepted as a threshold. Leave the key out, or send `null` or an empty string, to keep the default. A threshold outside 0 to 100 is ignored. Unlike the other options on this page, the two thresholds are declared fields of the agent, so a threshold that is not a number returns `INVALID_ARGUMENT`.
 
 ## Context gathering strategies
 

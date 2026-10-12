@@ -9208,8 +9208,8 @@ Request payload for `sdk.api.gdpr.deleteAllUserData`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `userIds` | `list[str]` | Yes | Users whose data should be deleted. |
-| `organizationIds` | `list[str]` | No | Restrict deletion to these organizations. Speeds up the job. |
+| `userIds` | `list[str]` | Yes | Users whose data should be deleted. More than 30 are truncated to the first 30 server-side. |
+| `organizationIds` | `list[str]` | No | Scope the deletion to these organizations. When omitted, the user's data is deleted across every organization. |
 
 ### DeleteAttachmentResolverRequest
 
@@ -9442,6 +9442,9 @@ Request payload for `sdk.api.gdpr.getAllUserData`.
 | `organizationId` | `str` | Yes | Organization to query. |
 | `userId` | `str` | Yes | User whose data should be exported. |
 | `pageToken` | `str` | No | Pagination token from a previous call. |
+| `veltUserIds` | `list[str]` | No | Export data for these Velt-side user IDs instead of the single `userId`. |
+| `veltAllOrganizations` | `bool` | No | Return data across all organizations rather than just `organizationId`. |
+| `uniqueId` | `str` | No | Accepted but ignored; it is not returned in the response. |
 
 ### GetAllUserDataResponse
 
@@ -9551,7 +9554,7 @@ Request payload for `sdk.api.commentAnnotations.getCommentAnnotationsCount`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `str` | Yes | Organization ID. |
-| `documentIds` | `list[str]` | Yes | Document IDs to count annotations for. Limit: 30 IDs per call. |
+| `documentIds` | `list[str]` | Yes | Document IDs to count annotations for. 1 to 25 IDs per call; the API rejects an empty or missing list. |
 | `userId` | `str` | Yes | ID of the user requesting the counts (used to compute unread). |
 | `statusIds` | `list[str]` | No | Filter counts by annotation status (e.g. `OPEN`, `IN_PROGRESS`). |
 
@@ -9901,8 +9904,8 @@ Request payload for `sdk.api.notifications.getNotificationConfig`.
 |-------|------|----------|-------------|
 | `organizationId` | `str` | Yes | Organization ID. |
 | `documentIds` | `list[str]` | No | Restrict to specific documents. |
-| `userId` | `str` | Yes | User whose preferences should be returned. |
-| `getOrganizationConfig` | `bool` | No | Also include org-level defaults. |
+| `userId` | `str` | No | User whose preferences should be returned. Required when `getOrganizationConfig` is `True`. |
+| `getOrganizationConfig` | `bool` | No | Also include org-level defaults. Requires `userId`. |
 
 ### GetNotificationConfigResponse
 
@@ -10016,8 +10019,9 @@ Request payload for `sdk.api.accessControl.getPermissions`.
 |-------|------|----------|-------------|
 | `organizationId` | `str` | Yes | Organization to query. |
 | `userIds` | `list[str]` | Yes | Users whose permissions should be returned. |
-| `folderIds` | `list[str]` | No | Include these folders in the result. |
-| `documentIds` | `list[str]` | No | Include these documents in the result. |
+| `folderIds` | `list[str]` | No | Include these folders in the result. At least one of `folderIds` or `documentIds` must be non-empty. |
+| `documentIds` | `list[str]` | No | Include these documents in the result. At least one of `folderIds` or `documentIds` must be non-empty. |
+| `skipResourceExistenceValidation` | `bool` | No | Skip the existence check on the organization and the supplied folder/document IDs. When `False` (the default) the API errors if any of them does not resolve. |
 
 ### GetPermissionsResponse
 
@@ -10061,7 +10065,7 @@ Request payload for `sdk.api.recordings.getRecordings`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `str` | Yes | Organization ID. |
-| `documentId` | `str` | No | Restrict to recordings on a specific document. |
+| `documentId` | `str` | No | Document to read recordings from. Omitting it returns an empty list, not the organization's recordings. |
 | `recordingIds` | `list[str]` | No | Filter by specific recording IDs. |
 | `pageSize` | `int` | No | Number of results per page. Minimum: 1. |
 | `pageToken` | `str` | No | Pagination cursor returned from a previous response. |
@@ -10524,15 +10528,31 @@ Request and response types used by the [Velt Node SDK](/backend-sdks/node). Fiel
 
 ### `VeltApiResponse` (Node)
 
-Standard envelope for all `sdk.api.*` REST methods. Success and error are mutually exclusive.
+Standard envelope for all `sdk.api.*` REST methods. Success and error are mutually exclusive, and the SDK returns the error envelope instead of throwing.
 
 ```ts
+interface VeltApiResponse<TResult = ApiResult> {
+  result?: TResult;
+  error?: VeltApiErrorBody;
+}
+
+interface ApiResult<TData = unknown> {
+  status: string;        // 'success'
+  message: string;
+  data?: TData;          // method-specific
+  nextPageToken?: string;
+}
+
+interface VeltApiErrorBody { message: string; status: string; details?: unknown }
+
 // Success
 { result: { status: 'success', message: '...', data: { /* method-specific */ } } }
 
 // Error
 { error: { message: '...', status: 'INTERNAL', details: { /* per-key error info */ } } }
 ```
+
+`TResult` depends on the service: `ApiResult` for most services; the raw value (`unknown`) for `sdk.api.memory`; a per-method `Approval*Result` object for `sdk.api.approval`, which pages by `nextCursor` instead of `nextPageToken`; and `AskAiResult` (`{ success: boolean; text?: string; error?: string }`) for `sdk.api.rewriter.askAi`.
 
 ### `VeltSelfHostingResponse` (Node)
 
@@ -10554,7 +10574,7 @@ Request payload for `sdk.api.activities.addActivities`.
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization context. |
 | `documentId` | `string` | Yes | Document the activities belong to. |
-| `activities` | `Array<{ featureType: string; actionType: string; actionUser: { userId: string; name?: string; email?: string }; displayMessageTemplate: string }>` | Yes | Activity events to log. |
+| `activities` | `ActivityInput[]` | Yes | Activity events to log. See [ActivityInput](#activityinput-node); `targetEntityId` is required when `featureType` is `'custom'`. |
 
 ### `AddCommentAnnotationsRequest` (Node)
 
@@ -10616,7 +10636,7 @@ Request payload for `sdk.api.folders.addFolder`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization that owns the folders. |
-| `folders` | `Array<{ folderId: string; folderName?: string }>` | Yes | Folders to create. |
+| `folders` | `Array<{ folderId: string; folderName?: string; parentFolderId?: string; accessType?: 'public' \| 'organizationPrivate' \| 'restricted' }>` | Yes | Folders to create. |
 | `createOrganization` | `boolean` | No | Auto-create the organization if missing. |
 
 ### `AddNotificationsRequest` (Node)
@@ -10648,8 +10668,8 @@ Request payload for `sdk.api.accessControl.addPermissions`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `user` | `{ userId: string }` | Yes | User to grant access to. |
-| `permissions` | `{ resources: Array<{ type: string; id: string; organizationId?: string; accessRole: string; expiresAt?: number }> }` | Yes | Resources and roles to grant. |
+| `user` | `RestUser` | Yes | User to grant access to. `userId` is required; see [RestUser](#restuser-node). |
+| `permissions` | `{ resources: Array<{ type: 'organization' \| 'folder' \| 'document' \| 'context'; id: string; organizationId?: string; accessRole?: 'editor' \| 'viewer'; expiresAt?: number }> }` | Yes | Resources and roles to grant. |
 
 ### `AddPresenceRequest` (Node)
 
@@ -10671,6 +10691,51 @@ Request payload for `sdk.api.userGroups.addUserGroups`.
 | `organizationUserGroups` | `Array<{ groupId: string; groupName?: string }>` | Yes | Groups to create. |
 | `createOrganization` | `boolean` | No | Auto-create the organization if missing. |
 
+### `RestUser` (Node)
+
+User object accepted by the REST request fields `users[]` (`addUsers`, `updateUsers`), `user` (`addPermissions`), `from`, `assignedTo`, `actionUser` and `notifyUsers`. Unknown keys pass through.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `userId` | `string` | Yes | User ID. |
+| `name` | `string` | No | Display name. |
+| `email` | `string` | No | Email address. |
+| `photoUrl` | `string` | No | Avatar URL. |
+| `accessRole` | `'editor' \| 'viewer'` | No | Access role on the resource. |
+| `contacts` | `Array<{ userId: string; name?: string; email?: string; photoUrl?: string; groupId?: string; source?: string; visibility?: string; role?: { id: string } }>` | No | Contacts the user can mention. Each entry needs `userId`. |
+| `role` | `{ id: string; name?: string; description?: string }` | No | Custom role. `id` is required. |
+| `organizationId`, `groupId`, `plan`, `color`, `textColor`, `type`, `isAdmin`, `isReadOnly`, `isAnonymous`, `isGuest`, `initial`, and other profile fields | mixed | No | Optional; passed through as sent. |
+
+### `ActivityInput` (Node)
+
+One item of `AddActivitiesRequest.activities`. A union on `featureType`: when `featureType` is `'custom'`, `targetEntityId` is required; for the other feature types it is optional.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `featureType` | `'comment' \| 'reaction' \| 'recorder' \| 'crdt' \| 'custom'` | Yes | Feature the activity belongs to. |
+| `actionType` | `string` | Yes | Action performed, for example `comment.add`. |
+| `actionUser` | `RestUser` | Yes | User who performed the action. |
+| `targetEntityId` | `string` | Conditional | Required when `featureType` is `'custom'`. |
+| `id` | `string` | No | Custom activity ID for idempotent writes. |
+| `targetEntityType` | `string` | No | Type of the target entity. |
+| `changes` | `Record<string, { from?: unknown; to?: unknown }>` | No | Field changes keyed by field name, for example `{ title: { from: 'A', to: 'B' } }`. |
+| `metadata` | `Record<string, unknown>` | No | Arbitrary metadata. |
+| `createdAt` | `number` | No | Creation timestamp. |
+
+### `UpdateActivityInput` (Node)
+
+One item of `UpdateActivitiesRequest.activities`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | `string` | Yes | Activity to update. `activityId` is accepted as a deprecated alias. |
+| `featureType` | `'comment' \| 'reaction' \| 'recorder' \| 'crdt' \| 'custom'` | No | New feature type. |
+| `actionType` | `string` | No | New action type. |
+| `actionUser` | `RestUser` | No | New action user. |
+| `targetEntityId` | `string` | No | New target entity. |
+| `changes` | `Record<string, { from?: unknown; to?: unknown }>` | No | Field changes keyed by field name. |
+| `metadata` | `Record<string, unknown>` | No | Arbitrary metadata. |
+
 ### `AddUsersRequest` (Node)
 
 Request payload for `sdk.api.users.addUsers`.
@@ -10678,7 +10743,7 @@ Request payload for `sdk.api.users.addUsers`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization to add users to. |
-| `users` | `Array<{ userId: string; name?: string; email?: string; accessRole?: 'editor' \| 'viewer' }>` | Yes | Users to add. |
+| `users` | `RestUser[]` | Yes | Users to add. See [RestUser](#restuser-node): `accessRole` is `'editor' \| 'viewer'`, each `contacts[]` entry needs `userId`, and `role` needs `id`. |
 | `createOrganization` | `boolean` | No | Auto-create the organization if missing. |
 
 ### `AddUsersToGroupRequest` (Node)
@@ -10763,8 +10828,8 @@ Request payload for `sdk.api.gdpr.deleteAllUserData`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `userIds` | `string[]` | Yes | Users whose data should be deleted. |
-| `organizationIds` | `string[]` | No | Restrict deletion to these organizations. |
+| `userIds` | `string[]` | Yes | Users whose data should be deleted. More than 30 are truncated to the first 30 server-side. |
+| `organizationIds` | `string[]` | No | Scope the deletion to these organizations. When omitted, the user's data is deleted across every organization. |
 
 ### `DeleteAttachmentRequest` SH (Node)
 
@@ -10941,7 +11006,7 @@ Request payload for `sdk.api.accessControl.generateToken`.
 |-------|------|----------|-------------|
 | `userId` | `string` | Yes | User to mint the token for. |
 | `userProperties` | `{ name?: string; email?: string; isAdmin?: boolean }` | No | User profile properties. |
-| `permissions` | `{ resources: Array<{ type: string; id: string; organizationId?: string; accessRole: string }> }` | No | Permissions to embed in the token. |
+| `permissions` | `{ resources: Array<{ type: 'organization' \| 'folder' \| 'document' \| 'context'; id: string; organizationId?: string; accessRole?: 'editor' \| 'viewer' }> }` | No | Permissions to embed in the token. |
 
 ### `GenerateTokenResponse` (Node)
 
@@ -11015,7 +11080,7 @@ Request payload for `sdk.api.gdpr.getAllUserData`.
 | `pageToken` | `string` | No | Pagination cursor returned from a previous call. |
 | `veltUserIds` | `string[]` | No | Export data for these Velt-side user IDs instead of the single `userId`. |
 | `veltAllOrganizations` | `boolean` | No | Return data across all organizations rather than just `organizationId`. |
-| `uniqueId` | `string` | No | Correlation value echoed back on the response. |
+| `uniqueId` | `string` | No | Accepted but ignored; it is not returned in the response. |
 
 ### `GetAllUserDataResponse` (Node)
 
@@ -11116,8 +11181,9 @@ Request payload for `sdk.api.commentAnnotations.getCommentAnnotationsCount`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization context. |
-| `documentIds` | `string[]` | Yes | Documents to count annotations for. |
-| `userId` | `string` | No | Filter counts to a specific user. |
+| `documentIds` | `string[]` | Yes | Documents to count annotations for. 1 to 25 IDs per call. |
+| `userId` | `string` | Yes | User requesting the counts (used to compute unread). |
+| `statusIds` | `string[]` | No | Filter counts by annotation status. |
 
 <Warning>
 The count endpoint does not support agent filtering, and agent filter fields sent to it are ignored rather than rejected — the response would be unfiltered totals with no error. To count an agent-scoped subset, list with an agent filter via `getCommentAnnotations` and count the result.
@@ -11418,7 +11484,9 @@ Request payload for `sdk.api.notifications.getNotificationConfig`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization context. |
-| `userId` | `string` | Yes | User whose preferences to fetch. |
+| `userId` | `string` | Yes | User whose preferences to fetch. The type requires it; the API only enforces it when `getOrganizationConfig` is `true`. |
+| `documentIds` | `string[]` | No | Restrict to specific documents. |
+| `getOrganizationConfig` | `boolean` | No | Also include org-level defaults. |
 
 ### `GetNotificationConfigResponse` (Node)
 
@@ -11517,10 +11585,10 @@ Request payload for `sdk.api.accessControl.getPermissions`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization context. |
-| `userIds` | `string[]` | No | Filter to these users. |
-| `documentIds` | `string[]` | No | Filter to these documents. |
-| `folderIds` | `string[]` | No | Filter to these folders. |
-| `skipResourceExistenceValidation` | `boolean` | No | Skip the existence check on the supplied folder/document IDs. When `false` (the default) the API errors if any ID does not resolve. |
+| `userIds` | `string[]` | Yes | Users whose permissions to return. |
+| `documentIds` | `string[]` | No | Filter to these documents. At least one of `documentIds` or `folderIds` must be non-empty. |
+| `folderIds` | `string[]` | No | Filter to these folders. At least one of `documentIds` or `folderIds` must be non-empty. |
+| `skipResourceExistenceValidation` | `boolean` | No | Skip the existence check on the organization and the supplied folder/document IDs. When `false` (the default) the API errors if any of them does not resolve. |
 
 ### `GetPermissionsResponse` (Node)
 
@@ -11568,7 +11636,7 @@ Request payload for `sdk.api.recordings.getRecordings`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization context. |
-| `documentId` | `string` | No | Document to fetch recordings for. |
+| `documentId` | `string` | No | Document to read recordings from. Omitting it returns an empty list, not the organization's recordings. |
 | `recordingIds` | `string[]` | No | Specific recording IDs to fetch. |
 | `pageSize` | `number` | No | Maximum number of recordings to return. |
 | `pageToken` | `string` | No | Token for fetching the next page of results. |
@@ -11895,7 +11963,7 @@ Request payload for `sdk.api.activities.updateActivities`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization context. |
-| `activities` | `Array<{ id: string; displayMessageTemplate: string }>` | Yes | Activity updates. |
+| `activities` | `UpdateActivityInput[]` | Yes | Activity updates, each identified by `id`. See [UpdateActivityInput](#updateactivityinput-node). |
 
 ### `UpdateApiKeyRequest` (Node)
 
@@ -11987,7 +12055,8 @@ Request payload for `sdk.api.folders.updateFolderAccess`.
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization that owns the folders. |
 | `folderIds` | `string[]` | Yes | Folders to update. |
-| `accessType` | `'restricted'` | Yes | New access type. |
+| `accessType` | `'public' \| 'organizationPrivate' \| 'restricted'` | No | New access type. Exactly one of `accessType` or `inheritFromParent` must be set. |
+| `inheritFromParent` | `boolean` | No | Inherit the access type from the parent folder. Exactly one of `accessType` or `inheritFromParent` must be set. |
 
 ### `UpdateFolderRequest` (Node)
 
@@ -12042,7 +12111,7 @@ Request payload for `sdk.api.users.updateUsers`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization to update users in. |
-| `users` | `Array<{ userId: string; name?: string; email?: string; accessRole?: string }>` | Yes | User updates. |
+| `users` | `RestUser[]` | Yes | User updates. See [RestUser](#restuser-node): `accessRole` is `'editor' \| 'viewer'`, each `contacts[]` entry needs `userId`, and `role` needs `id`. |
 
 ### `UpdateWebhookConfigRequest` (Node)
 
@@ -12083,20 +12152,20 @@ Result returned by `sdk.selfHosting.verifyToken`. See [`verifyToken`](/backend-s
 
 ### `CreateAgentRequest` (Node)
 
-Request payload for `sdk.api.agents.createAgent`. Accepts additional passthrough fields.
+Request payload for `sdk.api.agents.createAgent`. Unknown top-level keys are dropped by the API.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | `string` | Yes | Agent display name. |
-| `description` | `string` | No | Human-readable agent description. |
+| `description` | `string` | Yes | Human-readable agent description. |
 | `rawInstructions` | `string` | No | Unprocessed natural-language instructions. |
-| `instructions` | `string` | No | Resolved/structured instructions. Required when the configured strategy is `ai`, `service+ai`, or `stagehand-agent`. |
-| `enabled` | `boolean` | No | Whether the agent is active. |
+| `instructions` | `string` | Conditional | Resolved/structured instructions. Required unless `execution.executionStrategy` is `'service'`; the strategy defaults to `'ai'`. |
+| `enabled` | `boolean` | Yes | Whether the agent is active. |
 | `metadata` | `Record<string, unknown>` | No | Arbitrary metadata. Server-managed metadata keys (`type`, `category`, `internal`, `apiKey`) are rejected on create/update-version payloads. |
-| `contextGathering` | `ContextGatheringConfig` | No | Context gathering configuration. |
-| `execution` | `AgentExecutionConfig` | No | Execution configuration. |
+| `contextGathering` | `ContextGatheringConfig` | Yes | Context gathering configuration. `strategies` must be a non-empty list. |
+| `execution` | `AgentExecutionConfig` | Yes | Execution configuration. |
 | `response` | `AgentResponseConfig` | No | Response configuration. |
-| `postProcess` | `AgentPostProcessConfig` | No | Post-processing configuration. |
+| `postProcess` | `AgentPostProcessConfig` | No | Post-processing configuration. `pinResolution` is rejected by the API and typed `never`. |
 | `input` | `AgentInputConfig` | No | Input configuration. |
 | `scope` | `AgentScopeConfig` | No | Scope configuration. |
 | `setup` | `AgentSetupConfig` | No | Setup configuration. |

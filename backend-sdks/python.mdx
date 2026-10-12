@@ -83,7 +83,7 @@ config = {
         'attachments': 'attachments',
         'users': 'users'
     },
-    # Required for token generation; also enables sdk.api.*
+    # Required for sdk.api.* (including token generation)
     'apiKey': 'YOUR_VELT_API_KEY',
     'authToken': 'YOUR_VELT_AUTH_TOKEN'
 }
@@ -757,34 +757,6 @@ async def delete_attachment(request: Request):
 { 'success': True, 'statusCode': 200, 'data': { ... } }
 ```
 
-### Token
-
-#### `getToken`
-
-- Generates a Velt auth token for a user. Token minting is a call to Velt's API and needs no database, so the same service is also available as `sdk.api.token` under the [REST API backend](#rest-api-backend). Both names return the same shape.
-- Params: keyword arguments `organizationId`, `userId`, `email` (optional), `isAdmin` (optional), `name` (optional), `permissions` (optional dict with a `resources` list)
-- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
-
-```python
-result = sdk.selfHosting.token.getToken(
-    organizationId='org-123',
-    userId='user-1',
-    email='user@example.com',
-    isAdmin=False
-)
-```
-
-**Response**
-
-```python
-{
-    'success': True,
-    'data': { 'token': 'eyJhbGciOi...' }
-}
-```
-
-> Note: `getToken` takes keyword arguments; it does not accept a dataclass request object. Signature: `getToken(organizationId, userId, email=None, isAdmin=None, name=None, permissions=None)`. On failure it returns `{'success': False, 'error': '...', 'errorCode': '...'}`.
-
 ### Resolver Token Verification
 
 `sdk.selfHosting.verifyToken(headers=None, token=None, **overrides) -> VerifyTokenResult` authenticates the credential the Velt frontend forwards to your resolver endpoints. New in **v0.1.14**. It is **opt-in** via the `resolver_auth` config block, **framework-agnostic**, and **fail-closed** — it returns a structured [`VerifyTokenResult`](#verifytokenresult) and never raises for a verification outcome. It is **authentication only**: it never consults `apiKey`, `organizationId`, or the resolver database; resolver services keep their own scoping. `result.claims` is informational — assert tenant claims against the resolver payload's `organizationId` yourself if you need tenant isolation.
@@ -966,7 +938,7 @@ async def get_comments(request: Request):
 
 ## REST API Backend
 
-The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 19 services, plus token minting. Each method takes a typed `@dataclass` request object and returns the raw Velt API response.
+The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 19 services, including token generation with [`sdk.api.accessControl.generateToken`](#generatetoken). Each method takes a typed `@dataclass` request object and returns the raw Velt API response.
 
 You only need `apiKey` and `authToken` — no database or AWS config.
 
@@ -2226,6 +2198,7 @@ result = sdk.api.notifications.deleteNotifications(
 #### `getNotificationConfig`
 
 - Gets notification preferences (inbox/email/slack channels) for a user.
+- `userId` is required when `getOrganizationConfig=True`; the API rejects the call with `INVALID_ARGUMENT` if it is missing. For a user-level read, `userId` is optional.
 - Params: [GetNotificationConfigRequest](/api-reference/sdk/models/data-models#getnotificationconfigrequest)
 - Returns: [GetNotificationConfigResponse](/api-reference/sdk/models/data-models#getnotificationconfigresponse)
 
@@ -2425,6 +2398,7 @@ Agent filtering is annotation-scoped and requires advanced queries to be enabled
 #### `getCommentAnnotationsCount`
 
 - Counts total and unread annotations across one or more documents.
+- `documentIds` is required (1 to 25 IDs). The API rejects the call with `INVALID_ARGUMENT` when it is omitted.
 - Params: [GetCommentAnnotationsCountRequest](/api-reference/sdk/models/data-models#getcommentannotationscountrequest)
 - Returns: [GetCommentAnnotationsCountResponse](/api-reference/sdk/models/data-models#getcommentannotationscountresponse)
 
@@ -2732,6 +2706,7 @@ result = sdk.api.activities.addActivities(
 #### `addActivities`
 
 - Logs one or more activity events.
+- For `featureType` `'custom'`, `targetEntityId` is required; the other feature types accept it as optional.
 - Params: [AddActivitiesRequest](/api-reference/sdk/models/data-models#addactivitiesrequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
 - Accepts the optional `filter_unknown_fields=True` keyword (see the note above).
@@ -2921,6 +2896,7 @@ result = sdk.api.accessControl.addPermissions(
 #### `getPermissions`
 
 - Retrieves permissions for one or more users.
+- Pass at least one of `folderIds` or `documentIds`; the API rejects a call with neither. By default the API also errors when the organization or any supplied ID does not exist; set `skipResourceExistenceValidation=True` to skip that check.
 - Params: [GetPermissionsRequest](/api-reference/sdk/models/data-models#getpermissionsrequest)
 - Returns: [GetPermissionsResponse](/api-reference/sdk/models/data-models#getpermissionsresponse)
 
@@ -3029,6 +3005,9 @@ result = sdk.api.accessControl.generateSignature(
 #### `generateToken`
 
 - Generates a Velt JWT token bound to a user and a set of resource permissions.
+- Calls `POST /v2/auth/generate_token`, the endpoint documented in the [Generate Token REST API](/api-reference/rest-apis/v2/auth/generate-token) and used by the [JWT guide](/security/jwt-tokens).
+- Expects: `GenerateTokenRequest { userId, userProperties: { name, email, isAdmin }, permissions: { resources: [...] } }`.
+- Returns the raw Velt API response: `{ result: { status, message, data: { token } } }`.
 - Params: [GenerateTokenRequest](/api-reference/sdk/models/data-models#generatetokenrequest)
 - Returns: [GenerateTokenResponse](/api-reference/sdk/models/data-models#generatetokenresponse)
 
@@ -3312,7 +3291,7 @@ result = sdk.api.livestate.broadcastEvent(
 
 #### `getRecordings`
 
-- Retrieves recording metadata, optionally scoped to a document or set of recording IDs.
+- Retrieves recording metadata for a document. Pass `documentId` to target the document; omitting it returns an empty list, not the organization's recordings. `recordingIds` filters the fetched page.
 - Params: [GetRecordingsRequest](/api-reference/sdk/models/data-models#getrecordingsrequest)
 - Returns: [GetRecordingsResponse](/api-reference/sdk/models/data-models#getrecordingsresponse)
 
@@ -3406,6 +3385,7 @@ result = sdk.api.rewriter.askAi(
 #### `deleteAllUserData`
 
 - Requests deletion of all data associated with one or more users.
+- `organizationIds` scopes the deletion to those organizations. When it is omitted, the user's data is deleted across every organization. More than 30 `userIds` are truncated to the first 30 server-side.
 - Params: [DeleteAllUserDataRequest](/api-reference/sdk/models/data-models#deletealluserdatarequest)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
 
@@ -4303,6 +4283,7 @@ from velt_py.models.agents import (
 #### `createAgent`
 
 - Creates a new agent.
+- `description`, `enabled`, `contextGathering` (with a non-empty `strategies` list) and `execution` are required. `instructions` is required unless `execution['executionStrategy']` is `'service'`; the strategy defaults to `'ai'`.
 - Params: `CreateAgentRequest` (from `velt_py.models.agents`)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse)
 
@@ -4312,7 +4293,9 @@ result = sdk.api.agents.createAgent(
         name='QA Agent',
         description='Checks pages for spelling and broken links',
         instructions='Find spelling mistakes and broken links on the page.',
-        enabled=True
+        enabled=True,
+        contextGathering={'strategies': ['web-page-text']},
+        execution={'executionStrategy': 'ai'}
     )
 )
 ```
@@ -5139,35 +5122,6 @@ result = sdk.api.workflow.recordReviewerDecision(
 )
 ```
 
-### Token
-
-#### `getToken`
-
-- Generates a Velt auth token for a user. Available from **v0.2.1**; it is the same service as [`sdk.selfHosting.token`](#token) and needs no database, so it works with a REST-only config.
-- Params: keyword arguments `organizationId`, `userId`, `email` (optional), `isAdmin` (optional), `name` (optional), `permissions` (optional dict with a `resources` list)
-- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse)
-
-```python
-result = sdk.api.token.getToken(
-    organizationId='org-123',
-    userId='user-1',
-    email='user@example.com',
-    isAdmin=False
-)
-```
-
-**Response**
-
-```python
-{
-    'success': True,
-    'data': { 'token': 'eyJhbGciOi...' }
-}
-```
-
-> Note: `getToken` takes keyword arguments; it does not accept a dataclass request object. Signature: `getToken(organizationId, userId, email=None, isAdmin=None, name=None, permissions=None)`. To call the `/v2/auth/generate_token` endpoint and receive the raw Velt API response instead, use `sdk.api.accessControl.generateToken(GenerateTokenRequest(...))`.
-
-
 ### Data Isolation
 
 Every `sdk.api.*` method requires an `organizationId` in its request payload. Velt's API enforces data isolation server-side — requests without a valid `organizationId` will be rejected.
@@ -5210,7 +5164,7 @@ Python-SDK-specific dataclasses used by the self-hosting backend. These are not 
 
 ### `PartialCommentAnnotation`
 
-Represents a partial update payload for a comment annotation. Starting in **v0.1.10**, `from`, `assignedTo`, `targetTextRange`, and `resolvedByUserId` are first-class typed fields (previously silent pass-through via `extra_fields`).
+Represents a partial update payload for a comment annotation. Starting in **v0.1.10**, `from`, `assignedTo`, `targetTextRange`, and `resolvedByUserId` are first-class typed fields (previously silent pass-through via `extra_fields`). Starting in **v0.2.2**, `context` is typed too: Velt client 6.0.17+ sends the TipTap anchor text as `context.textEditorConfig.text`, and the SDK stores and returns the object unchanged. Read it as `annotation.context` instead of `annotation.extra_fields['context']`.
 
 ```python
 from velt_py.models import (

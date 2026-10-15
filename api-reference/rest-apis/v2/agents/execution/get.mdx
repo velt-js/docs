@@ -147,7 +147,10 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
 | `resultsSummary.urlsWithFindings`        | number              | URLs that had at least one finding.                                                                            |
 | `resultsSummary.urlsErrored`             | number \| undefined | URLs whose agent run failed. `0 < urlsErrored < urlsProcessed` → `partial`; `urlsErrored >= urlsProcessed` (≥1 processed) → `error`. |
 | `resultsSummary.erroredUrls`             | array \| undefined  | The failing pages, `{ url, message, providerFailures? }`, at most 50, also while the run is still running: the first 50 failing pages are kept. `providerFailures` is set when the page failed because every model provider failed (see [Provider failures](#provider-failures)). |
-| `resultsSummary.issuesCreated`           | number              | Equals `totalFindings` (backwards compat).                                                                     |
+| `resultsSummary.urlsSiteAccessBlocked`   | number \| undefined | Of `urlsErrored`, pages the run could not open because the site is behind a password or sign-in: no credential is stored for the site (`error.code` `SITE_ACCESS_REQUIRED`), or the site rejected the stored one (`SITE_ACCESS_FAILED`). Absent when no page was blocked. |
+| `resultsSummary.urlsReused`              | number \| undefined | Of `urlsProcessed`, pages where change detection kept the agent's previous findings because the page had not changed. The agent did not run on them. Absent when none. |
+| `resultsSummary.findingsReused`          | number \| undefined | Of `totalFindings`, findings copied from an earlier run onto the `urlsReused` pages. Their comments from that run stand, so `totalAnnotationsCreated` does not count them. Absent when none. |
+| `resultsSummary.issuesCreated`           | number              | Equals `totalFindings`, reused findings included (backwards compat).                                           |
 | `resultsSummary.severityCounts`          | object \| undefined | Finding counts keyed by severity, e.g. `{ "high": 2, "medium": 5, "low": 1 }`. Sparse: only severities with at least one finding are present, so treat a missing key as `0`. Possible keys are `critical`, `high`, `medium`, `low`, `info`. Absent entirely when the run produced no findings. |
 | `resultsSummary.findings`                | object[] \| undefined | Sample of the run's findings for at-a-glance display, each `{ title, description, severity, sourceUrl?, issueType?, url?, evidence? }`. At most 50, the top ones by severity, also while the run is still running. Absent when the run produced no findings. Use `includeResults: true` for the complete per-URL findings. `evidence` is the compact form of the finding's [evidence](#finding-evidence). When the agent wrote no description, `description` is filled from the evidence text as `Found in: "<text around it>"` or `Found: "<text>"`, followed by the viewport in parentheses when it is known, for example `Found: "Lorem ipsum dolor" (phone).` It never quotes a CSS selector, and stays empty when the evidence has no text. |
 | `resultsSummary.summary`                 | string \| null      | Human-readable summary. Null while running.                                                                    |
@@ -158,6 +161,10 @@ Use this API to fetch an execution document by ID. This is the polling endpoint:
 | `providerFallbacks`                      | object[] \| undefined | Present only when a model call fell back and still succeeded: the requested provider failed and a later one answered, so `llmModel` names the later one. Same entries as `error.providerFailures`. The same failure (provider, model, status, and code) is listed once per run, at most 10 entries, also while the run is still running. See [Provider failures](#provider-failures). |
 | `warnings`                               | object[] \| undefined | Non-blocking warnings stamped when the run started, such as `{ "code": "pages-truncated", "pagesTotal": 1200, "pagesRun": 500 }` when the `pageListTotal` sent to [Run Execution](/api-reference/rest-apis/v2/agents/execution/run) was larger than the pages the run reviews. |
 | `tokenUsage`                             | object              | `{ promptTokens, completionTokens, thoughtsTokens, totalTokens }`.                                             |
+
+<Note>
+  Change detection only measures today: every agent still runs on every page, so `urlsReused` and `findingsReused` are absent until it is switched on. See the run-control keys of [Run Execution](/api-reference/rest-apis/v2/agents/execution/run).
+</Note>
 
 <Note>
   The legacy execution-document fields `knowledgeRetrieved` / `knowledgeCached` / `degraded` have been **removed**. Memory-RAG runtime signals now live only on the in-memory execution result and are consumed internally by the guardrails processor; they are not persisted on the execution document.
@@ -298,7 +305,7 @@ When `includeResults` is true, a `results` array is included alongside `executio
 | `occurrence`   | number  | 1-based occurrence index of `targetText` on the page.                    |
 | `sourceUrl`    | string  | URL where the finding was detected.                                      |
 | `suggestion`   | string  | Suggested fix.                                                           |
-| `suggestedFix` | string  | The exact replacement text, when the agent knows it (for example a corrected spelling). Absent otherwise. |
+| `suggestedFix` | string  | The exact replacement text, when the agent knows it (for example a corrected spelling). Absent otherwise. A Proofreader spelling finding with several possible corrections and none picked has no `suggestedFix`, and its `suggestion` is `Check the spelling.` |
 | `htmlSelector` | string  | CSS selector of the DOM element.                                         |
 | `targetElementXpath` | string | XPath of the DOM element.                                          |
 | `isPageLevel`  | boolean | `true` for visual/layout findings; `false` when `targetText` matches DOM text. |

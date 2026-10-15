@@ -277,7 +277,7 @@ const sdk = VeltSDK.initialize({
 
 ## Self-Hosting Backend
 
-Each self-hosting service is loaded asynchronously on first access via `await sdk.selfHosting.getXxx()`. The service is cached after the first call. The `token` service is the exception: it is a direct synchronous property, `sdk.selfHosting.token`.
+Each self-hosting service is loaded asynchronously on first access via `await sdk.selfHosting.getXxx()`. The service is cached after the first call.
 
 `await sdk.selfHosting.database` returns the connected `DatabaseAdapter`: the raw adapter for the configured database (`MongoDBAdapter` or `PostgresAdapter`), with `find`, `findOne`, `insertOne`, `updateOne`, `updateMany`, `deleteOne`, and `deleteMany`. The first access connects and creates indexes; later accesses return the same adapter. Use it for a readiness check or to write data the resolvers do not write, such as seeding users. Pass collection names as configured in `collections`. On PostgreSQL the adapter accepts the query operators the SDK itself uses: equality, `$in`, `$nin`, `$eq`, `$ne`, `$exists`, and top-level `$and` and `$or`.
 
@@ -737,31 +737,6 @@ await activitiesService.saveActivities({
 { success: true, statusCode: 200, data: { saved: true } }
 ```
 
-### Token
-
-Access via the synchronous `sdk.selfHosting.token` property (no `await`).
-
-#### `getToken`
-
-- Generates a Velt auth token for a user. Token minting is a call to Velt's API and needs no database, so the same service is also available as `sdk.api.token` under the [REST API backend](#rest-api-backend). Both names send the same request and return the same shape.
-- Params: positional `organizationId` (string), `userId` (string), `email` (string, optional), `isAdmin` (boolean, optional)
-- Returns: `{ success: true, data: { token } }` or `{ success: false, error, errorCode }`
-
-```ts
-const tokenResult = await sdk.selfHosting.token.getToken('org-123', 'user-1', 'john@example.com', false);
-if (tokenResult.success) {
-  const token = tokenResult.data.token;
-}
-```
-
-**Response**
-
-```ts
-{ success: true, data: { token: 'eyJhbGciOiJIUzI1NiIs...' } }
-```
-
-> Note: `getToken` takes positional arguments, not a request object. An empty `organizationId` throws a `VeltValidationError`. A missing `userId`, API key, or auth token, or an error from Velt's API, returns `{ success: false, error: '...', errorCode: '...' }`.
-
 ### verifyToken
 
 `sdk.selfHosting.verifyToken` verifies the auth credential the Velt frontend forwards to endpoint-based resolvers. It is **database-free** (it does not open or query MongoDB), **fail-closed** (every error path returns `{ verified: false }`, never throws), and **authentication only** (claims are returned verbatim; it makes no authorization decision).
@@ -901,9 +876,30 @@ On failure, `result.errorCode` is one of the [`ResolverAuthErrorCode`](/api-refe
 
 ## REST API Backend
 
-The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 19 services, plus token minting. Each method takes a fully-typed TypeScript request object and returns the raw Velt API response. You only need `apiKey` and `authToken`; initialize without a `database` block.
+The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 19 services, including token generation with [`sdk.api.accessControl.generateToken`](#generatetoken). Each method takes a fully-typed TypeScript request object and returns the raw Velt API response. You only need `apiKey` and `authToken`; initialize without a `database` block.
 
 Every `sdk.api.*` method requires an `organizationId` in its request payload. Velt enforces data isolation per-organization server-side.
+
+### Response Envelope
+
+Every `sdk.api.*` method resolves to a `VeltApiResponse<TResult>`. The SDK does not throw on an API error; check `error` first.
+
+```ts
+interface VeltApiResponse<TResult = ApiResult> {
+  result?: TResult;                                   // present on success
+  error?: { message: string; status: string; details?: unknown }; // present on failure
+}
+
+interface ApiResult<TData = unknown> {
+  status: string; message: string; data?: TData; nextPageToken?: string;
+}
+
+const res = await sdk.api.organizations.getOrganizations({ organizationIds: ['org-123'] });
+if (res.error) throw new Error(res.error.message);
+const orgs = res.result?.data;
+```
+
+`TResult` depends on the service: `ApiResult` for most services, the raw value (`unknown`) for `sdk.api.memory`, a per-method `Approval*Result` object for `sdk.api.approval` (`listDefinitions` and `listExecutions` page by `nextCursor`), and `AskAiResult` (`{ success, text?, error? }`) for `sdk.api.rewriter.askAi`. `data` is untyped; narrow it to the shape shown in each method's response example. REST user fields (`users[]`, `from`, `assignedTo`, `actionUser`, `notifyUsers`, `addPermissions.user`) take `RestUser`: `accessRole` is `'editor' | 'viewer'`, each `contacts[]` entry needs `userId`, and `role` needs `id`.
 
 ### Field Allowlist
 
@@ -1920,6 +1916,7 @@ await sdk.api.commentAnnotations.addCommentAnnotations(
 #### `addCommentAnnotations`
 
 - Creates comment annotations on a document.
+- `location.id` is required. `status` needs `id`, `name` and `type` (`'default' | 'ongoing' | 'terminal'`); `priority` needs `id` and `name`; `visibility` needs `organizationId` for `organizationPrivate` and `userIds` for `restricted`; `pageInfo` needs `url` and `path`.
 - Params: [AddCommentAnnotationsRequest](/api-reference/sdk/models/data-models#addcommentannotationsrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
 - Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending (see the note above).
@@ -2013,6 +2010,7 @@ Agent filtering is annotation-scoped and requires advanced queries to be enabled
 #### `getCommentAnnotationsCount`
 
 - Gets total and unread annotation counts per document.
+- `documentIds` is required (1 to 25 IDs); the API rejects the call with `INVALID_ARGUMENT` when it is omitted.
 - Params: [GetCommentAnnotationsCountRequest](/api-reference/sdk/models/data-models#getcommentannotationscountrequest-node)
 - Returns: [GetCommentAnnotationsCountResponse](/api-reference/sdk/models/data-models#getcommentannotationscountresponse-node)
 
@@ -2222,6 +2220,7 @@ await sdk.api.commentAnnotations.deleteComments({
 #### `addActivities`
 
 - Logs activity events.
+- `changes` is a record keyed by field name (`{ title: { from, to } }`), not an array. A `custom` activity requires `targetEntityId`.
 - Params: [AddActivitiesRequest](/api-reference/sdk/models/data-models#addactivitiesrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
 - Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending (see the note above).
@@ -2288,6 +2287,7 @@ await sdk.api.activities.getActivities({
 #### `updateActivities`
 
 - Updates existing activity events.
+- Each item is identified by `id` (`activityId` is a deprecated alias). `changes` is a record keyed by field name.
 - Params: [UpdateActivitiesRequest](/api-reference/sdk/models/data-models#updateactivitiesrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
 - Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending (see the note above).
@@ -2354,7 +2354,7 @@ await sdk.api.accessControl.addPermissions({
 
 #### `getPermissions`
 
-- Retrieves permissions for users on resources.
+- Retrieves permissions for users on resources. Pass at least one of `folderIds` or `documentIds`; the API rejects a call with neither.
 - Params: [GetPermissionsRequest](/api-reference/sdk/models/data-models#getpermissionsrequest-node)
 - Returns: [GetPermissionsResponse](/api-reference/sdk/models/data-models#getpermissionsresponse-node)
 
@@ -2451,6 +2451,9 @@ await sdk.api.accessControl.generateSignature({
 #### `generateToken`
 
 - Generates a JWT auth token for a user with embedded permissions.
+- Calls `POST /v2/auth/generate_token`, the endpoint documented in the [Generate Token REST API](/api-reference/rest-apis/v2/auth/generate-token) and used by the [JWT guide](/security/jwt-tokens).
+- Expects `GenerateTokenRequest { userId: string; userProperties: { name?, email?, photoUrl?, color?, textColor?, ... }; permissions: { resources?: Resource[] } }`, passed as a request object like every other `sdk.api.*` method.
+- Returns the raw Velt API envelope `VeltApiResponse`: `{ result: { status, message, data: { token } } }`.
 - Params: [GenerateTokenRequest](/api-reference/sdk/models/data-models#generatetokenrequest-node)
 - Returns: [GenerateTokenResponse](/api-reference/sdk/models/data-models#generatetokenresponse-node)
 
@@ -2679,7 +2682,7 @@ await sdk.api.livestate.broadcastEvent({
 
 #### `getRecordings`
 
-- Retrieves recording metadata for an organization or document with optional filtering and pagination.
+- Retrieves recording metadata for a document. Pass `documentId` to target the document; omitting it returns an empty list, not the organization's recordings. `recordingIds` filters the fetched page.
 - Params: [GetRecordingsRequest](/api-reference/sdk/models/data-models#getrecordingsrequest-node)
 - Returns: [GetRecordingsResponse](/api-reference/sdk/models/data-models#getrecordingsresponse-node)
 
@@ -2803,7 +2806,7 @@ await sdk.api.gdpr.getAllUserData({
 });
 ```
 
-Pass `veltUserIds` to export data for a set of Velt-side user IDs instead of the single `userId`, `veltAllOrganizations` to span every organization rather than just `organizationId`, and `uniqueId` as a correlation value echoed back on the response:
+Pass `veltUserIds` to export data for a set of Velt-side user IDs instead of the single `userId`, and `veltAllOrganizations` to span every organization rather than just `organizationId`. `uniqueId` is accepted but ignored and is not returned in the response:
 
 ```ts
 await sdk.api.gdpr.getAllUserData({
@@ -2811,7 +2814,6 @@ await sdk.api.gdpr.getAllUserData({
   userId: 'user-1',
   veltUserIds: ['velt-user-1', 'velt-user-2'],
   veltAllOrganizations: true,
-  uniqueId: 'export-request-42',
 });
 ```
 
@@ -3557,33 +3559,6 @@ await sdk.api.workspace.getAdvancedWebhookEndpointSecret({ endpointId: 'endpoint
 { result: { status: 'success', message: 'Endpoint secret retrieved successfully.', data: { secret: 'whsec_...' } } }
 ```
 
-### Token
-
-**Namespace:** `sdk.api.token`
-
-Token minting needs no database, so `sdk.api.token` is the recommended name and works with a REST-only config. It is the same service as [`sdk.selfHosting.token`](#token): both names send the same request to `/v2/auth/token/get` and return the same shape.
-
-#### `getToken`
-
-- Generates a Velt auth token for a user.
-- Params: positional `organizationId` (string), `userId` (string), `email` (string, optional), `isAdmin` (boolean, optional)
-- Returns: `{ success: true, data: { token } }` or `{ success: false, error, errorCode }`
-
-```ts
-const tokenResult = await sdk.api.token.getToken('org-123', 'user-1', 'john@example.com', false);
-if (tokenResult.success) {
-  const token = tokenResult.data.token;
-}
-```
-
-**Response**
-
-```ts
-{ success: true, data: { token: 'eyJhbGciOiJIUzI1NiIs...' } }
-```
-
-> Note: `getToken` takes positional arguments, not a request object. To call the `/v2/auth/generate_token` endpoint with embedded permissions and receive the raw Velt API response instead, use [`sdk.api.accessControl.generateToken`](#generatetoken).
-
 <Note>
 Custom agent config supports the `rest-api` context-gathering strategy and the `mcp-tools` execution strategy. Secret-bearing REST API and MCP auth fields are encrypted at rest and redacted on read paths. Create and update-version payloads reject server-managed fields such as `managedBy`, `metadata.type`, `metadata.category`, `metadata.internal`, and `metadata.apiKey`; strategies that require instructions (`ai`, `service+ai`, `stagehand-agent`) reject empty `instructions`.
 </Note>
@@ -3597,7 +3572,7 @@ A new service for managing AI agents, versioned config, agent groups, executions
 
 #### `createAgent`
 
-- Create a new agent. Backend schema is `.passthrough()` — unknown fields forwarded verbatim.
+- Create a new agent. `description`, `enabled`, `contextGathering` (with a non-empty `strategies` list) and `execution` are required; `instructions` is required unless `execution.executionStrategy` is `'service'` (the strategy defaults to `'ai'`). The API drops unknown top-level keys and rejects `postProcess.pinResolution`.
 - Params: [CreateAgentRequest](/api-reference/sdk/models/data-models#createagentrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
 
@@ -3607,7 +3582,8 @@ await sdk.api.agents.createAgent({
   description: 'Flags a11y issues on a page',
   instructions: 'Review the page for WCAG 2.1 AA violations and report findings.',
   enabled: true,
-  execution: { executionStrategy: 'default', knowledge: { useMemory: true, maxChunks: 10 } },
+  contextGathering: { strategies: ['web-page-text'] },
+  execution: { executionStrategy: 'ai', knowledge: { useMemory: true, maxChunks: 10 } },
   response: { useAiFormatting: true },
 });
 ```
@@ -4459,7 +4435,7 @@ The SDK exports five typed error classes:
 | `VeltDatabaseError` | `VeltSDKError` | Database connection or query failures |
 | `VeltValidationError` | `VeltSDKError` | Missing or invalid request parameters |
 | `VeltTokenError` | `VeltSDKError` | Token generation failures |
-| `VeltApiError` | `VeltSDKError` | REST API call failures |
+| `VeltApiError` | `VeltSDKError` | Network or parse failures while calling the REST API. API-level errors are returned as `{ error }` on the response, not thrown (see [Response Envelope](/backend-sdks/node#response-envelope)) |
 
 ```ts
 import { VeltSDK, VeltDatabaseError, VeltApiError } from '@veltdev/node';
@@ -4513,6 +4489,7 @@ interface PartialCommentAnnotation {
   assignedTo?: PartialUser;        // Typed in v1.0.2; previously pass-through
   targetTextRange?: PartialTargetTextRange;  // Typed in v1.0.2; previously pass-through
   resolvedByUserId?: string | null; // Three-state — see resolvedByUserId Semantics below
+  context?: { textEditorConfig?: { text?: string } }; // TipTap anchor text from client 6.0.17+, stored unchanged
   [key: string]: unknown;          // Unknown keys are preserved on round-trip
 }
 ```
@@ -4526,6 +4503,7 @@ interface PartialCommentAnnotation {
 | `assignedTo` | `PartialUser` | User currently assigned to the annotation. |
 | `targetTextRange` | `PartialTargetTextRange` | Text selection the annotation is anchored to. |
 | `resolvedByUserId` | `string \| null` | Three-state field — see below. |
+| `context` | `object` | Typed since 2.0.2. Velt client 6.0.17+ sends the TipTap anchor text as `context.textEditorConfig.text`; the SDK stores and returns the object unchanged. |
 | `[key]` | `unknown` | Extra keys pass through serialization unchanged. |
 
 **Serializers:**

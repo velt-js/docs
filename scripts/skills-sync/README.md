@@ -1,5 +1,7 @@
 # skills-sync — Docs → Agent-Skills Auto-Sync Pipeline
 
+> **Retired:** the `docs-sync-skills` GitHub Actions workflow described here has been removed. Skills are now synced by a Claude Code routine that runs when a PR merges into `main`. The routine still uses `reference-artifacts/mapping.md` and `reference-artifacts/format-guide.md` as its routing and format spec, so keep those current. The rest of this document is kept for history.
+
 > **Status:** Phase 4 (production-hardened). The `push` trigger is ENABLED — every merge to `main` touching a watched path runs the pipeline and opens a PR against `velt-js/agent-skills`. Only enable in production once the Phase 3 test matrix below is green.
 
 This pipeline detects docs changes on `main` and opens a PR against [`velt-js/agent-skills`](https://github.com/velt-js/agent-skills) updating the affected skills. It's parallel to the existing `docs-sync.yml` / release-note pipelines and does not modify them.

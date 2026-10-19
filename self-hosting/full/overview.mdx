@@ -3,134 +3,66 @@ title: "Overview"
 description: "Run the complete Velt platform on infrastructure you own: backend, admin console, and client SDK, with no runtime requests to Velt-owned hosts."
 ---
 
-Velt's SaaS product runs on Velt-operated GCP: Cloud Functions, Firestore/RTDB, the hosted console at `console.velt.dev`, and the SDK from `cdn.velt.dev`. **Full self-hosting** moves that entire stack into a cloud project you own.
+Full self-hosting moves Velt's entire stack (the backend, the admin console, and the client SDK) into a cloud account you own. When it's done, your app and console make **no** requests to `velt.dev` or any other Velt-owned host. Data, sign-in, and administration stay inside your tenancy.
 
-| Piece | What you run | What you stop calling |
+## Choose your cloud
+
+<CardGroup cols={3}>
+  <Card title="GCP" icon="cloud" href="/self-hosting/full/gcp/overview">
+    **Available.** Cloud Run and Firebase in your GCP project.
+  </Card>
+  <Card title="AWS" icon="cloud" href="/self-hosting/full/aws/overview">
+    **Closed beta.** EKS and RDS for PostgreSQL, on GovCloud or commercial.
+  </Card>
+  <Card title="Azure" icon="cloud" href="/self-hosting/full/azure/overview">
+    **Closed beta.** AKS and PostgreSQL Flexible Server, commercial or Government.
+  </Card>
+</CardGroup>
+
+## How it works
+
+You don't run the install by hand. An AI coding agent does the work, and you handle the few steps that need a person.
+
+1. **Prepare.** Check the prerequisites and decide your inputs on your cloud's Get Started page.
+2. **Hand off.** Copy the agent instructions from the Install page and paste them into your AI coding agent with your inputs.
+3. **Approve.** The agent verifies every Velt artifact, builds the infrastructure, and deploys the backend, console, and SDK. It stops when it needs you: sign-in, billing or quota, the console's sign-in provider, the image scan sign-off, DNS, and a certificate.
+4. **Connect your app.** Add the `selfHosted` config the agent gives you, so the SDK loads from and talks to your deployment only.
+5. **Verify.** Sign in to the console, create a comment in your app, see it in the console, and confirm the browser's network log shows no Velt-owned hosts.
+
+## What you run
+
+| Piece | GCP | AWS and Azure |
 | --- | --- | --- |
-| **Backend** | Signed container on Cloud Run (Terraform), your Firebase project, your secrets | `api.velt.dev`, `*.cloudfunctions.net` on Velt projects |
-| **Console** | Static admin UI on your host, config pointing at your backend | `console.velt.dev` |
-| **SDK** | `@veltdev/sdk` files on your CDN + `config.selfHosted` in the app | `cdn.velt.dev` for code; Velt backends for data |
-
-When finished, your app and admin surface make **no** requests to `velt.dev` or Velt-owned hosts. Data, auth, and admin stay inside your tenancy.
-
-The table above describes the GCP deployment. On AWS and Azure, the same three pieces run on Velt's portable stack: a Kubernetes cluster, managed PostgreSQL, and a signed Helm chart, all served from one public host. See [Supported clouds](#supported-clouds).
-
-You consume releases through a single signed **umbrella manifest** (`velt-selfhost-manifest`) that pins backend image + Terraform module, console bundle, and the SDK version this release was tested with. You never hand-pick mismatched component versions.
+| **Backend** | Cloud Run services and your own Firebase project | A Kubernetes cluster (EKS or AKS) and managed PostgreSQL |
+| **Console** | Static files on a host you choose | Served from the deployment's one public host |
+| **SDK** | `@veltdev/sdk` files on your CDN | Served from the deployment's one public host |
+| **Built with** | Velt's signed Terraform module | Velt's signed Terraform module and Helm chart |
 
 ## Full vs partial self-hosting
 
-Velt offers two different things under the word "self-hosting", and they solve different problems.
-
-**Partial self-hosting** keeps Velt's managed backend and moves only your user-generated content and PII into your own storage. You register data providers, Velt stores the structural non-PII data (IDs, document and organization references, locations, statuses, timestamps), and your backend stores the content. It is an application-level integration with no infrastructure to run.
-
-**Full self-hosting** moves the entire stack. There is no Velt-operated component left in the runtime path.
+Velt offers two kinds of self-hosting. They solve different problems.
 
 | | Partial self-hosting | Full self-hosting |
 | --- | --- | --- |
 | **What moves to you** | User content and PII, through data providers | Backend, console, SDK hosting, and all data |
-| **Who runs the backend** | Velt | You, in your own GCP project, AWS account, or Azure subscription |
-| **What you set up** | Data provider callbacks or endpoints in your app | Cloud account, Terraform, and console and SDK hosting (Firebase on GCP; Kubernetes and Helm on AWS and Azure) |
+| **Who runs the backend** | Velt | You |
+| **What you set up** | Data provider callbacks or endpoints in your app | Cloud infrastructure, with an AI coding agent doing the install |
 | **Requests to Velt hosts** | Yes, for the collaboration backend | None |
-| **Where to start** | [Partial self-hosting](/self-hosting/partial/overview) | [Supported clouds](#supported-clouds) |
+| **Where to start** | [Partial self-hosting](/self-hosting/partial/overview) | [Choose your cloud](#choose-your-cloud) |
 
-## Core concepts
+## Key concepts
 
-| Concept | What it is |
+| Concept | What it means for you |
 | --- | --- |
-| **Umbrella release** | A versioned binding of backend + console + SDK, published as `velt-selfhost-manifest:<X.Y.Z>` (and `:latest`). One number (`selfHostVersion`) is what you install and upgrade. |
-| **Signed manifest** | Cosign-signed JSON. Trust root for the release: it pins image digest, module archive sha256, console sha256, SDK sha256. Always verify by digest, never trust a mutable tag alone. |
-| **Backend image** | One container (`velt-functions`) serving many Cloud Run services; `FUNCTION_TARGET` selects the export. Image and Terraform **module always upgrade together**. |
-| **Deployment profile** | Curated feature set (`core`, `core+recording`, `core+ai+agents`, `full`) plus optional opt-in modules. Terraform provisions only that closure. |
-| **`enabledModules`** | Resolved module list written into `velt-deployment-profile.json`. Console and SDK both honor it, hiding or inert-sentinelling features that aren't deployed. |
-| **`config.selfHosted`** | App-side object that repoints every SDK endpoint at your deployment. Generated during install, so don't hand-type URLs. |
-| **Strict mode** | `selfHosted.strict: true`. Any endpoint you didn't inject resolves to an inert `velt://self-hosted-disabled/…` sentinel instead of falling back to Velt SaaS. Required for zero-egress. |
-| **State file** | `velt-selfhost-state.json`, the resume contract for install/upgrade agents and humans. Records inputs, phase status, and artifact paths (not secret values). |
+| **Release** | One version number covers the backend, console, and SDK together. You install and upgrade releases, never individual components. |
+| **Signed manifest** | Each release is a signed file that pins every component by digest. The agent verifies its signature with `cosign` before it pulls anything. |
+| **`selfHosted` config** | The object in your app's Velt config that points the SDK at your deployment. The agent generates it for you. |
+| **Strict mode** | `selfHosted.strict: true`. Any endpoint your deployment doesn't serve is switched off instead of falling back to Velt's hosted service. Required for zero egress. |
+| **State file** | A JSON file the agent keeps in your working directory. It records progress (never secret values), so a new session can resume an interrupted install. |
 
-## Architecture
+## Security
 
-```mermaid
-flowchart TB
-  subgraph Customer["Your GCP project"]
-    App["Your app<br/>@veltdev/react + selfHosted"]
-    CDN["Your CDN<br/>/lib/sdk@version/"]
-    Console["Your console host<br/>velt-console-config.json"]
-    CR["Cloud Run services<br/>velt-functions image"]
-    FB["Firebase<br/>Auth · Firestore · RTDB · Storage"]
-  end
-
-  Registry["Velt release registry<br/>velt-selfhost-manifest<br/>image · module · console · sdk"]
-
-  App -->|loads JS| CDN
-  App -->|callables / data| CR
-  App -->|Auth + listeners| FB
-  Console -->|callables| CR
-  Console -->|Auth + admin data| FB
-  CR --> FB
-  Registry -.->|install / upgrade pulls| Customer
-```
-
-**Invariant:** after acceptance, DevTools Network on the app and the console show **no** requests to `cdn.velt.dev`, `console.velt.dev`, `api.velt.dev`, or other Velt-owned hosts.
-
-## What's included
-
-### Always on (`core`)
-
-Auth/identity, data plane, workspace control plane, notifications pipeline, agents runtime, analytics/debugger backends, console **backend** handlers, and index converge tooling. This is everything needed for the collaboration product plus the admin API on a self-hosted stack.
-
-### Curated add-ons (pick a profile or opt in)
-
-| Module | Typical need |
-| --- | --- |
-| `rest-api` | Customer-facing `*apibe` REST surface, GDPR workers, bulk folder moves |
-| `recorder-media` | Recording / Whisper / screenshots |
-| `ai` | AI chat / completion Cloud Functions (BYO LLM keys) |
-| `huddle-webrtc` | Huddle / TURN (`getIceServers`) |
-| `integrations-workflow` | Workflow engine + third-party connectors (opt-in) |
-| `migrations` | Operational migration tooling (off by default; recommended for full console ops) |
-
-Exact profile compositions: [Reference, Deployment profiles](/self-hosting/full/gcp/reference#deployment-profiles).
-
-Features whose modules aren't in `enabledModules` are gated in the console UI and inert-sentinelled in the SDK under strict mode. Self-host console builds also strip SaaS-only telemetry.
-
-## Security and trust
-
-1. **Verify the manifest** with `cosign` against the GitHub Actions OIDC identity before any pull of image, module, console, or SDK pins.
-2. **Pin the image by digest** in your registry and in Terraform. Tags move; digests don't.
-3. **Re-scan the image** in your tenancy (Phase 1.5) and diff against the manifest's signed `knownFindings`. Fixable CRITICAL/HIGH findings are never "accepted".
-4. **Secrets:** crypto keys (`PLUGIN_CRYPTO_*`, `JWT_SECRET_KEY`) plus your Gemini and Anthropic API keys must be real values you control (required even on `core`). Optional Twilio and other BYO keys apply when those modules are enabled. Velt SaaS analytics/OAuth placeholders are auto-seeded so Cloud Run can start; replace OAuth placeholders with *your* app credentials before enabling an integration.
-5. **Zero-egress proof** is part of acceptance. Treat residual `velt.dev` calls as a failed install.
-
-Details: [Reference, Trust model](/self-hosting/full/gcp/reference#trust-model).
-
-## Limitations
-
-- **GCP is generally available; AWS and Azure are in closed beta.** AWS and Azure have install guides today; their upgrade guides are in progress.
-- **Human steps remain on GCP:** link a billing account on the GCP project, create the OAuth client, sign off the infosec scan, set up DNS (if custom domains), and complete the first console sign-in.
-- **Install and upgrade guides are evergreen.** Version-specific pins always come from the signed manifest at run time, so don't bake component versions into runbooks.
-
-## Supported clouds
-
-| Cloud | Status | Guide |
-| --- | --- | --- |
-| GCP + Firebase | Available | [Get Started on GCP](/self-hosting/full/gcp/overview) |
-| AWS (GovCloud or commercial) | Closed beta | [Get Started on AWS](/self-hosting/full/aws/overview) |
-| Azure (commercial or Government) | Closed beta | [Get Started on Azure](/self-hosting/full/azure/overview) |
-
-The umbrella release, the signed manifest, and strict mode apply to every cloud. On AWS and Azure, the signed manifest also pins the portable release: its images, Helm chart, Terraform module, and tools bundle.
-
-## Next steps
-
-<CardGroup cols={2}>
-  <Card title="Get Started on GCP" icon="rocket" href="/self-hosting/full/gcp/overview">
-    Prerequisites, the inputs you decide once, and how to hand the install guide to your coding agent.
-  </Card>
-  <Card title="Reference" icon="book" href="/self-hosting/full/gcp/reference">
-    Manifest schema, profiles, config shapes, and trust verification.
-  </Card>
-  <Card title="Get Started on AWS" icon="cloud" href="/self-hosting/full/aws/overview">
-    Deploy the portable stack on EKS and RDS, on GovCloud or the commercial partition.
-  </Card>
-  <Card title="Get Started on Azure" icon="cloud" href="/self-hosting/full/azure/overview">
-    Deploy the portable stack on AKS and PostgreSQL Flexible Server.
-  </Card>
-</CardGroup>
+- **Every artifact is verified.** The agent checks each image, module, chart, and bundle against Velt's signing identity, and stops on any failure.
+- **Images run from your registry.** The agent copies images into your own registry by digest and scans them there. You sign off the scan (or waive it, if your policy allows) before the application deploys.
+- **Secrets stay with you.** Keys, passwords, and tokens go into your secret store. The state file and the agent's report record only where they are kept.
+- **Zero egress is tested.** The last acceptance check is a network audit. Any request to a Velt-owned host fails the install.

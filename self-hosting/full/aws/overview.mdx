@@ -4,7 +4,7 @@ sidebarTitle: "Get Started"
 description: "Deploy Velt full self-hosting into your own AWS account, on GovCloud or the commercial partition. Hand the install guide to an AI coding agent, answer the inputs up front, and complete the human steps."
 ---
 
-You do not run this deployment by hand. You give an AI coding agent the [Install guide](/self-hosting/full/aws/install), and it executes the phases, stopping to ask you whenever a step needs a human.
+You don't run this deployment by hand. An AI coding agent follows the [Install guide](/self-hosting/full/aws/install) and stops to ask you whenever a step needs a person.
 
 Most of the wall clock time is waiting on AWS: the EKS cluster takes 10 to 15 minutes, RDS 15 to 25 minutes (longer with Multi-AZ), the node group about 5 minutes, and the first load balancer about 3 minutes.
 
@@ -30,35 +30,20 @@ You deploy into GovCloud (`aws-us-gov`) or the commercial partition (`aws`). The
 
 <Step title="Check the prerequisites">
 
-**People and access**
-
 - An AWS account in the target partition, and an administrator role for the install. The preflight simulates every action the module needs.
 - Permission to create an Amazon Cognito user pool for console sign-in, or another OIDC provider.
 - **Someone who can create DNS records in the zone that holds your public host.** They create the certificate's validation record and the record that points at the load balancer. Find them before you start; nobody else can do this step.
 - On-Demand vCPU quota. Persistent mode needs 12 vCPUs at rest and up to 48 at the autoscaler's ceiling during a node-group update. Sandbox mode needs 4 at rest and up to 16.
 - If the account is in an AWS Organization, know its service control policies: a region allow-list, a deny on IAM OIDC-provider actions, or a spend cap each change the install.
-- Someone available to run an AI coding agent, or the shell commands themselves, for the duration.
+- Someone available to run an AI coding agent for the duration.
 
-**Tooling**
-
-| Tool | Why |
-| --- | --- |
-| AWS CLI ≥ 2.15 | All provisioning |
-| Terraform ≥ 1.6 | The substrate |
-| Helm ≥ 3.17 | The application (installed by chart digest) |
-| `kubectl` | Cluster operations |
-| `cosign`, `oras` | Verify and pull every release artifact |
-| Node ≥ 18 | The update check in the final report |
-| Docker | The provision CLI (keygen, tokens) |
-| `curl`, `python3`, `openssl`, `jq` | Verify steps |
-
-The release ships its own preflight script. The agent runs it in Phase 0. It creates nothing, and it stops at the first failed check.
+**Tools on the machine that runs the agent:** AWS CLI 2.15+, Terraform 1.6+, Helm 3.17+, `kubectl`, `cosign`, `oras`, Node 18+, Docker, `curl`, `python3`, `openssl`, and `jq`. The agent runs the release's preflight check before it starts. The check creates nothing and stops at the first problem.
 
 </Step>
 
 <Step title="Decide your inputs">
 
-Decide these once, up front. The agent asks for all of them before Phase 0 rather than interrupting you later.
+Decide these once, up front. The agent asks for all of them before it starts.
 
 | Input | Meaning |
 | --- | --- |
@@ -77,9 +62,9 @@ Optional features (REST API, comment attachments, advanced webhooks, console SAM
 
 </Step>
 
-<Step title="Give your agent the guide">
+<Step title="Start your agent">
 
-This is the step that does the work. Copy the agent instructions from the [Install guide](/self-hosting/full/aws/install) and paste them into your AI coding agent. Then start it with a prompt like this, filled in with the values you decided in step 2:
+Copy the agent instructions from the [Install guide](/self-hosting/full/aws/install) and paste them into your AI coding agent. Then start it with a prompt like this, filled in with your inputs:
 
 ```text
 You are deploying Velt full self-hosting into our own AWS account.
@@ -103,7 +88,7 @@ Maintain velt-selfhost-aws-state.json after every step so this run can
 be resumed in a fresh session. Stop and ask me whenever a step needs a human.
 ```
 
-Keep `velt-selfhost-aws-state.json` in your working directory. It is what lets a fresh session pick up where the last one stopped.
+The agent ends with a final report: your endpoints, your app's config, and where every secret is stored. Keep `velt-selfhost-aws-state.json` in your working directory; it lets a new session resume an interrupted install.
 
 </Step>
 
@@ -189,34 +174,17 @@ With comment attachments on, a fifth check confirms uploads and downloads go to 
 
 </Steps>
 
-## What the agent does
-
-| Phase | What happens | You care because |
-| --- | --- | --- |
-| **0** | Verify the release manifest and tools bundle; sign in; check quotas; run the preflight; create the console's identity provider | Organization policies and quota stop an install part-way |
-| **1** | Terraform apply of the substrate (EKS, RDS, KMS, ECR, S3, alarms) | The longest wait of the run |
-| **2** | Verify each image with `cosign`, copy it **by digest** into your ECR, scan it | Images never run from Velt's registry |
-| **3** | ES256 signing keypair, secrets, the RDS certificate bundle, the encrypted storage class, the ACM certificate | The private key goes to your secret store, never the state file |
-| **4** | Install the AWS Load Balancer Controller and Cluster Autoscaler; Helm install; verify the schema migration; seed the first workspace | First admin and API key for the app |
-| **5** | Point DNS at the load balancer; attach the alarms to it | Your public host and certificate |
-| **6** | Smoke tests and the read-only live check | Proves encryption, FIPS, network policy, and routing |
-| **7** | Acceptance: console sign-in, SDK loop, cross-surface proof, zero-egress audit | Done only when all four pass |
-
-The agent ends with a final report: endpoints, your app's config snippet, where secrets are stored, a version receipt to send Velt, the preflight and live-check reports, and how to idle the deployment.
-
-## Troubleshooting
+## Troubleshooting your app
 
 | Symptom | Likely cause |
 | --- | --- |
-| `oras` or `cosign` fails with `error getting credentials` | A Docker credential helper intercepts the anonymous release registry. Export an empty `DOCKER_CONFIG` (Phase 0.1) |
-| `terraform apply` stops on `failed to refresh cached credentials` | Terraform's own refresh of an SSO session failed. Don't re-apply straight away; use the `credential_process` profile from Phase 0.3 |
-| `terraform plan`: credentials "belong to partition" | You are signed in to the other partition. Sign in to the intended account; never change `partition` |
-| `kubectl` returns `Unauthorized` | Your role has no cluster access entry. Add it to `eks_admin_principal_arns` and apply |
-| The Ingress has no address | The ACM certificate isn't `ISSUED` yet, or the load balancer controller isn't installed |
-| Zero-egress audit shows `cdn.velt.dev` | `proxyConfig.cdnHost` or `version` is missing, or `staging`/`develop` is set |
+| The network log shows `cdn.velt.dev` | `proxyConfig.cdnHost` or `version` is missing, or `staging` or `develop` is set |
+| The browser shows a CORS error | The page isn't served from one of your configured app origins |
+| `/api/v2/...` returns 404 | The REST API is off by default. Ask the agent to turn on the `rest-api` module |
+| The console waits on a spinner after sign-in | Normal for 10 to 15 seconds after the redirect back from Cognito. Don't reload |
 
-The [agent instructions](/self-hosting/full/aws/install) end with the full troubleshooting table.
+For infrastructure errors, ask your agent: the agent instructions include the full troubleshooting table.
 
 ## Upgrading later
 
-The AWS Upgrade Guide is in progress. Contact Velt before you upgrade, and don't improvise one: upgrades run through the target release's own `portable-upgrade.sh`, after a database snapshot.
+The AWS upgrade guide is in progress. Contact Velt before you upgrade a deployment.

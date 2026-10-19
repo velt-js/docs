@@ -651,7 +651,7 @@ Configuration for text formatting toolbar options in comment composers.
 | ------------------- | --------------------------------------------- | -------- | --------------------------------------------------------------------------------- |
 | `commentAnnotation` | `{ [key: string]: PartialCommentAnnotation }` | Yes      | Map of comment annotation data to save                                            |
 | `metadata`          | `BaseMetadata`                                | No       | Additional metadata for the request. eg: apikey, organizationId, documentId, etc. |
-| `event`             | [`ResolverActions`](#resolveractions) \| [`CommentResolverSaveEvent`](#commentresolversaveevent) \| `string` | No       | The save event. One of the 4 core PII events (`ResolverActions`) or, when opted in via `additionalSaveEvents`, a non-core annotation-level event (`CommentResolverSaveEvent`). Also accepts raw strings for forward-compatibility. |
+| `event`             | [`ResolverActions`](#resolveractions) \| [`CommentResolverSaveEvent`](#commentresolversaveevent) \| `string` | No       | The save event. One of the 4 core PII events (`ResolverActions`) or, when opted in via `additionalSaveEvents`, a non-core annotation-level event (`CommentResolverSaveEvent`). `comment_annotation.suggestion_reject` is sent without opt-in. Also accepts raw strings for forward-compatibility. |
 | `commentId`         | `string`                                      | No       | ID of the comment to save                                                         |
 | `targetComment`     | [`PartialComment`](#partialcomment)           | No       | The comment the action occurred on, resolved by the frontend from `commentId` against the payload's `commentAnnotation[*].comments` map. A convenience alias for data already in the payload (no new data egress) and request context only — never persisted by `saveComments`. Omitted when `commentId` is absent or unmatched. |
 
@@ -2159,6 +2159,8 @@ Configuration for virtual scroll behavior in autocomplete dropdown.
 | `thumbnailWithPlayIconUrl` | `string` | No       | URL of the thumbnail with a play icon overlay        |
 | `metadata`                 | `any`    | No       | Additional metadata of the attachment                |
 | `mimeType`                 | `any`    | No       | MIME type of the attachment                          |
+| `clientOrganizationId`     | `string` | No       | Organization ID of the document that stores the file. Set only for self-hosted uploads |
+| `clientDocumentId`         | `string` | No       | Document ID that stores the file. Set only for self-hosted uploads |
 
 #### FileData
 
@@ -3691,6 +3693,22 @@ For location and user filters, provide at least one documented identity field in
 | `id`     | string | Yes      | Unique identifier for the custom category. |
 | `color`  | string | Yes      | Color associated with the custom category. |
 | `name`   | string | Yes      | Name or label of the custom category.      |
+
+### IdScopedAnchoringConfig
+
+---
+
+Passed to `enableIdScopedAnchoring()` and the `idScopedAnchoring` prop to limit id-scoped anchoring to specific documents.
+
+```typescript
+interface IdScopedAnchoringConfig {
+  documentIds?: string[];
+}
+```
+
+| Property      | Type       | Required | Description                                                                                                  |
+| ------------- | ---------- | -------- | ------------------------------------------------------------------------------------------------------------ |
+| `documentIds` | `string[]` | No       | Document ids (the ids you pass to `setDocuments`) to apply it to. Omit for every document. `[]` applies to none. |
 
 ### ConfirmDialogComponentConfig
 
@@ -5823,7 +5841,7 @@ The declaration keys below show how the former enum members map to the string va
 
 ---
 
-Non-core, annotation-level comment save events that customers can opt into receiving via [`ResolverConfig.additionalSaveEvents`](#resolverconfig), beyond the 4 core PII events. May appear as the `event` value on [`SaveCommentResolverRequest`](#savecommentresolverrequest).
+Non-core, annotation-level comment save events that customers can opt into receiving via [`ResolverConfig.additionalSaveEvents`](#resolverconfig), beyond the 4 core PII events. The exception is `comment_annotation.suggestion_reject`, which is sent without opt-in when the annotation has a `suggestion`. May appear as the `event` value on [`SaveCommentResolverRequest`](#savecommentresolverrequest).
 
 | Name                 | Value                                    | Description                                                       |
 | -------------------- | ---------------------------------------- | ---------------------------------------------------------------- |
@@ -5988,8 +6006,10 @@ Union type for all recorder resolver lifecycle event type strings.
 | `comments`          | `Record<string, PartialComment>` | No       | Map of comment IDs to partial comments data                                                                                                                                                       |
 | `from`              | `PartialUser`                    | No       | User who created the annotation. _Typed in `@veltdev/node` v1.0.2 (was previously pass-through)._                                                                                                 |
 | `assignedTo`        | `PartialUser`                    | No       | User the annotation is assigned to. _Typed in `@veltdev/node` v1.0.2._                                                                                                                            |
+| `context`           | `{ textEditorConfig?: { text?: string; [key: string]: any }; [key: string]: any }` | No | TipTap anchor text (`context.textEditorConfig.text`). Moved here from the annotation's `context` object and merged back on read. If `context` is listed in `fieldsToRemove`, the whole object is sent. Your `save` handler must store it and your `get` handler must return it. _Added in SDK v6.0.17._ |
 | `targetTextRange`   | `PartialTargetTextRange`         | No       | Text range the annotation is anchored to. _Typed in `@veltdev/node` v1.0.2._                                                                                                                      |
 | `resolvedByUserId`  | `string \| null`                 | No       | ID of the resolving user. Three-state semantics in `@veltdev/node` v1.0.2: omit = no change, `null` = unresolve, string = resolve. See [Node SDK Data Models](/backend-sdks/node#resolvedbyuserid-semantics). |
+| `suggestion`        | `Partial<SuggestionData>`        | No       | Present when the annotation carries a suggestion. Holds the content keys (`oldValue`, `newValue`, `summary`, `rejectReason`, `metadata`). See [Suggestion Content](/self-hosting/partial/comments#suggestion-content). |
 | `[key: string]`     | `unknown`                        | No       | Index signature; unknown keys are preserved by the `@veltdev/node` round-trip helpers.                                                                                                            |
 
 `@veltdev/node` v1.0.2 exposes `partialCommentAnnotationFromDict` and `partialCommentAnnotationToDict` round-trip helpers.
@@ -6090,7 +6110,7 @@ Config-based resolver endpoint configuration. SDK handles HTTP requests, headers
 | `deleteConfig`    | `ResolverEndpointConfig` | No       | Config-based endpoint for delete operations    |
 | `additionalFields` | `string[]`              | No       | Custom fields copied to resolver payloads but retained in Velt's storage |
 | `fieldsToRemove`  | `string[]`              | No       | Fields stripped from Velt's storage before writing to your resolver endpoint |
-| `additionalSaveEvents` | [`AdditionalSaveEventConfig[]`](#additionalsaveeventconfig) | No | Opt-in list of additional (non-core) annotation-level save events delivered to the existing save endpoint, beyond the 4 core PII events. Absent/empty ⇒ no extra events (default, backward-compatible). |
+| `additionalSaveEvents` | [`AdditionalSaveEventConfig[]`](#additionalsaveeventconfig) | No | Opt-in list of additional (non-core) annotation-level save events delivered to the existing save endpoint, beyond the 4 core PII events. Absent/empty ⇒ no extra events (default, backward-compatible), except `comment_annotation.suggestion_reject`, which is always sent when the annotation has a `suggestion`. |
 
 #### ResolverResponse
 
@@ -8561,7 +8581,7 @@ Stored on `CommentAnnotation.suggestion` when `annotation.type === 'suggestion'`
 | `oldValue`      | `unknown`                                   | Yes      | Target value captured at suggestion creation              |
 | `newValue`      | `unknown`                                   | Yes      | Proposed replacement value                                |
 | `summary`       | `string`                                    | No       | Human-readable description of the change                  |
-| `metadata`      | `Record<string, unknown>`                   | No       | Arbitrary caller-supplied metadata                        |
+| `metadata`      | `Record<string, unknown>`                   | No       | Customer metadata from `CommitSuggestionConfig.metadata`, stored as a JSON clone. With a comment data provider, only your resolver stores it. |
 | `driftDetected` | `boolean`                                   | No       | True when target value changed after suggestion was created |
 | `createdBy`     | `User`                                      | Yes      | User who created the suggestion                           |
 | `createdAt`     | `number`                                    | Yes      | Unix timestamp (ms) of creation                           |
@@ -8707,7 +8727,7 @@ Passed to [`commitSuggestion()`](/api-reference/sdk/api/api-methods#commitsugges
 | `newValue`    | `T`                       | Yes      | Proposed value to store in the suggestion      |
 | `summary`     | `string`                  | No       | Human-readable description of the change. Becomes the plain text of the suggestion's first comment. |
 | `summaryHtml` | `string`                  | No       | HTML body for the suggestion's first comment (for example, a color-coded diff). Sanitized with DOMPurify at render time: inline `style` is kept; scripts and event handlers are stripped. |
-| `metadata`    | `Record<string, unknown>` | No       | Arbitrary caller-supplied metadata             |
+| `metadata`    | `Record<string, unknown>` | No       | Plain JSON object stored on `suggestion.metadata` and returned as `Suggestion.metadata`. Not stored if it is not a plain object or cannot be serialized as JSON. |
 
 ### Handler Types
 

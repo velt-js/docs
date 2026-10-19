@@ -17,19 +17,18 @@ Your AI coding agent runs the install. This page holds the instructions it follo
 ## Agent instructions
 
 ````markdown Agent instructions (Azure) expandable
-# Velt Tier B (Portable) — Install Guide (Azure)
+# Velt Full Self-Hosting — Install Guide (Azure)
 
-> **Doc set.** After install, acceptance evidence: [Validation runbook](./self-hosting-tier-b-validation-runbook.md);
-> upgrades: [Upgrade Guide](./self-hosting-tier-b-upgrade-guide.md); the REST API this deployment can serve
-> (off by default — Phase 4.1 turns it on): [REST API](./self-hosting-tier-b-rest-api.md).
-> On AWS, use the [Install Guide (AWS)](./self-hosting-tier-b-aws-install-guide.md) instead.
+> **Doc set.** On AWS, use the [Install Guide (AWS)](https://docs.velt.dev/self-hosting/full/aws/install) instead.
+> After install: the Validation runbook (acceptance evidence) and the Upgrade Guide; the REST API this deployment
+> can serve is off by default (Phase 4.1 turns it on). Ask Velt for these runbooks.
 > This file is the **executable install procedure** — paste it to an agent, or follow the commands yourself.
 
 **Audience:** an AI coding agent with shell access, working for a Velt customer. A human
 operator pastes this document (or its URL) to you as instructions. A human can also
 follow it manually — every step is a plain command.
 
-**Outcome:** the Velt Tier B (portable) backend running entirely inside the customer's own
+**Outcome:** the Velt portable backend running entirely inside the customer's own
 Azure subscription:
 
 1. **Substrate** — an AKS cluster, Azure Database for PostgreSQL Flexible Server (private,
@@ -59,7 +58,7 @@ marked **Azure Government**.
 
 - **Execute phases in order.** Each phase ends with a **Verify** block carrying a
   *do not continue until* condition; do not proceed until it passes.
-- **Maintain the state file** (`velt-selfhost-tierb-state.json`, contract below) after
+- **Maintain the state file** (`velt-selfhost-azure-state.json`, contract below) after
   every step. If your session is interrupted, a fresh session resumes by reading this
   guide plus the state file — never by memory.
 - **Never run against any subscription other than `$SUBSCRIPTION_ID`.** Every resource
@@ -110,7 +109,7 @@ marked **Azure Government**.
   workspace auth token go into the operator's secret store; the state file and your report
   carry **paths and names**, never values.
 
-### State file contract — `velt-selfhost-tierb-state.json`
+### State file contract — `velt-selfhost-azure-state.json`
 
 Keep it in the working directory (or the operator's config repo). It is the single source
 of truth for resume and for cross-phase handoffs. Shape:
@@ -118,7 +117,6 @@ of truth for resume and for cross-phase handoffs. Shape:
 ```jsonc
 {
   "guideVersion": 4,
-  "tier": "B",
   "release": { /* the full manifest fetched in Phase 0.1, including its tierB block.
                   manifestVerified: true when the manifest's cosign signature verified AND
                   the tierB block was present; false when the version had to come from
@@ -249,7 +247,7 @@ on later".
 
 Expected total wall clock: **60–90 min** plus the human moments. Expected running cost of the
 deployed stack is in **After the install** at the end — tell the operator up front that a
-persistent Tier B deployment is a small always-on cluster plus a managed Postgres server,
+persistent deployment is a small always-on cluster plus a managed Postgres server,
 and how to idle it.
 
 ### Tooling preflight (hard requirements — the preflight script checks the versioned ones)
@@ -286,7 +284,7 @@ REG=us-docker.pkg.dev/velt-sdk/velt-releases
 IDENTITY='^https://github\.com/snippyly/shared-firebase-function/\.github/workflows/container-release\.yml@refs/heads/main$'
 ISSUER='https://token.actions.githubusercontent.com'
 
-PORTABLE_V=0.1.13     # the Tier B release: images, chart, Terraform module, tools bundle
+PORTABLE_V=0.1.13     # the portable release: images, chart, Terraform module, tools bundle
 CONSOLE_V=0.1.19      # the console bundle — its own cadence, its own tag
 SDK_V=6.0.24          # the SDK bundle — its own cadence; ALSO part of the served path
 ```
@@ -316,8 +314,8 @@ tells you.
 
 ### 0.1 Resolve and VERIFY the release manifest
 
-The umbrella manifest is the trust root. Its `tierB` block pins the Tier B release — every
-Tier B artifact's reference and digest.
+The umbrella manifest is the trust root. Its `tierB` block pins the portable release — every
+artifact's reference and digest.
 
 ```bash
 # MANDATORY — resolve the tag ONCE to its digest, verify that digest, then pull that digest.
@@ -330,7 +328,7 @@ cosign verify \
   --certificate-oidc-issuer "$ISSUER" "$REG/velt-selfhost-manifest@$MANIFEST_DIGEST" \
   && oras pull -o . "$REG/velt-selfhost-manifest@$MANIFEST_DIGEST"    # writes manifest.json
 
-# Read the Tier B pins.
+# Read the portable release pins.
 python3 -c "import json;m=json.load(open('manifest.json'));print(json.dumps(m.get('tierB','<<ABSENT>>'),indent=2))"
 ```
 
@@ -348,18 +346,18 @@ and, when present, `CONSOLE_V` / `SDK_V` from the `consoleStatic` / `sdkStatic` 
 pinned references verbatim.
 
 **A `tierB` block with no `tools` entry predates `0.1.13`** — the manifest is republished only
-when Velt publishes a new umbrella, so it can lag the newest Tier B release. Treat it exactly
+when Velt publishes a new umbrella, so it can lag the newest portable release. Treat it exactly
 like an absent block: take the version from the chart's tag list below, record
 `release.manifestVerified: false`, and tell the operator the manifest is behind (Velt republishes
 it; the install does not wait for that). Do not install a version whose tools bundle does not
 exist, and do not mix the manifest's older image pins with a newer chart.
 
-**`tierB` is an optional block and may be absent** (a release that carries only Tier A).
-Do not assume either way — read it. When it is absent, or present without `tools`, the Tier B
+**`tierB` is an optional block and may be absent** (a release without the portable deployment).
+Do not assume either way — read it. When it is absent, or present without `tools`, the portable
 version comes from the chart's own tag list in the release registry:
 
 ```bash
-oras repo tags "$REG/velt-portable" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1   # the newest Tier B release (signature tags sort last — filter them out)
+oras repo tags "$REG/velt-portable" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1   # the newest portable release (signature tags sort last — filter them out)
 ```
 
 Set `PORTABLE_V` to that value and record `release.manifestVerified: false` in the state
@@ -487,7 +485,7 @@ az ad group list --query "[].{name:displayName,id:id}" -o table      # any exist
 # None suitable: create one and add the operator (needs the Groups Administrator or Global
 # Administrator role, or the tenant setting that lets users create security groups):
 AKS_ADMIN_GROUP_OBJECT_ID=$(az ad group create --display-name "velt-aks-admins" \
-  --mail-nickname "velt-aks-admins" --description "Administers the Velt Tier B AKS cluster" \
+  --mail-nickname "velt-aks-admins" --description "Administers the Velt AKS cluster" \
   --query id -o tsv)
 az ad group member add --group "$AKS_ADMIN_GROUP_OBJECT_ID" \
   --member-id "$(az ad signed-in-user show --query id -o tsv)"
@@ -1230,12 +1228,12 @@ console:
 
 # WHICH MODULES this deployment serves — the one list the console, the SDK and the gateway all
 # read (chart 0.1.15 or newer; on 0.1.13 / 0.1.14 set `restApi.enabled: true` instead). `core` is the SDK
-# data plane and is always on. Add `rest-api` for the customer REST API
-# (self-hosting-tier-b-rest-api.md): a token-authenticated surface on the public ingress
+# data plane and is always on. Add `rest-api` for the customer REST API:
+# a token-authenticated surface on the public ingress
 # (`/api/v2/...`) that a deployment whose integrations all go through the SDK never needs; its
 # credential is the API key's auth token you seed in Phase 4.5. Without `rest-api`, `/api/v2/...`
 # answers a bare 404 and the console hides the REST features. No other module id is served on
-# Tier B — listing one only makes the console show features that answer `unimplemented`.
+# this deployment — listing one only makes the console show features that answer `unimplemented`.
 enabledModules:
   - core
   # - rest-api
@@ -1872,7 +1870,7 @@ security team and Velt support will each need.
 11. **Operations:** the node pool's floor and ceiling (`aks_node_count`, `aks_node_max_count`);
     the action group the alerts notify and who is on it; the backup window
     (`postgres_backup_retention_days`) and the date of the last restore rehearsal
-    ([Backup and Restore](./self-hosting-tier-b-backup-restore.md)).
+    (Backup and Restore).
 
 ---
 
@@ -1880,7 +1878,7 @@ security team and Velt support will each need.
 
 ### What this costs to run, and how to idle it
 
-A persistent Tier B deployment is a small always-on cluster plus a managed database: three
+A persistent deployment is a small always-on cluster plus a managed database: three
 general-purpose AKS nodes, a General Purpose PostgreSQL Flexible Server, an Application
 Gateway, Key Vault, a storage account and a Basic container registry. Read the exact figures
 for the chosen SKUs and region from the Azure pricing calculator; the nodes and the
@@ -1957,7 +1955,7 @@ kubectl -n velt exec statefulset/velt-redis -- df -h /data       # the cache's v
 
 PostgreSQL keeps automated backups for `postgres_backup_retention_days` when you set it (7 to 35
 days); unset, the module leaves the server's own window alone (7 days on a new server, or what
-you set in the portal), and restores to any second in that window. The [Backup and Restore](./self-hosting-tier-b-backup-restore.md)
+you set in the portal), and restores to any second in that window. The Backup and Restore
 runbook has what each backup covers, the restore procedures, and the rehearsal to run before
 going live.
 
@@ -1977,7 +1975,7 @@ before the apply; use a different name, or recover and adopt the old vault (Trou
 ### Upgrades
 
 **Do not improvise an upgrade.** Upgrades have their own document and their own script —
-[Upgrade Guide](./self-hosting-tier-b-upgrade-guide.md), executed by the release's
+Upgrade Guide, executed by the release's
 `./velt-portable-tools/portable-upgrade.sh`:
 
 ```bash
@@ -2004,11 +2002,11 @@ helm upgrade velt "oci://$REG/velt-portable@$CHART_DIGEST" -n velt -f values-<en
 
 | Feature | Values to set | Outside piece, first | Check |
 |---|---|---|---|
-| **REST API** | add `rest-api` to `enabledModules` (Phase 4.1) | an auth token on the API key: seeded in Phase 4.5 with `--auth-token`, or created in the console under the key's App Configuration | `curl -sS https://<public-host>/api/v2/organizations/get -H 'content-type: application/json' -H "x-velt-api-key: <api-key>" -H "x-velt-auth-token: <token>" -d '{"data":{"organizationIds":["<org-id>"]}}'` → 200 ([REST API](./self-hosting-tier-b-rest-api.md)) |
+| **REST API** | add `rest-api` to `enabledModules` (Phase 4.1) | an auth token on the API key: seeded in Phase 4.5 with `--auth-token`, or created in the console under the key's App Configuration | `curl -sS https://<public-host>/api/v2/organizations/get -H 'content-type: application/json' -H "x-velt-api-key: <api-key>" -H "x-velt-auth-token: <token>" -d '{"data":{"organizationIds":["<org-id>"]}}'` → 200 (REST API) |
 | **Comment attachments** | the `storage:` block from Phase 4.1, from the Terraform outputs | `attachment_cors_origins` in the tfvars (Phase 1.2) and `terraform apply` — the storage account, container and identity roles already exist from the install; a 0.1.13 module takes the manual `az storage cors add` in Phase 1.2 instead | the five steps of Phase 6.3 through the public host; the gateway's startup log reads `storage: enabled` |
 | **Advanced webhooks — direct** | `webhookV2Delivery: direct` | nothing (the workers sign and POST from inside the cluster; private receiver addresses are allowed) | in the console, enable advanced webhooks on the API key and add an endpoint; the receiver gets a signed test event |
 | **Advanced webhooks — Svix** | `webhookV2Delivery: ""` and `secrets.svixSecretName: velt-svix` | `kubectl -n velt create secret generic velt-svix --from-literal=VELT_SVIX_API_KEY=<the customer's Svix token>`; outbound HTTPS to `api.svix.com`, and the receiver reachable from Svix | the same console steps; the endpoint appears in the Svix application |
-| **Console SAML sign-in + SCIM** | `consoleAuth.saml.enabled: true` plus the IdP fields (or `idpMetadataUrl`) — the `consoleAuth:` block in the [SAML runbook](./self-hosting-tier-b-saml-scim.md) | a SAML app in the identity provider pointing at `https://<public-host>/api/console/saml/acs`, audience `https://<public-host>/api/console/saml/metadata`; a Secret for the IdP certificate(s) | a real sign-in through the IdP lands on the console dashboard; with SCIM on, a user deactivated in the IdP is gone from the console roster |
+| **Console SAML sign-in + SCIM** | `consoleAuth.saml.enabled: true` plus the IdP fields (or `idpMetadataUrl`) — the `consoleAuth:` block in the SAML runbook | a SAML app in the identity provider pointing at `https://<public-host>/api/console/saml/acs`, audience `https://<public-host>/api/console/saml/metadata`; a Secret for the IdP certificate(s) | a real sign-in through the IdP lands on the console dashboard; with SCIM on, a user deactivated in the IdP is gone from the console roster |
 | **Self-hosted SDK bundle** | `sdk.enabled: true`, `sdk.version` / `sdk.tag` (Phase 4.1) | `az acr import` of `velt-sdk-static:<version>` (Phase 2.1); the app pins `version` and `proxyConfig.cdnHost` (Phase 7.1) | `curl -sI https://<public-host>/lib/sdk@<version>/velt.js` and `…/velt-portable.js` → 200 |
 | **Webhook payload encryption** | `secrets.webhookEncryptionSecretName: velt-webhook-key` | `kubectl -n velt create secret generic velt-webhook-key --from-literal=VELT_WEBHOOK_ENCRYPTION_KEY="$(openssl rand -base64 32)"` | enable `encryptData` on a webhook in the console; the next event arrives encrypted. Without the secret, a webhook with `encryptData` on fails loudly rather than sending plaintext |
 | **Deployment-wide token minting** | `secrets.masterAuthTokenSecretName: velt-master-auth` | `kubectl -n velt create secret generic velt-master-auth --from-literal=VELT_MASTER_AUTH_TOKEN="$(openssl rand -hex 32)"`; keep the value in the secret store | `POST https://<public-host>/api/auth/token` with that token mints for any API key on the deployment. Leave this off unless internal services mint across several API keys — off is the safe choice, and a revoked API key stays revoked either way |
@@ -2034,7 +2032,7 @@ Kubernetes Secret.
 
 ### Acceptance evidence
 
-The [Validation runbook](./self-hosting-tier-b-validation-runbook.md) is the checklist that
+The Validation runbook is the checklist that
 says "correctly installed" with evidence — provenance, FIPS posture, network policy, the
 schema head, the REST door. Run it once after this guide; attach it to the report.
 

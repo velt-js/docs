@@ -1,0 +1,201 @@
+---
+title: "Get Started on Azure (Closed Beta)"
+sidebarTitle: "Get Started"
+description: "Deploy Velt full self-hosting into your own Azure subscription. Hand the install guide to an AI coding agent, answer the inputs up front, and complete the human steps."
+---
+
+You don't run this deployment by hand. An AI coding agent follows the [Install guide](/self-hosting/full/azure/install) and stops to ask you whenever a step needs a person.
+
+Budget 60 to 90 minutes of wall clock time, plus the human steps. Most of that is waiting on the AKS and PostgreSQL apply, pod startup, and the first Application Gateway sync.
+
+<Note>
+  Full self-hosting on Azure is in **closed beta**. Contact us before your first install. New to full self-hosting? Read the [Overview](/self-hosting/full/overview) first.
+</Note>
+
+## What runs in your subscription
+
+Azure runs Velt's portable stack: Kubernetes and PostgreSQL instead of Cloud Run and Firebase. Everything is served from one public host, and nothing calls a Velt-owned host at runtime.
+
+| Piece | What you run |
+| --- | --- |
+| **Substrate** | An AKS cluster, Azure Database for PostgreSQL Flexible Server (private, customer-managed key), Key Vault, a Blob storage account, managed identities, and an Application Gateway ingress. Created by Velt's signed Terraform module. |
+| **Application** | Velt's signed gateway, workers, and migrate images plus an in-cluster Valkey cache, installed from Velt's signed Helm chart and pulled only from your own Azure Container Registry. |
+| **Console** | The Velt admin console on the same host, signing in through Entra ID or any OIDC provider. |
+| **SDK** | The Velt client SDK bundle served from the same host, so your pages download nothing from Velt. |
+| **First workspace** | An API key, an organization, and an admin user seeded into the deployment's own database. |
+
+Azure commercial (`AzureCloud`) and Azure Government (`AzureUSGovernment`) use the same commands. The install guide calls out the few values that differ.
+
+<Steps titleSize="h2">
+
+<Step title="Check the prerequisites">
+
+- An Azure subscription where the deploying identity holds **Owner**, or **Contributor + User Access Administrator**. Contributor alone can't create the Key Vault grant the module needs.
+- An Entra tenant where you (or an admin) can create a single-page app registration for console sign-in and a security group for cluster admins.
+- vCPU quota in your region. The default footprint (3 × `Standard_D4ds_v5`) needs at least 16 regional and family vCPUs. The small footprint (3 × `Standard_D2ds_v4`) fits a 10-vCPU subscription.
+- A region where PostgreSQL Flexible Server is offered to your subscription. The agent checks this before the apply.
+- Someone available to run an AI coding agent for the duration.
+
+**Tools on the machine that runs the agent:** Azure CLI 2.60+, Terraform 1.6+, Helm 3.17+ (or 4.x), `kubectl`, Azure's `kubelogin`, `cosign`, `oras`, Node 18+, Docker, `curl`, `python3`, `openssl`, `jq`, and `dig`. The agent runs the release's preflight check before it starts and stops at the first problem: tools, permissions, region, quota, or name availability.
+
+<Warning>
+  Install Azure's `kubelogin` with `brew install Azure/kubelogin/kubelogin`. `brew install kubelogin` installs an unrelated tool with the same name that the install can't use.
+</Warning>
+
+</Step>
+
+<Step title="Decide your inputs">
+
+Decide these once, up front. The agent asks for all of them before it starts.
+
+| Input | Meaning |
+| --- | --- |
+| `SUBSCRIPTION_ID` / `TENANT_ID` / `CLOUD` | Where to deploy: `AzureCloud` or `AzureUSGovernment` |
+| `LOCATION` | Azure region for both AKS and PostgreSQL |
+| `RESOURCE_GROUP` / `DEPLOYMENT_NAME` | Resource group, and a 3 to 16 character slug that prefixes every resource |
+| `PUBLIC_HOST` | The one public hostname for the API, WebSocket, console, and SDK |
+| `CONSOLE_AUTH_ISSUER` / `CONSOLE_AUTH_CLIENT_ID` | The console's OIDC provider (Entra ID or any OIDC provider) |
+| `ACR_NAME` | The container registry that holds the verified Velt images |
+| AKS admin group + operator egress CIDR | Who administers the cluster, and from which network |
+| API key, organization ID, admin user ID hash, console admin email | The first workspace |
+| Allowed domains + app origins | Where your app runs (identify and CORS) |
+| TLS path | Your own certificate (default), a Key Vault certificate, or cert-manager with ACME |
+
+<Warning>
+  A torn-down deployment's Key Vault reserves `DEPLOYMENT_NAME` for 90 days. Add a suffix (`acmevelt01`) rather than reusing a name.
+</Warning>
+
+Optional features (REST API, comment attachments, advanced webhooks, console SAML sign-in and SCIM, FIPS mode, metric alerts) are off by default. You can turn each on later with a `helm upgrade`. The [agent instructions](/self-hosting/full/azure/install) list every input in full.
+
+</Step>
+
+<Step title="Start your agent">
+
+Copy the agent instructions from the [Install guide](/self-hosting/full/azure/install) and paste them into your AI coding agent. Then start it with a prompt like this, filled in with your inputs:
+
+```text
+You are deploying Velt full self-hosting into our own Azure subscription.
+
+Follow the Velt Install Guide (Azure) I gave you, phase by phase. Do not
+invent your own procedure.
+
+Inputs:
+  SUBSCRIPTION_ID     = <subscription-id>
+  TENANT_ID           = <tenant-id>
+  CLOUD               = AzureCloud
+  LOCATION            = <region>
+  RESOURCE_GROUP      = velt-portable
+  DEPLOYMENT_NAME     = <deployment-name>
+  PUBLIC_HOST         = <velt.example.com>
+  ACR_NAME            = <acr-name>
+  CONSOLE_ADMIN_EMAIL = <admin@example.com>
+  ALLOWED_DOMAINS     = <example.com,app.example.com>
+  APP_ORIGIN          = <https://app.example.com>
+
+Maintain velt-selfhost-azure-state.json after every step so this run can be
+resumed in a fresh session. Stop and ask me whenever a step needs a human.
+```
+
+The agent ends with a final report: your endpoints, your app's config, and where every secret is stored. Keep `velt-selfhost-azure-state.json` in your working directory; it lets a new session resume an interrupted install.
+
+</Step>
+
+<Step title="Stay available for the human steps">
+
+The agent pauses and asks at each of these moments, handing you the exact command or portal URL.
+
+| Moment | What you do |
+| --- | --- |
+| Sign-in | Run `az login` (or follow the device-code URL) |
+| Permissions | Confirm **Owner**, or **Contributor + User Access Administrator**, on the subscription |
+| Region | Confirm the region the agent proposes from its checks |
+| Quota | Request a vCPU quota increase if your limits are below the footprint, or choose the small footprint |
+| Console app registration | Create the Entra single-page app, only if the agent's identity can't |
+| Cluster admin group | Approve or supply the Entra security group for cluster admins, only if the agent can't create it |
+| Image scan | Sign off the vulnerability scan, if your policy requires one |
+| DNS | Add the A record for `PUBLIC_HOST`, unless you use the free Azure DNS label |
+| Certificate | Supply the TLS certificate, or approve the Key Vault or cert-manager path |
+| Acceptance | Sign in to the console and run the SDK loop in your app |
+
+<Tip>
+  A vCPU family at a quota of 0 usually needs a portal request or a support ticket, which can take days. Check your quota on day 1.
+</Tip>
+
+</Step>
+
+<Step title="Wire your app">
+
+Set both axes in your app's Velt config: where the SDK bundle downloads **from** (`version` and `proxyConfig.cdnHost`), and where the SDK **talks to** (`selfHosted`).
+
+<Tabs>
+  <Tab title="React / Next.js">
+  ```jsx
+  <VeltProvider
+    apiKey="<api-key>"
+    config={{
+      version: '<sdk-version>',                            // must equal sdk.version in your Helm values
+      proxyConfig: { cdnHost: 'https://<public-host>' },   // serves /lib/sdk@<version>/
+      selfHosted: {
+        enablePortableBackend: true,
+        portableBackendUrl: 'https://<public-host>/api',   // the /api base
+        strict: true,                                      // never fall back to Velt hosts
+      },
+    }}
+  >
+    <App />
+  </VeltProvider>
+  ```
+  </Tab>
+  <Tab title="Other Frameworks">
+  ```js
+  const client = await initVelt('<api-key>', {
+    version: '<sdk-version>',                            // must equal sdk.version in your Helm values
+    proxyConfig: { cdnHost: 'https://<public-host>' },   // serves /lib/sdk@<version>/
+    selfHosted: {
+      enablePortableBackend: true,
+      portableBackendUrl: 'https://<public-host>/api',   // the /api base
+      strict: true,                                      // never fall back to Velt hosts
+    },
+  });
+  ```
+  </Tab>
+</Tabs>
+
+**Rules that break production if violated:**
+
+1. Set both axes. `strict: true` silences runtime calls, but only `proxyConfig.cdnHost` and `version` stop the bundle from loading from `cdn.velt.dev`.
+2. Pin `version` to the chart's `sdk.version`. It defaults to the wrapper's built-in version, and a mismatch 404s.
+3. Never set `staging: true` or `develop: true` on a self-hosted page. Both point at a Velt host.
+4. `portableBackendUrl` ends in `/api`. Root paths such as `/identify` are not routed.
+
+</Step>
+
+<Step title="Confirm it is done">
+
+The deployment is complete only when all four pass:
+
+1. Console sign-in as the seeded admin email lands on the dashboard.
+2. The app loads `velt.js` and its chunks from **your** host, and `window.Velt.version` matches the pin.
+3. A comment created in the app is visible in the console.
+4. A Network audit on both the app and console sessions shows **no** requests to `velt.dev` or other Velt-owned hosts.
+
+With comment attachments on, a fifth check confirms uploads and downloads go to your own storage account.
+
+</Step>
+
+</Steps>
+
+## Troubleshooting your app
+
+| Symptom | Likely cause |
+| --- | --- |
+| The network log shows `cdn.velt.dev` | `proxyConfig.cdnHost` or `version` is missing, or `staging` or `develop` is set |
+| The browser shows a CORS error on `/api/...` | Your app's exact origin isn't in the deployment's allowed origins. Ask the agent to add it |
+| Identify fails with "no allowed domain" | The workspace has no allowed domains. Add them in the console |
+| `/api/v2/...` returns 404 | The REST API is off by default. Ask the agent to turn on the `rest-api` module |
+
+For infrastructure errors, ask your agent: the agent instructions include the full troubleshooting table.
+
+## Upgrading later
+
+The Azure upgrade guide is in progress. Contact Velt before you upgrade a deployment.

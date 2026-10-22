@@ -1,5 +1,7 @@
 # Skills-Sync Pipeline — End-to-End Summary
 
+> **Retired:** the `docs-sync-skills` GitHub Actions workflow described here has been removed. Skills are now synced by a Claude Code routine that runs when a PR merges into `main`. The routine still uses `scripts/skills-sync/reference-artifacts/mapping.md` and `format-guide.md` as its routing and format spec, so keep those current. The rest of this document is kept for history.
+
 A multi-agent CI pipeline that watches `velt-js/docs`, detects when a merge to `main` should change rules in `velt-js/agent-skills`, edits the right files, validates the build, and opens (or updates) a single review-ready PR — automatically. Plus auto-propagation downstream into `velt-plugin-cursor` and `velt-plugin-claude`.
 
 ---
@@ -12,7 +14,7 @@ Every push to `velt-js/docs/main` touching one of the watched paths runs `.githu
 
 ```
 async-collaboration/**       realtime-collaboration/**
-api-reference/rest-apis/**   self-host-data/**
+api-reference/rest-apis/**   self-hosting/partial/**
 security/**                  webhooks/**
 get-started/**               backend-sdks/**
 ui-customization/**          permission-management/**

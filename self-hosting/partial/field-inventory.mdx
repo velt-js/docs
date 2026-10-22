@@ -3,7 +3,7 @@ title: "Complete Field Inventory"
 description: "An exhaustive, ground-truthed inventory of every persisted self-hosting field — Velt's DB vs. your DB — with type, example value, description, and notes for comments, reactions, recordings, notifications, activity, and attachments."
 ---
 
-> **Companion to the [Self-Hosting Overview](/self-host-data/overview).** That guide's field-inventory
+> **Companion to the [Self-Hosting Overview](/self-hosting/partial/overview).** That guide's field-inventory
 > section lists the field *names* split between Velt's DB and your DB. This page adds **Type**,
 > **Example value**, **Description**, and **Notes** for every field, covers **both sides** of the
 > split, and **expands every nested structural object** into its own sub-table. Ground-truthed against
@@ -123,7 +123,7 @@ Model: `CommentAnnotation`. PII payload: `PartialCommentAnnotation`.
 | `views` | `CommentAnnotationViews` | `{ views: { 'u_1': { timestamp: 1717800000 } } }` | View tracking. | kept — see [CommentAnnotationViews](#commentannotationviews) |
 | `viewedByUserIds` | `string[]` | `["u_1","u_2"]` | Viewer userIds. | already userIds |
 | `involvedUserIds` | `string[]` | `["u_1","u_2"]` | All userIds participating in the thread (authors, assignees, @mentions). | already userIds; auto-maintained |
-| `suggestion` | `SuggestionData` | `{ status: 'pending', resolvedBy: { userId: 'u_1' } }` | SDK-managed suggestion data (iff `type === 'suggestion'`). | kept; nested `resolvedBy` reduced when `user` provider active |
+| `suggestion` | `SuggestionData` | `{ status: 'pending', resolvedBy: { userId: 'u_1' } }` | SDK-managed suggestion data (iff `type === 'suggestion'`). | Structural keys only (`status`, `targetId`, `targetType`, `driftDetected`, `resolvedBy`, `resolvedAt`) are kept; nested `resolvedBy` reduced when `user` provider active. Content keys go to your DB when a `comment` provider is set. See [Suggestion Content](/self-hosting/partial/comments#suggestion-content) |
 | `agent` | `AgentData` `{ agentName?; name?; avatar?; result?: { title? }; agentFields?[] }` | `{ agentName: 'Reviewer Bot', result: { title: 'Fix typo' }, agentFields: ['result'] }` | AI-agent identity + output. | read-only from SDK; kept; `agent.agentFields` is **mandatory** for querying and is always retained (not subject to `fieldsToRemove`) |
 
 ### 1.B — Stored in your DB (`PartialCommentAnnotation`)
@@ -144,6 +144,7 @@ Model: `CommentAnnotation`. PII payload: `PartialCommentAnnotation`.
 | `assignedTo` | `PartialUser` `{ userId }` | `{ userId: 'u_2' }` | Assignee. | only if truthy; **copied-not-moved** |
 | `targetTextRange` | `{ text: string }` | `{ text: 'the selected sentence' }` | Selected text content (PII). | the `.text` is **never sent to Velt** (stripped → your DB); rest of `targetTextRange` is sent |
 | `resolvedByUserId` | `string \| null` | `"u_1"` | Who resolved it. | only if truthy; **copied-not-moved** |
+| `suggestion` | `Partial<SuggestionData>` | `{ oldValue: 'Acme Inc', newValue: 'Acme', summary: 'Rename', rejectReason: null, metadata: { ticket: 'PROJ-7' } }` | Suggestion content (iff `type === 'suggestion'`). | content keys only (`oldValue`, `newValue`, `summary`, `rejectReason`, `metadata`); **never sent to Velt** once your provider holds them |
 | `[fieldsToRemove]` | `any` | `{ internalTicketId: 'JIRA-42' }` | Your custom fields kept off Velt entirely. | per `config.fieldsToRemove`; truthy-gated; **never sent to Velt** (→ your DB) |
 | `[additionalFields]` | `any` | `{ teamName: 'Growth' }` | Your custom fields replicated. | per `config.additionalFields`; deep-copied; sent to **both** (falsy preserved) |
 
@@ -151,12 +152,13 @@ Model: `CommentAnnotation`. PII payload: `PartialCommentAnnotation`.
 
 - The only PII stripped on the frontend (and therefore **never sent to Velt**) is: per-comment
   `commentText`/`commentHtml`, attachment `name`/`url` (when the `attachment` resolver is active),
-  `targetTextRange.text`, and any `fieldsToRemove`. Each comment whose PII is withheld gets
+  `targetTextRange.text`, suggestion content keys, and any `fieldsToRemove`. Each comment whose PII is withheld gets
   `isCommentResolverUsed = true`; attachments get `isAttachmentResolverUsed = true`.
 - `from` / `assignedTo` / `resolvedByUserId` are **copied-not-moved** (sent to both).
 - A `save` to your provider only fires when the comment PII actually changed **and** the action maps
   to a `ResolverActions` value (`COMMENT_ANNOTATION_ADD` / `COMMENT_ADD` / `COMMENT_UPDATE` /
   `COMMENT_DELETE`, or a draft). Pure status / priority / assignment changes do **not** call `save`.
+  Exception: `comment_annotation.suggestion_reject` always calls `save` when the annotation has a `suggestion`.
 - Truthy-gating: empty-string `commentText` etc. are **not** sent to your provider (and are not
   withheld from Velt either). `additionalFields` is the exception — it uses `!== undefined`, so
   `0` / `""` / `false` are copied.

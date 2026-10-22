@@ -1,0 +1,185 @@
+---
+title: "Estimate Fix It Everywhere"
+api: "POST https://api.velt.dev/v2/agents/fix-it-everywhere/estimate"
+---
+
+Use this API to estimate how many pages a `fix-it-everywhere` run would touch before you start it, for a step such as "Found on about 12 pages. Apply everywhere?". The `fix-it-everywhere` agent takes one text edit, the text to find and optionally its replacement, and pins the same edit on every other copy of that text across a site.
+
+The body describes the run the way [Run Execution](/api-reference/rest-apis/v2/agents/execution/run) does: its site `url`, its optional page list `urls`, and its `userContext`. The estimate reads the first few pages of the list and counts the copies of the search text. Nothing runs, nothing is pinned, and nothing is billed.
+
+Available on V2 only.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/fix-it-everywhere/estimate`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="url" type="string" required>
+      Valid URL. The site the run reviews. Relative `urls` entries resolve against it.
+    </ParamField>
+
+    <ParamField body="urls" type="string[]">
+      The run's page list: max 500 entries, each an absolute `http(s)` URL or a site-relative path. Normalized and checked against the site exactly as a [Run Execution](/api-reference/rest-apis/v2/agents/execution/run) page list is, with `userContext.sourcePageUrl` placed first.
+
+      Without `urls`, the site's sitemap is read, with `sourcePageUrl` first. Without a sitemap, only `sourcePageUrl` and `url` are read, and the estimate is not extended to the rest of the site.
+    </ParamField>
+
+    <ParamField body="userContext" type="object" required>
+      The `userContext` of the run. It is checked with the run's own rule, so a search the run would refuse is refused here with the same message. The estimate uses these keys:
+
+      | Key             | Type    | Required | Description |
+      | --------------- | ------- | -------- | ----------- |
+      | `findText`      | string  | yes      | The text to look for. 2 to 200 characters, and not only stop words. In `comment` mode it also needs at least 2 words or 8 characters, and cannot be a phrase nearly every page carries, such as "Learn more". |
+      | `replaceWith`   | string  | no       | The new text, up to 500 characters. Copies that already read it are not counted. |
+      | `editMode`      | string  | no       | `"replace"`, `"delete"`, or `"comment"`. Default: `"replace"` when there is a `replaceWith`, `"comment"` otherwise. |
+      | `matchCase`     | boolean | no       | Match the case of `findText` exactly. Default: `true`. |
+      | `sourcePageUrl` | string  | no       | The page the edit came from. It is read first. |
+      | `sourceText`    | string  | no       | The text the reviewer selected on `sourcePageUrl`. When set, one copy on that page is the reviewer's own and is not counted. |
+
+      Any other key the run reads is checked the same way, so a value of the wrong type returns `INVALID_ARGUMENT`.
+    </ParamField>
+
+    <ParamField body="maxPages" type="number">
+      Pages to read. Whole number, 1 to 20. Default: `8`.
+    </ParamField>
+
+    <ParamField body="organizationId" type="string">
+      Accepted and not used.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+The schema uses `.strict()`: unknown fields are rejected, so do not send the rest of a Run Execution body, such as `agentId` or `documentId`.
+
+Pages are read as plain HTML through the same guard that keeps agents on public addresses, a few at a time, within about 6 seconds, plus up to 6 seconds to read the sitemap when there is no `urls` list. A page that does not answer in time, or answers with something other than HTML, is left out.
+
+## **Example Requests**
+
+#### 1. Estimate over a page list
+
+```JSON
+{
+  "data": {
+    "url": "https://www.example.com",
+    "urls": ["/", "/services", "/about", "/team", "/contact", "/faq"],
+    "userContext": {
+      "findText": "BOTOX",
+      "replaceWith": "Botox",
+      "sourcePageUrl": "https://www.example.com/services",
+      "sourceText": "BOTOX"
+    }
+  }
+}
+```
+
+#### 2. Estimate from the site's sitemap
+
+```JSON
+{
+  "data": {
+    "url": "https://www.example.com",
+    "userContext": {
+      "findText": "Call us today for a free consultation",
+      "sourcePageUrl": "https://www.example.com/pricing"
+    },
+    "maxPages": 12
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Fix It Everywhere estimate computed successfully",
+    "data": {
+      "estimate": {
+        "pagesSampled": 8,
+        "pagesWithMatches": 3,
+        "matches": 5,
+        "estimatedPagesWithMatches": 13
+      },
+      "pages": {
+        "count": 42,
+        "source": "sitemap",
+        "truncated": false
+      }
+    }
+  }
+}
+```
+
+| Field                                     | Type              | Description |
+| ----------------------------------------- | ----------------- | ----------- |
+| `data.estimate`                           | object \| null    | The estimate. `null` when no page could be read. |
+| `data.estimate.pagesSampled`              | number            | Pages read. |
+| `data.estimate.pagesWithMatches`          | number            | Pages read that have at least one copy the run would change. |
+| `data.estimate.matches`                   | number            | Copies on the pages read, the reviewer's own copy left out. |
+| `data.estimate.estimatedPagesWithMatches` | number \| undefined | Pages of the whole list expected to have a copy: the share seen on the pages read, `sourcePageUrl` left out, applied to the rest of the list. Equal to `pagesWithMatches` when every page was read. Absent when the length of the list is unknown (`pages.source: "none"`). |
+| `data.pages.count`                        | number            | Pages the run would review. |
+| `data.pages.source`                       | string            | Where the page list came from: `"list"` (your `urls`), `"sitemap"`, or `"none"` (no list and no sitemap: `sourcePageUrl` and `url` only). |
+| `data.pages.truncated`                    | boolean           | `true` when the sitemap listed more pages than a run takes (500). |
+
+<Note>
+  This is an estimate, not a preview of the run. The pages are read as static HTML rather than rendered, so text a script writes is missed, and a hidden copy, such as a phone menu's duplicate, is counted even though the run skips it. The run does its own matching on the rendered pages.
+</Note>
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "userContext.findText is too common to look for on every page. Use a longer, more specific phrase.",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+**Errors:** `INVALID_ARGUMENT` for:
+
+- a body outside the schema: an invalid `url` (`A valid URL is required`), more than 500 `urls`, `maxPages` outside `1..20`, a missing `userContext`, or an unknown field;
+- a search the run would refuse: `userContext.findText is required: the text to look for on every page.`, `userContext.findText must be 2 to 200 characters.`, `userContext.findText is too common to look for on every page. Use a longer, more specific phrase.`, or `A Fix It Everywhere userContext field has the wrong type: <key>`;
+- a `urls` list with no page on the site (`No usable pages in the list: every entry was blank, off-site or invalid.`).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Fix It Everywhere estimate computed successfully",
+    "data": {
+      "estimate": {
+        "pagesSampled": 6,
+        "pagesWithMatches": 2,
+        "matches": 3,
+        "estimatedPagesWithMatches": 2
+      },
+      "pages": {
+        "count": 6,
+        "source": "list",
+        "truncated": false
+      }
+    }
+  }
+}
+```
+</ResponseExample>

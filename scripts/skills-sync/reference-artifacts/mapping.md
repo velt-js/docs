@@ -21,7 +21,7 @@ These take priority over all convention rules. Use for cross-cutting files where
 | `get-started/**` | `velt-setup-best-practices` |
 | `security/auth-tokens.mdx`, `security/jwt-tokens.mdx`, `security/supported-regions.mdx` | `velt-setup-best-practices` |
 | `security/proxy-server.mdx`, `security/content-security-policy.mdx` | `velt-proxy-server-best-practices` |
-| `self-host-data/**` | `velt-self-hosting-data-best-practices` |
+| `self-hosting/partial/**` | `velt-self-hosting-data-best-practices` |
 | `backend-sdks/python.mdx` | `velt-self-hosting-data-best-practices` |
 | `backend-sdks/node.mdx` | `velt-node-sdk-best-practices` |
 | `api-reference/rest-apis/v1/**`, `api-reference/rest-apis/v2/**` | `velt-rest-apis-best-practices` |

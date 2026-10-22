@@ -1,0 +1,1507 @@
+---
+title: "Install Guide"
+sidebarTitle: "Install"
+description: "Copy-paste instructions for the AI coding agent that installs Velt full self-hosting in your AWS account."
+---
+
+Your AI coding agent runs the install. This page holds the instructions it follows, so you don't need to read them yourself.
+
+1. Check the prerequisites and decide your inputs in [Get Started on AWS](/self-hosting/full/aws/overview).
+2. Copy the instructions below with the copy button.
+3. Paste them into your agent along with the prompt from Get Started, then stay available for the steps that need a person.
+
+<Note>
+  The instructions mention companion runbooks (Validation, REST API, SAML and SCIM, Backup and Restore) that are not published on this site yet. Ask Velt for them. Upgrades follow the [Upgrade guide](/self-hosting/full/aws/upgrade).
+</Note>
+
+## Agent instructions
+
+````markdown Agent instructions (AWS) expandable
+# Velt Full Self-Hosting — Install Guide (AWS)
+
+> **Doc set.** The same install on Azure: [Install Guide (Azure)](https://docs.velt.dev/self-hosting/full/azure/install). This guide
+> reuses its cloud-neutral acceptance phase. After install: the Validation runbook (its AWS section; ask Velt for it) and the
+> [Upgrade Guide](https://docs.velt.dev/self-hosting/full/aws/upgrade); the REST API this deployment can serve is off by default (Phase 4.2 turns it on).
+> This file is the **executable install procedure** — paste it to an agent, or follow the commands yourself.
+
+**Audience:** an AI coding agent with shell access, working for a Velt customer. A human operator pastes this document
+(or its URL) to you as instructions. A human can also follow it manually — every step is a plain command.
+
+**Outcome:** the Velt portable backend running entirely inside the customer's own AWS account — GovCloud
+(`aws-us-gov`) or the commercial partition (`aws`):
+
+1. **Substrate** — an EKS cluster (Kubernetes Secrets encrypted with your KMS key; Bottlerocket FIPS nodes on
+   GovCloud), Amazon RDS for PostgreSQL 16 (private, your KMS key, TLS forced), five customer-managed KMS keys (six
+   with the alarm topic's), ECR repositories, an S3 bucket for comment attachments, CloudWatch log groups and alarms,
+   and the IAM roles for service accounts, created by Velt's signed Terraform module.
+2. **Application** — Velt's signed images (gateway, workers, migrate) and the in-cluster Valkey cache, installed from
+   Velt's signed Helm chart, pulled only from your own ECR, behind one Application Load Balancer.
+3. **Console** — the Velt admin console on the same host, signing in through your identity provider (Amazon Cognito or
+   any OIDC provider).
+4. **SDK** — the Velt client SDK bundle served from the same host, so your pages download nothing from Velt.
+5. **A first workspace** — an API key, an organization and an admin user seeded into the deployment's own database.
+
+---
+
+## To the agent executing this — read this first
+
+- **Execute phases in order.** Each phase ends with a **Verify** block; do not continue until it passes.
+- **Maintain the state file** (`velt-selfhost-aws-state.json`, below) after every step. A fresh session resumes
+  from this guide plus the state file — never from memory.
+- **One account, one partition.** GovCloud and the commercial partition are different accounts with different
+  credentials; never run a step against an account other than `$ACCOUNT_ID`. Every resource is prefixed by
+  `DEPLOYMENT_NAME`; never touch anything outside it.
+- **The partition is asserted, never assumed.** The module refuses a plan whose credentials or region disagree with
+  `partition`. If you see that refusal you are signed in to the wrong account — do not "fix" it by changing the
+  variable.
+- **All versions come from the release** (Phase 0). The images, the chart, the Terraform module and the tools bundle
+  are one release. Never substitute a different version for one component.
+- **Verify before you use.** Every artifact — manifest, tools, module, each image, the chart — is verified with
+  `cosign` against Velt's release identity before anything is extracted, copied or installed. A verification failure is
+  a **stop**, never a retry.
+- **Human moments are known in advance** — show the operator the table in *Inputs* before starting.
+- **Long waits are normal (expected):** the EKS cluster ~10–15 min, RDS ~15–25 min (longer with Multi-AZ), the node
+  group ~5 min, the first ALB ~3 min. Say so when a long wait starts.
+- **Never print a secret.** The ES256 private key, the RDS master password, the DSNs and the workspace auth token go
+  into the operator's secret store; the state file and your report carry **paths, names and ARNs**, never values.
+- If a command fails, check **Troubleshooting** at the end before escalating.
+
+### State file contract — `velt-selfhost-aws-state.json`
+
+```jsonc
+{
+  "guideVersion": 1,
+  "substrate": "aws",
+  "versions": { "portableVersion": "", "consoleVersion": "", "sdkVersion": "", "manifestVerified": false, "schemaHead": "" },
+  "inputs": {
+    "partition": "aws-us-gov", "region": "us-gov-west-1", "accountId": "", "deploymentName": "velt",
+    "mode": "persistent", "kubernetesVersion": "", "publicHost": "", "acmCertificateArn": "",
+    "consoleAuthIssuer": "", "consoleAuthClientId": "", "consoleAuthUserPoolId": "",
+    "adminPrincipalArns": [], "endpointCidrs": [],
+    "attachmentOrigins": [], "apiKey": "", "orgId": "", "adminUserIdHash": "", "consoleAdminEmail": "", "allowedDomains": [],
+    "privateCommentsEnabled": false, "webhookV2Delivery": "", "consoleSaml": false, "alarmRecipients": []
+  },
+  "phases": { "0-release": "pending|done", "1-substrate": "…", "2-images": "…", "3-secrets": "…", "4-helm": "…",
+              "5-ingress": "…", "6-smoke": "…", "7-acceptance": "…" },
+  "artifacts": {
+    "preflightReport": "", "liveCheckReport": "", "receiptPath": "",
+    "ecrRegistry": "", "workloadRoleArn": "", "rdsEndpoint": "", "rdsMasterSecretArn": "", "eksClusterName": "",
+    "clusterAutoscalerRoleArn": "", "alarmTopicArn": "",
+    "jwtPrivateKeyLocation": "", "workspaceAuthTokenLocation": ""   // where they are stored — never the value
+  },
+  "log": [ { "ts": "…", "phase": "…", "note": "…" } ]
+}
+```
+
+---
+
+## Inputs and human moments
+
+| Input | Meaning | Example |
+|---|---|---|
+| `PARTITION` | `aws-us-gov` (GovCloud — FedRAMP High) or `aws` (commercial) | `aws-us-gov` |
+| `REGION` | in the partition, and allowed by the account's organization policy | `us-gov-west-1` |
+| `ACCOUNT_ID` | the account the session is on | `123456789012` |
+| `DEPLOYMENT_NAME` | 3–16 character slug prefixing every resource and the ECR repositories | `velt` |
+| `MODE` | `persistent` (production posture) or `sandbox` (disposable, smaller) | `persistent` |
+| `K8S_VERSION` | the EKS version to pin — the preflight checks the FIPS image and add-ons for it | an EKS version your region offers |
+| `PUBLIC_HOST` | the one HTTPS host the load balancer serves (`/`, `/api`, `/ws`) | `velt.customer.example.gov` |
+| `ACM_CERT_ARN` | the ACM certificate for `PUBLIC_HOST` (requested or imported) — Phase 3.5, before the values file names it | `arn:aws-us-gov:acm:…` |
+| DNS for `PUBLIC_HOST` | **someone who can create records in the zone that holds `PUBLIC_HOST`** — the certificate's validation record (Phase 3.5) and the record pointing at the load balancer (Phase 5). Find them before you start: it is the one step nobody else in the room can do | a Route 53 hosted zone, or a delegation from your DNS provider |
+| `ADMIN_PRINCIPAL_ARNS` | IAM roles that administer the cluster (persistent mode requires at least one) | `arn:aws-us-gov:iam::…:role/PlatformAdmin` |
+| `ENDPOINT_CIDRS` | operator networks allowed to the Kubernetes API, or a private-only API | `["203.0.113.4/32"]` |
+| `CONSOLE_AUTH_ISSUER` / `CONSOLE_AUTH_CLIENT_ID` | the console's OIDC identity provider (Cognito — Phase 0.6) | — |
+| `ATTACHMENT_ORIGINS` | the app origins that upload and download comment attachments (empty: attachments off) | `["https://app.customer.example.gov"]` |
+| Alarm recipients | who is told when an alarm fires (persistent mode): email addresses subscribed to the module's SNS topic, or the ARN of your own topic — Phase 1.2 | `["oncall@customer.example.gov"]` |
+| `API_KEY` / `ORG_ID` / `ADMIN_USER_ID_HASH` / `CONSOLE_ADMIN_EMAIL` / `ALLOWED_DOMAINS` | the first workspace (Phase 4.7) | — |
+| `APP_ORIGINS` | every browser origin of the app — the first workspace's identify configuration (Phase 4.7) | `https://app.customer.example.gov` |
+| `<api-auth-token>` | the first API key's auth token for the REST API (`x-velt-auth-token`): a value **you generate** (at least 24 characters, letters and digits), stored in Phase 3.1 | `openssl rand -base64 24 \| tr -d '/+='` |
+| Private comments? | whether the customer uses Velt private comments (the seed's `--project-config`, Phase 4.7) | yes / no |
+| Webhook V2 delivery | `""` (no advanced webhooks yet), `svix` (the customer's own Svix account — needs its token) or `direct` (delivered from inside the cluster, no third party) — `webhookV2Delivery`, Phase 4.2 | `direct` |
+| Console SAML sign-in + SCIM | whether console members sign in through the customer's SAML identity provider (Okta, Entra ID, Keycloak, Ping, ADFS), with or without the OIDC sign-in above, and whether that provider keeps the console roster in step over SCIM. Needs a SAML app in the provider; can be turned on after the install ("Turning a feature on later") | no |
+
+| # | When | What the operator does |
+|---|---|---|
+| 1 | Phase 0.3 | Sign in to the right account and partition with an administrator role |
+| 2 | Phase 0.4 | Request a quota increase if the preflight asks for one; ask the management account about organization policies it names |
+| 3 | Phase 0.6 | Create the Cognito user pool and public app client (or supply another OIDC provider) — before Terraform, which writes them into the console config |
+| 4 | Phase 1.2 | Name the admin role ARNs and the API endpoint networks (or choose private-only) |
+| 5 | Phase 2.2 | Sign off the image scan |
+| 6 | Phase 3.5 and Phase 5 | Request or import the ACM certificate and create its validation record (3.5); create the record for `PUBLIC_HOST` (5) — the DNS zone's owner |
+| 7 | Phase 7 | Prove the loop in a real app; sign in to the console |
+
+### Features you can turn on — decide now or later
+
+Every optional feature is off until it is turned on, and every one can be turned on after the install with a
+`helm upgrade` plus whatever outside piece it needs. Decide on purpose rather than inherit the defaults; the how-to for
+each is under "After the install → Turning a feature on later".
+
+**This guide can be newer than your release.** The two rows marked *(after 0.1.17)* need a release newer than 0.1.17;
+on 0.1.17 or older, skip their steps — the Cluster Autoscaler half of 4.1, the alarm steps of 1.2, 1.5 and Phase 5,
+their lines in the final report and the idle steps — and leave their variables out of the tfvars (1.2 checks it).
+
+| Feature | Default | Asked above as | Outside the chart it needs |
+|---|---|---|---|
+| REST API (server-to-server) | off | `rest-api` in `enabledModules` (Phase 4.2) | nothing — the API key's auth token from Phase 3.1, seeded in Phase 4.7 |
+| Comment attachments | off | `ATTACHMENT_ORIGINS` | the application role's bucket grants and the bucket's CORS rule (Terraform `enable_storage_grants`, `attachment_cors_origins`); the bucket itself is always created |
+| Advanced webhooks | off | Webhook V2 delivery | `direct`: nothing; `svix`: a Secret with the customer's Svix token |
+| Console SAML sign-in + SCIM | off | Console SAML sign-in + SCIM | a SAML app in the customer's identity provider |
+| Self-hosted SDK bundle | off in the chart; this guide's values turn it on | `sdk:` block (Phase 4.2) | the `velt-sdk-static` image copied into ECR (Phase 2.1); the app's `cdnHost` pin (Phase 7) |
+| Webhook payload encryption | off | — (decide later) | a Secret holding the encryption key |
+| Deployment-wide token minting | off, and off is the safe choice | — (decide later) | a Secret holding the master token; only for internal services that mint tokens across several API keys |
+| Private comments | per API key | Private comments? | nothing — the console (or the seed's `--project-config`) |
+| Email notifications | per API key, off | — (decide later) | the customer's own SendGrid or Customer.io account, set on the API key in the console |
+| Permission provider | per API key, off | — (decide later) | an HTTPS endpoint of the customer's that answers Velt's permission questions, reachable from the cluster, set on the API key in the console |
+| FIPS mode (nodes and application) | on in GovCloud, off in the commercial partition | `fips_enabled` (Phase 1.2) and `fips.enabled` (Phase 4.2) | **an install-time choice**: changing `fips_enabled` changes the node group's image type, which replaces the nodes (expected); the application's `fips.enabled` follows it |
+| FIPS service endpoints | off | — (decide later) | Terraform `aws_use_fips_endpoints`: the module's own AWS calls, and the S3 and STS endpoints it hands the chart for attachments, use each service's FIPS endpoint (expected) |
+| Node autoscaling *(after 0.1.17)* | on: the node group starts at `node_count` and may grow to `node_max_count` (twice `node_count` unless set) | — (Phase 1.2) | the Cluster Autoscaler, installed with Helm in Phase 4.1 under the IAM role the module creates; vCPU quota for the ceiling (Phase 0.4) |
+| Alarms *(after 0.1.17)* | on in `persistent`, off in `sandbox` | Alarm recipients | a subscription to the alarm topic (email addresses in Phase 1.2, or your own topic); the certificate alarm takes its ARN, and the load balancer's alarms appear, on one more apply after Phase 5. The node memory alarm needs Container Insights, which comes with the alarms (billed per metric; `enable_container_insights = false` to leave it out) |
+
+---
+
+## Phase 0 — Release, tools, sign-in, preflight
+
+### 0.0 The versions — set once, used everywhere
+
+```bash
+REG=us-docker.pkg.dev/velt-sdk/velt-releases
+IDENTITY='^https://github\.com/snippyly/shared-firebase-function/\.github/workflows/container-release\.yml@refs/heads/main$'
+ISSUER='https://token.actions.githubusercontent.com'
+PORTABLE_V=<X.Y.Z>    # the portable release — the first one that ships velt-portable-module-aws, or newer (0.1)
+
+# The inputs from the table above — set once, re-export in every fresh session.
+PARTITION=aws-us-gov  REGION=us-gov-west-1  ACCOUNT_ID=<12 digits>  DEPLOYMENT_NAME=velt  MODE=persistent   # or sandbox
+K8S_VERSION=<an EKS version your region offers>  PUBLIC_HOST=<velt.customer.example.gov>
+API_KEY=<api-key>  ORG_ID=<org-id>  ADMIN_USER_ID_HASH=<admin-user-id-hash>  CONSOLE_ADMIN_EMAIL=<console-admin-email>
+ATTACHMENT_ORIGIN=<the first of ATTACHMENT_ORIGINS — empty when attachments are off>
+```
+
+### 0.1 Resolve and VERIFY the release manifest
+
+The umbrella manifest is the trust root. Its `tierB` block pins every portable artifact by digest; the AWS module is
+`tierB.modules.aws`. The release registry is read anonymously — no login. If `oras` or `cosign` answers `error getting
+credentials`, your Docker configuration sends this registry to a credential helper (the gcloud one, typically) that
+fails for anonymous reads: export an empty configuration, and keep it exported for the rest of the install — Phase
+2.1's two ECR logins then land in the same configuration, which the copies into ECR and the provision CLI read. A
+fresh session exports it again and logs in again. **Record your Docker engine first:** the configuration also holds
+the docker CLI's context, and on Colima or Docker Desktop an empty one makes `docker` fall back to
+`/var/run/docker.sock`, which does not exist there (`failed to connect to the docker API`) — and 2.1's `docker login`
+and 3.1's provision CLI both need Docker:
+
+```bash
+export DOCKER_HOST=$(docker context inspect --format '{{.Endpoints.docker.Host}}')   # BEFORE the next line
+export DOCKER_CONFIG=$(mktemp -d)
+```
+
+```bash
+# Resolve the tag ONCE to its digest, verify that digest, then pull that digest:
+MANIFEST_DIGEST=$(oras manifest fetch --descriptor "$REG/velt-selfhost-manifest:latest" \
+  | python3 -c "import json,sys;print(json.load(sys.stdin)['digest'])")
+# The manifest is published by a different workflow than the images, so its identity differs:
+cosign verify --certificate-identity-regexp '^https://github\.com/snippyly/shared-firebase-function/\.github/workflows/selfhost-umbrella-publish\.yml@refs/heads/main$' \
+  --certificate-oidc-issuer "$ISSUER" "$REG/velt-selfhost-manifest@$MANIFEST_DIGEST" \
+  && oras pull -o . "$REG/velt-selfhost-manifest@$MANIFEST_DIGEST"    # writes manifest.json
+python3 -c "import json;m=json.load(open('manifest.json'));t=m.get('tierB') or {};print(t.get('portableVersion'), 'aws module pinned' if (t.get('modules') or {}).get('aws') else 'NO aws module pin')"
+```
+
+**Verify and fetch by one digest.** The registry is asked what a tag names every time a command uses the tag, so a
+verification by tag followed by a pull by tag gets two answers, and only the first was checked. Every step below that
+pulls or copies an artifact from the release registry resolves the tag once (`oras manifest fetch --descriptor`),
+verifies that digest, and pulls or copies that same digest. Do not put the tag back in place of the digest.
+
+When the manifest pins `PORTABLE_V` and carries `modules.aws`, record `manifestVerified: true`. When it pins no AWS
+module, take `PORTABLE_V` from the newest release that published `velt-portable-module-aws` and record
+`manifestVerified: false` — every artifact below is still verified individually. Filter to released versions: cosign
+keeps its signature tags (`sha256-….sig`) in the same repository, and they sort above every version.
+
+```bash
+oras repo tags "$REG/velt-portable-module-aws" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1
+```
+
+The console and the SDK move on their own versions; read them from the verified manifest. A manifest may omit either
+one — every manifest published before the release pipeline began pinning the SDK omits `sdkStatic`. Then take the
+newest version a portable release published, the same rule the release pipeline uses to pin it. Only Velt's release job
+builds and signs these images, so 2.1 still verifies them against the same signer as everything else. Record in the
+report which one came from the registry rather than the manifest:
+
+```bash
+CONSOLE_V=$(python3 -c "import json;r=(json.load(open('manifest.json')).get('tierB') or {}).get('images',{}).get('consoleStatic');print(r['ref'].rsplit(':',1)[1] if r else '')")
+SDK_V=$(python3 -c "import json;r=(json.load(open('manifest.json')).get('tierB') or {}).get('images',{}).get('sdkStatic');print(r['ref'].rsplit(':',1)[1] if r else '')")
+echo "manifest: console=${CONSOLE_V:-absent} sdk=${SDK_V:-absent}"
+[[ -n "$CONSOLE_V" ]] || CONSOLE_V=$(oras repo tags "$REG/velt-console-static" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+[[ -n "$SDK_V" ]] || SDK_V=$(oras repo tags "$REG/velt-sdk-static" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+echo "using:    console=${CONSOLE_V:-absent} sdk=${SDK_V:-absent}"
+```
+
+If either is still `absent`, no release has published that image: skip it in 2.1 and set its `enabled: false` in 4.2.
+
+### 0.2 Pull and VERIFY the tools bundle
+
+Every script this guide runs comes from the release's own signed tools bundle:
+
+```bash
+TOOLS_DIGEST=$(oras manifest fetch --descriptor "$REG/velt-portable-tools:$PORTABLE_V" \
+  | python3 -c "import json,sys;print(json.load(sys.stdin)['digest'])")
+cosign verify --certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$REG/velt-portable-tools@$TOOLS_DIGEST" \
+  && oras pull "$REG/velt-portable-tools@$TOOLS_DIGEST" && tar xzf "velt-portable-tools-$PORTABLE_V.tar.gz"
+ls velt-portable-tools/
+# portable-install-preflight-aws.sh  portable-aws-live-check.sh  portable-receipt.sh  portable-support-bundle.sh
+# portable-upgrade.sh  portable-check-updates.js (and its lib/)  portable-install-preflight.sh (Azure)  README.md  VERSION
+cat velt-portable-tools/VERSION      # must equal $PORTABLE_V
+```
+
+### 0.3 Sign in to AWS (human moment 1)
+
+The operator signs in to the account and partition the deployment goes into — through IAM Identity Center
+(`aws sso login --profile <profile>`), or the customer's federation. GovCloud has its own identity system and its own
+profile. Then:
+
+```bash
+export AWS_PROFILE=<profile> AWS_REGION=<REGION>
+aws sts get-caller-identity          # the Account must be $ACCOUNT_ID; the Arn's partition must be $PARTITION
+```
+
+The role must be an administrator for the install (the preflight simulates every action the module needs).
+
+**Credentials that last through the apply.** Phase 1.3 runs for half an hour or more, and Terraform refreshes the
+session itself. With an `aws login` or IAM Identity Center (SSO) profile that refresh can fail part-way —
+`failed to refresh cached credentials … CreateOAuth2Token … The provided authorization grant is invalid` — while the
+AWS CLI refreshes the same session without trouble. Hand Terraform a profile that asks the CLI for credentials
+instead, and use it for the rest of the install:
+
+```ini
+# ~/.aws/config — next to your sign-in profile
+[profile <profile>-cli]
+credential_process = aws configure export-credentials --profile <profile> --format process
+region = <REGION>
+```
+
+```bash
+export AWS_PROFILE=<profile>-cli
+aws sts get-caller-identity          # the same Account and Arn as above
+```
+
+The sign-in session itself must still outlast the install: sign in again before Phase 1.3 if it is close to expiring.
+
+**Organization policies.** An account in an AWS Organization may be bound by service control policies. Three shapes
+matter here, and the preflight names each one it meets:
+
+| Policy shape | What breaks without care | What to do |
+|---|---|---|
+| a **region allow-list** | an apply in another region dies part-way | pick an allowed region and set `allowed_regions` in the tfvars (1.2): a plan anywhere else is refused before anything is created. Nothing in the module needs `us-east-1` |
+| **IAM OIDC-provider actions denied** (`iam:*OpenIDConnectProvider*`) | the module creates the cluster's OIDC provider, which IAM roles for service accounts trust: the apply would create the cluster and then fail | ask the management account to allow it for this account, or use the two-step apply (1.4) |
+| a **spend cap** on the member account | the install may stop when the cap is reached | ask the management account what the cap is |
+
+### 0.4 Quotas (human moment 2)
+
+The node group needs `nodes × vCPUs` On-Demand standard vCPUs at rest. The Cluster Autoscaler may grow it to
+`node_max_count` nodes (twice `node_count` unless set), and a managed node group's version update first adds up to
+twice its availability-zone count in nodes on top of whatever size it has then (expected). With the module's defaults:
+
+| mode | nodes | at rest | at the autoscaler's ceiling | at the ceiling, during a node-group update |
+|---|---|---|---|---|
+| `sandbox` | 2 × `m6i.large` (2 vCPU) over 2 zones, ceiling 4 | 4 | 8 | 16 |
+| `persistent` | 3 × `m6i.xlarge` (4 vCPU) over 3 zones, ceiling 6 | 12 | 24 | 48 |
+
+Plus one Elastic IP per NAT gateway (sandbox 1, persistent one per zone) and one VPC. The preflight refuses below the
+at-rest figure and warns below the last figure, naming the value to request; pass `--max-nodes` if you set
+`node_max_count`. To request it:
+
+```bash
+aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A --region "$AWS_REGION"
+aws service-quotas request-service-quota-increase --service-code ec2 --quota-code L-1216C47A \
+  --desired-value <the value the preflight names> --region "$AWS_REGION"
+```
+
+A small increase is often approved automatically within minutes (observed: 32 → 48 vCPUs). Re-run the `get` above,
+or the preflight, before waiting on it.
+
+### 0.5 Run the install preflight
+
+```bash
+./velt-portable-tools/portable-install-preflight-aws.sh --partition "$PARTITION" --region "$REGION" \
+  --account-id "$ACCOUNT_ID" --mode "$MODE" --kubernetes-version "$K8S_VERSION" --fips \
+  --ecr-prefix "$DEPLOYMENT_NAME/" --manifest-ref "$REG/velt-selfhost-manifest:latest" \
+  --portable-version "$PORTABLE_V" --manifest-file ./manifest.json --report ./preflight-report.json
+# Commercial partition: drop --fips unless you want FIPS nodes there too. Under an organization policy that denies
+# the OIDC-provider actions, add --without-eks-oidc-provider and follow 1.4.
+```
+
+`--manifest-ref` takes the tag, as written: P9 resolves it, verifies that digest itself and checks that
+`./manifest.json` is the manifest that verified. If `latest` has moved since 0.1 it refuses — repeat 0.1, then run
+the preflight again.
+
+It **creates nothing** — every fact it needs has a read API. It stops at the first failure and has no flag to skip
+one. Exit 0 = pass (a `WARN` line passes: read it and log it); 1 = a check failed and the report names it; 2 = usage.
+
+| Check | What it proves |
+|---|---|
+| P1 | `aws` ≥ 2.15, `terraform` ≥ 1.6, `helm` ≥ 3.17 (the chart is installed by its digest), `node` ≥ 18, a `python3` that runs, `kubectl`, `cosign`, `oras` on the PATH |
+| P2 | the session is on `--account-id`, in `--partition`, and the region is in that partition |
+| P10 | no organization policy denies the IAM OIDC-provider actions (or you chose the two-step apply) |
+| P3 | the deploying role may perform every action the module needs |
+| P4 | the region offers the zones and the `vpc-cni`, `aws-ebs-csi-driver` and `metrics-server` add-ons at the version |
+| P5 | RDS for PostgreSQL 16 is orderable as the instance class in the region |
+| P6 | the node type is x86_64 and offered in enough zones; with `--fips`, the Bottlerocket FIPS image exists for the version |
+| P7 | the vCPU and Elastic IP quotas leave room (0.4) |
+| P8 | the module's seven ECR repositories either all exist or none do |
+| P9 | the manifest verifies, and its `tierB` pin is not newer than `PORTABLE_V` |
+| P11 | the budgets the account can read (never a refusal) |
+
+### 0.6 The console's identity provider (human moment 3)
+
+Terraform writes the console's runtime config from the issuer and client id (1.2), so the provider must exist first.
+Any OIDC provider your organization runs works if it meets the same rules; with **Amazon Cognito**:
+
+```bash
+# 1. The user pool: members sign in with their email, the email is verified automatically, only an administrator
+#    creates users, and a changed email must be verified again. The password policy is an example — use yours.
+POOL=$(aws cognito-idp create-user-pool --pool-name "$DEPLOYMENT_NAME-console" \
+  --username-attributes email --auto-verified-attributes email \
+  --admin-create-user-config AllowAdminCreateUserOnly=true \
+  --policies 'PasswordPolicy={MinimumLength=12,RequireUppercase=true,RequireLowercase=true,RequireNumbers=true,RequireSymbols=false}' \
+  --user-attribute-update-settings AttributesRequireVerificationBeforeUpdate=email \
+  --query UserPool.Id --output text); echo "pool $POOL"
+
+# 2. A domain for the hosted sign-in page. REQUIRED: without one the discovery document has no
+#    authorization_endpoint, and the console has nowhere to send the user.
+aws cognito-idp create-user-pool-domain --user-pool-id "$POOL" --domain "$DEPLOYMENT_NAME-console-$ACCOUNT_ID" >/dev/null \
+  && echo "domain $DEPLOYMENT_NAME-console-$ACCOUNT_ID"
+
+# 3. The public app client: no secret (the console runs PKCE), the authorization-code grant, openid/email/profile,
+#    callback /signup. Users may write only `name` — never email or preferred_username.
+CONSOLE_AUTH_CLIENT_ID=$(aws cognito-idp create-user-pool-client --user-pool-id "$POOL" --client-name "$DEPLOYMENT_NAME-console" \
+  --no-generate-secret --allowed-o-auth-flows code --allowed-o-auth-scopes openid email profile \
+  --allowed-o-auth-flows-user-pool-client --supported-identity-providers COGNITO \
+  --callback-urls "https://$PUBLIC_HOST/signup" --logout-urls "https://$PUBLIC_HOST/" "https://$PUBLIC_HOST/signup" \
+  --read-attributes email email_verified name preferred_username \
+  --write-attributes name \
+  --explicit-auth-flows ALLOW_REFRESH_TOKEN_AUTH ALLOW_USER_SRP_AUTH \
+  --query UserPoolClient.ClientId --output text); echo "client $CONSOLE_AUTH_CLIENT_ID"
+
+# 4. Measure the issuer (Cognito's has no trailing slash) and check the domain is live.
+CONSOLE_AUTH_ISSUER=$(curl -s "https://cognito-idp.$REGION.amazonaws.com/$POOL/.well-known/openid-configuration" | jq -r .issuer)
+echo "issuer [$CONSOLE_AUTH_ISSUER]"     # use exactly this as console_auth_issuer (1.2) and consoleAuth.oidcIssuer (4.2)
+curl -s "https://cognito-idp.$REGION.amazonaws.com/$POOL/.well-known/openid-configuration" | jq '{authorization_endpoint,end_session_endpoint}'   # both set
+
+# 5. The console admin as a Cognito user — the same email as --console-admin-email (4.7). No invitation email, the
+#    email marked verified, a permanent password kept in Secrets Manager and never printed.
+PW="Vt$(openssl rand -hex 10)Q9"
+aws cognito-idp admin-create-user --user-pool-id "$POOL" --username "$CONSOLE_ADMIN_EMAIL" \
+  --user-attributes Name=email,Value="$CONSOLE_ADMIN_EMAIL" Name=email_verified,Value=true --message-action SUPPRESS \
+  --query User.UserStatus --output text
+aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username "$CONSOLE_ADMIN_EMAIL" --password "$PW" --permanent
+aws secretsmanager create-secret --name "$DEPLOYMENT_NAME/console-admin-password" --secret-string "$PW" --query Name --output text
+unset PW
+```
+
+Why the rules: console members are matched by email, so a user who could write their own `email` (or
+`preferred_username`) could impersonate a member — the client lets users write only `name`, and the pool verifies
+email. The issuer must match **character for character**. A token that carries `email_verified` is refused unless the
+claim is `true` (or the string `"true"`); a token without the claim is accepted. Record the pool id
+(`inputs.consoleAuthUserPoolId`): the pool is not in Terraform, and the teardown deletes it.
+
+**Verify (phase gate):** the preflight exited 0; `artifacts.preflightReport` is recorded; the issuer and client id are
+in the state file. Mark `0-release: done`.
+
+---
+
+## Phase 1 — The substrate (Terraform)
+
+### 1.1 Pull and VERIFY the Terraform module
+
+```bash
+MODULE_DIGEST=$(oras manifest fetch --descriptor "$REG/velt-portable-module-aws:$PORTABLE_V" \
+  | python3 -c "import json,sys;print(json.load(sys.stdin)['digest'])")
+cosign verify --certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$REG/velt-portable-module-aws@$MODULE_DIGEST" \
+  && oras pull "$REG/velt-portable-module-aws@$MODULE_DIGEST" \
+  && tar xzf "velt-portable-module-aws-$PORTABLE_V.tar.gz"          # unpacks to ./terraform/aws/
+```
+
+### 1.2 Write `terraform/aws/terraform.tfvars` (human moment 4; never commit it)
+
+```hcl
+partition          = "aws-us-gov"                 # or "aws"
+region             = "us-gov-west-1"
+# allowed_regions  = ["<region>"]                 # your organization's region allow-list: a plan elsewhere is refused
+deployment_name    = "velt"
+mode               = "persistent"                 # $MODE from 0.0 — "persistent" or "sandbox"
+kubernetes_version = "<K8S_VERSION>"              # the one the preflight checked
+
+public_host            = "velt.customer.example.gov"
+console_auth_issuer    = "<CONSOLE_AUTH_ISSUER — 0.6>"
+console_auth_client_id = "<CONSOLE_AUTH_CLIENT_ID — 0.6>"
+
+# Who operates the cluster, and from where. Persistent mode REQUIRES an admin role AND either networks or a private
+# API. Role ARNs as IAM shows them (an IAM Identity Center role keeps its /aws-reserved/... path), never a session ARN.
+eks_admin_principal_arns             = ["arn:aws-us-gov:iam::<account>:role/<PlatformAdmin>"]
+cluster_endpoint_public_access_cidrs = ["<operator network>/32"]   # each /8 or narrower; OR:
+# cluster_endpoint_private_only      = true                         # then run kubectl / helm from inside the VPC
+# fips_enabled = true                                               # the GovCloud default (Bottlerocket FIPS images)
+
+# Comment attachments (optional): the app role's bucket grants and the bucket's CORS for your app origins.
+# Both, plus the chart's storage.s3 block (4.2), or none — then attachments stay off.
+enable_storage_grants   = true
+attachment_cors_origins = ["https://app.customer.example.gov"]
+# attachment_noncurrent_version_days = 30   # how long a deleted attachment's data stays recoverable
+
+# Node autoscaling: the group starts at node_count (3 in persistent) and the Cluster Autoscaler (4.1) may grow it to
+# node_max_count — twice node_count unless set. node_max_count = node_count keeps the group a fixed size.
+# node_max_count = 6
+
+# Alarms (on in persistent): every alarm notifies ONE SNS topic — the module's own, or yours.
+alarm_email_addresses = ["oncall@customer.example.gov"]   # each address confirms AWS's subscription email first
+# alarm_sns_topic_arn = "arn:aws-us-gov:sns:<region>:<account>:<your topic>"   # instead of the module's topic (no emails then)
+# enable_container_insights = false   # Container Insights (node and pod metrics, no logs) comes with the alarms; it feeds the node memory alarm
+
+# rds_backup_retention_days = 7   # the point-in-time restore window, 1..35 days (7 in persistent unless set)
+```
+
+This guide can be newer than the module you pulled. Before planning, check that every variable you set exists in it —
+a variable it does not have fails the plan (`An argument named … is not expected here`):
+
+```bash
+grep -oE '^[[:space:]]*[a-z_0-9]+[[:space:]]*=' terraform/aws/terraform.tfvars | tr -d ' \t=' | sort -u \
+  | while read -r v; do grep -q "^variable \"$v\"" terraform/aws/*.tf || echo "not in this module: $v"; done
+# prints nothing when every variable exists; remove each one it names (that feature is newer than your release)
+```
+
+### 1.3 Apply
+
+```bash
+terraform -chdir=terraform/aws init
+terraform -chdir=terraform/aws plan -out tf.plan
+terraform -chdir=terraform/aws apply tf.plan
+```
+
+**If the apply stops part-way — on credentials, a timeout, a dropped connection — do NOT plan and apply again
+straight away.** Every resource that was still being created is marked *tainted*, and the next plan destroys and
+recreates each one: RDS and the node group among them, which on a persistent install is the data. Instead:
+
+```bash
+terraform -chdir=terraform/aws show -no-color | grep '(tainted)'     # the resources the next plan would replace
+# For each: wait until AWS reports it ready (the console, or e.g. `aws rds wait db-instance-available …`,
+# `aws eks wait nodegroup-active …`), then keep it:
+terraform -chdir=terraform/aws untaint '<address>'                   # e.g. 'aws_db_instance.this'
+terraform -chdir=terraform/aws plan -out tf.plan                     # must show "0 to destroy"; then apply it
+```
+
+Untaint only a resource AWS shows as healthy; one that failed to create is right to replace. The same rule holds for
+every later apply in this guide.
+
+It creates: a VPC (public, private and database subnets across 2–3 zones, NAT, an S3 gateway endpoint); five KMS keys
+(RDS, S3, EKS, EBS, platform — and a sixth for the alarm topic when the module creates the topic); EKS with access
+entries, Secrets envelope encryption and control-plane logs; the node group (between `node_count` and
+`node_max_count` nodes); the `vpc-cni` (with network policy), `aws-ebs-csi-driver` and `metrics-server` add-ons, and,
+with the alarms, the `amazon-cloudwatch-observability` add-on (Container Insights: node and pod metrics into CloudWatch,
+container log collection off); IAM roles for the application, the EBS CSI driver, the load balancer controller, the
+Cluster Autoscaler and the CloudWatch agent; RDS for
+PostgreSQL 16 (private, TLS forced, SCRAM, pgaudit, the master password managed by RDS in Secrets Manager, automated
+backups for `rds_backup_retention_days`); the ECR repositories; the S3 bucket (versioned, TLS-only, KMS-encrypted); in
+persistent mode the alarm topic and its alarms (RDS CPU, RDS free storage, node CPU, node memory); and
+`terraform/aws/out/velt-console-config.json`.
+
+**FIPS is two switches.** `fips_enabled` is the HOST (the node images). The APPLICATION's FIPS mode is the chart's
+`fips.enabled` (4.2): the image ships the OpenSSL FIPS provider and refuses to start without it when the chart says
+true. On a FedRAMP deployment set both.
+
+### 1.4 Only if an organization policy denies the OIDC-provider actions: the two-step apply
+
+The cluster's OIDC issuer gets its id when EKS creates the cluster, so its IAM provider can only be created after
+that — by a principal the policy does not bind (if the policy exempts none, only relaxing it works).
+
+```bash
+# 1a — the cluster and everything under it, without the provider
+terraform -chdir=terraform/aws apply -target=aws_eks_cluster.this
+aws eks describe-cluster --name "$(terraform -chdir=terraform/aws output -raw eks_cluster_name)" \
+  --query cluster.identity.oidc.issuer --output text
+# The exempt principal creates the IAM OIDC provider for that issuer (client id sts.<the partition's DNS suffix>)
+# and hands back its ARN — read it from IAM, never type it.
+# 1b — add to the tfvars:   create_eks_oidc_provider = false   eks_oidc_provider_arn = "<that ARN>"
+./velt-portable-tools/portable-install-preflight-aws.sh … --eks-oidc-provider-arn "<that ARN>"   # same flags as 0.5
+terraform -chdir=terraform/aws plan -out tf.plan && terraform -chdir=terraform/aws apply tf.plan
+```
+
+The plan refuses an ARN in another account, partition or region, and the apply refuses one for another cluster. If the
+module already created the provider on an earlier apply (the policy arrived later), run
+`terraform -chdir=terraform/aws state rm 'aws_iam_openid_connect_provider.eks[0]'` BEFORE setting
+`create_eks_oidc_provider = false` with that provider's ARN; otherwise the plan destroys the provider every role trusts.
+
+### 1.5 Sign in to the cluster, read the outputs
+
+```bash
+# A shell FUNCTION, not a variable: zsh (the macOS default) does not word-split a variable, so a command stored in one
+# runs as a single word ("no such file or directory: terraform -chdir=… output -raw") and leaves the value EMPTY —
+# which later steps would write into secrets.
+tfo() { terraform -chdir=terraform/aws output -raw "$1"; }
+aws eks update-kubeconfig --region "$REGION" --name "$(tfo eks_cluster_name)"
+kubectl get nodes -o wide            # Ready; Bottlerocket (FIPS) on GovCloud
+terraform -chdir=terraform/aws output   # ecr_registry, workload_role_arn, lb_controller_role_arn, rds_endpoint,
+                                        # rds_master_secret_arn, ebs_kms_key_arn, public_subnet_cidrs,
+                                        # postgres_subnet_cidrs, s3_bucket_url, s3_region, sts_endpoint,
+                                        # cluster_autoscaler_role_arn, node_scaling, alarm_topic_arn, …
+```
+
+Each address in `alarm_email_addresses` now has an email from AWS ("AWS Notification - Subscription Confirmation");
+nothing reaches it until its link is followed. Ask the recipients to confirm now — Phase 5 sends a test alarm. Every
+alarm email carries an unsubscribe link that works for anyone holding the email (a forwarded copy, a mail scanner
+that follows links). To make it require AWS credentials, confirm with the CLI instead of the link — the token is the
+`Token=` value in the confirmation link:
+`aws sns confirm-subscription --topic-arn "$(tfo alarm_topic_arn)" --token <token> --authenticate-on-unsubscribe true --region "$REGION"`.
+
+**Verify (phase gate):** a second `terraform plan` shows no changes; `kubectl get nodes` lists Ready nodes. Record the
+outputs in `artifacts`. Mark `1-substrate: done`.
+
+---
+
+## Phase 2 — Images: verify, copy into ECR, scan
+
+### 2.1 Verify, then copy by digest
+
+```bash
+ECR=$(tfo ecr_registry)              # <registry host>/<deployment_name>
+ECR_HOST=${ECR%%/*}
+aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ECR_HOST"
+aws ecr get-login-password --region "$REGION" | helm registry login --username AWS --password-stdin "$ECR_HOST"
+
+# Verify FIRST, then copy with cosign: the signature travels with the image, so the copy stays verifiable in ECR.
+# Each tag is resolved ONCE; the verify and the copy name that digest, and the copy keeps the tag in ECR.
+for IMG in velt-gateway velt-workers velt-migrate velt-portable; do
+  DIGEST=$(oras manifest fetch --descriptor "$REG/$IMG:$PORTABLE_V" \
+    | python3 -c "import json,sys;print(json.load(sys.stdin)['digest'])")
+  cosign verify --certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$REG/$IMG@$DIGEST" \
+    && cosign copy "$REG/$IMG@$DIGEST" "$ECR/$IMG:$PORTABLE_V"
+done
+for PAIR in "velt-console-static:$CONSOLE_V" "velt-sdk-static:$SDK_V"; do
+  IMG=${PAIR%%:*} V=${PAIR#*:}
+  [[ "$V" != "" ]] || { echo "skip $IMG (no published version — 0.1)"; continue; }
+  DIGEST=$(oras manifest fetch --descriptor "$REG/$IMG:$V" \
+    | python3 -c "import json,sys;print(json.load(sys.stdin)['digest'])")
+  cosign verify --certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$REG/$IMG@$DIGEST" \
+    && cosign copy "$REG/$IMG@$DIGEST" "$ECR/$IMG:$V"
+done
+# Valkey (the Redis-compatible cache) is upstream, not Velt-signed — copy it so the cluster pulls nothing from Docker Hub:
+cosign copy docker.io/valkey/valkey:8 "$ECR/valkey:8"
+```
+
+### 2.2 Vulnerability scan + sign-off (human moment 5)
+
+ECR scans each image on push: `aws ecr describe-image-scan-findings --repository-name "$DEPLOYMENT_NAME/velt-gateway"
+--image-id imageTag="$PORTABLE_V"` (and the others). If that answers `ScanNotFoundException` on a tag, the tag names an
+image index (a multi-platform image, or one built with attestations) rather than one image: read the findings by the
+`linux/amd64` manifest's digest (`docker manifest inspect "$ECR/velt-gateway:<tag>"` lists it) with
+`--image-id imageDigest=<that digest>`. Persistent-mode repositories refuse to move a tag (re-copying the same release
+is expected to be accepted for cosign's own signature tags).
+
+Velt's release fails on any critical or high finding that has a fix. Findings with **no fix** in the base image's
+Debian release can still appear: on 0.1.17, each of gateway, workers and migrate showed seven HIGH findings in
+util-linux and zlib that Debian 12 has not fixed, and upstream Valkey carries its own. So the sign-off compares the
+list with the [Debian security tracker](https://security-tracker.debian.org/tracker/) rather than expecting zero. List
+the critical and high findings with their packages (basic scanning; with Amazon Inspector's enhanced scanning the
+findings are under `enhancedFindings` instead):
+
+```bash
+for IMG in velt-gateway velt-workers velt-migrate velt-console-static velt-sdk-static valkey; do
+  TAG=$PORTABLE_V; [ "$IMG" = velt-console-static ] && TAG=$CONSOLE_V; [ "$IMG" = velt-sdk-static ] && TAG=$SDK_V; [ "$IMG" = valkey ] && TAG=8
+  aws ecr describe-image-scan-findings --repository-name "$DEPLOYMENT_NAME/$IMG" --image-id imageTag="$TAG" --region "$REGION" \
+    --query 'imageScanFindings.findings[?severity==`CRITICAL` || severity==`HIGH`].[severity,name,attributes[?key==`package_name`].value|[0]]' \
+    --output text | sed "s|^|$IMG  |"
+done
+```
+
+This step is your security team's sign-off.
+
+**Verify (phase gate):** every image and the chart are in ECR under `PORTABLE_V` (or their own versions), each
+verified before the copy; the scan is signed off. Mark `2-images: done`.
+
+---
+
+## Phase 3 — Keys, secrets, the RDS certificate, storage
+
+### 3.1 The deployment's ES256 signing keypair
+
+The CLI ships inside the migrate image. It writes to the mounted directory as your user; the images are amd64-only
+(add `--platform linux/amd64` on Apple Silicon — already in the command).
+
+```bash
+kubectl create namespace velt
+mkdir -p keys
+# A shell FUNCTION, not a variable: zsh (the macOS default) does not word-split an unquoted variable, so a command
+# stored in one fails there with "no such file or directory: docker run …". The function works in bash and zsh alike.
+pcli() { docker run --rm --platform linux/amd64 -u "$(id -u):$(id -g)" --entrypoint node -v "$PWD/keys:/keys" \
+  "$ECR/velt-migrate:$PORTABLE_V" dist/portable-runtime/src/provision-cli.js "$@"; }
+pcli keygen --out-dir /keys --secret-name velt-jwt-es256 --namespace velt
+kubectl -n velt create secret generic velt-jwt-es256 --from-file=VELT_JWT_PUBLIC_KEY=./keys/jwt-public.pem
+kubectl -n velt create secret generic velt-jwt-es256-private --from-file=VELT_JWT_PRIVATE_KEY=./keys/jwt-private.pem
+```
+
+The Secret **keys** must be the exact environment-variable names (`VELT_JWT_PUBLIC_KEY`, `VELT_JWT_PRIVATE_KEY`): a
+filename-style key never reaches the process. Then put the private key away — in Secrets Manager, or the operator's
+own secret store — and delete the local copy; record only where it is:
+
+```bash
+aws secretsmanager create-secret --name "$DEPLOYMENT_NAME/jwt-es256-private" --secret-string file://keys/jwt-private.pem
+rm keys/jwt-private.pem
+```
+
+Generate the first API key's auth token (`<api-auth-token>`) now and store it the same way — Phase 4.7 seeds it, and it
+is what the REST API's `x-velt-auth-token` takes:
+
+```bash
+aws secretsmanager create-secret --name "$DEPLOYMENT_NAME/api-auth-token" \
+  --secret-string "$(openssl rand -base64 24 | tr -d '/+=')" >/dev/null
+```
+
+### 3.2 The RDS certificate bundle
+
+RDS signs its server certificate with an AWS certificate authority that is not in Node's trust store, so the
+`verify-full` connections below fail until the bundle is trusted. Download the region's bundle from the RDS
+certificate page for your partition (commercial regions:
+`https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem`; GovCloud's location differs), check it
+against `aws rds describe-certificates` (the thumbprints), then:
+
+```bash
+kubectl -n velt create configmap velt-postgres-ca --from-file=ca.pem=./"$REGION"-bundle.pem
+```
+
+### 3.3 The database credentials
+
+The migrate Job logs in as the RDS administrator and creates a least-privilege application role on its first run; the
+gateway and workers log in as that role. The administrator password is managed by RDS in Secrets Manager and may
+contain URL-special characters, so it is percent-encoded:
+
+```bash
+PG_HOST=$(tfo rds_endpoint)
+ADMIN_PW=$(aws secretsmanager get-secret-value --secret-id "$(tfo rds_master_secret_arn)" --query SecretString --output text \
+  | python3 -c 'import json,sys,urllib.parse;print(urllib.parse.quote(json.load(sys.stdin)["password"],safe=""))')
+APP_PW=$(openssl rand -base64 24 | tr -d '/+=')
+# ONE command, so an empty value stops it before any secret is written: a secret with an empty host or password is
+# accepted here and only fails much later, at the migrate hook, with nothing pointing back to this step.
+[ -n "$PG_HOST" ] && [ -n "$ADMIN_PW" ] && [ -n "$APP_PW" ] \
+  && kubectl -n velt create secret generic velt-postgres-dsn-admin \
+       --from-literal=VELT_PG_DSN="postgres://veltadmin:${ADMIN_PW}@${PG_HOST}:5432/velt?sslmode=verify-full" \
+  && kubectl -n velt create secret generic velt-app-db --from-literal=VELT_APP_DB_PASSWORD="${APP_PW}" \
+  && kubectl -n velt create secret generic velt-postgres-dsn \
+       --from-literal=VELT_PG_DSN="postgres://velt_app:${APP_PW}@${PG_HOST}:5432/velt?sslmode=verify-full" \
+  || echo "STOP: a value is empty or a secret was not created — fix it before going on"
+unset ADMIN_PW APP_PW
+```
+
+RDS rotates the administrator password. Only the migrate Job reads `velt-postgres-dsn-admin`, and it runs on every
+upgrade — the Upgrade Guide's AWS section rebuilds it from Secrets Manager first.
+
+### 3.4 The encrypted storage class for the cache
+
+Recent EKS versions mark no storage class as the default (some still create an unmarked in-tree `gp2` class), so the
+Valkey volume gets an encrypted gp3 class on the module's EBS key:
+
+```bash
+EBS_KEY=$(tfo ebs_kms_key_arn)
+[ -n "$EBS_KEY" ] && kubectl apply -f - <<EOF || echo "STOP: no EBS key ARN — check: tfo ebs_kms_key_arn"
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata: {name: velt-gp3-encrypted}
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+parameters: {type: gp3, encrypted: "true", kmsKeyId: "$EBS_KEY"}
+EOF
+```
+
+### 3.5 The certificate for `PUBLIC_HOST` (human moment 6)
+
+The load balancer controller does not read Kubernetes TLS secrets: the certificate comes from ACM, and the values file
+names it (4.2). Request it here, before the install. Until it is `ISSUED` the controller creates the load balancer
+and its `:80` listener but not `:443` (its log repeats `CreateListener … 400`), and the Ingress shows no address. Its
+DNS validation needs the zone's owner and can take a while, so start it now:
+
+```bash
+ACM_CERT_ARN=$(aws acm request-certificate --domain-name "$PUBLIC_HOST" --validation-method DNS --region "$REGION" \
+  --query CertificateArn --output text)
+# the validation record the zone's owner creates (empty for a few seconds after the request — run it again)
+aws acm describe-certificate --certificate-arn "$ACM_CERT_ARN" --region "$REGION" \
+  --query 'Certificate.DomainValidationOptions[0].ResourceRecord'
+aws acm wait certificate-validated --certificate-arn "$ACM_CERT_ARN" --region "$REGION"   # returns once ISSUED
+echo "$ACM_CERT_ARN"   # 4.2's certificate-arn
+```
+
+Or import yours (`aws acm import-certificate`, for a private certificate authority or an air-gapped network). The
+certificate must be in the load balancer's region, `$REGION`. No access to the DNS zone yet: Phase 5's test path
+installs without a certificate and adds one afterwards.
+
+**An imported certificate never renews by itself.** ACM renews a certificate it issued, automatically, for as long as
+its validation record stays in the zone (keep that record); an imported one simply expires, and the load balancer
+then serves an expired certificate to every client. Phase 5 points the certificate alarm at it so the expiry reaches
+you 30 days ahead; renew by importing the replacement into the SAME ARN, which the load balancer picks up without a
+change: `aws acm import-certificate --certificate-arn "$ACM_CERT_ARN" --certificate fileb://cert.pem --private-key
+fileb://key.pem --certificate-chain fileb://chain.pem --region "$REGION"`.
+
+**Verify (phase gate):** `kubectl -n velt get secret` lists `velt-jwt-es256`, `velt-jwt-es256-private`,
+`velt-postgres-dsn-admin`, `velt-postgres-dsn`, `velt-app-db`; the `velt-postgres-ca` ConfigMap and the
+`velt-gp3-encrypted` StorageClass exist; the private key is in the secret store; the certificate is `ISSUED`
+(`aws acm describe-certificate … --query Certificate.Status`). Mark `3-secrets: done`.
+
+---
+
+## Phase 4 — The load balancer controller, then the application
+
+### 4.1 The AWS Load Balancer Controller and the Cluster Autoscaler
+
+The module created both controllers' IAM roles; install the controllers themselves (the module never calls the
+Kubernetes API). First the load balancer controller:
+
+```bash
+helm repo add eks https://aws.github.io/eks-charts && helm repo update     # air-gapped: mirror the chart and image into ECR
+helm install aws-load-balancer-controller eks/aws-load-balancer-controller -n kube-system --version 3.6.0 \
+  --set clusterName="$(tfo eks_cluster_name)" --set region="$REGION" \
+  --set vpcId="$(aws eks describe-cluster --name "$(tfo eks_cluster_name)" --query cluster.resourcesVpcConfig.vpcId --output text)" \
+  --set serviceAccount.create=true --set serviceAccount.name=aws-load-balancer-controller \
+  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="$(tfo lb_controller_role_arn)"
+kubectl label namespace velt elbv2.k8s.aws/pod-readiness-gate-inject=enabled    # rollouts wait for target health
+```
+
+If the install fails with `error validating data: the server is currently unable to handle the request`, see
+Troubleshooting: it is the API server's OpenAPI answer, not the chart.
+
+The module's IAM policy matches controller **v3.6.0**, which chart 3.6.0 ships — hence `--version 3.6.0`
+(`helm search repo eks/aws-load-balancer-controller --versions` lists the pairs). The GovCloud controller image comes
+from a different registry than commercial's (expected — the chart's `image.repository`).
+
+Then the Cluster Autoscaler — the upstream one, under the role the module created. It adds a node when a pod cannot be
+scheduled (the chart's autoscalers add gateway and worker pods under load) and removes an underused one, never going
+below `node_count` or above `node_max_count`. Skip it if you set `enable_cluster_autoscaler = false`, or if the module
+has no `cluster_autoscaler_role_arn` output (0.1.17 and older).
+
+```bash
+helm repo add autoscaler https://kubernetes.github.io/autoscaler && helm repo update   # air-gapped: mirror the chart and image into ECR
+helm search repo autoscaler/cluster-autoscaler --versions | head   # pick the chart whose APP VERSION has K8S_VERSION's minor
+helm install cluster-autoscaler autoscaler/cluster-autoscaler -n kube-system --version <that chart version> \
+  --set fullnameOverride=cluster-autoscaler --set cloudProvider=aws --set awsRegion="$REGION" \
+  --set autoDiscovery.clusterName="$(tfo eks_cluster_name)" \
+  --set rbac.serviceAccount.create=true --set rbac.serviceAccount.name=cluster-autoscaler \
+  --set rbac.serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="$(tfo cluster_autoscaler_role_arn)" \
+  --set extraArgs.skip-nodes-with-local-storage=false
+# with aws_use_fips_endpoints = true, add:  --set extraEnv.AWS_USE_FIPS_ENDPOINT=true
+kubectl -n kube-system rollout status deploy/cluster-autoscaler
+kubectl -n kube-system logs deploy/cluster-autoscaler | grep -iE 'accessdenied|registered|node ?group' | head   # no AccessDenied
+```
+
+The autoscaler's minor version must match the cluster's (an autoscaler for 1.33 on a 1.33 cluster): after an EKS
+version upgrade, upgrade it to the matching chart. The ServiceAccount must be `kube-system/cluster-autoscaler` — the
+module's role trusts exactly that one — and the role can resize only the Auto Scaling groups, in this region, that EKS
+tagged as this cluster's. `skip-nodes-with-local-storage=false` is required: every Velt pod mounts a scratch volume
+for `/tmp`, and with the autoscaler's default no node running a Velt pod is ever removed, so the group only grows.
+It never removes the node running the cache pod (Valkey): the chart marks that pod `safe-to-evict: "false"`, because
+every gateway is unready while it moves (its volume detaches and re-attaches, then the cache reloads — minutes). Other
+nodes it drains wait for the chart's disruption budgets. A node failure or a node-group upgrade still moves the cache
+pod. By default the autoscaler also keeps a node that runs a `kube-system` pod with no disruption budget (the load
+balancer controller, metrics-server): if the group stays above `node_count` long after load drops, that is why — give
+those Deployments a PodDisruptionBudget, or install with `--set extraArgs.skip-nodes-with-system-pods=false`.
+
+### 4.2 The values file — complete
+
+Write `values-aws.yaml`, replacing every `<placeholder>` with a Phase 1 output or a name from Phase 3:
+
+```yaml
+image:
+  registry: <ecr_registry>              # output ecr_registry
+  tag: "<PORTABLE_V>"
+
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: <workload_role_arn>     # output workload_role_arn
+
+ingress:
+  enabled: true
+  className: alb
+  host: <PUBLIC_HOST>
+  connectionIdleTimeoutSeconds: 120     # > 2 × the 30 s WebSocket heartbeat; the same number as the attribute below
+  timeoutAnnotationKey: ""              # the ALB's idle timeout is a load-balancer attribute, set below
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing             # or internal, for a private deployment
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: <ACM_CERT_ARN>     # 3.5 — ISSUED, in this region
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04   # check: aws elbv2 describe-ssl-policies
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=120
+    alb.ingress.kubernetes.io/target-group-attributes: deregistration_delay.timeout_seconds=90
+  tls:
+    secretName: ""                      # the ALB terminates TLS with the ACM certificate
+
+trustedProxyHops: 1
+trustedProxyCidrs: [<public_subnet_cidrs>]   # output public_subnet_cidrs (an internal ALB: private_subnet_cidrs)
+
+postgresCa:
+  configMapName: velt-postgres-ca
+  key: ca.pem
+
+secrets:
+  postgresDsnSecretName: velt-postgres-dsn
+  migratePostgresDsnSecretName: velt-postgres-dsn-admin
+  appDbPasswordSecretName: velt-app-db
+  jwtEs256SecretName: velt-jwt-es256
+  # svixSecretName: velt-svix           # ONLY with webhookV2Delivery "" or "svix": your own Svix token, key VELT_SVIX_API_KEY
+
+consoleAuth:
+  enabled: true
+  oidcIssuer: <CONSOLE_AUTH_ISSUER>     # character for character — 0.6
+  oidcClientId: <CONSOLE_AUTH_CLIENT_ID>
+  oidcJwksUrl: ""                       # air-gapped: the pool's JWKS URL, so the gateway skips discovery
+  jwtPrivateKeySecretName: velt-jwt-es256-private
+  preferredUsernameFallback: false      # Cognito users can write preferred_username — never key a session on it
+
+identify:
+  enabled: true
+  wsEndpoint: wss://<PUBLIC_HOST>/ws
+  apiEndpoint: https://<PUBLIC_HOST>/api
+
+corsAllowedOrigins: "https://<PUBLIC_HOST>,<your app origins, comma-separated>"
+
+# Advanced (V2) webhooks — ONE choice per deployment. "" or "svix": through your own Svix account (then set
+# secrets.svixSecretName). "direct": no third party — the workers sign each event with Svix's scheme (a receiver verifies
+# it with the unchanged svix package) and POST it from inside the cluster. "direct" beside secrets.svixSecretName fails
+# the render. Direct mode sends each event once and never retries. Event types: a NEW comment thread is
+# `comment_annotation.add`; only replies, edits and reactions are `comment.*` ("Turning a feature on later").
+webhookV2Delivery: ""                   # "" | "svix" | "direct"
+
+networkPolicy:
+  enabled: true
+  egress:
+    restricted: false                   # opt in once you have the full list of what the deployment calls out to
+    postgresCidrs: [<postgres_subnet_cidrs>]   # output postgres_subnet_cidrs
+    allowCidrs: []
+
+fips:
+  enabled: true                         # the application's FIPS mode (GovCloud / FedRAMP)
+
+redis:
+  image: <ecr_registry>/valkey:8
+  persistence:
+    storageClassName: velt-gp3-encrypted
+
+sdk:
+  enabled: true                         # false only when 0.1 found no SDK_V
+  version: "<SDK_V>"                    # part of the served PATH, /lib/sdk@<SDK_V>/
+  tag: "<SDK_V>"
+  retainedVersions: []                  # on a LATER SDK upgrade: the old version(s) to keep serving while apps repoint
+                                        # (one image serves one version — the Upgrade Guide's Phase U5)
+
+console:
+  enabled: true
+  tag: "<CONSOLE_V>"
+  config: {}                            # replaced in 4.3 with terraform/aws/out/velt-console-config.json
+
+# WHICH MODULES this deployment serves — the one list the console, the SDK and the gateway all read. `core` is the SDK
+# data plane and is always on. Add `rest-api` for the customer REST API: a
+# token-authenticated surface on the public host (`/api/v2/...`) that a deployment whose integrations all go through
+# the SDK never needs; its credential is the API key's auth token seeded in 4.7. Without `rest-api`, `/api/v2/...`
+# answers a bare 404 and the console hides the REST features. No other module id is served on this deployment — listing one
+# only makes the console show features that answer `unimplemented`.
+enabledModules:
+  - core
+  # - rest-api
+
+# Comment attachments — only with enable_storage_grants and attachment_cors_origins set in 1.2; otherwise leave the
+# whole block out (the attachment calls then answer `unimplemented` and the SDK hides the button).
+storage:
+  s3:
+    bucketUrl: <s3_bucket_url>          # output s3_bucket_url
+    region: <s3_region>                 # output s3_region
+    stsEndpoint: <sts_endpoint>         # output sts_endpoint
+    roleArn: <workload_role_arn>        # the same role as the annotation above
+```
+
+### 4.3 Splice the console config
+
+`consoleAuth.oidcIssuer` and `oidcClientId` in 4.2 are the 0.6 values. Terraform wrote the console's runtime config
+from the same values in Phase 1; splice it into the values file rather than retyping it (if the issuer changed since
+the apply, re-run the apply first — the file is written only then):
+
+```bash
+# Remove the placeholder console block from values-aws.yaml first (its four lines), then append the generated one.
+python3 - "$CONSOLE_V" <<'EOF' >> values-aws.yaml
+import json, sys
+cfg = json.load(open('terraform/aws/out/velt-console-config.json'))
+print('console:')
+print('  enabled: true')
+print(f'  tag: "{sys.argv[1]}"')
+print('  config:', json.dumps(cfg))
+EOF
+```
+
+### 4.4 Verify the chart, then install
+
+```bash
+CHART_DIGEST=$(oras manifest fetch --descriptor "$ECR/velt-portable:$PORTABLE_V" \
+  | python3 -c "import json,sys;print(json.load(sys.stdin)['digest'])")
+cosign verify --certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$ECR/velt-portable@$CHART_DIGEST" \
+  && helm install velt-portable "oci://$ECR/velt-portable@$CHART_DIGEST" -n velt -f values-aws.yaml --timeout 10m
+```
+
+The chart in ECR is the copy 2.1 made by the digest that verified (a copy keeps the digest). This resolves your copy's
+tag once, re-verifies that digest and installs that same digest. Do not add `--version`: Helm 3.17 ignores it beside a
+digest, and newer Helm refuses the pair when the tag has moved. Every later `helm upgrade` in this guide re-applies
+`$CHART_DIGEST`; in a new shell, set and verify it again by running this block up to the `cosign verify` (everything
+before `&& helm install`).
+
+The release is `velt-portable` in namespace `velt` — the pair the receipt, support bundle and upgrade commands take.
+The migrate Job runs first as a pre-install hook and applies the schema; a failure aborts the install loudly.
+
+### 4.5 Verify the migrate hook actually applied the schema
+
+```bash
+helm show chart "oci://$ECR/velt-portable@$CHART_DIGEST" | grep schema-head    # the head this chart applies
+kubectl -n velt run pgcheck --restart=Never --image="$ECR/velt-migrate:$PORTABLE_V" \
+  --overrides='{"spec":{"volumes":[{"name":"ca","configMap":{"name":"velt-postgres-ca"}}],"containers":[{"name":"pgcheck",
+    "image":"'"$ECR/velt-migrate:$PORTABLE_V"'","envFrom":[{"secretRef":{"name":"velt-postgres-dsn"}}],
+    "env":[{"name":"NODE_EXTRA_CA_CERTS","value":"/ca/ca.pem"}],"volumeMounts":[{"name":"ca","mountPath":"/ca"}],
+    "command":["node","-e","const {Client}=require(\"pg\");const c=new Client({connectionString:process.env.VELT_PG_DSN});c.connect().then(()=>c.query(\"select max(version) as head from schema_migrations\")).then(r=>{console.log(\"schemaHead \"+r.rows[0].head);return c.end()})"]}]}}'
+kubectl -n velt wait pod/pgcheck --for=jsonpath='{.status.phase}'=Succeeded --timeout=120s
+SCHEMA_HEAD=$(kubectl -n velt logs pgcheck | awk '$1=="schemaHead"{print $2}'); echo "ledger head: $SCHEMA_HEAD"   # the final report's receipt takes it
+kubectl -n velt delete pod pgcheck
+```
+
+Every in-cluster step here runs **detached** and is read from its log: an attached `kubectl run --rm -i` can race the
+short-lived container and print nothing.
+
+The printed ledger head must equal the chart's `velt.dev/schema-head`. Record it as `versions.schemaHead` (a fresh
+session sets `SCHEMA_HEAD` from the state file).
+
+### 4.6 pgaudit (when diagnostics are on — the persistent default)
+
+The module loads pgaudit on RDS when `enable_diagnostics` is on — the default in persistent mode; set
+`enable_diagnostics = true` in the tfvars to have it in sandbox too (the live check's audit-log questions need it).
+Enable the extension once, as the administrator, from inside the cluster:
+
+```bash
+kubectl -n velt run pgaudit --restart=Never --image="$ECR/velt-migrate:$PORTABLE_V" \
+  --overrides='{"spec":{"volumes":[{"name":"ca","configMap":{"name":"velt-postgres-ca"}}],"containers":[{"name":"pgaudit",
+    "image":"'"$ECR/velt-migrate:$PORTABLE_V"'","envFrom":[{"secretRef":{"name":"velt-postgres-dsn-admin"}}],
+    "env":[{"name":"NODE_EXTRA_CA_CERTS","value":"/ca/ca.pem"}],"volumeMounts":[{"name":"ca","mountPath":"/ca"}],
+    "command":["node","-e","const {Client}=require(\"pg\");const c=new Client({connectionString:process.env.VELT_PG_DSN});c.connect().then(()=>c.query(\"CREATE EXTENSION IF NOT EXISTS pgaudit\")).then(()=>{console.log(\"pgaudit ready\");return c.end()})"]}]}}'
+kubectl -n velt wait pod/pgaudit --for=jsonpath='{.status.phase}'=Succeeded --timeout=120s
+kubectl -n velt logs pgaudit        # pgaudit ready
+kubectl -n velt delete pod pgaudit
+```
+
+### 4.7 Seed the first workspace (in-cluster)
+
+The database is private, so the provision CLI runs inside the cluster from the migrate image, with the gateway's own
+DSN secret and the RDS certificate. It is idempotent: re-running upserts, never duplicates.
+
+Two credentials come out of this step, for two different ladders of the REST API — do not confuse them:
+
+- the **API key's auth token** (`x-velt-api-key` + `x-velt-auth-token`): what the REST API document calls "that
+  apiKey's auth token", and what the console shows as the API key's **Auth Token**. You chose it in Phase 3.1
+  (`<api-auth-token>`); the seed stores it hashed;
+- the **workspace auth token** (`x-velt-workspace-id` + `x-velt-workspace-auth-token`): the deployment-scoped
+  credential of the `/v2/workspace/*` family. The seed GENERATES it and prints it once — the console shows it as
+  **Workspace Auth Token**.
+
+A request on one ladder with the other ladder's token is refused with `403 Invalid Auth token.`.
+
+```bash
+# Inline JSON for --project-config and --identify-config is fine: neither carries a secret. The inner quotes are
+# backslash-escaped because each value is spliced into the --overrides JSON string below.
+PRIVATE_COMMENTS='{\"isPrivateCommentsEnabled\":true}'     # or '{}' when the customer does not use private comments
+# The identify configuration needs BOTH flags — a config without them is refused:
+#   requireAutoOrgUser  true:  a user who identifies into an organization is added to it (the hosted default for a new
+#                              API key); false: add users to organizations through the REST API first
+#   requireJwtToken     false: identify accepts a user without a token from your server (the hosted default); true: only
+#                              users your server signs (needs your verification key as customerJwt)
+IDENTIFY_CONFIG='{\"allowedOrigins\":[\"<app-origin>\"],\"requireAutoOrgUser\":true,\"requireJwtToken\":false}'  # APP_ORIGINS — every browser origin of the app, comma separated inside the array
+API_AUTH_TOKEN=$(aws secretsmanager get-secret-value --secret-id "$DEPLOYMENT_NAME/api-auth-token" --query SecretString --output text)
+kubectl -n velt run velt-provision --restart=Never --image="$ECR/velt-migrate:$PORTABLE_V" \
+  --overrides='{"spec":{"volumes":[{"name":"ca","configMap":{"name":"velt-postgres-ca"}}],"containers":[{"name":"velt-provision",
+    "image":"'"$ECR/velt-migrate:$PORTABLE_V"'","envFrom":[{"secretRef":{"name":"velt-postgres-dsn"}}],
+    "env":[{"name":"NODE_EXTRA_CA_CERTS","value":"/ca/ca.pem"}],"volumeMounts":[{"name":"ca","mountPath":"/ca"}],
+    "command":["node","dist/portable-runtime/src/provision-cli.js","seed",
+      "--api-key","<api-key>","--org-id","<org-id>","--user-id-hash","<admin-user-id-hash>",
+      "--console-admin-email","<console-admin-email>",
+      "--allowed-domains","<allowed-domains>",
+      "--identify-config","'"$IDENTIFY_CONFIG"'",
+      "--auth-token","'"$API_AUTH_TOKEN"'",
+      "--project-config","'"$PRIVATE_COMMENTS"'"]}]}}'
+# The log holds the generated WORKSPACE auth token (one bare line, printed once) next to a node `pg` SSL-mode
+# warning: capture it straight into Secrets Manager, then delete the pod so the log is gone. ONE command: a failed seed,
+# or a line that is not a token, stores nothing and keeps the pod so you can read its log.
+kubectl -n velt wait pod/velt-provision --for=jsonpath='{.status.phase}'=Succeeded --timeout=120s \
+  && ( umask 077; kubectl -n velt logs velt-provision | grep -vE '^\[|warning|Warning' | tail -1 > seed-workspace-token.txt ) \
+  && grep -qE '^[A-Za-z0-9_-]{32,}$' seed-workspace-token.txt \
+  && aws secretsmanager create-secret --name "$DEPLOYMENT_NAME/workspace-auth-token" --secret-string file://seed-workspace-token.txt >/dev/null \
+  && kubectl -n velt delete pod velt-provision \
+  || echo "NOT stored — read: kubectl -n velt logs velt-provision; fix, then kubectl -n velt delete pod velt-provision"
+rm -f seed-workspace-token.txt; unset API_AUTH_TOKEN
+```
+
+The pod runs detached and is read from its log on purpose: an attached run can lose the output, and a re-seed never
+prints the workspace token again (it is stored hashed). If the log shows `workspace auth token already provisioned`,
+the first run's token is the one in Secrets Manager; re-seeding is otherwise idempotent (that run prints `NOT stored`,
+which is expected there — delete the pod).
+
+`--allowed-domains` is required — identify refuses a workspace with none; `--console-admin-email` is who can sign in
+to the console. **`--identify-config` matters beyond CORS:** a workspace seeded without one has no identify
+configuration, and adding a second workspace in the console then fails with `cannot create a second live apiKey …
+until every existing apiKey has a valid identify config` until the first has one (Troubleshooting).
+
+**Verify (phase gate):** `helm -n velt status velt-portable` is `deployed`; the migrate pod is `Completed`; the schema
+head matches the chart; the seed completed and the token is stored; every pod is `Running` and Ready. Mark
+`4-helm: done`.
+
+---
+
+## Phase 5 — DNS and one host (human moment 6)
+
+The certificate from 3.5 is `ISSUED`, so the load balancer has its `:443` listener and the Ingress an address. Read
+it and point `PUBLIC_HOST` at it.
+
+**No access to the DNS zone yet?** A test install can run on the load balancer's own hostname with a certificate for
+that hostname from a private certificate authority, imported into ACM. On this path 3.5 has no certificate yet: install
+at 4.4 with the `certificate-arn` line left out, read the hostname (`aws elbv2 describe-load-balancers` lists it before
+the Ingress has an address), import the certificate, then put its ARN in `certificate-arn` — and that hostname in
+`PUBLIC_HOST` and every value that names it — and `helm upgrade` with the same values. Every browser and client must
+trust that authority, the hostname changes if the load balancer is recreated, and the identity provider needs that
+host's callback URL. Use it to test, not for production.
+
+```bash
+ALB=$(kubectl -n velt get ingress -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}')
+echo "$ALB"     # DNS: PUBLIC_HOST → this name (a Route 53 alias, or a CNAME in your DNS)
+```
+
+One HTTPS host serves everything: `/ws` and `/api` reach the gateway, `/lib` the SDK bundle, `/` the console; `:80`
+only redirects.
+
+**Point the alarms at the load balancer and the certificate** (persistent mode). The load balancer exists only now.
+The module finds it by itself — by the tag the load balancer controller puts on everything it creates
+(`elbv2.k8s.aws/cluster` = the cluster's name) — so no id is read or typed: add the certificate's ARN to
+`terraform.tfvars`, then plan — expect the certificate alarm, the two 5xx alarms and ONE unhealthy-target alarm, and
+nothing else — and apply:
+
+```hcl
+alarm_acm_certificate_arn = "<ACM_CERT_ARN>"
+```
+
+```bash
+terraform -chdir=terraform/aws plan -out tf.plan && terraform -chdir=terraform/aws apply tf.plan
+tfo alarm_load_balancer; echo        # app/<name>/<id> — the load balancer the alarms watch (empty: see Troubleshooting)
+aws sns list-subscriptions-by-topic --topic-arn "$(tfo alarm_topic_arn)" --region "$REGION" \
+  --query 'Subscriptions[].[Endpoint,SubscriptionArn]' --output text      # PendingConfirmation = not confirmed yet
+aws cloudwatch set-alarm-state --alarm-name "$DEPLOYMENT_NAME-rds-cpu" --state-value ALARM \
+  --state-reason "install check" --region "$REGION"                         # every subscriber gets an ALARM, then an OK
+```
+
+The test alarm returns to OK at its next evaluation (within about five minutes), and the subscribers get that too. If
+the load balancer is ever recreated (the Ingress deleted and installed again, or the cluster rebuilt), the next
+`terraform apply` finds the new one and moves its alarms to it; until that apply they never fire (the 5xx alarms read
+OK, the unhealthy-target one "insufficient data"). A module-created topic with no confirmed subscriber notifies nobody.
+
+**Verify (phase gate):** `PUBLIC_HOST` resolves to the load balancer and serves the ACM certificate; in persistent mode
+`tfo alarm_load_balancer` names `app/<name>/<id>` and the test alarm reached every subscriber. Mark `5-ingress: done`.
+
+---
+
+## Phase 6 — Smoke and the live check
+
+```bash
+kubectl -n velt get pods                                        # migrate Completed; the rest Running and Ready
+curl -si "https://$PUBLIC_HOST/api/operations/read" -H 'content-type: application/json' -d '{}' | head -1   # 400/401 — never 404
+curl -si --http1.1 "https://$PUBLIC_HOST/ws" -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' | head -1   # HTTP/1.1 101
+curl -sI "http://$PUBLIC_HOST/" | head -1                       # 301 → https
+curl -sI "https://$PUBLIC_HOST/lib/sdk@$SDK_V/velt.js" | head -1            # 200 — the SDK bundle (sdk.enabled)
+curl -sI "https://$PUBLIC_HOST/lib/sdk@$SDK_V/velt-portable.js" | head -1   # 200 — a sibling chunk: the whole directory is served
+
+VELT_AWS_LIVE_ACCOUNT_ID=$ACCOUNT_ID VELT_AWS_LIVE_REGION=$REGION VELT_AWS_LIVE_CLUSTER=$(tfo eks_cluster_name) \
+VELT_AWS_LIVE_NAMESPACE=velt VELT_AWS_LIVE_RELEASE=velt-portable VELT_AWS_LIVE_PUBLIC_HOST=$PUBLIC_HOST \
+  ./velt-portable-tools/portable-aws-live-check.sh --target gov --report live-check.json     # commercial: --target commercial
+```
+
+The live check asks twelve read-only questions — the account and partition; EKS secrets encryption; the node
+architecture (and FIPS images on GovCloud); the application role reached the gateway pod; the RDS certificate is
+mounted and the gateway is Ready; FIPS is active in the gateway; network policy is enforced; the ingress has an ALB;
+the idle timeout and deregistration delay; RDS encryption, privacy and forced TLS; the EKS and RDS audit log groups;
+and the one-host smoke. With any input unset it fails naming the variables. Record `artifacts.liveCheckReport`.
+
+**Comment attachments** (only with the `storage.s3` block set) — the calls the SDK makes, with a fresh token minted
+from the private key, fetched back from the secret store for this check and deleted after it:
+
+```bash
+aws secretsmanager get-secret-value --secret-id "$DEPLOYMENT_NAME/jwt-es256-private" --query SecretString --output text > keys/jwt-private.pem
+TOKEN=$(pcli token --private-key /keys/jwt-private.pem --api-key "$API_KEY" --user-id-hash "$ADMIN_USER_ID_HASH" --ttl-seconds 900)
+API="https://$PUBLIC_HOST/api/operations"; DOC="install-check-attachments-$(date +%s)"
+H=(-H "Authorization: Bearer $TOKEN" -H 'content-type: application/json')
+curl -s "$API/setDocumentMetadata" "${H[@]}" -d "{\"organizationId\":\"$ORG_ID\",\"documentId\":\"$DOC\",\"metadata\":{}}"; echo   # {"ok":true}
+UP=$(curl -s "$API/getUploadUrl" "${H[@]}" -d "{\"organizationId\":\"$ORG_ID\",\"documentId\":\"$DOC\",\"contentType\":\"text/plain\"}")
+echo "$UP" | jq -c '{ok, method: .data.method, headers: .data.headers}'   # {"ok":true,"method":"PUT","headers":{"Content-Type":"text/plain"}}
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT "$(echo "$UP" | jq -r .data.url)" -H 'Content-Type: text/plain' --data-binary 'attachment check'   # 200
+ID=$(echo "$UP" | jq -r .data.attachmentId); BODY="{\"organizationId\":\"$ORG_ID\",\"documentId\":\"$DOC\",\"attachmentId\":\"$ID\"}"
+curl -s "$(curl -s "$API/getDownloadUrl" "${H[@]}" -d "$BODY" | jq -r .data.url)"; echo        # attachment check
+curl -s -o /dev/null -D - -X OPTIONS "$(echo "$UP" | jq -r .data.url)" -H "Origin: $ATTACHMENT_ORIGIN" \
+  -H 'Access-Control-Request-Method: PUT' -H 'Access-Control-Request-Headers: content-type' | grep -i '^access-control-allow-origin'   # your origin
+curl -s "$API/deleteAttachment" "${H[@]}" -d "$BODY"; echo                                        # {"ok":true,"data":{"success":true}}
+curl -s "$API/getDownloadUrl" "${H[@]}" -d "$BODY"; echo                                          # {"ok":false,"code":"not-found",…}
+rm keys/jwt-private.pem
+```
+
+**Verify (phase gate):** the curls answer as commented (the two `/lib/sdk` ones only with `sdk.enabled`); the live check
+exits 0; with attachments on, the round trip answers as commented. Mark `6-smoke: done`.
+
+---
+
+## Phase 7 — End-to-end acceptance (human moment 7)
+
+The operator (or you, with browser tooling) proves the whole loop: the SDK in a real app, the comment in the console,
+and nothing fetched from a Velt host.
+
+**First, ASK the operator: "Do you have a test app, or a dev build of your real app, we can wire the SDK into?"** Do
+not silently build a page. A real app also exercises what a stand-in cannot: its CSP headers, its framework wrapper
+(`@veltdev/react` …) and its own sign-in. If there is none, build a minimal page yourself, say plainly that it is a
+stand-in, and record `acceptanceApp: stand-in` so the loop is proven again inside their app when one exists. Serve the
+page from one of `APP_ORIGINS` (the identify configuration, 4.7) — and, with attachments on, from an origin in
+`attachment_cors_origins` (1.2).
+
+### 7.1 The app's SDK config — both axes
+
+```js
+initVelt('<api-key>', {
+  // BUNDLE axis — where the JavaScript is downloaded FROM. Omit either line and the loader goes to cdn.velt.dev,
+  // even with strict: true (the two axes are independent).
+  version: '<SDK_V>',                                  // MUST equal sdk.version in values-aws.yaml
+  proxyConfig: { cdnHost: 'https://<PUBLIC_HOST>' },   // serves /lib/sdk@<SDK_V>/…
+  // RUNTIME axis — where the SDK TALKS to.
+  selfHosted: {
+    enablePortableBackend: true,
+    portableBackendUrl: 'https://<PUBLIC_HOST>/api',   // the /api base — the SDK appends /identify to it
+    strict: true,                                      // without it the SDK still calls Velt hosts
+  },
+})
+```
+
+Four silent traps on the bundle axis:
+
+- **`version` defaults to the wrapper's own built-in version**, not `latest`. Pin it, equal to `sdk.version`, or the
+  path 404s.
+- **`staging: true` / `develop: true` beat the pin** — both point at a Velt host. Never set them on a self-hosted page.
+- **The whole directory is served, not one file.** `velt.js` imports dozens of sibling chunks relative to its own path;
+  the `velt-sdk-static` image carries all of them, and Phase 6's two `/lib/sdk@…` checks prove they are served.
+- **One image serves one version.** When you later move `sdk.version`, keep the old one in `sdk.retainedVersions`
+  until every app has repointed (the Upgrade Guide's Phase U5).
+
+### 7.2 The checks
+
+1. **Console sign-in.** Open `https://<PUBLIC_HOST>` and sign in as the console admin: the email passed to
+   `--console-admin-email` in 4.7, which is the Cognito user of 0.6 (its password is in Secrets Manager,
+   `$DEPLOYMENT_NAME/console-admin-password`). After the redirect back from Cognito the console waits on `/signup`
+   with a spinner for 10–15 seconds before the dashboard (observed) — wait; do not reload.
+2. **SDK loop.** Open the app with the 7.1 config. In the browser's network log, filtered on `velt`: the bundle loads
+   from **your** host; `window.Velt.version` equals `SDK_V`; a new comment renders, and its calls go to
+   `https://<PUBLIC_HOST>/api` and `wss://<PUBLIC_HOST>/ws`.
+3. **Cross-surface proof.** The comment from step 2 is visible in the console. The console's Data view lists
+   organizations and documents by their **server ids**, not the ids your app uses; compute them to find the right rows:
+
+   ```bash
+   # the organization's server id (MD5 of the organization id)
+   node -e 'console.log(require("crypto").createHash("md5").update(process.argv[1]).digest("hex"))' "$ORG_ID"
+   # the document's server id (cyrb53 of the document id)
+   node -e 'const s=process.argv[1];let h1=0xdeadbeef,h2=0x41c6ce57;for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);h1=Math.imul(h1^c,2654435761);h2=Math.imul(h2^c,1597334677)}h1=Math.imul(h1^(h1>>>16),2246822507)^Math.imul(h2^(h2>>>13),3266489909);h2=Math.imul(h2^(h2>>>16),2246822507)^Math.imul(h1^(h1>>>13),3266489909);console.log(4294967296*(2097151&h2)+(h1>>>0))' "<the document id the app set>"
+   ```
+
+   The comment detail pane shows the annotation id, not the text or author — match on the id the SDK shows for the
+   comment. The console session lives in the operator's browser; when you (the agent) must verify this alone and the
+   REST API is on, read the comment through it instead — the same proof from the other door:
+
+   ```bash
+   API_AUTH_TOKEN=$(aws secretsmanager get-secret-value --secret-id "$DEPLOYMENT_NAME/api-auth-token" --query SecretString --output text)
+   curl -sS "https://$PUBLIC_HOST/api/v2/commentannotations/get" -H 'content-type: application/json' \
+     -H "x-velt-api-key: $API_KEY" -H "x-velt-auth-token: $API_AUTH_TOKEN" \
+     -d "{\"data\":{\"organizationId\":\"$ORG_ID\",\"documentId\":\"<the document id the app set>\"}}" | jq '.result.data | length'   # ≥ 1
+   unset API_AUTH_TOKEN
+   ```
+
+4. **Zero-egress audit.** Across both sessions the network log contains **no request to any Velt-owned host** — no
+   `cdn.velt.dev`, `api.velt.dev`, `staging.velt.dev`, no Velt analytics. `strict: true` silences the SDK's runtime
+   calls; only `proxyConfig.cdnHost` decides where the bundle comes from, a choice made before `velt.js` exists. A page
+   without the pin passes checks 1–3 and fails this one on its very first request: set both, or state plainly in the
+   report that the deployment is backend-sealed and CDN-dependent.
+5. **With attachments on:** attach a file to a comment in the app, reload, open it. The upload and the download go to
+   **your** bucket (`<bucket>.s3.<region>.amazonaws.com`, or its FIPS endpoint) and the signed-URL requests to your
+   host — nothing to a Velt host.
+
+**Driving the checks with a browser automation tool** (observed in a 0.1.17 run):
+
+- The SDK's elements render in shadow DOM: `document.querySelectorAll` finds nothing inside them. Use your tool's
+  locators that pierce shadow roots.
+- Enter does not submit the comment composer; click `button[aria-label="Save new comment"]`.
+- On a bare stand-in page, open the comments sidebar by clicking `velt-sidebar-button`; `openCommentSidebar()` did not
+  open it there.
+- An attachment's download button appears only on hover.
+- The console's "Sign in with your organization" is neither a button nor a link: select it by its text, not its role.
+- Record every request's host from a fresh browser context: that list is check 4's evidence.
+
+**Verify (final gate):** checks 1–4 pass (and 5 with attachments on). Mark `7-acceptance: done`.
+
+---
+
+## Final report — deliver this to the operator
+
+1. **Endpoints:** `PUBLIC_HOST`, `https://<PUBLIC_HOST>/api`, `wss://<PUBLIC_HOST>/ws`, the console URL.
+2. **The app's config snippet**, in full (Phase 7).
+3. **Workspace:** the API key, the organization id, the seeded admin email, the allowed domains and app origins, and
+   WHERE the workspace auth token, the API key's auth token and the ES256 private key are stored (never the values);
+   whether the **REST API** module is on (`rest-api` in `enabledModules`, Phase 4.2).
+4. **The version receipt** — send it to Velt with the report; the deployment never calls home. RDS is private, so the
+   workstation cannot read the schema head: pass the one Phase 4.5 read in-cluster:
+
+   ```bash
+   ./velt-portable-tools/portable-receipt.sh --release velt-portable --namespace velt --schema-head "$SCHEMA_HEAD" --out receipt.json
+   ```
+
+5. **The update check** — from the workstation, never the cluster:
+
+   ```bash
+   node ./velt-portable-tools/portable-check-updates.js --receipt receipt.json
+   # exit 0 up to date · 10 an update exists and this version is supported · 20 OUTSIDE the support window
+   ```
+
+   It names newer releases and says whether the installed one is inside Velt's support window. When the release index
+   is behind the published charts it says so, names the newest published chart and gives no support verdict. Include
+   its output.
+6. **Versions deployed** — `portableVersion`, the chart, the schema head, the console, the SDK, the Terraform module —
+   and whether they came from a verified manifest (`manifestVerified`).
+7. **The preflight report and the live-check report**, and the partition (`aws-us-gov` or `aws`).
+8. **Security:** the scan sign-off and the image digests.
+9. **Operations:** the node group's floor and ceiling (`node_scaling`) and that the Cluster Autoscaler is running; the
+   alarm topic, who is subscribed, and that the test alarm arrived; the backup window (`rds_backup_retention_days`) and
+   the date of the last restore rehearsal (Backup and Restore).
+10. **Anything skipped or degraded** — console off, egress not restricted, the SDK bundle not self-hosted, acceptance
+   on a stand-in page, and which of the "Features you can turn on" were left off. A gap the operator knows about is a
+   decision; one discovered later is a defect.
+
+---
+
+## After the install
+
+### What this costs to run, and how to idle it
+
+A persistent deployment is three general-purpose EKS nodes, an RDS instance (Multi-AZ in persistent mode), NAT
+gateways, an ALB, KMS keys, ECR and an S3 bucket; read the figures for your sizes from the AWS pricing calculator —
+the nodes, RDS and the NAT gateways dominate; the Cluster Autoscaler adds nodes (up to `node_max_count`) only while
+pods need them. Between evaluation windows, stop the autoscaler first (it would otherwise add nodes back for the
+pending pods), then scale the node group to zero, and stop RDS (AWS restarts a stopped RDS instance after 7 days —
+stop it again for a longer window). The NAT gateways and the ALB keep billing while idle.
+
+```bash
+kubectl -n kube-system scale deploy/cluster-autoscaler --replicas=0
+aws eks update-nodegroup-config --cluster-name "$(tfo eks_cluster_name)" --nodegroup-name "$(tfo eks_node_group_name)" \
+  --scaling-config minSize=0,maxSize=<node_max_count>,desiredSize=0 --region "$REGION"
+# to resume: minSize=<node_count>,desiredSize=<node_count>, then scale the autoscaler back to 1 replica
+```
+
+Resume BEFORE any `terraform apply`: Terraform no longer sets the group's size, so an apply while it is idled sends
+the minimum `node_count` beside a size of 0, and EKS refuses it (`Minimum capacity … can't be greater than desired
+size`). In persistent mode the RDS alarms report the stopped instance as missing data, not as an alarm.
+
+### Teardown
+
+Uninstall the application first, then delete its namespace, then destroy:
+
+```bash
+helm uninstall velt-portable -n velt --wait   # removes the Ingress; the controller deletes the ALB (not in Terraform's state; it holds the public subnets)
+kubectl delete namespace velt --wait          # the cache's volume: its claim outlives helm uninstall, and its EBS volume is not in Terraform's state
+aws ec2 describe-volumes --region "$REGION" --filters Name=status,Values=available \
+  --query 'Volumes[].[VolumeId,Tags[?Key==`kubernetes.io/created-for/pvc/namespace`]|[0].Value]' --output text   # nothing left for velt
+helm uninstall aws-load-balancer-controller -n kube-system
+terraform -chdir=terraform/aws destroy
+```
+
+**The cache's volume.** A StatefulSet's volume claim is not removed by `helm uninstall`, and the EBS volume behind
+it is the CSI driver's, not Terraform's — skip the namespace step and it is left behind, billing. Deleting the
+namespace removes the claim and the driver deletes the volume. The namespace takes several minutes to go (about ten
+measured: the workers' termination grace period); that is not a hang. In persistent mode deletion protection is on:
+destroy refuses until it is turned off deliberately —
+`aws rds modify-db-instance --db-instance-identifier <DEPLOYMENT_NAME>-pg --no-deletion-protection --apply-immediately`,
+which is the step that lets the database be deleted (it leaves the final snapshot below). The KMS keys enter a pending-deletion window rather than disappearing at once; their aliases
+and the two log groups are deleted with them, so a reinstall under the same `DEPLOYMENT_NAME` does not collide.
+
+Two things the destroy does not remove, and that matter for a reinstall under the same name:
+
+- **The Cognito user pool** (0.6) is not in Terraform: delete its domain, then the pool —
+  `aws cognito-idp delete-user-pool-domain --user-pool-id <pool id> --domain "$DEPLOYMENT_NAME-console-$ACCOUNT_ID"`,
+  then `aws cognito-idp delete-user-pool --user-pool-id <pool id>` (the id is `inputs.consoleAuthUserPoolId`).
+- **The Secrets Manager secrets** you created (`$DEPLOYMENT_NAME/…`, Phases 0.6, 3 and 4.7) are not in Terraform. Delete
+  them — `aws secretsmanager delete-secret --secret-id "$DEPLOYMENT_NAME/<name>" --force-delete-without-recovery` — or
+  keep them for the reinstall. Deleted WITH a recovery window, a name stays reserved for that window and the reinstall's
+  `create-secret` refuses it; `aws secretsmanager restore-secret` brings it back.
+- **The final database snapshot** (persistent mode), `<DEPLOYMENT_NAME>-pg-final`, is your data: it stays until you
+  delete it. A later persistent destroy under the same name needs that name free, so delete or copy it first. **It is
+  encrypted with the module's RDS key, and the destroy schedules that key for deletion** (30 days in persistent mode):
+  once the key is gone the snapshot cannot be restored. To keep it, copy it under a key you keep, or cancel the key's
+  deletion inside the window — the Backup and Restore runbook has both
+  commands.
+
+**Keep the DNS zone.** If `PUBLIC_HOST` lives in a Route 53 hosted zone, delete only the records this install added (the
+certificate's validation record and the record for `PUBLIC_HOST`), never the zone itself: a new zone gets new name
+servers, and the domain stops resolving until its registration — or the parent zone's delegation — is pointed at them.
+
+### Alarms, and what they do not cover
+
+In persistent mode every alarm notifies the alarm topic (`alarm_topic_arn`), once when it fires and once when it
+clears, and each alarm's description says what to look at:
+
+| Alarm | Fires when | First look |
+|---|---|---|
+| `<DEPLOYMENT_NAME>-rds-cpu` | RDS averages above 80% CPU for 15 minutes | long-running queries, then a larger `rds_instance_class` |
+| `<DEPLOYMENT_NAME>-rds-free-storage` | free storage stays below 10% of `rds_allocated_storage_gb` for half an hour | storage autoscaling has hit its cap (4 × `rds_allocated_storage_gb`) or cannot keep up: raise `rds_allocated_storage_gb` and apply |
+| `<DEPLOYMENT_NAME>-node-cpu` | the nodes average above 80% CPU for 15 minutes | is the node group at `node_max_count`? raise it or the instance size |
+| `<DEPLOYMENT_NAME>-node-memory` | the nodes' memory averages above 85% for 15 minutes (Container Insights) | `kubectl top nodes` and the Redis pod's memory — the cache must fit on one node; raise `node_max_count` or the instance size |
+| `<DEPLOYMENT_NAME>-certificate-expiry` | the certificate expires in under 30 days | import the replacement into the same ARN, or check the renewal's validation record |
+| `<DEPLOYMENT_NAME>-alb-5xx` | the load balancer answers more than 10 requests in five minutes with its own 5xx (503: no healthy gateway pod) | the gateway pods and the target groups' health |
+| `<DEPLOYMENT_NAME>-gateway-5xx` | the Velt pods answer more than 10 requests per five minutes with a 5xx, for 15 minutes | the gateway's logs. Its 501 for an endpoint this deployment does not offer counts too (the log line's route key is `not-ported`): a caller using such an endpoint keeps it firing |
+| `<DEPLOYMENT_NAME>-unhealthy-targets` | any target group of the load balancer keeps an unhealthy target for five minutes | the pods that are not Ready (`kubectl -n velt get pods`, then `kubectl describe pod`) |
+
+Two signals have no alarm: pods that cannot be scheduled, and the cache's volume filling. Container Insights publishes
+both as metrics when it is on (the alarms bring it), but the module sets no alarm on them — check them on a schedule,
+or alarm on the Container Insights metrics yourself:
+
+```bash
+kubectl get pods -A --field-selector=status.phase=Pending      # pods the autoscaler could not place (at the ceiling, or out of quota)
+kubectl -n velt exec statefulset/velt-portable-redis -- df -h /data   # the cache's volume; grow the PVC before it fills
+```
+
+### Backups and restore
+
+RDS keeps automated backups for `rds_backup_retention_days` (7 in persistent unless set) and restores to any second in
+that window; deleted attachments stay recoverable in the versioned bucket for `attachment_noncurrent_version_days`. The
+Backup and Restore runbook has what each backup covers, the restore
+procedures, and the rehearsal to run before going live.
+
+### Upgrades
+
+Do not improvise an upgrade: follow the [Upgrade Guide](https://docs.velt.dev/self-hosting/full/aws/upgrade) — its AWS section —
+with the target release's `./velt-portable-tools/portable-upgrade.sh` and `--import-to "$ECR"` (docker and helm both
+logged in to ECR; the administrator DSN rebuilt from Secrets Manager first; a snapshot of the database taken). Moving
+the SDK version is its own step, Phase U5: one image serves one version, so the old version stays listed in
+`sdk.retainedVersions` until every app has repointed.
+
+### Turning a feature on later
+
+Each feature below is a change to `values-aws.yaml` plus one `helm upgrade`, with the outside piece named in its row.
+Make the outside piece first, then upgrade, then run the check. Keep the whole values file in one place and apply it in
+full — never `--set` a single key you do not also write into the file, or the next upgrade carries the old value
+forward. Docker and helm must still be logged in to ECR (Phase 2.1), and `$CHART_DIGEST` is the installed chart's
+digest from Phase 4.4 (in a new shell, run that block again up to the `cosign verify`).
+
+```bash
+helm upgrade velt-portable "oci://$ECR/velt-portable@$CHART_DIGEST" -n velt -f values-aws.yaml
+```
+
+| Feature | Values to set | Outside piece, first | Check |
+|---|---|---|---|
+| **REST API** | add `rest-api` to `enabledModules` (Phase 4.2) | an auth token on the API key: the one Phase 4.7 seeded (Secrets Manager, `$DEPLOYMENT_NAME/api-auth-token`), or one created in the console under the key's App Configuration | `curl -sS https://<PUBLIC_HOST>/api/v2/organizations/get -H 'content-type: application/json' -H "x-velt-api-key: <api-key>" -H "x-velt-auth-token: <api-auth-token>" -d '{"data":{"organizationIds":["<org-id>"]}}'` → 200 (REST API) |
+| **Comment attachments** | the `storage.s3` block from Phase 4.2, from the Terraform outputs | `enable_storage_grants = true` and `attachment_cors_origins` in the tfvars (Phase 1.2), then `terraform plan` — expect the application role's bucket grant and the bucket's CORS configuration; the bucket already exists from the install — and apply | the Phase 6 attachment round trip through the public host; the gateway's startup log shows storage `enabled — S3` |
+| **Advanced webhooks — direct** | `webhookV2Delivery: direct` | nothing (the workers sign and POST from inside the cluster, out through the NAT gateways; private receiver addresses are allowed) | in the console, enable advanced webhooks on the API key and add an endpoint; the receiver gets a signed test event — AND a real new comment made in the app arrives as `comment_annotation.add`. A new thread is `comment_annotation.add`; only replies, edits and reactions are `comment.*`: an endpoint filtered on `comment.add` alone gets the test event (which defaults to `comment.add`) and never a new thread, and nothing says so at the default log level |
+| **Advanced webhooks — Svix** | `webhookV2Delivery: ""` and `secrets.svixSecretName: velt-svix` | the `velt-svix` Secret (below); outbound HTTPS to `api.svix.com`, and the receiver reachable from Svix | the same console steps and the same two events (the test event, then a real new comment as `comment_annotation.add`); the endpoint appears in the Svix application |
+| **Console SAML sign-in + SCIM** | `consoleAuth.saml.enabled: true` plus the identity provider's fields (or `idpMetadataUrl`) — the `consoleAuth:` block in the SAML runbook | a SAML app in the identity provider pointing at `https://<PUBLIC_HOST>/api/console/saml/acs`, audience `https://<PUBLIC_HOST>/api/console/saml/metadata`; its certificate(s), inline or in a Secret | a real sign-in through the provider lands on the console dashboard; with SCIM on, a user deactivated in the provider is gone from the console roster |
+| **Self-hosted SDK bundle** | `sdk.enabled: true`, `sdk.version` / `sdk.tag` (Phase 4.2) | `cosign verify`, then `cosign copy` of `velt-sdk-static:<version>` into ECR (Phase 2.1); the app pins `version` and `proxyConfig.cdnHost` (Phase 7) | `curl -sI https://<PUBLIC_HOST>/lib/sdk@<version>/velt.js` and `…/velt-portable.js` → 200. A later SDK upgrade keeps the old version served with `sdk.retainedVersions` (the Upgrade Guide's Phase U5) |
+| **Webhook payload encryption** | `secrets.webhookEncryptionSecretName: velt-webhook-key` | the `velt-webhook-key` Secret (below) | enable `encryptData` on a webhook in the console; the next event arrives encrypted. Without the Secret, a webhook with `encryptData` on fails loudly rather than sending plaintext |
+| **Deployment-wide token minting** | `secrets.masterAuthTokenSecretName: velt-master-auth` | the `velt-master-auth` Secret (below), its value kept in Secrets Manager | `POST https://<PUBLIC_HOST>/api/auth/token` with that token mints for any API key on the deployment. Leave this off unless internal services mint across several API keys — off is the safe choice, and a revoked API key stays revoked either way |
+| **Private comments** | no chart change | the console: turn on private comments for the API key (or re-run the Phase 4.7 seed with `PRIVATE_COMMENTS` set to turn them on) | a comment restricted to its author stays visible to the author |
+| **Email notifications** | no chart change | in the console, the API key's email settings: the key (and template) of the customer's own SendGrid or Customer.io account; the workers reach the provider through the NAT gateways | tag a user who has an email address in a comment; the user receives the email |
+| **Permission provider** | no chart change (`permissionProvider:` holds optional limits on its calls) | the provider's HTTPS endpoint, reachable from the cluster; in the console, the API key's permission provider: its URL and auth token | the endpoint's log shows the deployment's permission requests. A provider that cannot be reached denies nobody, so everyone is notified — the hosted behaviour |
+| **FIPS mode** | `fips.enabled: true` | `fips_enabled = true` in the tfvars, then `terraform plan` — it replaces the node group (expected); plan a maintenance window, and treat it as an install-time choice where you can — and apply | the live check (Phase 6) reports FIPS active in the gateway; `kubectl get nodes -o wide` shows the Bottlerocket FIPS image |
+| **FIPS service endpoints** | with attachments on, `storage.s3.bucketUrl` and `storage.s3.stsEndpoint` from the new outputs | `aws_use_fips_endpoints = true` in the tfvars, then `terraform plan` — it changes the `s3_bucket_url` output, and in the commercial partition `sts_endpoint` (expected) — and apply | the Phase 6 attachment round trip; the upload URL's host carries `s3-fips` |
+
+The three Secrets these rows name — each written in ONE command, so an empty value writes nothing:
+
+```bash
+# Advanced webhooks through Svix: store the customer's Svix token in Secrets Manager first, as "$DEPLOYMENT_NAME/svix-api-key"
+V=$(aws secretsmanager get-secret-value --secret-id "$DEPLOYMENT_NAME/svix-api-key" --query SecretString --output text) \
+  && [ -n "$V" ] && kubectl -n velt create secret generic velt-svix --from-literal=VELT_SVIX_API_KEY="$V" \
+  || echo "STOP: no value, or the secret was not created"
+unset V
+
+# Webhook payload encryption: a fresh 32-byte key, never printed
+V=$(openssl rand -base64 32) && [ -n "$V" ] \
+  && kubectl -n velt create secret generic velt-webhook-key --from-literal=VELT_WEBHOOK_ENCRYPTION_KEY="$V" \
+  || echo "STOP: no value, or the secret was not created"
+unset V
+
+# Deployment-wide minting: the token goes into Secrets Manager first (the services that mint read it there)
+aws secretsmanager create-secret --name "$DEPLOYMENT_NAME/master-auth-token" --secret-string "$(openssl rand -hex 32)" >/dev/null \
+  && V=$(aws secretsmanager get-secret-value --secret-id "$DEPLOYMENT_NAME/master-auth-token" --query SecretString --output text) \
+  && [ -n "$V" ] && kubectl -n velt create secret generic velt-master-auth --from-literal=VELT_MASTER_AUTH_TOKEN="$V" \
+  || echo "STOP: no value, or a secret was not created"
+unset V
+```
+
+Turning a feature **off** is the reverse: remove the values and upgrade. Data a feature wrote stays (attachments in the
+bucket, webhook ledger rows, SAML members on the roster) until you remove it yourself. On the Terraform side, emptying
+`attachment_cors_origins` removes the bucket's CORS configuration at the next apply, and `enable_storage_grants =
+false` removes the application role's bucket grants; the objects stay.
+
+### Before a support conversation: the support bundle
+
+```bash
+./velt-portable-tools/portable-support-bundle.sh --release velt-portable --namespace velt --schema-head "$SCHEMA_HEAD" --out .
+```
+
+It carries facts about the deployment — versions, image digests, pod states, the schema head, environment-variable
+names — and no secret value, no log line and no user data unless you add `--include-logs`.
+
+### Acceptance evidence
+
+Run the Validation runbook once, including its AWS section, and attach
+it to the report.
+
+---
+
+## Troubleshooting (AWS)
+
+| Symptom | Likely cause | Action |
+|---|---|---|
+| `kubectl run --rm -i …` prints nothing, or only `try pressing enter` | an attached run raced the short-lived container | run detached, `kubectl wait`, then `kubectl logs` (Phases 4.5–4.7 are written that way) |
+| `no such file or directory: docker run …` (zsh) | the provision CLI's command was stored in a variable, which zsh does not word-split | the `pcli()` shell function in Phase 3.1 |
+| the console refuses a second workspace: `cannot create a second live apiKey … until every existing apiKey has a valid identify config` | the first workspace was seeded without `--identify-config` | re-run the seed with `--identify-config` (idempotent), or set the first workspace's identify configuration in the console |
+| the seed refuses: `refusing to seed an invalid identify config: requireAutoOrgUser must be a boolean` (or `requireJwtToken`) | the identify configuration lacks one of its two flags | the Phase 4.7 value, which sets both |
+| `no such file or directory: terraform -chdir=… output -raw` (zsh), or a secret whose DSN has an empty host | a command stored in a variable: zsh does not word-split it, and the value came out empty | the `tfo()` function (1.5); delete the empty secrets and the storage class, then redo 3.3 and 3.4 |
+| `oras pull` or `cosign verify` → `error getting credentials` | your Docker configuration sends the release registry to a credential helper that fails; the registry needs no login | the empty `DOCKER_CONFIG` in Phase 0.1 (after its `DOCKER_HOST` line), with the ECR logins of 2.1 after it |
+| `docker login` or the provision CLI → `failed to connect to the docker API` / `Cannot connect to the Docker daemon at unix:///var/run/docker.sock` | the empty `DOCKER_CONFIG` hid the docker CLI's context (Colima, Docker Desktop) | set `DOCKER_HOST` to your engine's socket (`docker context inspect` with your normal configuration prints it) — the line before `DOCKER_CONFIG` in 0.1 |
+| `terraform apply` stops with `failed to refresh cached credentials … CreateOAuth2Token … The provided authorization grant is invalid` | Terraform's own refresh of an `aws login` / SSO session failed | do NOT plan and apply again yet: untaint what AWS shows healthy, re-plan to "0 to destroy" (1.3); then use the `credential_process` profile (0.3) |
+| `helm install aws-load-balancer-controller` → `error validating data: the server is currently unable to handle the request` | the API server answers `/openapi/v2` in protobuf with 503 (seen on EKS 1.36; JSON and `/openapi/v3` answer 200), and Helm's client-side validation of the chart's `kind: List` asks for it | confirm: `kubectl proxy --port 8001 &` then `curl -s -o /dev/null -w '%{http_code}\n' -H 'Accept: application/com.github.proto-openapi.spec.v2@v1.0+protobuf' http://127.0.0.1:8001/openapi/v2` → 503. Re-run THAT install with `--disable-openapi-validation` (the API server still validates every object it applies); do not add the flag anywhere else. It is intermittent on the AWS side: a fresh EKS 1.36 cluster the next day installed the controller without it |
+| a webhook receiver gets the console's test event but no real comment | the endpoint is filtered on `comment.add`, and a new thread is `comment_annotation.add` | add `comment_annotation.add` to the endpoint's event types (or remove the filter); the debug-level log line is `no enabled endpoint takes this event type` |
+| after an SDK upgrade, `/lib/sdk@<old>/velt.js` → 404 and apps pinned to `<old>` stop loading the SDK | one image serves one version; `sdk.version` moved and `<old>` was not retained | add `<old>` to `sdk.retainedVersions` and `helm upgrade`; keep it there until every app has repointed (Upgrade Guide, Phase U5) |
+| the sdk pod stays `Init:ImagePullBackOff` after adding a retained version | a listed version's `velt-sdk-static:<v>` image is not in ECR, so no version is served | copy that image into ECR (Phase 2.1) or remove the entry; every entry in `retainedVersions` needs its image |
+| `portable-check-updates.js` exits 20 | the installed version is outside Velt's support window | plan the upgrade (Upgrade Guide) |
+| pods stay `Pending` (`Insufficient cpu` / `memory`) and no node is added | the Cluster Autoscaler is not installed, the node group is at `node_max_count`, or the account is out of vCPU quota | `kubectl -n kube-system logs deploy/cluster-autoscaler` names which; raise `node_max_count` (and the quota, Phase 0.4) |
+| the autoscaler's log shows `AccessDenied` on `SetDesiredCapacity` | its ServiceAccount is not `kube-system/cluster-autoscaler`, or it lacks the role annotation | reinstall with Phase 4.1's flags; the role trusts exactly that ServiceAccount |
+| `terraform apply` fails with `Minimum capacity … can't be greater than desired size` | `node_count` was raised above the group's current size; the autoscaler owns the size, so Terraform does not change it | raise the size first with `aws eks update-nodegroup-config … --scaling-config minSize=<current>,maxSize=<max>,desiredSize=<new node_count>`, then apply |
+| alarm emails never arrive | the subscription is still `PendingConfirmation` (the link in AWS's email was not followed), or your own topic's policy or KMS key does not admit CloudWatch | `aws sns list-subscriptions-by-topic`; for your own topic, CloudWatch needs `sns:Publish` and, if the topic is encrypted, use of its key (AWS's managed `aws/sns` key cannot be used) |
+| `terraform apply` fails lowering `node_max_count` (the maximum below the group's current size) | the autoscaler has grown the group past the new ceiling | let it shrink first (or scale it down with `aws eks update-nodegroup-config`), then apply. Change `node_count` or `node_max_count` with the autoscaler scaled to 0 (the idle steps above): an apply sends the size Terraform read at plan time, so a scale-up between plan and apply is undone, and the autoscaler then adds the nodes again |
+| the load balancer alarms never fire after the load balancer was recreated (the 5xx alarms read OK, the unhealthy-target one "insufficient data") | its id changed, and no apply has run since | `terraform plan` and apply: the module finds the new load balancer by its tag and moves the alarms to it |
+| `tfo alarm_load_balancer` is empty after Phase 5, and the plan has no load-balancer alarm | no load balancer — or more than one — carries `elbv2.k8s.aws/cluster = <cluster>` (a second Ingress in the cluster, or a controller that does not tag) | `aws elbv2 describe-tags --resource-arns <the ALB's ARN>` shows its tags; with several, set `alarm_load_balancer_tags = { "ingress.k8s.aws/stack" = "velt/velt-portable" }` (namespace/Ingress name) and apply |
+| the node memory alarm sits at "insufficient data" | Container Insights is not publishing (`enable_container_insights = false`, or its agent is not running) | `kubectl -n amazon-cloudwatch get pods`; `aws eks describe-addon --cluster-name <cluster> --addon-name amazon-cloudwatch-observability` |
+| `https://<PUBLIC_HOST>/api/v2/...` → 404 while `/api/operations/read` answers 400 or 401 | the `rest-api` module is not on (the default) | add `rest-api` to `enabledModules` (Phase 4.2), `helm upgrade` |
+| `helm` fails the render: `enabledModules lists rest-api but restApi.enabled is false` | the two spellings of the REST answer disagree in your values | give one answer: remove `rest-api` from the list, or set `restApi.enabled: true` (or leave it out — it follows the list) |
+| `403 Invalid Auth token.` on `/api/v2/...` with the token the seed printed | the printed token is the WORKSPACE auth token; `x-velt-auth-token` takes the API key's auth token | use `<api-auth-token>` (Secrets Manager, `$DEPLOYMENT_NAME/api-auth-token`); the workspace token goes with `x-velt-workspace-id` / `x-velt-workspace-auth-token` on `/v2/workspace/*` |
+| `terraform plan`: credentials "belong to partition" … | signed in to the other partition | sign in to the intended account; never change `partition` to match |
+| `terraform plan`: "persistent mode must restrict the Kubernetes API endpoint" | no networks, `0.0.0.0/0`, or not private-only | list operator networks, or set `cluster_endpoint_private_only` |
+| `terraform plan`: region "is not in allowed_regions" | the region is outside your organization's allow-list | an allowed region |
+| `terraform plan` would destroy `aws_iam_openid_connect_provider.eks[0]` | `create_eks_oidc_provider` set to false on an install whose provider the module created | do not apply: `state rm` it first (1.4) |
+| any call: "with an explicit deny in a service control policy" | an organization policy | the management account; the policy id is in the error |
+| `kubectl`: `You must be logged in to the server (Unauthorized)` | your role has no cluster access entry | add it to `eks_admin_principal_arns`, apply |
+| `redis-0` stays `Pending`, its volume unbound | no storage class named | 3.4 and `redis.persistence.storageClassName` |
+| migrate hook: `self-signed certificate in certificate chain` | the RDS certificate bundle is not mounted | 3.2 and `postgresCa.configMapName` |
+| migrate hook: `password authentication failed for user "veltadmin"` | RDS rotated the administrator password | rebuild `velt-postgres-dsn-admin` from Secrets Manager (3.3) |
+| the Ingress has no address | the load balancer controller is not installed or its role is wrong | 4.1 |
+| the Ingress has no address; the controller logs `CreateListener … 400` for port 443 | the certificate is not issued yet (validation record missing) | create the validation record, wait for `ISSUED` (3.5) |
+| `describe-image-scan-findings … imageTag=…` → `ScanNotFoundException` | the tag names an image index (a multi-platform image, or one built with attestations) | read the findings by the `linux/amd64` manifest's digest (2.2) |
+| 502/503 from the ALB | targets unhealthy | `healthcheck-path: /healthz`, `target-type: ip` |
+| ECR `denied` on `cosign copy` or `helm install oci://…` | docker or helm not logged in to ECR | both `get-login-password` lines (2.1) |
+| attachment calls answer `failed-precondition`; the gateway log shows `ENOENT` | no web-identity token in the pod: the service account has no role annotation | `serviceAccount.annotations` (4.2) |
+| attachment calls answer `failed-precondition`; the gateway log shows `AccessDenied` from STS | the role trusts another service account or namespace | the module's `workload_namespace` / `workload_service_account` must match the release |
+| the gateway log: object existence read failed with status 403 | the role lacks the bucket grants | `enable_storage_grants = true`, apply |
+| the browser's upload fails with a CORS error; `curl` works | the app origin is not in `attachment_cors_origins` | add it, apply |
+| the FIPS check prints `fips: 0` | run without the image's entrypoint, or `fips.enabled` is false | run it through the entrypoint; set `fips.enabled: true` |
+````

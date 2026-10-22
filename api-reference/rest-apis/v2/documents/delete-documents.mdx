@@ -64,13 +64,16 @@ Use this API to delete specific documents from an organization.
       "yourDocumentId2": {
         "success": true,
         "id": "2131443384150904",
-        "message": "Document does not exist"
+        "message": "Deleted Successfully"
       }
     }
   }
 }
 ```
 
+<Note>
+  A success response contains only successful items. If any document in the batch fails, the whole call returns an error instead. See [Partial Failures](#partial-failures) below.
+</Note>
 
 #### Failure Response
 
@@ -79,6 +82,45 @@ Use this API to delete specific documents from an organization.
   "error": {
     "message": "ERROR_MESSAGE",
     "status": "INVALID_ARGUMENT"
+  }
+}
+```
+
+#### Partial Failures
+
+When only some of the documents in the batch fail, this endpoint returns HTTP `500` and puts a per-item breakdown in `error.details`, keyed by the document IDs you sent.
+
+<Warning>
+  A partial failure is reported as `500 INTERNAL` even when nothing actually went wrong on the server, such as when a document simply does not exist. Branch on the per-item `code` rather than the HTTP status when deciding whether to retry. Retrying on the status alone will loop on `not-found`, which will never succeed.
+</Warning>
+
+<ResponseField name="code" type="string">
+  Why this particular item failed. Present on every entry with `"success": false`.
+
+  | Value | Meaning | Safe to retry? |
+  | --- | --- | --- |
+  | `not-found` | The document does not exist. | No |
+  | `internal` | A genuine server-side failure. | Yes |
+</ResponseField>
+
+```JSON
+{
+  "error": {
+    "status": "INTERNAL",
+    "message": "Error deleting document(s).",
+    "details": {
+      "yourDocumentId1": {
+        "success": true,
+        "id": "6737987049068973",
+        "message": "Deleted Successfully"
+      },
+      "yourDocumentId2": {
+        "success": false,
+        "id": "yourDocumentId2",
+        "message": "Document does not exist",
+        "code": "not-found"
+      }
+    }
   }
 }
 ```

@@ -1,0 +1,190 @@
+---
+title: "Get Started on AWS (Closed Beta)"
+sidebarTitle: "Get Started"
+description: "Deploy Velt full self-hosting into your own AWS account, on GovCloud or the commercial partition. Hand the install guide to an AI coding agent, answer the inputs up front, and complete the human steps."
+---
+
+You don't run this deployment by hand. An AI coding agent follows the [Install guide](/self-hosting/full/aws/install) and stops to ask you whenever a step needs a person.
+
+Most of the wall clock time is waiting on AWS: the EKS cluster takes 10 to 15 minutes, RDS 15 to 25 minutes (longer with Multi-AZ), the node group about 5 minutes, and the first load balancer about 3 minutes.
+
+<Note>
+  Full self-hosting on AWS is in **closed beta**. Contact us before your first install. New to full self-hosting? Read the [Overview](/self-hosting/full/overview) first.
+</Note>
+
+## What runs in your account
+
+AWS runs Velt's portable stack: Kubernetes and PostgreSQL instead of Cloud Run and Firebase. Everything is served from one HTTPS host behind one Application Load Balancer, and nothing calls a Velt-owned host at runtime.
+
+| Piece | What you run |
+| --- | --- |
+| **Substrate** | An EKS cluster (Kubernetes Secrets encrypted with your KMS key; Bottlerocket FIPS nodes on GovCloud), Amazon RDS for PostgreSQL 16 (private, your KMS key, TLS forced), customer-managed KMS keys, ECR repositories, an S3 bucket for comment attachments, CloudWatch log groups and alarms, and IAM roles for service accounts. Created by Velt's signed Terraform module. |
+| **Application** | Velt's signed gateway, workers, and migrate images plus an in-cluster Valkey cache, installed from Velt's signed Helm chart and pulled only from your own ECR. |
+| **Console** | The Velt admin console on the same host, signing in through Amazon Cognito or any OIDC provider. |
+| **SDK** | The Velt client SDK bundle served from the same host, so your pages download nothing from Velt. |
+| **First workspace** | An API key, an organization, and an admin user seeded into the deployment's own database. |
+
+You deploy into GovCloud (`aws-us-gov`) or the commercial partition (`aws`). The partition is asserted, never assumed: the module refuses a plan whose credentials or region disagree with it.
+
+<Steps titleSize="h2">
+
+<Step title="Check the prerequisites">
+
+- An AWS account in the target partition, and an administrator role for the install. The preflight simulates every action the module needs.
+- Permission to create an Amazon Cognito user pool for console sign-in, or another OIDC provider.
+- **Someone who can create DNS records in the zone that holds your public host.** They create the certificate's validation record and the record that points at the load balancer. Find them before you start; nobody else can do this step.
+- On-Demand vCPU quota. Persistent mode needs 12 vCPUs at rest and up to 48 at the autoscaler's ceiling during a node-group update. Sandbox mode needs 4 at rest and up to 16.
+- If the account is in an AWS Organization, know its service control policies: a region allow-list, a deny on IAM OIDC-provider actions, or a spend cap each change the install.
+- Someone available to run an AI coding agent for the duration.
+
+**Tools on the machine that runs the agent:** AWS CLI 2.15+, Terraform 1.6+, Helm 3.17+, `kubectl`, `cosign`, `oras`, Node 18+, Docker, `curl`, `python3`, `openssl`, and `jq`. The agent runs the release's preflight check before it starts. The check creates nothing and stops at the first problem.
+
+</Step>
+
+<Step title="Decide your inputs">
+
+Decide these once, up front. The agent asks for all of them before it starts.
+
+| Input | Meaning |
+| --- | --- |
+| `PARTITION` / `REGION` / `ACCOUNT_ID` | Where to deploy: `aws-us-gov` or `aws`, a region your organization allows, and the account |
+| `DEPLOYMENT_NAME` | A 3 to 16 character slug that prefixes every resource and the ECR repositories |
+| `MODE` | `persistent` (production posture) or `sandbox` (disposable, smaller) |
+| `K8S_VERSION` | The EKS version to pin |
+| `PUBLIC_HOST` | The one HTTPS host for the API, WebSocket, console, and SDK |
+| `ADMIN_PRINCIPAL_ARNS` / `ENDPOINT_CIDRS` | IAM roles that administer the cluster, and the networks allowed to the Kubernetes API (or a private-only API) |
+| `CONSOLE_AUTH_ISSUER` / `CONSOLE_AUTH_CLIENT_ID` | The console's OIDC provider (Cognito, created in Phase 0) |
+| `ATTACHMENT_ORIGINS` | App origins that upload comment attachments (empty turns attachments off) |
+| Alarm recipients | Email addresses for the module's SNS topic, or your own topic's ARN |
+| API key, organization ID, admin user ID hash, console admin email, allowed domains, app origins | The first workspace |
+
+Optional features (REST API, comment attachments, advanced webhooks, console SAML sign-in and SCIM, email notifications, permission provider, FIPS mode) are off by default. You can turn each on later with a `helm upgrade`. The [agent instructions](/self-hosting/full/aws/install) list every input in full.
+
+</Step>
+
+<Step title="Start your agent">
+
+Copy the agent instructions from the [Install guide](/self-hosting/full/aws/install) and paste them into your AI coding agent. Then start it with a prompt like this, filled in with your inputs:
+
+```text
+You are deploying Velt full self-hosting into our own AWS account.
+
+Follow the Velt Install Guide (AWS) I gave you, phase by phase. Do not
+invent your own procedure.
+
+Inputs:
+  PARTITION           = aws-us-gov
+  REGION              = us-gov-west-1
+  ACCOUNT_ID          = <12-digit account id>
+  DEPLOYMENT_NAME     = <deployment-name>
+  MODE                = persistent
+  K8S_VERSION         = <an EKS version your region offers>
+  PUBLIC_HOST         = <velt.example.com>
+  CONSOLE_ADMIN_EMAIL = <admin@example.com>
+  ALLOWED_DOMAINS     = <example.com,app.example.com>
+  APP_ORIGINS         = <https://app.example.com>
+
+Maintain velt-selfhost-aws-state.json after every step so this run can
+be resumed in a fresh session. Stop and ask me whenever a step needs a human.
+```
+
+The agent ends with a final report: your endpoints, your app's config, and where every secret is stored. Keep `velt-selfhost-aws-state.json` in your working directory; it lets a new session resume an interrupted install.
+
+</Step>
+
+<Step title="Stay available for the human steps">
+
+The agent pauses and asks at each of these moments.
+
+| Moment | What you do |
+| --- | --- |
+| Sign-in | Sign in to the right account and partition with an administrator role |
+| Quota and policies | Request a quota increase if the preflight asks for one; ask the management account about any organization policy it names |
+| Console identity provider | Create the Cognito user pool and public app client, or supply another OIDC provider |
+| Cluster access | Name the admin role ARNs and the API endpoint networks, or choose a private-only API |
+| Image scan | Sign off the vulnerability scan |
+| Certificate and DNS | Request or import the ACM certificate and create its validation record; then create the record for `PUBLIC_HOST` |
+| Acceptance | Prove the loop in a real app and sign in to the console |
+
+<Tip>
+  Start the ACM certificate request early. Until it is `ISSUED`, the load balancer has no `:443` listener and the Ingress has no address.
+</Tip>
+
+</Step>
+
+<Step title="Wire your app">
+
+Set both axes in your app's Velt config: where the SDK bundle downloads **from** (`version` and `proxyConfig.cdnHost`), and where the SDK **talks to** (`selfHosted`).
+
+<Tabs>
+  <Tab title="React / Next.js">
+  ```jsx
+  <VeltProvider
+    apiKey="<api-key>"
+    config={{
+      version: '<sdk-version>',                            // must equal sdk.version in your Helm values
+      proxyConfig: { cdnHost: 'https://<public-host>' },   // serves /lib/sdk@<version>/
+      selfHosted: {
+        enablePortableBackend: true,
+        portableBackendUrl: 'https://<public-host>/api',   // the /api base
+        strict: true,                                      // never fall back to Velt hosts
+      },
+    }}
+  >
+    <App />
+  </VeltProvider>
+  ```
+  </Tab>
+  <Tab title="Other Frameworks">
+  ```js
+  const client = await initVelt('<api-key>', {
+    version: '<sdk-version>',                            // must equal sdk.version in your Helm values
+    proxyConfig: { cdnHost: 'https://<public-host>' },   // serves /lib/sdk@<version>/
+    selfHosted: {
+      enablePortableBackend: true,
+      portableBackendUrl: 'https://<public-host>/api',   // the /api base
+      strict: true,                                      // never fall back to Velt hosts
+    },
+  });
+  ```
+  </Tab>
+</Tabs>
+
+**Rules that break production if violated:**
+
+1. Set both axes. `strict: true` silences runtime calls, but only `proxyConfig.cdnHost` and `version` stop the bundle from loading from `cdn.velt.dev`.
+2. Pin `version` to the chart's `sdk.version`. It defaults to the wrapper's built-in version, and a mismatch 404s.
+3. Never set `staging: true` or `develop: true` on a self-hosted page. Both point at a Velt host.
+4. Serve the page from one of your configured app origins, so identify (and attachment CORS) admits it.
+
+</Step>
+
+<Step title="Confirm it is done">
+
+The deployment is complete only when all four pass:
+
+1. Console sign-in as the seeded admin lands on the dashboard.
+2. The app loads `velt.js` and its chunks from **your** host, and `window.Velt.version` matches the pin.
+3. A comment created in the app is visible in the console.
+4. A Network audit on both the app and console sessions shows **no** requests to `velt.dev` or other Velt-owned hosts.
+
+With comment attachments on, a fifth check confirms uploads and downloads go to your own S3 bucket.
+
+</Step>
+
+</Steps>
+
+## Troubleshooting your app
+
+| Symptom | Likely cause |
+| --- | --- |
+| The network log shows `cdn.velt.dev` | `proxyConfig.cdnHost` or `version` is missing, or `staging` or `develop` is set |
+| The browser shows a CORS error | The page isn't served from one of your configured app origins |
+| `/api/v2/...` returns 404 | The REST API is off by default. Ask the agent to turn on the `rest-api` module |
+| The console waits on a spinner after sign-in | Normal for 10 to 15 seconds after the redirect back from Cognito. Don't reload |
+
+For infrastructure errors, ask your agent: the agent instructions include the full troubleshooting table.
+
+## Upgrading later
+
+Upgrades are a delta, not a reinstall. Hand your agent the [Upgrade guide](/self-hosting/full/aws/upgrade): it verifies the new release, carries your settings forward, and updates the cluster with the release's own upgrade script. Back up the database first.

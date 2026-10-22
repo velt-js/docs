@@ -1,6 +1,7 @@
 ---
 title: "Node SDK for self-hosting and REST API calls"
-description: "Integrate the Velt Node SDK in Node.js or TypeScript to self-host data with MongoDB and S3, or call Velt's REST APIs from your backend."
+sidebarTitle: "Node SDK"
+description: "Integrate the Velt Node SDK in Node.js or TypeScript to self-host data with MongoDB or PostgreSQL and S3, or call Velt's REST APIs from your backend."
 ---
 
 ## Overview
@@ -9,7 +10,7 @@ The [Velt Node SDK](https://www.npmjs.com/package/@veltdev/node) exposes two ind
 
 | Backend | Namespace | Use case |
 |---------|-----------|----------|
-| Self-hosting | `sdk.selfHosting.*` | Store Velt data in your own MongoDB + AWS S3 |
+| Self-hosting | `sdk.selfHosting.*` | Store Velt data in your own MongoDB or PostgreSQL, plus AWS S3 for attachments |
 | REST API | `sdk.api.*` | Call Velt's REST APIs directly from your backend |
 
 **Self-hosting backend** (`sdk.selfHosting.*`) simplifies backend implementation by **90%**. Instead of writing custom database queries and storage logic, you:
@@ -18,34 +19,39 @@ The [Velt Node SDK](https://www.npmjs.com/package/@veltdev/node) exposes two ind
 2. Call the relevant SDK method with the raw request payload
 3. Return the resulting response directly to the client
 
-**REST API backend** (`sdk.api.*`) provides parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2). 18 services, fully-typed TypeScript request objects, and raw Velt API responses. API calls do not read or write MongoDB or AWS S3.
-
-<Note>
-  In `@veltdev/node@1.0.7`, `VeltSDK.initialize` still validates the top-level
-  `database` config. Pass your database config during initialization even when
-  you only call `sdk.api.*`; the REST API methods themselves do not use it.
-</Note>
+**REST API backend** (`sdk.api.*`) provides parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2). 19 services, fully-typed TypeScript request objects, and raw Velt API responses. No database or AWS configuration needed.
 
 ## Installation
 
-```bash
-npm install @veltdev/node
-```
-
-For self-hosting, also install the optional peer dependencies you plan to use:
+Install the driver for the database you self-host on. The core package carries no database driver.
 
 ```bash
-npm install mongodb              # required for self-hosting backend
-npm install @aws-sdk/client-s3   # required only if using S3 for attachments
-npm install jose@^5              # required only for the built-in JWT/JWKS verifyToken path
+npm install @veltdev/node                 # REST API backend only
+npm install @veltdev/node mongodb         # + self-hosting on MongoDB
+npm install @veltdev/node pg              # + self-hosting on PostgreSQL
+npm install @aws-sdk/client-s3            # only if you use S3 for attachments
+npm install jose@^5                       # only for the built-in JWT/JWKS verifyToken path
 ```
+
+A `database` config whose driver is not installed fails at `initialize()` with the command to run, for example `MongoDB support requires 'npm install mongodb'` or `PostgreSQL support requires 'npm install pg'`.
+
+<Warning>
+**Upgrading from 1.x:** version 2.0.0 changes these behaviors.
+
+- The database driver is checked at `initialize()`. A config with a `database` block fails at startup when its driver (`mongodb` or `pg`) is not installed. If you only call `sdk.api.*`, remove the `database` block instead.
+- `saveAttachment` stores a closed set of fields: `attachmentId`, `file` (the URL), `name`, `mimeType`, and `metadata` (`organizationId`, `documentId`, `folderId`, `attachmentId`, `commentAnnotationId`, `apiKey`). Other fields, a top-level `url`, and null metadata keys are no longer stored. A save without a `file` URL or file data returns 400.
+- An empty `organizationId` in `getComments`, `getReactions`, `getRecorderAnnotations`, and `getNotifications` returns 400 with `errorCode: 'INVALID_INPUT'`.
+- An unknown `database.type` throws at `initialize()`. A second SDK instance pointed at a different database without `await sdk.close()` throws at its first `sdk.selfHosting.*` call.
+</Warning>
 
 ### Requirements
 
 - Node.js 18+
-- TypeScript 5.x (optional — JavaScript is fully supported)
-- MongoDB 6+ (Percona Server or MongoDB Atlas) for self-hosting
-- `mongodb` ^6, `@aws-sdk/client-s3` ^3, and `jose` ^5 (for [`verifyToken`](#verifytoken)) as optional peer dependencies
+- TypeScript 5.x (optional; JavaScript is fully supported)
+- For self-hosting, one of:
+  - MongoDB 6+ (Percona Server or MongoDB Atlas) with `mongodb` ^6
+  - PostgreSQL 14+ with `pg` ^8.16
+- `@aws-sdk/client-s3` ^3 and `jose` ^5 (for [`verifyToken`](#verifytoken)) as optional peer dependencies
 
 ## Quick Start
 
@@ -54,18 +60,19 @@ npm install jose@^5              # required only for the built-in JWT/JWKS verif
 <Tabs>
 <Tab title="Self-hosting">
 
-Self-hosting initialization (MongoDB + optional AWS):
+Self-hosting initialization (MongoDB or PostgreSQL, plus optional AWS S3):
 
 ```ts
 import { VeltSDK } from '@veltdev/node';
 
 const sdk = VeltSDK.initialize({
   database: {
-    host: 'localhost:27017',
-    username: 'your-username',
-    password: 'your-password',
-    auth_database: 'admin',
-    database_name: 'velt-integration',
+    // MongoDB (default type)
+    connection_string: 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
+
+    // PostgreSQL: set the type and use a PostgreSQL connection string instead
+    // type: 'postgresql',
+    // connection_string: 'postgresql://user:pass@host:5432/velt',
   },
   apiKey: 'YOUR_VELT_API_KEY',
   authToken: 'YOUR_VELT_AUTH_TOKEN'
@@ -75,19 +82,12 @@ const sdk = VeltSDK.initialize({
 </Tab>
 <Tab title="REST API">
 
-REST API service initialization:
+REST API initialization needs no `database` block:
 
 ```ts
 import { VeltSDK } from '@veltdev/node';
 
 const sdk = VeltSDK.initialize({
-  database: {
-    host: 'localhost:27017',
-    username: 'your-username',
-    password: 'your-password',
-    auth_database: 'admin',
-    database_name: 'velt-integration',
-  },
   apiKey: 'YOUR_VELT_API_KEY',
   authToken: 'YOUR_VELT_AUTH_TOKEN'
 });
@@ -96,7 +96,7 @@ const sdk = VeltSDK.initialize({
 const result = await sdk.api.organizations.getOrganizations({ organizationIds: ['org-123'] });
 ```
 
-Set `VELT_API_KEY` and `VELT_AUTH_TOKEN` environment variables as an alternative to passing credentials in the config object.
+Set `VELT_API_KEY` and `VELT_AUTH_TOKEN` environment variables as an alternative to passing credentials in the config object. On an SDK initialized without a `database` block, `sdk.selfHosting.*` methods throw a `VeltDatabaseError` saying a `database` block is required.
 
 </Tab>
 </Tabs>
@@ -126,23 +126,81 @@ Call `await sdk.close()` when your process exits to release the database connect
 <Tabs>
 <Tab title="Database">
 
-Configure MongoDB connection for storing comments, reactions, and user data.
+Configure the database that stores comments, reactions, and user data. `type` selects the backend: `mongodb` (default) or `postgresql`. Every `sdk.selfHosting.*` method behaves the same on both.
 
-```ts
+<CodeGroup>
+
+```ts MongoDB
 const sdk = VeltSDK.initialize({
   database: {
-    host: 'localhost:27017',
-    username: 'your-username',
-    password: 'your-password',
-    auth_database: 'admin',
-    database_name: 'velt-db',
+    // Option 1: Connection string (the database name comes from its path)
+    connection_string: 'mongodb+srv://user:pass@cluster.mongodb.net/velt-db',
 
-    // Optional fields:
-    // type: 'mongodb',       // defaults to 'mongodb'
-    // use_srv: true,         // use mongodb+srv:// (auto-detected for *.mongodb.net hosts)
+    // Option 2: Individual components
+    // host: 'localhost:27017',
+    // username: 'your-username',
+    // password: 'your-password',
+    // auth_database: 'admin',
+    // database_name: 'velt-db',
+
+    // Optional (defaults shown)
+    // type: 'mongodb',
+    // use_srv: true,           // use mongodb+srv:// (auto-detected for *.mongodb.net hosts)
+    // pool_min_size: 1,
+    // pool_max_size: 5,
   }
 });
 ```
+
+```ts PostgreSQL
+const sdk = VeltSDK.initialize({
+  database: {
+    type: 'postgresql',
+    // Option 1: Connection string (URI or libpq key/value form)
+    connection_string: 'postgresql://user:pass@host:5432/velt',
+
+    // Option 2: Individual components
+    // host: 'host',            // may include the port, for example 'host:5433'
+    // port: 5432,
+    // username: 'your-username',
+    // password: 'your-password',
+    // database_name: 'velt',
+
+    // Optional (defaults shown)
+    // schema: 'public',
+    // sslmode: 'prefer',       // use 'verify-full' with sslrootcert for remote databases
+    // sslrootcert: undefined,  // path to the CA certificate file
+    // connect_timeout: 10,     // seconds
+    // application_name: 'velt-node/<version>',
+    // pool_min_size: 1,
+    // pool_max_size: 5,
+    // pool_timeout: 10,        // seconds a query waits for a pooled connection
+    // manage_schema: true,
+    // connection_options: {},  // extra connection parameters passed to node-postgres
+  }
+});
+```
+
+</CodeGroup>
+
+`database_name` overrides the database named in `connection_string` on both backends. `pool_min_size` and `pool_max_size` apply to both and are validated at `initialize()`.
+
+**How PostgreSQL storage works**
+
+- One table per collection (`comment_annotations`, `reaction_annotations`, `recorder_annotations`, `notifications`, `activities`, `attachments`, `users`) with a single JSONB `data` column that holds the document, plus expression indexes on the fields the SDK queries. The `collections` option renames these tables.
+- On first connection the SDK creates the schema, tables, and indexes (`manage_schema: true`). The role needs `CREATE` on the schema. Concurrent application starts coordinate through a per-schema advisory lock, so they do not race; a process that waits more than 60 seconds skips setup and logs a warning.
+- For locked-down roles set `manage_schema: false` and apply the DDL yourself. Generate it for your exact config and hand it to a migration role:
+
+```ts
+import { Config, postgresSchemaSql } from '@veltdev/node';
+
+console.log(postgresSchemaSql(new Config({ database: { type: 'postgresql', connection_string: 'postgresql://...' } })));
+```
+
+- `schema` is the PostgreSQL schema that holds the tables. It is unrelated to the `user_schema` option, which maps user fields.
+- `sslmode` follows libpq names: `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`. In Node, `prefer` (the default) connects **without TLS**, because node-postgres cannot fall back from TLS to plaintext. `require` encrypts without verifying the certificate (it verifies the CA when you set `sslrootcert`), and `verify-ca` and `verify-full` verify it. An unknown `sslmode` fails at `initialize()`. For any database that is not on the same host, set `sslmode: 'verify-full'` with `sslrootcert: '/path/to/ca.pem'`.
+- Each process opens its own connection pool, so a Node `cluster`, PM2, or several containers open one pool per worker.
+- The SDK does not migrate data between MongoDB and PostgreSQL.
 
 </Tab>
 <Tab title="AWS (Attachments)">
@@ -167,7 +225,7 @@ const sdk = VeltSDK.initialize({
 </Tab>
 <Tab title="Complete Example">
 
-Full configuration with database and credentials.
+Full configuration with database and credentials. For PostgreSQL, replace the `database` block with `{ type: 'postgresql', connection_string: 'postgresql://user:pass@host:5432/velt' }`.
 
 ```ts
 import { VeltSDK } from '@veltdev/node';
@@ -196,12 +254,6 @@ process.on('SIGTERM', async () => {
 
 Configure `resolverAuth` to verify the credential the Velt frontend forwards to endpoint-based resolvers. See [`verifyToken`](#verifytoken) for the full reference, error codes, and security guarantees.
 
-<Note>
-  In `@veltdev/node@1.0.7`, `VeltSDK.initialize` still validates the top-level
-  `database` config. Pass your self-hosting database config during
-  initialization; `verifyToken` itself does not open a database connection.
-</Note>
-
 ```ts
 const sdk = VeltSDK.initialize({
   database: {
@@ -225,7 +277,14 @@ const sdk = VeltSDK.initialize({
 
 ## Self-Hosting Backend
 
-Each self-hosting service is loaded asynchronously on first access via `await sdk.selfHosting.getXxx()`. The service is cached after the first call. The `token` service is the exception — it is available as a direct synchronous property via `sdk.selfHosting.token`.
+The SDK loads each self-hosting service asynchronously on first access via `await sdk.selfHosting.getXxx()`. It caches the service after the first call.
+
+`await sdk.selfHosting.database` returns the connected `DatabaseAdapter`: the raw adapter for the configured database (`MongoDBAdapter` or `PostgresAdapter`), with `find`, `findOne`, `insertOne`, `updateOne`, `updateMany`, `deleteOne`, and `deleteMany`. The first access connects and creates indexes; later accesses return the same adapter. Use it for a readiness check or to write data the resolvers do not write, such as seeding users. Pass collection names as configured in `collections`. On PostgreSQL the adapter accepts the query operators the SDK itself uses: equality, `$in`, `$nin`, `$eq`, `$ne`, `$exists`, and top-level `$and` and `$or`.
+
+```ts
+const db = await sdk.selfHosting.database;
+await db.insertOne('users', { userId: 'user-1', name: 'John Doe', email: 'john@example.com' });
+```
 
 ### Comments
 
@@ -233,7 +292,7 @@ Access via `await sdk.selfHosting.getComments()`.
 
 #### `getComments`
 
-- Fetches comments for a document from your MongoDB store.
+- Fetches comments for a document from your database.
 - Params: [GetCommentsRequest (SH)](/api-reference/sdk/models/data-models#getcommentsrequest-sh-node)
 - Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
 
@@ -257,7 +316,7 @@ const result = await commentsService.getComments({
 
 #### `saveComments`
 
-- Saves (creates or updates) comment annotations to MongoDB.
+- Saves (creates or updates) comment annotations to your database.
 - Params: [SaveCommentsRequest (SH)](/api-reference/sdk/models/data-models#savecommentsrequest-sh-node)
 - Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
 
@@ -285,7 +344,7 @@ const result = await commentsService.saveComments({
 
 #### `deleteComment`
 
-- Deletes a single comment annotation from MongoDB.
+- Deletes a single comment annotation from your database.
 - Params: [DeleteCommentRequest (SH)](/api-reference/sdk/models/data-models#deletecommentrequest-sh-node)
 - Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
 
@@ -309,7 +368,7 @@ Access via `await sdk.selfHosting.getReactions()`.
 
 #### `getReactions`
 
-- Fetches reactions for a document from MongoDB.
+- Fetches reactions for a document from your database.
 - Params: [GetReactionsRequest (SH)](/api-reference/sdk/models/data-models#getreactionsrequest-sh-node)
 - Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
 
@@ -329,7 +388,7 @@ const result = await reactionsService.getReactions({
 
 #### `saveReactions`
 
-- Persists reactions to MongoDB.
+- Persists reactions to your database.
 - Params: [SaveReactionsRequest (SH)](/api-reference/sdk/models/data-models#savereactionsrequest-sh-node)
 - Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
 - The reacting user is set via `from` (renamed from `user` in **v1.0.5**, matching the frontend `PartialReactionAnnotation.from`).
@@ -352,7 +411,7 @@ const result = await reactionsService.saveReactions({
 
 #### `deleteReaction`
 
-- Deletes a single reaction from MongoDB.
+- Deletes a single reaction from your database.
 - Params: [DeleteReactionRequest (SH)](/api-reference/sdk/models/data-models#deletereactionrequest-sh-node)
 - Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
 
@@ -393,10 +452,10 @@ const result = await attachmentsService.getAttachment('org-123', 12345);
   statusCode: 200,
   data: {
     attachmentId: 12345,
+    file: 'https://s3.amazonaws.com/...',
     name: 'document.pdf',
     mimeType: 'application/pdf',
-    size: 1024,
-    url: 'https://s3.amazonaws.com/...'
+    metadata: { organizationId: 'org-123', documentId: 'doc-1' }
   }
 }
 ```
@@ -416,7 +475,6 @@ const result = await attachmentsService.saveAttachment(
       attachmentId: 12345,
       name: 'document.pdf',
       mimeType: 'application/pdf',
-      size: 1024,
     },
   },
   fileBuffer,        // optional Buffer for S3 upload
@@ -428,7 +486,7 @@ const result = await attachmentsService.saveAttachment(
 **Response**
 
 ```ts
-{ success: true, statusCode: 200, data: { saved: true, attachmentId: 12345 } }
+{ success: true, statusCode: 200, data: { url: 'https://s3.amazonaws.com/...' } }
 ```
 
 #### `deleteAttachment`
@@ -457,7 +515,7 @@ Access via `await sdk.selfHosting.getUsers()`.
 
 #### `getUsers`
 
-- Fetches users from MongoDB.
+- Fetches users from your database.
 - Params: [GetUsersSelfHostingRequest (SH)](/api-reference/sdk/models/data-models#getusersselfhostingrequest-sh-node)
 - Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
 
@@ -479,13 +537,41 @@ const result = await usersService.getUsers({
 }
 ```
 
+#### `resolveUserIdsByEmail`
+
+- Resolves a list of email addresses to their user IDs. Backs the frontend's anonymous-user data provider.
+- Params: [ResolveUserIdsByEmailRequest](/api-reference/sdk/models/data-models#resolveuseridsbyemailrequest)
+- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
+
+```ts
+const usersService = await sdk.selfHosting.getUsers();
+const result = await usersService.resolveUserIdsByEmail({
+  organizationId: 'org-123',
+  emails: ['alice@example.com', 'bob@example.com'],
+});
+```
+
+The SDK honors custom `user_schema` field mappings. It de-duplicates repeated addresses and drops empty entries. Like `getUsers`, the lookup does not filter by organization.
+
+**Response**
+
+`data` is a map of email to user ID. Addresses that do not match a user are absent from the map:
+
+```ts
+{
+  success: true,
+  statusCode: 200,
+  data: { 'alice@example.com': 'user-1', 'bob@example.com': 'user-2' }
+}
+```
+
 ### Recorder
 
 Access via `await sdk.selfHosting.getRecorder()`.
 
 #### `getRecorderAnnotations`
 
-- Fetches recorder annotations from MongoDB.
+- Fetches recorder annotations from your database.
 - Params: [GetRecorderAnnotationsRequest (SH)](/api-reference/sdk/models/data-models#getrecorderannotationsrequest-sh-node)
 - Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
 
@@ -549,7 +635,7 @@ Access via `await sdk.selfHosting.getNotifications()`.
 
 #### `getNotifications`
 
-- Fetches notifications for a user from MongoDB.
+- Fetches notifications for a user from your database.
 - Params: [GetNotificationsSelfHostingRequest (SH)](/api-reference/sdk/models/data-models#getnotificationsselfhostingrequest-sh-node)
 - Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
 
@@ -569,7 +655,7 @@ const result = await notificationsService.getNotifications({
 
 #### `saveNotifications`
 
-- Persists one or more notifications to MongoDB.
+- Persists one or more notifications to your database.
 - Params: [SaveNotificationsRequest (SH)](/api-reference/sdk/models/data-models#savenotificationsrequest-sh-node)
 - Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
 
@@ -589,7 +675,7 @@ await notificationsService.saveNotifications({
 
 #### `deleteNotification`
 
-- Deletes a notification from MongoDB.
+- Deletes a notification from your database.
 - Params: [DeleteNotificationRequest (SH)](/api-reference/sdk/models/data-models#deletenotificationrequest-sh-node)
 - Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
 
@@ -613,7 +699,7 @@ Access via `await sdk.selfHosting.getActivities()`.
 
 #### `getActivities`
 
-- Fetches activity logs from MongoDB.
+- Fetches activity logs from your database.
 - Params: [GetActivitiesSelfHostingRequest (SH)](/api-reference/sdk/models/data-models#getactivitiesselfhostingrequest-sh-node)
 - Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
 
@@ -633,7 +719,7 @@ const result = await activitiesService.getActivities({
 
 #### `saveActivities`
 
-- Persists activity log entries to MongoDB.
+- Persists activity log entries to your database.
 - Params: [SaveActivitiesRequest (SH)](/api-reference/sdk/models/data-models#saveactivitiesrequest-sh-node)
 - Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
 
@@ -651,44 +737,9 @@ await activitiesService.saveActivities({
 { success: true, statusCode: 200, data: { saved: true } }
 ```
 
-### Token
-
-Access via the synchronous `sdk.selfHosting.token` property (no `await`).
-
-#### `getToken`
-
-- Generates a Velt auth token for a user.
-- Params: positional — `organizationId` (string), `userId` (string), `email` (string, optional), `isAdmin` (boolean, optional)
-- Returns: [VeltSelfHostingResponse](/api-reference/sdk/models/data-models#veltselfhostingresponse-node)
-
-> Note: `getToken` takes positional arguments — not a request object.
-
-```ts
-const tokenResult = await sdk.selfHosting.token.getToken(
-  'org-123',
-  'user-1',
-  'john@example.com',
-  false
-);
-const token = (tokenResult.data as { token: string }).token;
-```
-
-**Response**
-
-```ts
-{ success: true, statusCode: 200, data: { token: 'eyJhbGciOiJIUzI1NiIs...' } }
-```
-
 ### verifyToken
 
 `sdk.selfHosting.verifyToken` verifies the auth credential the Velt frontend forwards to endpoint-based resolvers. It is **database-free** (it does not open or query MongoDB), **fail-closed** (every error path returns `{ verified: false }`, never throws), and **authentication only** (claims are returned verbatim; it makes no authorization decision).
-
-<Note>
-  In `@veltdev/node@1.0.7`, `VeltSDK.initialize` still validates the top-level
-  `database` config before you can access `sdk.selfHosting`. Include your
-  self-hosting database config when initializing the SDK. The `verifyToken`
-  method itself remains database-free after initialization.
-</Note>
 
 > **Optional dependency:** `npm install jose@^5` (optional `peerDependency`, pinned `^5` for Node 18 — jose v6 needs the WebCrypto global absent on Node 18). If `jose` is missing and the built-in JWT path is used, `verifyToken` returns `{ verified: false, errorCode: 'DEPENDENCY_MISSING' }`. The custom `verify` callback path needs no dependency.
 
@@ -825,9 +876,30 @@ On failure, `result.errorCode` is one of the [`ResolverAuthErrorCode`](/api-refe
 
 ## REST API Backend
 
-The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 18 services. Each method takes a fully-typed TypeScript request object and returns the raw Velt API response. API methods need `apiKey` and `authToken` and do not use MongoDB or AWS S3, although `@veltdev/node@1.0.7` still validates the top-level `database` config at initialization.
+The `sdk.api.*` namespace gives you parity with [Velt's REST APIs](/api-reference/rest-apis/v2/organizations/get-organizations-v2) across 19 services, including token generation with [`sdk.api.accessControl.generateToken`](#generatetoken). Each method takes a fully-typed TypeScript request object and returns the raw Velt API response. You only need `apiKey` and `authToken`; initialize without a `database` block.
 
 Every `sdk.api.*` method requires an `organizationId` in its request payload. Velt enforces data isolation per-organization server-side.
+
+### Response Envelope
+
+Every `sdk.api.*` method resolves to a `VeltApiResponse<TResult>`. The SDK does not throw on an API error; check `error` first.
+
+```ts
+interface VeltApiResponse<TResult = ApiResult> {
+  result?: TResult;                                   // present on success
+  error?: { message: string; status: string; details?: unknown }; // present on failure
+}
+
+interface ApiResult<TData = unknown> {
+  status: string; message: string; data?: TData; nextPageToken?: string;
+}
+
+const res = await sdk.api.organizations.getOrganizations({ organizationIds: ['org-123'] });
+if (res.error) throw new Error(res.error.message);
+const orgs = res.result?.data;
+```
+
+`TResult` depends on the service: `ApiResult` for most services, the raw value (`unknown`) for `sdk.api.memory`, a per-method `Approval*Result` object for `sdk.api.approval` (`listDefinitions` and `listExecutions` page by `nextCursor`), and `AskAiResult` (`{ success, text?, error? }`) for `sdk.api.rewriter.askAi`. `data` is untyped; narrow it to the shape shown in each method's response example. REST user fields (`users[]`, `from`, `assignedTo`, `actionUser`, `notifyUsers`, `addPermissions.user`) take `RestUser`: `accessRole` is `'editor' | 'viewer'`, each `contacts[]` entry needs `userId`, and `role` needs `id`.
 
 ### Field Allowlist
 
@@ -1844,6 +1916,7 @@ await sdk.api.commentAnnotations.addCommentAnnotations(
 #### `addCommentAnnotations`
 
 - Creates comment annotations on a document.
+- `location.id` is required. `status` needs `id`, `name` and `type` (`'default' | 'ongoing' | 'terminal'`); `priority` needs `id` and `name`; `visibility` needs `organizationId` for `organizationPrivate` and `userIds` for `restricted`; `pageInfo` needs `url` and `path`.
 - Params: [AddCommentAnnotationsRequest](/api-reference/sdk/models/data-models#addcommentannotationsrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
 - Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending (see the note above).
@@ -1937,6 +2010,7 @@ Agent filtering is annotation-scoped and requires advanced queries to be enabled
 #### `getCommentAnnotationsCount`
 
 - Gets total and unread annotation counts per document.
+- `documentIds` is required (1 to 25 IDs); the API rejects the call with `INVALID_ARGUMENT` when it is omitted.
 - Params: [GetCommentAnnotationsCountRequest](/api-reference/sdk/models/data-models#getcommentannotationscountrequest-node)
 - Returns: [GetCommentAnnotationsCountResponse](/api-reference/sdk/models/data-models#getcommentannotationscountresponse-node)
 
@@ -2146,6 +2220,7 @@ await sdk.api.commentAnnotations.deleteComments({
 #### `addActivities`
 
 - Logs activity events.
+- `changes` is a record keyed by field name (`{ title: { from, to } }`), not an array. A `custom` activity requires `targetEntityId`.
 - Params: [AddActivitiesRequest](/api-reference/sdk/models/data-models#addactivitiesrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
 - Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending (see the note above).
@@ -2212,6 +2287,7 @@ await sdk.api.activities.getActivities({
 #### `updateActivities`
 
 - Updates existing activity events.
+- Each item is identified by `id` (`activityId` is a deprecated alias). `changes` is a record keyed by field name.
 - Params: [UpdateActivitiesRequest](/api-reference/sdk/models/data-models#updateactivitiesrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
 - Accepts an optional `options?: FieldFilterOptions` second argument — pass `{ filterUnknownFields: true }` to drop unknown fields before sending (see the note above).
@@ -2278,7 +2354,7 @@ await sdk.api.accessControl.addPermissions({
 
 #### `getPermissions`
 
-- Retrieves permissions for users on resources.
+- Retrieves permissions for users on resources. Pass at least one of `folderIds` or `documentIds`; the API rejects a call with neither.
 - Params: [GetPermissionsRequest](/api-reference/sdk/models/data-models#getpermissionsrequest-node)
 - Returns: [GetPermissionsResponse](/api-reference/sdk/models/data-models#getpermissionsresponse-node)
 
@@ -2375,6 +2451,9 @@ await sdk.api.accessControl.generateSignature({
 #### `generateToken`
 
 - Generates a JWT auth token for a user with embedded permissions.
+- Calls `POST /v2/auth/generate_token`, the endpoint documented in the [Generate Token REST API](/api-reference/rest-apis/v2/auth/generate-token) and used by the [JWT guide](/security/jwt-tokens).
+- Expects `GenerateTokenRequest { userId: string; userProperties: { name?, email?, photoUrl?, color?, textColor?, ... }; permissions: { resources?: Resource[] } }`, passed as a request object like every other `sdk.api.*` method.
+- Returns the raw Velt API envelope `VeltApiResponse`: `{ result: { status, message, data: { token } } }`.
 - Params: [GenerateTokenRequest](/api-reference/sdk/models/data-models#generatetokenrequest-node)
 - Returns: [GenerateTokenResponse](/api-reference/sdk/models/data-models#generatetokenresponse-node)
 
@@ -2603,7 +2682,7 @@ await sdk.api.livestate.broadcastEvent({
 
 #### `getRecordings`
 
-- Retrieves recording metadata for an organization or document with optional filtering and pagination.
+- Retrieves recording metadata for a document. Pass `documentId` to target the document; omitting it returns an empty list, not the organization's recordings. `recordingIds` filters the fetched page.
 - Params: [GetRecordingsRequest](/api-reference/sdk/models/data-models#getrecordingsrequest-node)
 - Returns: [GetRecordingsResponse](/api-reference/sdk/models/data-models#getrecordingsresponse-node)
 
@@ -2727,7 +2806,7 @@ await sdk.api.gdpr.getAllUserData({
 });
 ```
 
-Pass `veltUserIds` to export data for a set of Velt-side user IDs instead of the single `userId`, `veltAllOrganizations` to span every organization rather than just `organizationId`, and `uniqueId` as a correlation value echoed back on the response:
+Pass `veltUserIds` to export data for a set of Velt-side user IDs instead of the single `userId`, and `veltAllOrganizations` to span every organization rather than just `organizationId`. `uniqueId` is accepted but ignored and is not returned in the response:
 
 ```ts
 await sdk.api.gdpr.getAllUserData({
@@ -2735,7 +2814,6 @@ await sdk.api.gdpr.getAllUserData({
   userId: 'user-1',
   veltUserIds: ['velt-user-1', 'velt-user-2'],
   veltAllOrganizations: true,
-  uniqueId: 'export-request-42',
 });
 ```
 
@@ -3481,34 +3559,6 @@ await sdk.api.workspace.getAdvancedWebhookEndpointSecret({ endpointId: 'endpoint
 { result: { status: 'success', message: 'Endpoint secret retrieved successfully.', data: { secret: 'whsec_...' } } }
 ```
 
-### Token
-
-**Namespace:** `sdk.api.token`
-
-#### `getToken`
-
-- Generates a Velt auth token for a user via REST.
-- Params: positional — `organizationId` (string), `userId` (string), `email` (string, optional), `isAdmin` (boolean, optional)
-- Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
-
-> Note: `getToken` takes positional arguments — not a request object.
-
-```ts
-await sdk.api.token.getToken('org-123', 'user-1', 'john@example.com', false);
-```
-
-**Response**
-
-```ts
-{
-  result: {
-    status: 'success',
-    message: 'Token generated successfully.',
-    data: { token: 'eyJhbGciOiJIUzI1NiIs...' }
-  }
-}
-```
-
 <Note>
 Custom agent config supports the `rest-api` context-gathering strategy and the `mcp-tools` execution strategy. Secret-bearing REST API and MCP auth fields are encrypted at rest and redacted on read paths. Create and update-version payloads reject server-managed fields such as `managedBy`, `metadata.type`, `metadata.category`, `metadata.internal`, and `metadata.apiKey`; strategies that require instructions (`ai`, `service+ai`, `stagehand-agent`) reject empty `instructions`.
 </Note>
@@ -3522,7 +3572,7 @@ A new service for managing AI agents, versioned config, agent groups, executions
 
 #### `createAgent`
 
-- Create a new agent. Backend schema is `.passthrough()` — unknown fields forwarded verbatim.
+- Create a new agent. `description`, `enabled`, `contextGathering` (with a non-empty `strategies` list) and `execution` are required; `instructions` is required unless `execution.executionStrategy` is `'service'` (the strategy defaults to `'ai'`). The API drops unknown top-level keys and rejects `postProcess.pinResolution`.
 - Params: [CreateAgentRequest](/api-reference/sdk/models/data-models#createagentrequest-node)
 - Returns: [VeltApiResponse](/api-reference/sdk/models/data-models#veltapiresponse-node)
 
@@ -3532,7 +3582,8 @@ await sdk.api.agents.createAgent({
   description: 'Flags a11y issues on a page',
   instructions: 'Review the page for WCAG 2.1 AA violations and report findings.',
   enabled: true,
-  execution: { executionStrategy: 'default', knowledge: { useMemory: true, maxChunks: 10 } },
+  contextGathering: { strategies: ['web-page-text'] },
+  execution: { executionStrategy: 'ai', knowledge: { useMemory: true, maxChunks: 10 } },
   response: { useAiFormatting: true },
 });
 ```
@@ -3625,6 +3676,17 @@ await sdk.api.agents.runExecution({ agentId: 'agent-123', url: 'https://example.
 - `deviceType` — emulate `'mobile'` or `'desktop'`. Defaults to `'desktop'`.
 - `annotationVisibility` — access posture for the annotations this run creates. `'private'` (the default) means workspace admins and organization users only; `'public'` means any viewer of the document.
 - `aiConfig` — override the provider/model for this run only. Supply at least one of `provider` (`'gemini' | 'claude' | 'openai'`), `model`, `defaultModels`, or `maxToolTurns` (1–16); an empty object is rejected.
+- `urls`: review exactly these pages instead of crawling (max 500). Absolute `http(s)` URLs or site-relative paths resolved against `url`, all on the same host as `url`. When present, `crossPageExecute` and `maxUrlsToProcess` are derived from the list and the crawler is skipped. See [Run Execution](/api-reference/rest-apis/v2/agents/execution/run) for the normalization rules.
+
+```ts
+await sdk.api.agents.runExecution({
+  agentId: 'agent-123',
+  url: 'https://help.example.com',
+  urls: ['/s/article?id=101', '/s/article?id=102', '/s/topic?category=billing&sort=newest'],
+  organizationId: 'org-123',
+  documentId: 'doc-1',
+});
+```
 
 ```ts
 await sdk.api.agents.runExecution({
@@ -4370,10 +4432,10 @@ The SDK exports five typed error classes:
 | Class | Extends | When thrown |
 |-------|---------|-------------|
 | `VeltSDKError` | `Error` | Base class for all SDK errors |
-| `VeltDatabaseError` | `VeltSDKError` | MongoDB connection or query failures |
+| `VeltDatabaseError` | `VeltSDKError` | Database connection or query failures |
 | `VeltValidationError` | `VeltSDKError` | Missing or invalid request parameters |
 | `VeltTokenError` | `VeltSDKError` | Token generation failures |
-| `VeltApiError` | `VeltSDKError` | REST API call failures |
+| `VeltApiError` | `VeltSDKError` | Network or parse failures while calling the REST API. The SDK returns API-level errors as `{ error }` on the response instead of throwing them (see [Response Envelope](/backend-sdks/node#response-envelope)) |
 
 ```ts
 import { VeltSDK, VeltDatabaseError, VeltApiError } from '@veltdev/node';
@@ -4427,6 +4489,7 @@ interface PartialCommentAnnotation {
   assignedTo?: PartialUser;        // Typed in v1.0.2; previously pass-through
   targetTextRange?: PartialTargetTextRange;  // Typed in v1.0.2; previously pass-through
   resolvedByUserId?: string | null; // Three-state — see resolvedByUserId Semantics below
+  context?: { textEditorConfig?: { text?: string } }; // TipTap anchor text from client 6.0.17+, stored unchanged
   [key: string]: unknown;          // Unknown keys are preserved on round-trip
 }
 ```
@@ -4440,6 +4503,7 @@ interface PartialCommentAnnotation {
 | `assignedTo` | `PartialUser` | User currently assigned to the annotation. |
 | `targetTextRange` | `PartialTargetTextRange` | Text selection the annotation is anchored to. |
 | `resolvedByUserId` | `string \| null` | Three-state field — see below. |
+| `context` | `object` | Typed since 2.0.2. Velt client 6.0.17+ sends the TipTap anchor text as `context.textEditorConfig.text`; the SDK stores and returns the object unchanged. |
 | `[key]` | `unknown` | Extra keys pass through serialization unchanged. |
 
 **Serializers:**

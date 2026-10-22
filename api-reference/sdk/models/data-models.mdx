@@ -49,6 +49,7 @@
 | `basicAnchorData`         | `{ xpath: string; topPercentage: number; leftPercentage: number }`        | No       | Client-safe anchor data derived from the target element's xpath. `xpath` is sourced from `targetElement.anchor.fXPath`, falling back to the legacy `targetElement.fXpath`. `topPercentage` and `leftPercentage` default to `0` when not set. Omitted entirely when no xpath source is present. |
 | `involvedUserIds`         | `string[]`                                                                | No       | All user IDs involved in the annotation (subscribed + unsubscribed participants). Read-only, server-derived. |
 | `mentionedUserIds`        | `string[]`                                                                | No       | User IDs @mentioned across the annotation's comments. Read-only, server-derived. |
+| `actions`                 | [`CommentAction[]`](#commentaction)                                       | No       | Per-row default action chips, inherited by every comment on the annotation that doesn't set its own `comment.actions`. |
 
 #### Enum
 
@@ -85,6 +86,7 @@ Placeholder set when an annotation has lost its DOM target (e.g., the element wa
 | `metadata`          | `VeltEventMetadata`      | Yes      | Event metadata                                              |
 | `addContext`        | `(context: any) => void` | Yes      | Function to add custom metadata                             |
 | `elementRef`        | `{ xpath: string }`      | No       | Reference to DOM element where comment annotation was added |
+| `isAssigneeChanged` | `boolean`                | Yes      | Whether this event assigned a new user or removed the assignee. Read the current assignee from `commentAnnotation.assignedTo`. |
 
 #### AddCommentAnnotationDraftEvent
 
@@ -649,7 +651,7 @@ Configuration for text formatting toolbar options in comment composers.
 | ------------------- | --------------------------------------------- | -------- | --------------------------------------------------------------------------------- |
 | `commentAnnotation` | `{ [key: string]: PartialCommentAnnotation }` | Yes      | Map of comment annotation data to save                                            |
 | `metadata`          | `BaseMetadata`                                | No       | Additional metadata for the request. eg: apikey, organizationId, documentId, etc. |
-| `event`             | [`ResolverActions`](#resolveractions) \| [`CommentResolverSaveEvent`](#commentresolversaveevent) \| `string` | No       | The save event. One of the 4 core PII events (`ResolverActions`) or, when opted in via `additionalSaveEvents`, a non-core annotation-level event (`CommentResolverSaveEvent`). Also accepts raw strings for forward-compatibility. |
+| `event`             | [`ResolverActions`](#resolveractions) \| [`CommentResolverSaveEvent`](#commentresolversaveevent) \| `string` | No       | The save event. One of the 4 core PII events (`ResolverActions`) or, when opted in via `additionalSaveEvents`, a non-core annotation-level event (`CommentResolverSaveEvent`). `comment_annotation.suggestion_reject` is sent without opt-in. Also accepts raw strings for forward-compatibility. |
 | `commentId`         | `string`                                      | No       | ID of the comment to save                                                         |
 | `targetComment`     | [`PartialComment`](#partialcomment)           | No       | The comment the action occurred on, resolved by the frontend from `commentId` against the payload's `commentAnnotation[*].comments` map. A convenience alias for data already in the payload (no new data egress) and request context only — never persisted by `saveComments`. Omitted when `commentId` is absent or unmatched. |
 
@@ -1714,6 +1716,79 @@ Logical anchor stored in `annotation.context.textEditorConfig`. Physical rectang
 | `sourceType`            | `string`                               | No       | Origin of the comment; `'agent'` indicates AI-agent-authored. Read-only. |
 | `agent`                 | [`AgentData`](#agentdata)              | No       | AI agent identity + output for an agent-authored comment. Read-only.    |
 | `metadata`              | `any`                                  | No       | Customer-supplied metadata bag, persisted as-is when provided.          |
+| `actions`               | [`CommentAction[]`](#commentaction)    | No       | Action chips rendered on this comment row. Overrides any `CommentAnnotation.actions` default for this row. |
+| `progress`              | [`CommentProgress`](#commentprogress)  | No       | Turns this comment into a live progress row while `state` is `'active'`. |
+
+#### CommentAction
+
+---
+
+| Property   | Type      | Required | Description                                                                 |
+| ---------- | --------- | -------- | ---------------------------------------------------------------------------- |
+| `id`       | `string`  | Yes      | Stable, opaque, customer-owned identifier. The only field used as identity. |
+| `label`    | `string`  | No       | Chip text. Also the accessible name when `icon` is set.                    |
+| `icon`     | `string`  | No       | Raw SVG string (trimmed value starting with `<`), or a URL / data URI rendered as an `<img>`. Anything else resolves to no icon. |
+| `disabled` | `boolean` | No       | Renders the chip non-interactive. A disabled chip emits nothing when clicked. |
+| `hidden`   | `boolean` | No       | Omits the chip entirely.                                                    |
+| `metadata` | `any`     | No       | Customer-owned data, persisted as-is and echoed back on `commentActionClicked`. |
+
+#### CommentActionClickedEvent
+
+---
+
+| Property           | Type                                       | Required | Description                                                                 |
+| ------------------ | ------------------------------------------- | -------- | ---------------------------------------------------------------------------- |
+| `action`           | [`CommentAction`](#commentaction)          | Yes      | The full action object, including `action.metadata`.                       |
+| `actionId`         | `string`                                   | Yes      | ID of the clicked action.                                                   |
+| `scope`            | `'comment' \| 'annotation'`                | Yes      | Where the action was defined. Independent of `commentId`.                  |
+| `annotationId`     | `string`                                   | Yes      | ID of the annotation.                                                       |
+| `commentId`        | `number`                                   | No       | ID of the row that was clicked. Omitted when the click isn't tied to a row. |
+| `commentAnnotation`| [`CommentAnnotation`](#commentannotation)  | Yes      | The comment annotation object.                                              |
+| `comment`          | [`Comment`](#comment)                      | No       | The clicked row's comment object. Same presence rule as `commentId`.       |
+| `actionUser`       | [`User`](#user)                            | Yes      | The user who clicked. Distinct from the row's author on a machine-written row. |
+| `metadata`         | `VeltEventMetadata`                        | Yes      | Velt event metadata. Distinct from `action.metadata`.                      |
+
+#### CommentProgress
+
+---
+
+| Property           | Type                                            | Required | Description                                                            |
+| ------------------ | ------------------------------------------------ | -------- | -------------------------------------------------------------------------- |
+| `state`            | [`CommentProgressState`](#commentprogressstate) | Yes      | Lifecycle state of the progress row.                                   |
+| `steps`            | [`CommentProgressStep[]`](#commentprogressstep) | No       | Step list. Replaces the previous array wholesale on every `updateComment`. |
+| `visibleToUserIds` | `string[]`                                       | No       | Display-only. Not a security boundary and not used to scope anything.  |
+| `startedAt`        | `number`                                         | No       | Customer-supplied start time. Never used for staleness or ordering.    |
+
+**CommentProgressState**
+
+| Value | Description |
+| --- | --- |
+| `active` | The row renders with animated dots and the current step label. |
+| `completed` | The row stops rendering. The comment renders as a normal reply once it has content. |
+| `failed` | The row stops rendering. Any content already written on the comment stays visible. |
+| `cancelled` | The row stops rendering. Any content already written on the comment stays visible. |
+
+#### CommentProgressStep
+
+---
+
+| Property      | Type                                                     | Required | Description                                            |
+| ------------- | --------------------------------------------------------- | -------- | ---------------------------------------------------------- |
+| `id`          | `string`                                                  | No       | Step identifier.                                        |
+| `label`       | `string`                                                  | Yes      | Customer-authored label. Rendered verbatim, never translated. |
+| `state`       | [`CommentProgressStepState`](#commentprogressstepstate)  | No       | Step's own state.                                        |
+| `startedAt`   | `number`                                                  | No       | Step start time.                                         |
+| `completedAt` | `number`                                                  | No       | Step completion time.                                    |
+| `metadata`    | `any`                                                      | No       | Customer-owned data.                                     |
+
+**CommentProgressStepState**
+
+| Value | Description |
+| --- | --- |
+| `pending` | Step hasn't started. |
+| `active` | Step is in progress. Its `label` is what the progress row shows. |
+| `completed` | Step finished. |
+| `failed` | Step failed. |
 
 #### AddCommentEvent
 
@@ -1726,6 +1801,7 @@ Logical anchor stored in `annotation.context.textEditorConfig`. Physical rectang
 | `commentId`         | `number`            | Yes      | ID of the comment         |
 | `comment`           | `Comment`           | Yes      | Comment Object            |
 | `metadata`          | `VeltEventMetadata` | Yes      | Event metadata            |
+| `isAssigneeChanged` | `boolean`           | Yes      | Whether this event assigned a new user or removed the assignee. Read the current assignee from `commentAnnotation.assignedTo`. |
 
 #### UpdateCommentEvent
 
@@ -1738,6 +1814,7 @@ Logical anchor stored in `annotation.context.textEditorConfig`. Physical rectang
 | `commentId`         | `number`            | Yes      | ID of the comment         |
 | `comment`           | `Comment`           | Yes      | Comment Object            |
 | `metadata`          | `VeltEventMetadata` | Yes      | Event metadata            |
+| `isAssigneeChanged` | `boolean`           | Yes      | Whether this update changed the annotation's assignee. Always `false` when called through `commentElement.updateComment`; listen for `assignUser` for an assignment made separately. |
 
 #### DeleteCommentEvent
 
@@ -2082,6 +2159,8 @@ Configuration for virtual scroll behavior in autocomplete dropdown.
 | `thumbnailWithPlayIconUrl` | `string` | No       | URL of the thumbnail with a play icon overlay        |
 | `metadata`                 | `any`    | No       | Additional metadata of the attachment                |
 | `mimeType`                 | `any`    | No       | MIME type of the attachment                          |
+| `clientOrganizationId`     | `string` | No       | Organization ID of the document that stores the file. Set only for self-hosted uploads |
+| `clientDocumentId`         | `string` | No       | Document ID that stores the file. Set only for self-hosted uploads |
 
 #### FileData
 
@@ -2470,43 +2549,6 @@ class ReactionMetadata extends BaseMetadata {
 | `annotationId` | `string`         | Yes      | ID of the annotation |
 | `options`      | `RequestOptions` | No       | Request options      |
 
-#### AcceptCommentAnnotationRequest
-
----
-
-| Property       | Type             | Required | Description          |
-| -------------- | ---------------- | -------- | -------------------- |
-| `annotationId` | `string`         | Yes      | ID of the annotation |
-| `options`      | `RequestOptions` | No       | Request options      |
-
-#### RejectCommentAnnotationRequest
-
----
-
-| Property       | Type             | Required | Description          |
-| -------------- | ---------------- | -------- | -------------------- |
-| `annotationId` | `string`         | Yes      | ID of the annotation |
-| `options`      | `RequestOptions` | No       | Request options      |
-
-#### AcceptSuggestionRequest
-
----
-
-| Property       | Type             | Required | Description          |
-| -------------- | ---------------- | -------- | -------------------- |
-| `annotationId` | `string`         | Yes      | ID of the annotation |
-| `options`      | `RequestOptions` | No       | Request options      |
-
-#### RejectSuggestionRequest
-
----
-
-| Property       | Type             | Required | Description                      |
-| -------------- | ---------------- | -------- | -------------------------------- |
-| `annotationId` | `string`         | Yes      | ID of the annotation             |
-| `rejectReason` | `string`         | No       | Optional reason for rejection    |
-| `options`      | `RequestOptions` | No       | Request options                  |
-
 #### CustomPriority
 
 ---
@@ -2605,22 +2647,24 @@ class ReactionMetadata extends BaseMetadata {
 
 ---
 
-| Property            | Type                | Required | Description               |
-| ------------------- | ------------------- | -------- | ------------------------- |
-| `annotationId`      | `string`            | Yes      | ID of the annotation      |
-| `commentAnnotation` | `CommentAnnotation` | Yes      | Comment annotation object |
-| `metadata`          | `VeltEventMetadata` | Yes      | Event metadata            |
+| Property            | Type                | Required | Description                    |
+| ------------------- | ------------------- | -------- | ------------------------------- |
+| `annotationId`      | `string`            | Yes      | ID of the annotation            |
+| `commentAnnotation` | `CommentAnnotation` | Yes      | Comment annotation object       |
+| `metadata`          | `VeltEventMetadata` | Yes      | Event metadata                  |
+| `actionUser`        | `User`              | Yes      | User who performed the action   |
 
 #### SuggestionRejectEvent
 
 ---
 
-| Property            | Type                | Required | Description               |
-| ------------------- | ------------------- | -------- | ------------------------- |
-| `annotationId`      | `string`            | Yes      | ID of the annotation      |
-| `commentAnnotation` | `CommentAnnotation` | Yes      | Comment annotation object |
-| `rejectReason`      | `string`            | No       | Reason provided for rejection |
-| `metadata`          | `VeltEventMetadata` | Yes      | Event metadata            |
+| Property            | Type                | Required | Description                    |
+| ------------------- | ------------------- | -------- | -------------------------------- |
+| `annotationId`      | `string`            | Yes      | ID of the annotation             |
+| `commentAnnotation` | `CommentAnnotation` | Yes      | Comment annotation object        |
+| `metadata`          | `VeltEventMetadata` | Yes      | Event metadata                   |
+| `actionUser`        | `User`              | Yes      | User who performed the action    |
+| `rejectReason`      | `string`            | No       | Reason provided for rejection    |
 
 ### Comment Dialog Primitives
 
@@ -3650,6 +3694,22 @@ For location and user filters, provide at least one documented identity field in
 | `color`  | string | Yes      | Color associated with the custom category. |
 | `name`   | string | Yes      | Name or label of the custom category.      |
 
+### IdScopedAnchoringConfig
+
+---
+
+Passed to `enableIdScopedAnchoring()` and the `idScopedAnchoring` prop to limit id-scoped anchoring to specific documents.
+
+```typescript
+interface IdScopedAnchoringConfig {
+  documentIds?: string[];
+}
+```
+
+| Property      | Type       | Required | Description                                                                                                  |
+| ------------- | ---------- | -------- | ------------------------------------------------------------------------------------------------------------ |
+| `documentIds` | `string[]` | No       | Document ids (the ids you pass to `setDocuments`) to apply it to. Omit for every document. `[]` applies to none. |
+
 ### ConfirmDialogComponentConfig
 
 ---
@@ -3784,7 +3844,7 @@ Props accepted by the `VeltCommentDialog` component. The React TypeScript interf
 | `pageMode`                          | `boolean`                 | No       | Enable page-mode composer                                     |
 | `focusedThreadMode`                 | `boolean`                 | No       | Enable focused-thread view on comment click                   |
 | `readOnly`                          | `boolean`                 | No       | Enable read-only mode                                         |
-| `embedMode`                         | `string \| null`          | No       | Embeds the sidebar inline within a container                  |
+| `embedMode`                         | `boolean`                 | No       | Embeds the sidebar inline within a container.                 |
 | `floatingMode`                      | `boolean`                 | No       | Renders the sidebar as a floating overlay                     |
 | `position`                          | `'right' \| 'left'`       | No       | Sidebar position. Narrowed from `string` to `'right' \| 'left'`. |
 | `variant`                           | `string`                  | No       | Sidebar variant, e.g., `'sidebar'`, `'inline'`                |
@@ -4516,6 +4576,17 @@ Configuration for cross-organization "For You" notifications. Merges For You not
 | `excludeOrganizationIds`   | `string[]`                    | No       | Org IDs to exclude. The current org is always excluded regardless of this field.  |
 | `feeds`                    | `('forYou' \| 'all')[]`       | No       | Feed targets. Only `'forYou'` is supported; `'all'` is ignored with a warning.    |
 
+#### UserScopedNotificationsConfig
+
+---
+
+Configuration for the user-scoped "For You" notifications fetch. Fetches the current user's newest notifications for the current organization directly, independent of the recently-active-documents window. Used with [`enableUserScopedNotifications()`](/async-collaboration/notifications/customize-behavior#enableuserscopednotifications).
+
+| Property  | Type      | Required | Description                                                                                                                        |
+| --------- | --------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled` | `boolean` | No       | Enable or disable the user-scoped fetch. Defaults to `true` when opted in; an explicit `false` disables and keeps the configured `limit`. |
+| `limit`   | `number`  | No       | Maximum user-scoped notifications fetched. Defaults to `25` and is clamped to `[1, 200]`; non-numeric, non-finite, or values below `1` fall back to `25`. |
+
 #### FirestorePaths
 
 ---
@@ -4524,7 +4595,7 @@ Self-hosting configuration that maps Velt collections to custom Firestore paths.
 
 | Property                | Type     | Required | Description                                                                                                  |
 | ----------------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------- |
-| `userNotificationIndex` | `string` | No       | Path to the global, per-user notification index collection (org-independent). Required for cross-organization "For You" notifications. See [Cross-Organization Notifications](/self-host-data/notifications#cross-organization-notifications). |
+| `userNotificationIndex` | `string` | No       | Path to the global, per-user notification index collection (org-independent). Required for cross-organization "For You" notifications. See [Cross-organization notifications](/self-hosting/partial/overview#operational-behavior). |
 
 #### NotificationSettingsLayout
 
@@ -5770,7 +5841,7 @@ The declaration keys below show how the former enum members map to the string va
 
 ---
 
-Non-core, annotation-level comment save events that customers can opt into receiving via [`ResolverConfig.additionalSaveEvents`](#resolverconfig), beyond the 4 core PII events. May appear as the `event` value on [`SaveCommentResolverRequest`](#savecommentresolverrequest).
+Non-core, annotation-level comment save events that customers can opt into receiving via [`ResolverConfig.additionalSaveEvents`](#resolverconfig), beyond the 4 core PII events. The exception is `comment_annotation.suggestion_reject`, which is sent without opt-in when the annotation has a `suggestion`. May appear as the `event` value on [`SaveCommentResolverRequest`](#savecommentresolverrequest).
 
 | Name                 | Value                                    | Description                                                       |
 | -------------------- | ---------------------------------------- | ---------------------------------------------------------------- |
@@ -5809,7 +5880,7 @@ Element type of [`ResolverConfig.additionalSaveEvents`](#resolverconfig).
 
 Enum defining module names for user-related resolver operations. Used in data provider events to identify which module triggered the resolver call.
 
-[Self-Host User Data →](/self-host-data/users#debugging)
+[Self-Host User Data →](/self-hosting/partial/users#debugging)
 
 | Name                      | Value                     | Description                                              |
 | ------------------------- | ------------------------- | -------------------------------------------------------- |
@@ -5825,7 +5896,7 @@ Enum defining module names for user-related resolver operations. Used in data pr
 
 Enum defining module names for comment-related resolver operations. Used in data provider events to identify which module triggered the resolver call.
 
-[Self-Host Comment Data →](/self-host-data/comments#debugging)
+[Self-Host Comment Data →](/self-hosting/partial/comments#debugging)
 
 | Name                      | Value                     | Description                                        |
 | ------------------------- | ------------------------- | -------------------------------------------------- |
@@ -5839,7 +5910,7 @@ Enum defining module names for comment-related resolver operations. Used in data
 
 Enum defining module names for reaction-related resolver operations. Used in data provider events to identify which module triggered the resolver call.
 
-[Self-Host Reaction Data →](/self-host-data/reactions#debugging)
+[Self-Host Reaction Data →](/self-hosting/partial/reactions#debugging)
 
 | Name                       | Value                      | Description                                       |
 | -------------------------- | -------------------------- | ------------------------------------------------- |
@@ -5852,7 +5923,7 @@ Enum defining module names for reaction-related resolver operations. Used in dat
 
 Enum defining module names for recorder-related resolver operations. Used in data provider events to identify which module triggered the resolver call.
 
-[Self-Host Recording Data →](/self-host-data/recordings#debugging)
+[Self-Host Recording Data →](/self-hosting/partial/recordings#debugging)
 
 | Name                       | Value                      | Description                                       |
 | -------------------------- | -------------------------- | ------------------------------------------------- |
@@ -5935,8 +6006,10 @@ Union type for all recorder resolver lifecycle event type strings.
 | `comments`          | `Record<string, PartialComment>` | No       | Map of comment IDs to partial comments data                                                                                                                                                       |
 | `from`              | `PartialUser`                    | No       | User who created the annotation. _Typed in `@veltdev/node` v1.0.2 (was previously pass-through)._                                                                                                 |
 | `assignedTo`        | `PartialUser`                    | No       | User the annotation is assigned to. _Typed in `@veltdev/node` v1.0.2._                                                                                                                            |
+| `context`           | `{ textEditorConfig?: { text?: string; [key: string]: any }; [key: string]: any }` | No | TipTap anchor text (`context.textEditorConfig.text`). Moved here from the annotation's `context` object and merged back on read. If `context` is listed in `fieldsToRemove`, the whole object is sent. Your `save` handler must store it and your `get` handler must return it. _Added in SDK v6.0.17._ |
 | `targetTextRange`   | `PartialTargetTextRange`         | No       | Text range the annotation is anchored to. _Typed in `@veltdev/node` v1.0.2._                                                                                                                      |
 | `resolvedByUserId`  | `string \| null`                 | No       | ID of the resolving user. Three-state semantics in `@veltdev/node` v1.0.2: omit = no change, `null` = unresolve, string = resolve. See [Node SDK Data Models](/backend-sdks/node#resolvedbyuserid-semantics). |
+| `suggestion`        | `Partial<SuggestionData>`        | No       | Present when the annotation carries a suggestion. Holds the content keys (`oldValue`, `newValue`, `summary`, `rejectReason`, `metadata`). See [Suggestion Content](/self-hosting/partial/comments#suggestion-content). |
 | `[key: string]`     | `unknown`                        | No       | Index signature; unknown keys are preserved by the `@veltdev/node` round-trip helpers.                                                                                                            |
 
 `@veltdev/node` v1.0.2 exposes `partialCommentAnnotationFromDict` and `partialCommentAnnotationToDict` round-trip helpers.
@@ -6037,7 +6110,7 @@ Config-based resolver endpoint configuration. SDK handles HTTP requests, headers
 | `deleteConfig`    | `ResolverEndpointConfig` | No       | Config-based endpoint for delete operations    |
 | `additionalFields` | `string[]`              | No       | Custom fields copied to resolver payloads but retained in Velt's storage |
 | `fieldsToRemove`  | `string[]`              | No       | Fields stripped from Velt's storage before writing to your resolver endpoint |
-| `additionalSaveEvents` | [`AdditionalSaveEventConfig[]`](#additionalsaveeventconfig) | No | Opt-in list of additional (non-core) annotation-level save events delivered to the existing save endpoint, beyond the 4 core PII events. Absent/empty ⇒ no extra events (default, backward-compatible). |
+| `additionalSaveEvents` | [`AdditionalSaveEventConfig[]`](#additionalsaveeventconfig) | No | Opt-in list of additional (non-core) annotation-level save events delivered to the existing save endpoint, beyond the 4 core PII events. Absent/empty ⇒ no extra events (default, backward-compatible), except `comment_annotation.suggestion_reject`, which is always sent when the annotation has a `suggestion`. |
 
 #### ResolverResponse
 
@@ -8508,7 +8581,7 @@ Stored on `CommentAnnotation.suggestion` when `annotation.type === 'suggestion'`
 | `oldValue`      | `unknown`                                   | Yes      | Target value captured at suggestion creation              |
 | `newValue`      | `unknown`                                   | Yes      | Proposed replacement value                                |
 | `summary`       | `string`                                    | No       | Human-readable description of the change                  |
-| `metadata`      | `Record<string, unknown>`                   | No       | Arbitrary caller-supplied metadata                        |
+| `metadata`      | `Record<string, unknown>`                   | No       | Customer metadata from `CommitSuggestionConfig.metadata`, stored as a JSON clone. With a comment data provider, only your resolver stores it. |
 | `driftDetected` | `boolean`                                   | No       | True when target value changed after suggestion was created |
 | `createdBy`     | `User`                                      | Yes      | User who created the suggestion                           |
 | `createdAt`     | `number`                                    | Yes      | Unix timestamp (ms) of creation                           |
@@ -8654,7 +8727,7 @@ Passed to [`commitSuggestion()`](/api-reference/sdk/api/api-methods#commitsugges
 | `newValue`    | `T`                       | Yes      | Proposed value to store in the suggestion      |
 | `summary`     | `string`                  | No       | Human-readable description of the change. Becomes the plain text of the suggestion's first comment. |
 | `summaryHtml` | `string`                  | No       | HTML body for the suggestion's first comment (for example, a color-coded diff). Sanitized with DOMPurify at render time: inline `style` is kept; scripts and event handlers are stripped. |
-| `metadata`    | `Record<string, unknown>` | No       | Arbitrary caller-supplied metadata             |
+| `metadata`    | `Record<string, unknown>` | No       | Plain JSON object stored on `suggestion.metadata` and returned as `Suggestion.metadata`. Not stored if it is not a plain object or cannot be serialized as JSON. |
 
 ### Handler Types
 
@@ -9155,8 +9228,8 @@ Request payload for `sdk.api.gdpr.deleteAllUserData`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `userIds` | `list[str]` | Yes | Users whose data should be deleted. |
-| `organizationIds` | `list[str]` | No | Restrict deletion to these organizations. Speeds up the job. |
+| `userIds` | `list[str]` | Yes | Users whose data should be deleted. More than 30 are truncated to the first 30 server-side. |
+| `organizationIds` | `list[str]` | No | Scope the deletion to these organizations. When omitted, the user's data is deleted across every organization. |
 
 ### DeleteAttachmentResolverRequest
 
@@ -9389,6 +9462,9 @@ Request payload for `sdk.api.gdpr.getAllUserData`.
 | `organizationId` | `str` | Yes | Organization to query. |
 | `userId` | `str` | Yes | User whose data should be exported. |
 | `pageToken` | `str` | No | Pagination token from a previous call. |
+| `veltUserIds` | `list[str]` | No | Export data for these Velt-side user IDs instead of the single `userId`. |
+| `veltAllOrganizations` | `bool` | No | Return data across all organizations rather than just `organizationId`. |
+| `uniqueId` | `str` | No | Accepted but ignored; it is not returned in the response. |
 
 ### GetAllUserDataResponse
 
@@ -9498,7 +9574,7 @@ Request payload for `sdk.api.commentAnnotations.getCommentAnnotationsCount`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `str` | Yes | Organization ID. |
-| `documentIds` | `list[str]` | Yes | Document IDs to count annotations for. Limit: 30 IDs per call. |
+| `documentIds` | `list[str]` | Yes | Document IDs to count annotations for. 1 to 25 IDs per call; the API rejects an empty or missing list. |
 | `userId` | `str` | Yes | ID of the user requesting the counts (used to compute unread). |
 | `statusIds` | `list[str]` | No | Filter counts by annotation status (e.g. `OPEN`, `IN_PROGRESS`). |
 
@@ -9848,8 +9924,8 @@ Request payload for `sdk.api.notifications.getNotificationConfig`.
 |-------|------|----------|-------------|
 | `organizationId` | `str` | Yes | Organization ID. |
 | `documentIds` | `list[str]` | No | Restrict to specific documents. |
-| `userId` | `str` | Yes | User whose preferences should be returned. |
-| `getOrganizationConfig` | `bool` | No | Also include org-level defaults. |
+| `userId` | `str` | No | User whose preferences should be returned. Required when `getOrganizationConfig` is `True`. |
+| `getOrganizationConfig` | `bool` | No | Also include org-level defaults. Requires `userId`. |
 
 ### GetNotificationConfigResponse
 
@@ -9963,8 +10039,9 @@ Request payload for `sdk.api.accessControl.getPermissions`.
 |-------|------|----------|-------------|
 | `organizationId` | `str` | Yes | Organization to query. |
 | `userIds` | `list[str]` | Yes | Users whose permissions should be returned. |
-| `folderIds` | `list[str]` | No | Include these folders in the result. |
-| `documentIds` | `list[str]` | No | Include these documents in the result. |
+| `folderIds` | `list[str]` | No | Include these folders in the result. At least one of `folderIds` or `documentIds` must be non-empty. |
+| `documentIds` | `list[str]` | No | Include these documents in the result. At least one of `folderIds` or `documentIds` must be non-empty. |
+| `skipResourceExistenceValidation` | `bool` | No | Skip the existence check on the organization and the supplied folder/document IDs. When `False` (the default) the API errors if any of them does not resolve. |
 
 ### GetPermissionsResponse
 
@@ -10008,7 +10085,7 @@ Request payload for `sdk.api.recordings.getRecordings`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `str` | Yes | Organization ID. |
-| `documentId` | `str` | No | Restrict to recordings on a specific document. |
+| `documentId` | `str` | No | Document to read recordings from. Omitting it returns an empty list, not the organization's recordings. |
 | `recordingIds` | `list[str]` | No | Filter by specific recording IDs. |
 | `pageSize` | `int` | No | Number of results per page. Minimum: 1. |
 | `pageToken` | `str` | No | Pagination cursor returned from a previous response. |
@@ -10471,15 +10548,31 @@ Request and response types used by the [Velt Node SDK](/backend-sdks/node). Fiel
 
 ### `VeltApiResponse` (Node)
 
-Standard envelope for all `sdk.api.*` REST methods. Success and error are mutually exclusive.
+Standard envelope for all `sdk.api.*` REST methods. Success and error are mutually exclusive, and the SDK returns the error envelope instead of throwing.
 
 ```ts
+interface VeltApiResponse<TResult = ApiResult> {
+  result?: TResult;
+  error?: VeltApiErrorBody;
+}
+
+interface ApiResult<TData = unknown> {
+  status: string;        // 'success'
+  message: string;
+  data?: TData;          // method-specific
+  nextPageToken?: string;
+}
+
+interface VeltApiErrorBody { message: string; status: string; details?: unknown }
+
 // Success
 { result: { status: 'success', message: '...', data: { /* method-specific */ } } }
 
 // Error
 { error: { message: '...', status: 'INTERNAL', details: { /* per-key error info */ } } }
 ```
+
+`TResult` depends on the service: `ApiResult` for most services; the raw value (`unknown`) for `sdk.api.memory`; a per-method `Approval*Result` object for `sdk.api.approval`, which pages by `nextCursor` instead of `nextPageToken`; and `AskAiResult` (`{ success: boolean; text?: string; error?: string }`) for `sdk.api.rewriter.askAi`.
 
 ### `VeltSelfHostingResponse` (Node)
 
@@ -10501,7 +10594,7 @@ Request payload for `sdk.api.activities.addActivities`.
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization context. |
 | `documentId` | `string` | Yes | Document the activities belong to. |
-| `activities` | `Array<{ featureType: string; actionType: string; actionUser: { userId: string; name?: string; email?: string }; displayMessageTemplate: string }>` | Yes | Activity events to log. |
+| `activities` | `ActivityInput[]` | Yes | Activity events to log. See [ActivityInput](#activityinput-node); `targetEntityId` is required when `featureType` is `'custom'`. |
 
 ### `AddCommentAnnotationsRequest` (Node)
 
@@ -10563,7 +10656,7 @@ Request payload for `sdk.api.folders.addFolder`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization that owns the folders. |
-| `folders` | `Array<{ folderId: string; folderName?: string }>` | Yes | Folders to create. |
+| `folders` | `Array<{ folderId: string; folderName?: string; parentFolderId?: string; accessType?: 'public' \| 'organizationPrivate' \| 'restricted' }>` | Yes | Folders to create. |
 | `createOrganization` | `boolean` | No | Auto-create the organization if missing. |
 
 ### `AddNotificationsRequest` (Node)
@@ -10595,8 +10688,8 @@ Request payload for `sdk.api.accessControl.addPermissions`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `user` | `{ userId: string }` | Yes | User to grant access to. |
-| `permissions` | `{ resources: Array<{ type: string; id: string; organizationId?: string; accessRole: string; expiresAt?: number }> }` | Yes | Resources and roles to grant. |
+| `user` | `RestUser` | Yes | User to grant access to. `userId` is required; see [RestUser](#restuser-node). |
+| `permissions` | `{ resources: Array<{ type: 'organization' \| 'folder' \| 'document' \| 'context'; id: string; organizationId?: string; accessRole?: 'editor' \| 'viewer'; expiresAt?: number }> }` | Yes | Resources and roles to grant. |
 
 ### `AddPresenceRequest` (Node)
 
@@ -10618,6 +10711,51 @@ Request payload for `sdk.api.userGroups.addUserGroups`.
 | `organizationUserGroups` | `Array<{ groupId: string; groupName?: string }>` | Yes | Groups to create. |
 | `createOrganization` | `boolean` | No | Auto-create the organization if missing. |
 
+### `RestUser` (Node)
+
+User object accepted by the REST request fields `users[]` (`addUsers`, `updateUsers`), `user` (`addPermissions`), `from`, `assignedTo`, `actionUser` and `notifyUsers`. Unknown keys pass through.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `userId` | `string` | Yes | User ID. |
+| `name` | `string` | No | Display name. |
+| `email` | `string` | No | Email address. |
+| `photoUrl` | `string` | No | Avatar URL. |
+| `accessRole` | `'editor' \| 'viewer'` | No | Access role on the resource. |
+| `contacts` | `Array<{ userId: string; name?: string; email?: string; photoUrl?: string; groupId?: string; source?: string; visibility?: string; role?: { id: string } }>` | No | Contacts the user can mention. Each entry needs `userId`. |
+| `role` | `{ id: string; name?: string; description?: string }` | No | Custom role. `id` is required. |
+| `organizationId`, `groupId`, `plan`, `color`, `textColor`, `type`, `isAdmin`, `isReadOnly`, `isAnonymous`, `isGuest`, `initial`, and other profile fields | mixed | No | Optional; passed through as sent. |
+
+### `ActivityInput` (Node)
+
+One item of `AddActivitiesRequest.activities`. A union on `featureType`: when `featureType` is `'custom'`, `targetEntityId` is required; for the other feature types it is optional.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `featureType` | `'comment' \| 'reaction' \| 'recorder' \| 'crdt' \| 'custom'` | Yes | Feature the activity belongs to. |
+| `actionType` | `string` | Yes | Action performed, for example `comment.add`. |
+| `actionUser` | `RestUser` | Yes | User who performed the action. |
+| `targetEntityId` | `string` | Conditional | Required when `featureType` is `'custom'`. |
+| `id` | `string` | No | Custom activity ID for idempotent writes. |
+| `targetEntityType` | `string` | No | Type of the target entity. |
+| `changes` | `Record<string, { from?: unknown; to?: unknown }>` | No | Field changes keyed by field name, for example `{ title: { from: 'A', to: 'B' } }`. |
+| `metadata` | `Record<string, unknown>` | No | Arbitrary metadata. |
+| `createdAt` | `number` | No | Creation timestamp. |
+
+### `UpdateActivityInput` (Node)
+
+One item of `UpdateActivitiesRequest.activities`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | `string` | Yes | Activity to update. `activityId` is accepted as a deprecated alias. |
+| `featureType` | `'comment' \| 'reaction' \| 'recorder' \| 'crdt' \| 'custom'` | No | New feature type. |
+| `actionType` | `string` | No | New action type. |
+| `actionUser` | `RestUser` | No | New action user. |
+| `targetEntityId` | `string` | No | New target entity. |
+| `changes` | `Record<string, { from?: unknown; to?: unknown }>` | No | Field changes keyed by field name. |
+| `metadata` | `Record<string, unknown>` | No | Arbitrary metadata. |
+
 ### `AddUsersRequest` (Node)
 
 Request payload for `sdk.api.users.addUsers`.
@@ -10625,7 +10763,7 @@ Request payload for `sdk.api.users.addUsers`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization to add users to. |
-| `users` | `Array<{ userId: string; name?: string; email?: string; accessRole?: 'editor' \| 'viewer' }>` | Yes | Users to add. |
+| `users` | `RestUser[]` | Yes | Users to add. See [RestUser](#restuser-node): `accessRole` is `'editor' \| 'viewer'`, each `contacts[]` entry needs `userId`, and `role` needs `id`. |
 | `createOrganization` | `boolean` | No | Auto-create the organization if missing. |
 
 ### `AddUsersToGroupRequest` (Node)
@@ -10710,8 +10848,8 @@ Request payload for `sdk.api.gdpr.deleteAllUserData`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `userIds` | `string[]` | Yes | Users whose data should be deleted. |
-| `organizationIds` | `string[]` | No | Restrict deletion to these organizations. |
+| `userIds` | `string[]` | Yes | Users whose data should be deleted. More than 30 are truncated to the first 30 server-side. |
+| `organizationIds` | `string[]` | No | Scope the deletion to these organizations. When omitted, the user's data is deleted across every organization. |
 
 ### `DeleteAttachmentRequest` SH (Node)
 
@@ -10888,7 +11026,7 @@ Request payload for `sdk.api.accessControl.generateToken`.
 |-------|------|----------|-------------|
 | `userId` | `string` | Yes | User to mint the token for. |
 | `userProperties` | `{ name?: string; email?: string; isAdmin?: boolean }` | No | User profile properties. |
-| `permissions` | `{ resources: Array<{ type: string; id: string; organizationId?: string; accessRole: string }> }` | No | Permissions to embed in the token. |
+| `permissions` | `{ resources: Array<{ type: 'organization' \| 'folder' \| 'document' \| 'context'; id: string; organizationId?: string; accessRole?: 'editor' \| 'viewer' }> }` | No | Permissions to embed in the token. |
 
 ### `GenerateTokenResponse` (Node)
 
@@ -10962,7 +11100,7 @@ Request payload for `sdk.api.gdpr.getAllUserData`.
 | `pageToken` | `string` | No | Pagination cursor returned from a previous call. |
 | `veltUserIds` | `string[]` | No | Export data for these Velt-side user IDs instead of the single `userId`. |
 | `veltAllOrganizations` | `boolean` | No | Return data across all organizations rather than just `organizationId`. |
-| `uniqueId` | `string` | No | Correlation value echoed back on the response. |
+| `uniqueId` | `string` | No | Accepted but ignored; it is not returned in the response. |
 
 ### `GetAllUserDataResponse` (Node)
 
@@ -11063,8 +11201,9 @@ Request payload for `sdk.api.commentAnnotations.getCommentAnnotationsCount`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization context. |
-| `documentIds` | `string[]` | Yes | Documents to count annotations for. |
-| `userId` | `string` | No | Filter counts to a specific user. |
+| `documentIds` | `string[]` | Yes | Documents to count annotations for. 1 to 25 IDs per call. |
+| `userId` | `string` | Yes | User requesting the counts (used to compute unread). |
+| `statusIds` | `string[]` | No | Filter counts by annotation status. |
 
 <Warning>
 The count endpoint does not support agent filtering, and agent filter fields sent to it are ignored rather than rejected — the response would be unfiltered totals with no error. To count an agent-scoped subset, list with an agent filter via `getCommentAnnotations` and count the result.
@@ -11365,7 +11504,9 @@ Request payload for `sdk.api.notifications.getNotificationConfig`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization context. |
-| `userId` | `string` | Yes | User whose preferences to fetch. |
+| `userId` | `string` | Yes | User whose preferences to fetch. The type requires it; the API only enforces it when `getOrganizationConfig` is `true`. |
+| `documentIds` | `string[]` | No | Restrict to specific documents. |
+| `getOrganizationConfig` | `boolean` | No | Also include org-level defaults. |
 
 ### `GetNotificationConfigResponse` (Node)
 
@@ -11464,10 +11605,10 @@ Request payload for `sdk.api.accessControl.getPermissions`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization context. |
-| `userIds` | `string[]` | No | Filter to these users. |
-| `documentIds` | `string[]` | No | Filter to these documents. |
-| `folderIds` | `string[]` | No | Filter to these folders. |
-| `skipResourceExistenceValidation` | `boolean` | No | Skip the existence check on the supplied folder/document IDs. When `false` (the default) the API errors if any ID does not resolve. |
+| `userIds` | `string[]` | Yes | Users whose permissions to return. |
+| `documentIds` | `string[]` | No | Filter to these documents. At least one of `documentIds` or `folderIds` must be non-empty. |
+| `folderIds` | `string[]` | No | Filter to these folders. At least one of `documentIds` or `folderIds` must be non-empty. |
+| `skipResourceExistenceValidation` | `boolean` | No | Skip the existence check on the organization and the supplied folder/document IDs. When `false` (the default) the API errors if any of them does not resolve. |
 
 ### `GetPermissionsResponse` (Node)
 
@@ -11515,7 +11656,7 @@ Request payload for `sdk.api.recordings.getRecordings`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization context. |
-| `documentId` | `string` | No | Document to fetch recordings for. |
+| `documentId` | `string` | No | Document to read recordings from. Omitting it returns an empty list, not the organization's recordings. |
 | `recordingIds` | `string[]` | No | Specific recording IDs to fetch. |
 | `pageSize` | `number` | No | Maximum number of recordings to return. |
 | `pageToken` | `string` | No | Token for fetching the next page of results. |
@@ -11842,7 +11983,7 @@ Request payload for `sdk.api.activities.updateActivities`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization context. |
-| `activities` | `Array<{ id: string; displayMessageTemplate: string }>` | Yes | Activity updates. |
+| `activities` | `UpdateActivityInput[]` | Yes | Activity updates, each identified by `id`. See [UpdateActivityInput](#updateactivityinput-node). |
 
 ### `UpdateApiKeyRequest` (Node)
 
@@ -11934,7 +12075,8 @@ Request payload for `sdk.api.folders.updateFolderAccess`.
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization that owns the folders. |
 | `folderIds` | `string[]` | Yes | Folders to update. |
-| `accessType` | `'restricted'` | Yes | New access type. |
+| `accessType` | `'public' \| 'organizationPrivate' \| 'restricted'` | No | New access type. Exactly one of `accessType` or `inheritFromParent` must be set. |
+| `inheritFromParent` | `boolean` | No | Inherit the access type from the parent folder. Exactly one of `accessType` or `inheritFromParent` must be set. |
 
 ### `UpdateFolderRequest` (Node)
 
@@ -11989,7 +12131,7 @@ Request payload for `sdk.api.users.updateUsers`.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `organizationId` | `string` | Yes | Organization to update users in. |
-| `users` | `Array<{ userId: string; name?: string; email?: string; accessRole?: string }>` | Yes | User updates. |
+| `users` | `RestUser[]` | Yes | User updates. See [RestUser](#restuser-node): `accessRole` is `'editor' \| 'viewer'`, each `contacts[]` entry needs `userId`, and `role` needs `id`. |
 
 ### `UpdateWebhookConfigRequest` (Node)
 
@@ -12030,20 +12172,20 @@ Result returned by `sdk.selfHosting.verifyToken`. See [`verifyToken`](/backend-s
 
 ### `CreateAgentRequest` (Node)
 
-Request payload for `sdk.api.agents.createAgent`. Accepts additional passthrough fields.
+Request payload for `sdk.api.agents.createAgent`. Unknown top-level keys are dropped by the API.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | `string` | Yes | Agent display name. |
-| `description` | `string` | No | Human-readable agent description. |
+| `description` | `string` | Yes | Human-readable agent description. |
 | `rawInstructions` | `string` | No | Unprocessed natural-language instructions. |
-| `instructions` | `string` | No | Resolved/structured instructions. Required when the configured strategy is `ai`, `service+ai`, or `stagehand-agent`. |
-| `enabled` | `boolean` | No | Whether the agent is active. |
+| `instructions` | `string` | Conditional | Resolved/structured instructions. Required unless `execution.executionStrategy` is `'service'`; the strategy defaults to `'ai'`. |
+| `enabled` | `boolean` | Yes | Whether the agent is active. |
 | `metadata` | `Record<string, unknown>` | No | Arbitrary metadata. Server-managed metadata keys (`type`, `category`, `internal`, `apiKey`) are rejected on create/update-version payloads. |
-| `contextGathering` | `ContextGatheringConfig` | No | Context gathering configuration. |
-| `execution` | `AgentExecutionConfig` | No | Execution configuration. |
+| `contextGathering` | `ContextGatheringConfig` | Yes | Context gathering configuration. `strategies` must be a non-empty list. |
+| `execution` | `AgentExecutionConfig` | Yes | Execution configuration. |
 | `response` | `AgentResponseConfig` | No | Response configuration. |
-| `postProcess` | `AgentPostProcessConfig` | No | Post-processing configuration. |
+| `postProcess` | `AgentPostProcessConfig` | No | Post-processing configuration. `pinResolution` is rejected by the API and typed `never`. |
 | `input` | `AgentInputConfig` | No | Input configuration. |
 | `scope` | `AgentScopeConfig` | No | Scope configuration. |
 | `setup` | `AgentSetupConfig` | No | Setup configuration. |
@@ -12133,9 +12275,10 @@ Request payload for `sdk.api.agents.runExecution`. Accepts additional passthroug
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `agentId` | `string` | Yes | Agent to run. |
-| `url` | `string` | Yes | URL the agent executes against. |
-| `crossPageExecute` | `boolean` | No | Execute across linked pages. |
-| `maxUrlsToProcess` | `number` | No | Cap on URLs processed. |
+| `url` | `string` | Yes | URL the agent executes against. With `urls`, the site the list belongs to. |
+| `urls` | `string[]` | No | Review exactly these pages instead of crawling. Max 500. Absolute `http(s)` URLs or site-relative paths resolved against `url`; must be on the same host as `url`. When present, `crossPageExecute` and `maxUrlsToProcess` are derived from the list. |
+| `crossPageExecute` | `boolean` | No | Execute across linked pages. Ignored when `urls` is present. |
+| `maxUrlsToProcess` | `number` | No | Cap on URLs processed. Ignored when `urls` is present. |
 | `organizationId` | `string` | No | Organization context. |
 | `documentId` | `string` | No | Document context. |
 | `trigger` | `'standalone' \| 'workflow'` | No | Execution trigger source. |

@@ -53,10 +53,9 @@ npm install @veltdev/react
 
 ---
 
-<sub>**For internal contributors:** On every merge to `main` touching a watched docs path, the
-[`docs-sync-skills`](.github/workflows/docs-sync-skills.yml) pipeline runs automatically. It opens
-(or updates, if one is already open) a `skills-sync` PR against
-[`velt-js/agent-skills`](https://github.com/velt-js/agent-skills) requesting `@yoen-velt` as the reviewer,
-covering any rule that drifted from docs. No manual coordination required. See
-[`scripts/skills-sync/README.md`](scripts/skills-sync/README.md) for pipeline details.</sub>
+<sub>**For internal contributors:** A Claude Code routine keeps
+[`velt-js/agent-skills`](https://github.com/velt-js/agent-skills) in sync with these docs. It runs when a PR
+merges into `main` (plus a daily safety-net run), applies every docs change since the last synced commit,
+and opens or updates a `skills-sync (routine): docs@<sha>` PR in agent-skills. It routes and formats
+changes with [`scripts/skills-sync/reference-artifacts/`](scripts/skills-sync/reference-artifacts/).</sub>
 

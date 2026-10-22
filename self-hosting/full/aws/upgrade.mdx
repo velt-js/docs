@@ -1,0 +1,1277 @@
+---
+title: "Upgrade Guide"
+sidebarTitle: "Upgrade"
+description: "Copy-paste instructions for the AI coding agent that moves an existing Velt full self-hosting deployment in your AWS account to a newer release."
+---
+
+Your AI coding agent runs the upgrade with the release's own upgrade script. The script verifies every artifact, carries your Helm values forward, applies the database migration, and stops at the first failed check. On a small deployment the upgrade itself takes about a minute.
+
+1. Check which release you run: `helm list -n velt` shows it under APP VERSION.
+2. Take an RDS snapshot. Rollback restores code, never data. The agent can take the snapshot for you.
+3. Copy the instructions below with the copy button and paste them into your agent. Tell it which release to move to, or ask for the newest. It runs a dry run first, then the upgrade.
+4. Stay available to scan the new images, if your policy requires it, and to move your app's SDK `version` if the SDK changes.
+
+Setting up a deployment for the first time? Use the [Install guide](/self-hosting/full/aws/install) instead.
+
+## Agent instructions
+
+````markdown Agent instructions (AWS upgrade) expandable
+# Velt Full Self-Hosting — Upgrade Guide (Azure and AWS)
+
+**Audience:** the operator (or agent) upgrading an installed Velt full self-hosting deployment on Azure or AWS — Kubernetes + PostgreSQL + Redis/Valkey, installed from the `velt-portable` Helm chart by the [Install Guide (Azure)](https://docs.velt.dev/self-hosting/full/azure/install) or the [Install Guide (AWS)](https://docs.velt.dev/self-hosting/full/aws/install).
+
+**This is not the GCP guide.** The [Upgrade Guide (GCP)](https://docs.velt.dev/self-hosting/full/gcp/upgrade) covers a deployment on GCP (Terraform, Cloud Run), and none of its commands apply here. If you are running `helm`, you are in the right document.
+
+**Everything below is performed by one script.** `portable-upgrade.sh`, shipped in each release's tools bundle (next section), runs phases U0–U4 in order and refuses to continue past any failed gate. Every stop names its reason on stderr (inside GitHub Actions, also as a run annotation), and an exit no gate explains prints `ERROR: portable-upgrade.sh stopped at line N (exit C) while running: <command>` — a silent stop is a bug, not a mode. This guide explains *what each phase is protecting you from*, so you can read a failure rather than just retry it. The phase labels here are the script's own, so this document describes the upgrade the script performs and nothing else.
+
+The whole upgrade is `./velt-portable-tools/portable-upgrade.sh --target "$PORTABLE_V" --release velt --namespace velt` — run it only after the next section has verified, pulled and unpacked the TARGET release's bundle; never run a copy you have not just verified. (`--release` and `--namespace` are the Helm release name and namespace you installed into; the examples use `velt` for both.)
+
+---
+
+## Get the release's tools
+
+Every release from **0.1.13** on publishes its operator scripts as a signed artifact in the public release registry, beside the chart and the images: `velt-portable-tools:<version>`. It unpacks to `./velt-portable-tools/` and contains `portable-upgrade.sh` (this guide), `portable-install-preflight.sh` (the install guide's preflight), `portable-receipt.sh` (the version receipt), `portable-support-bundle.sh` (what to send Velt before a support conversation), `portable-check-updates.js` (is there a newer release, and is mine still supported) with its one module under `lib/`, a one-paragraph `README.md`, and `VERSION` (the release it belongs to). From the first release that ships the AWS module, every bundle also carries the two AWS tools, `portable-install-preflight-aws.sh` and `portable-aws-live-check.sh`. Nothing else. **Always use the target release's bundle** — the scripts are that release's own copies and know that release's chart; an older release's script can refuse a newer deployment (see the `NOAUTH` row under Troubleshooting). Releases before 0.1.13 have no tools artifact: for a target older than that, Velt support supplies the scripts.
+
+The target version is `tierB.portableVersion` in the release manifest **when the manifest is current**. Portable releases can ship between manifests, so check the chart's tags too — they are the release versions — and take the newer of the two: `oras repo tags "$REG/velt-portable" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1` (the filter drops cosign's `sha256-….sig` tags, which share the repository and sort above every version). If the manifest you have carries no `tierB` block, the chart's tags are the only source. From an installed deployment, `node ./velt-portable-tools/portable-check-updates.js --receipt receipt.json` (Phase U4) answers the same question against your receipt.
+
+Verify, pull, unpack:
+
+```bash
+REG=us-docker.pkg.dev/velt-sdk/velt-releases
+IDENTITY='^https://github\.com/snippyly/shared-firebase-function/\.github/workflows/container-release\.yml@refs/heads/main$'
+ISSUER='https://token.actions.githubusercontent.com'
+PORTABLE_V=0.1.13   # the target release
+TOOLS_DIGEST=$(oras manifest fetch --descriptor "$REG/velt-portable-tools:$PORTABLE_V" \
+  | python3 -c "import json,sys;print(json.load(sys.stdin)['digest'])")
+cosign verify --certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$REG/velt-portable-tools@$TOOLS_DIGEST" \
+  && oras pull "$REG/velt-portable-tools@$TOOLS_DIGEST" && tar xzf "velt-portable-tools-$PORTABLE_V.tar.gz"
+./velt-portable-tools/portable-upgrade.sh --target "$PORTABLE_V" --release velt --namespace velt
+```
+
+The `cosign verify` is not optional: the bundle is code you are about to run against your cluster and your database, and it is signed by the same release workflow identity as the chart and the images. The tag is resolved once and the verify and the pull both name that digest: naming the tag twice asks the registry twice, and only the first answer would be checked. `REG`, `IDENTITY` and `ISSUER` are reused by the commands further down.
+
+---
+
+## Before you start — the two things that make upgrades safe
+
+1. **Migrations are expand-only.** Every schema change is additive: add columns and tables, backfill, cut over, drop in a *later* release. This is machine-enforced in Velt's release process, and it is the reason a rolling upgrade — and a rollback — can run old code against a new schema without corrupting anything.
+2. **A database ahead of the code is tolerated and announced.** If the schema is at v10 and a pod is still running code that knows v9, the migration runner skips the unknown versions and logs one warning naming them. This is normal during a rolling upgrade and during a rollback. It is not an error.
+
+Neither property protects you if you skip the verification step, and neither is a substitute for a backup.
+
+### Checklist
+
+**Tools.** `bash` 3.2 or newer (macOS's stock `/bin/bash` is fine), `helm` 3.17+ or 4.x (to a release newer than 0.1.15
+the chart is applied by its digest, which Helm supports from 3.17), `kubectl` against the
+cluster, `cosign`, `oras`, `node` 18+ (the update check), and `psql` only if your workstation can reach the
+database. Network access to `us-docker.pkg.dev`, read anonymously — no login. If `cosign verify` answers `error
+getting credentials`, your Docker config routes that registry to a credential helper (the gcloud one, typically) that
+fails for anonymous pulls; run the verification with an empty Docker config:
+
+```bash
+export DOCKER_CONFIG=$(mktemp -d)     # for cosign and oras only; unset it before any docker command that needs your logins
+```
+
+**Which version you are on.** `helm list -n velt` prints the chart version under CHART and the running release under
+APP VERSION; `./velt-portable-tools/portable-receipt.sh --release velt --namespace velt --out receipt.json` records
+both. The version sections further down each say which from-version they apply to; the table before the first of
+them says which ones your upgrade needs.
+
+**Everything the script reads from the environment**, in one place:
+
+| Variable | Required? | Phase | What happens without it |
+|---|---|---|---|
+| `VELT_PG_DSN` | optional | U2, U3 | the Redis preflight and the schema-head assertion fall back to the in-cluster migrate Job's own checks; the script says so |
+| `VELT_EXPECTED_SCHEMA_HEAD` | optional, targets before 0.1.13 only | U3 | the chart's own `velt.dev/schema-head` annotation is the expected head (0.1.13+); older charts fall back to the weak check |
+| `VELT_SMOKE_URL` | optional | U4 | no post-upgrade smoke runs (the script opens no port-forward of its own). Set it to the gateway's `/readyz` through a port-forward, as below — it answers 200 only when the pod reaches Postgres and Redis. Never a public URL: through the chart's ingress `/healthz` is the console's own page (a false pass) and `/api/healthz` answers 404 |
+| `VELT_MIN_SDK` + `VELT_INSTALLED_SDK` | optional, both or neither | U0 | the SDK fence is skipped; one without the other is refused |
+| `VELT_CONSOLE_SCHEMA` + `VELT_INSTALLED_CONSOLE_SCHEMA` | optional, both or neither | U0 | the console config-schema fence is skipped; one without the other is refused |
+| `VELT_SMOKE_RETRIES`, `VELT_SMOKE_RETRY_DELAY` | optional | U4 | the smoke retries 12 times, 5 s apart |
+| `VELT_RESULT_JSON`, `VELT_RECEIPT_JSON` | optional | end | no result record / no receipt is written by the script (run `portable-receipt.sh` yourself) |
+| `DOCKER_CONFIG` | only for the credential-helper case above | U1 | — |
+
+(`VELT_REDIS_PASSWORD` is read inside the Redis pod by the preflight, never from your shell.)
+
+**Reaching Postgres and the smoke URL from your workstation.** A managed Postgres is private. Either run the
+script from a jump host or a runner inside the network, or open a port-forward to a pod that can reach it and point
+`VELT_PG_DSN` at `localhost`. A port-forward is pinned to the pod it started on and **dies when the upgrade replaces
+that pod** (`socket hang up`), so wrap the smoke's forward in a restart loop. The ingress cannot carry this smoke: on
+your public host `/healthz` is the console's page (or, with the console off, the load balancer's 404) — a 200 there says
+nothing about the gateway — and `/api/healthz` answers 404, because the health probes answer only on the pod itself.
+`/readyz` is the one to smoke: it answers 200 only when the pod reaches Postgres and Redis (`/healthz` says only that
+the process is up). The Service is `<release>-gateway`
+(`velt-gateway` for the release name `velt`, `velt-portable-gateway` for `velt-portable`):
+
+```bash
+( while true; do kubectl -n velt port-forward svc/velt-gateway 58080:8080; sleep 1; done ) &
+for i in $(seq 1 30); do curl -sf http://127.0.0.1:58080/readyz >/dev/null && break; sleep 1; done
+export VELT_SMOKE_URL=http://127.0.0.1:58080/readyz
+```
+
+**Back the database up before Phase U3.** Rollback moves code, never data (see Rollback). On AWS take an RDS snapshot
+("Upgrading on AWS", step 4). On Azure take a
+server snapshot — `az postgres flexible-server backup create -g <rg> -n <server> --backup-name pre-<target>` — or on a
+small install dump it from a pod that reaches it: `pg_dump "$VELT_PG_DSN" -Fc -f pre-<target>.dump`. Keep the
+command and the time with your change record.
+
+**Dry-run first, every time.** `--dry-run` runs U0, U1 and U2 for real — the fences, every `cosign verify`, the
+render with your values — and stops before anything is applied. It takes under a minute and catches every refusal at
+no risk, so it is step 1 of the procedure below, not an option.
+
+**How long, and what users see.** On a small deployment the dry run takes about 40 s and the upgrade about a minute:
+the migrate Job, then a rolling replacement of the gateway and the workers (each gateway pod drains for up to 30 s
+before it stops), with no gap at the smoke check. The slow parts are index builds — v98 and v118 lock their table
+while they build; the 0.1.10 and 0.1.13 sections give the measured times.
+
+**Exit codes.** `0` means the step completed; anything else means it stopped, and the last `ERROR:` line says where.
+(Tools bundles 0.1.13 to 0.1.15 have a defect on macOS's bash 3.2: a refusal prints its `ERROR:` and stops, but exits
+`0`. Read the output, not only the code, on those bundles; 0.1.16 and later exit non-zero as documented.)
+
+### The procedure, numbered
+
+1. `cosign verify` and unpack the target's tools bundle (above).
+2. Export the variables from the table that apply to you.
+3. Back up the database.
+4. `./velt-portable-tools/portable-upgrade.sh --target "$PORTABLE_V" --release velt --namespace velt --dry-run`
+5. The same command without `--dry-run`.
+6. Phase U4's smoke, then the receipt, the update check and — if anything looked wrong — the support bundle.
+
+---
+
+## Phase U0 — Preflight and compatibility fences
+
+The script checks that `helm`, `kubectl`, `psql` and `cosign` are present, that you named a target version, a release and a namespace, and then applies two fences.
+
+(This is the UPGRADE preflight. The install has its own, `./velt-portable-tools/portable-install-preflight.sh` — nine checks against the
+subscription, region, quota and the manifest signature, run before Terraform ever applies. They do not overlap: U0 assumes
+a running deployment.)
+
+**Fence 1 — SDK `minVersion`.** Every release declares the minimum `@veltdev/client` version it will serve. If the SDK your application ships is older, the upgrade stops here.
+
+```bash
+export VELT_MIN_SDK=6.0.8        # from the target release's manifest
+export VELT_INSTALLED_SDK=6.0.8  # what your app actually loads
+```
+
+Supplying one without the other is an error, not a skip — a half-supplied fence reads exactly like a passed fence, and that is worse than no fence.
+
+⚠ **SDK and gateway order.** SDK 6.0.17 or later needs gateway 0.1.6 or later: it relies on capabilities that release
+first announced (`ordered-deltas`, `resume-visibility-removals`, `getaccess-any-user`). **Upgrade the gateway first**,
+then let the app team move the SDK.
+
+⚠ This fence is about what your app LOADS. If you host the bundle yourself (`sdk.enabled`), the
+version in `values.sdk.version` and the `version` pin in `initVelt` must move together with it — see
+Phase U5. If you do not host it, your users are loading the SDK from `cdn.velt.dev`, which is worth
+knowing deliberately rather than by default.
+
+**Fence 2 — console `configSchemaVersion`.** If you serve the Velt console and the target release's console bundle expects a different config schema than the one you have installed, the console **boots blank with no error** — the worst failure shape available, because nothing tells you it happened.
+
+```bash
+export VELT_CONSOLE_SCHEMA=2
+export VELT_INSTALLED_CONSOLE_SCHEMA=2
+```
+
+**Human moment:** run your own vulnerability scan of the target images now if your infosec policy requires one. The pipeline will not do this for you and will not pretend it did.
+
+---
+
+## Phase U1 — Verify the artifacts, then import them
+
+Every artifact is `cosign`-verified against the release workflow's identity before anything is applied: the **Helm chart** and all three images (`velt-gateway`, `velt-workers`, `velt-migrate`). A chart is a code-delivery vehicle exactly as much as an image is, which is why it is in the list.
+
+**There is no way to skip this.** If verification fails for any one artifact, nothing is applied — partial verification is not a partial success. If you need to rehearse against locally-built images, that is a separate, explicitly-named mode (`--local-images`) that prints a warning banner, and it cannot be combined with a release registry.
+
+If your cluster pulls from your own registry (most do — air-gapped or otherwise), pass `--import-to <your-registry>`. The script copies all four artifacts with `cosign copy` **by digest** (the digest cosign just attested, never the tag), then **re-verifies each copy** and refuses to continue if a copy's digest differs from the source — "digest-preserving" is checked, not assumed. The chart is then rendered and applied from your registry, so an air-gapped cluster never has to reach the release registry. **`--import-to` must be the registry your values pull from.** The chart builds every image reference — gateway, workers, migrate, and also the console and SDK images — from the single value `image.registry`. If your carried `image.registry` differs from `--import-to`, the script stops before rendering (`registry mismatch`): the pods would otherwise pull the target tag from a registry this run never verified, or fail to pull at all in an air-gapped cluster. If your values carry no `image.registry`, it is set to the import registry. Without `--import-to`, a carried `image.registry` that is not the one this run verified is refused — see below. You must already be logged in to your registry (`docker login` / `cosign login`); the copy is registry-neutral (ACR, ECR, GAR, Harbor …). With `--dry-run` nothing is copied — the script prints what it would copy.
+
+Two spellings of the same chart are involved: cosign verifies `REGISTRY/velt-portable:TAG` and reports the digest it attested, and helm then renders, reads and applies `oci://REGISTRY/velt-portable@<that digest>` — never the tag a second time (with `--import-to`, the same digest in your registry, after the copy is re-verified). Helm installs a chart by digest from 3.17; after verification the script refuses an older Helm by name, before anything is rendered. You never type either spelling. (The scripts of 0.1.15 and earlier render by `--version TAG`.)
+
+**If your values already point `image.registry` at a registry this run did not verify and you do not pass `--import-to`, the upgrade is refused.** "Verified" has to mean the bytes your pods run, and the script cannot vouch for a registry it never looked at. `--import-to <that registry>` is the fix. There is deliberately no flag to proceed anyway: that would be a verification-skip flag by another name, and the upgrade path has none.
+
+---
+
+## Phase U2 — Carry your values forward
+
+The script snapshots your live values (`helm get values`) and renders the target chart with them.
+
+**What this phase catches:** a new chart version that introduced a **required value with no default**. Rendering fails, the script names the missing keys, and nothing is applied. Set them and re-run.
+
+**`image.tag` is the one carried value the script overrides.** The install guide has you pin `image.tag`; carried forward unchanged, that pin would put the new chart on the **old images** and roll nothing — measured on a real upgrade (0.1.0 carried into a 0.1.2 upgrade). So the target always wins for the three velt images, and the script prints the override (`carried image.tag=0.1.0 -> overriding to 0.1.2`). `console.tag` and `sdk.tag` are separate components and are carried exactly as you set them. After the rollout (U4) the script reads the gateway Deployment's image back and fails the upgrade if it is not on the target tag — it never infers "we run the target" from helm's exit code.
+
+You want this to fail here. The alternative is a successful `helm upgrade` followed by a pod that will not start, which is a much worse place to debug from — you are now half-upgraded.
+
+**Tenants with NO allowed domain.** Since 0.1.6, identify refuses a tenant that has no allowed domain — the same rule as
+Velt's hosted service — so its users cannot sign in. The script counts such tenants here (read-only, from
+`allowed_domain_entries`, or `allowed_domains` on a database older than v92) and prints a warning naming up to ten of
+them; it never stops the upgrade. When the rendered gateway Deployment has identify explicitly OFF (`VELT_IDENTIFY_ENABLED`
+set to `false`, `0`, `no` or `off` — from `identify.enabled`, or your `env` entry), the script says so and skips the check:
+with identify off nothing reads the allowed domains. Any other value, or none, runs the check. Add each tenant's domains with the REST door's `domains/add`, the console's
+`apiKey.updateAllowedDomains`, or `velt-provision seed --allowed-domains`. If the script says the check did NOT run (no
+`VELT_PG_DSN`, or the read failed), check by hand.
+
+**Allowed domains during a rolling upgrade across v92 (0.1.7).** Old and new pods read different tables while both run,
+so a domain added by an old pod is invisible to new pods, and a domain removed by a new pod is still accepted by old
+ones. **Do not change allowed domains until every pod runs the new version.** There is no sync between the two tables;
+this note is the whole mitigation. The window opens when the migrate hook applies v92 (U3), not when the first new pod
+starts. A domain an old pod adds inside it never reaches the new table and stays missing after the rollout finishes: add
+it again once every pod is new. Rolling back across v92 splits the tables the same way in reverse (see Rollback).
+
+**`identify.allowedOrigins` is optional (since 0.1.10).** Velt's hosted identify checks one list, each tenant's allowed
+domains, and so does this deployment. `identify.allowedOrigins` is now an extra, optional narrowing: empty means no extra
+restriction (a request still needs a parseable `Origin` and an allowed domain). A deployment upgraded with it set keeps
+narrowing by it; clearing it is your choice. Nothing opens either way: a tenant with no allowed domain is still refused.
+
+**Stored identify configs with no `allowedOrigins` start working.** On 0.1.9 and earlier a per-tenant identify config
+without an origin list was incomplete, and identify refused that tenant. The REST door can write such a config
+(`apikeyconfig/update`, and unvalidated while identify is off). After the upgrade it is complete: identify serves that
+tenant on its allowed domains alone. The script names those tenants here (read-only, warn-only), and says how many of
+them set `requireJwtToken: false` — identify with no token. Review each one (the console's `apiKey.getIdentifyConfig`)
+before you upgrade. If the script says the check did NOT run, check by hand.
+
+**The permission provider's denied-users answer must be the hosted envelope (since 0.1.10).** A tenant with a permission
+provider must answer `{ success: true, statusCode: 200, data: [...] }` (optionally wrapped in `result`), as Velt's
+hosted service requires. Any other body denies nobody (the hosted fail-open). Older gateways also accepted `{ data: [...] }`
+and a bare array: a provider written against them now denies nobody, so notifications reach users it meant to deny.
+Check your tenants' providers before you upgrade. The gateway logs `denied-users: no accepted answer` each time it happens.
+
+---
+
+## Phase U3 — Apply, then assert the schema actually moved
+
+`helm upgrade` runs. The `velt-migrate` Job is a **pre-upgrade hook**, so migrations complete *before* the gateway rolls. If migrations fail, the gateway never rolls and your existing deployment keeps serving. **The Job also asserts, itself, that every migration this image declares is recorded in `schema_migrations` before it exits 0** — that is the check that can stop a rollout, because it runs inside the hook.
+
+Then the script does the thing that is easy to skip and expensive to have skipped: **it opens a connection and reads `schema_migrations`.** Be clear about what this second read is: `helm upgrade --wait` has already returned, so the gateway has already rolled. The script's assertion can detect a schema that is not where the release requires it and tell you to roll back; it cannot prevent the rollout. The prevention is the Job's own assertion above.
+
+A zero exit from the migrate Job proves the Job ran. It does not prove the schema changed. Those two facts look identical from outside, and only one of them is the one you need. The script therefore asserts the ledger's head against the head the release expects:
+
+**Where the expected head comes from.** From 0.1.13 on, every published chart states the schema head it applies in the
+chart annotation `velt.dev/schema-head` (`helm show chart` prints it).
+By default the script reads that annotation from the chart it verified in U1 and asserts that the ledger's head equals
+it — the strict check, with nothing for you to pin. `VELT_EXPECTED_SCHEMA_HEAD` overrides the annotation; if you set it
+and it differs from the annotation, the script stops BEFORE applying and names both numbers — a disagreement between
+you and the chart is a question to settle, not a race to run. Charts before 0.1.13 carry no annotation: with no pin the
+script falls back to the weak check (the head did not go backwards) and says so rather than implying more. For those
+targets pin the head yourself:
+
+```bash
+export VELT_EXPECTED_SCHEMA_HEAD=111   # the migration head the target release carries
+```
+
+| Target release | Schema head |
+|---|---|
+| 0.1.0 – 0.1.4 | 1 |
+| 0.1.5 | 46 |
+| 0.1.6 | 91 |
+| 0.1.7 – 0.1.9 | 96 |
+| 0.1.10 | 107 |
+| 0.1.11 | 108 |
+| 0.1.12 | 111 |
+| 0.1.13 and later | the chart states it — do not pin (0.1.13 declares 126; 0.1.14 and 0.1.15 declare 127) |
+
+The table stops at 0.1.12 on purpose: from 0.1.13 the target chart's `velt.dev/schema-head` annotation is the
+expected head, read by the script, and a hand-kept row can only be wrong (one was, for 0.1.13). To see a chart's
+head without running the upgrade: `helm show chart <chart reference> | grep schema-head`.
+
+The head is the highest version recorded, not the row count: numbers a release reserved and never applied (v112–v115,
+v119–v122) are gaps in the ledger by design and are never reused. `./velt-portable-tools/portable-receipt.sh` records
+the running head as `schemaHead`.
+
+**v98 blocks `documents` writes while it builds (0.1.10).** v98 adds one index to `documents` inside the migrate Job's
+transaction (not `CONCURRENTLY`), so document writes — SDK `setDocument`s, REST document writes, a comment's document
+registration — wait until it finishes; reads continue. Measured: 0.9 s for 350,000 documents on a small VM. Scale that
+to your table and pick a quiet window if it is large. The migration then runs `ANALYZE documents` (sampled; it blocks no
+reads or writes) so the by-ids read uses the index at once.
+
+**Stated limit, so you can plan around it:** this assertion catches a skipped or half-applied migration. It does *not* catch a migration whose DDL was a no-op but was still correctly recorded — for example `CREATE INDEX IF NOT EXISTS` finding a same-named index that has the wrong columns. That class is caught by a separate object-level check in Velt's release process.
+
+---
+
+## Phase U4 — Converge and smoke
+
+`kubectl rollout status` on the gateway Deployment, then the readiness check through your port-forward (Postgres and
+Redis reachable from the new pods):
+
+```bash
+export VELT_SMOKE_URL=http://127.0.0.1:58080/readyz     # the restart-loop forward above, never the public host
+```
+
+A converged rollout that does not serve reads is a failed upgrade, and the script treats it as one.
+
+**The version receipt (since 0.1.11).** Set `VELT_RECEIPT_JSON=./receipt.json` and the script runs
+`./velt-portable-tools/portable-receipt.sh` after the image assertion: what RUNS now (image digests, schema head, the
+gateway's signed attestation from its pod-direct `/version`). **Send the file to Velt with the upgrade report** — the
+deployment never calls home, so this is how Velt knows which version you run. From your workstation,
+`node ./velt-portable-tools/portable-check-updates.js --receipt receipt.json` tells you when the next release exists and
+whether this one is still inside the support window.
+
+---
+
+## Phase U5 — The SDK bundle (only if you host it, and only if the SDK pin moved)
+
+Skip this if `sdk.enabled` is false — but read the warning below before deciding that it is
+deliberate rather than inherited.
+
+The SDK bundle can be served from your own ingress, at `/lib/sdk@<version>/`, by the
+`velt-sdk-static` image the release ships.
+
+⚠ **This axis is NOT covered by `strict: true`.** `@veltdev/client`'s loader chooses its bundle URL
+*before* `velt.js` exists, from `{staging, develop, version, proxyDomain | proxyConfig.cdnHost}` —
+`selfHosted`/`strict` are not inputs to it and cannot be, since everything `strict` gates lives
+inside the bundle being fetched. Unpinned, it resolves `https://cdn.velt.dev/lib/sdk@<v>/velt.js`.
+So a deployment with a perfectly sealed gateway can still download JavaScript from Velt on every
+page load, and no backend setting changes that.
+
+**One image serves one version.** `velt-sdk-static:<v>` carries exactly `/lib/sdk@<v>/`, and the
+chart runs one of them. If you only change `sdk.version`, the old path answers **404 the moment the
+new pod is up**, and every app still pinned to the old version stops loading the SDK at that instant
+— the operator and the app team cannot move at the same moment. So an SDK upgrade keeps the old
+version served until every app has moved, with `sdk.retainedVersions` (chart 0.1.16 or newer):
+
+1. Verify and import the new image, as for any artifact:
+
+   ```bash
+   SDK_V=<new version>   # e.g. 6.0.25
+   SDK_OLD=<the version apps are pinned to today>   # e.g. 6.0.24
+   SDK_DIGEST=$(oras manifest fetch --descriptor "$REG/velt-sdk-static:$SDK_V" \
+     | python3 -c "import json,sys;print(json.load(sys.stdin)['digest'])")
+   cosign verify --certificate-identity-regexp "$IDENTITY" \
+     --certificate-oidc-issuer "$ISSUER" "$REG/velt-sdk-static@$SDK_DIGEST" \
+     && az acr import -n <acr> --source "$REG/velt-sdk-static@$SDK_DIGEST" --image "velt-sdk-static:$SDK_V"
+   ```
+
+2. In `values-<env>.yaml` set the new version AND keep the old one, then upgrade:
+
+   ```yaml
+   sdk:
+     enabled: true
+     version: "6.0.25"              # the new version; sdk.tag too if you pin it
+     retainedVersions: ["6.0.24"]   # still served at /lib/sdk@6.0.24/ — the old image must still be in your registry
+   ```
+
+   ```bash
+   CHART_DIGEST=$(oras manifest fetch --descriptor "<your-registry>/velt-portable:<chart>" \
+     | python3 -c "import json,sys;print(json.load(sys.stdin)['digest'])")
+   cosign verify --certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "<your-registry>/velt-portable@$CHART_DIGEST" \
+     && helm upgrade velt "oci://<your-registry>/velt-portable@$CHART_DIGEST" -n velt -f values-<env>.yaml
+   ```
+
+   (`<chart>` is the chart version you run now; with Helm before 3.17, which cannot install by digest, the last line is
+   `helm upgrade velt oci://<your-registry>/velt-portable --version <chart> -n velt -f values-<env>.yaml`),
+   then `kubectl -n velt rollout status deploy/velt-sdk --timeout=5m` — the rolling update keeps the
+   previous pod serving until the new one is ready, so a stuck new pod (a listed image missing from
+   your registry, `Init:ImagePullBackOff`) is visible here and nowhere in step 3.
+   The pod now starts one init container per listed version, which copies that version's bundle into
+   a shared volume the server reads (node-local disk, about 13 MiB per served version); every path
+   stays `/lib/sdk@<version>/`.
+
+3. Verify BOTH versions, both files:
+
+   ```bash
+   for V in "$SDK_V" "$SDK_OLD"; do
+     curl -sI "https://<public_host>/lib/sdk@$V/velt.js"          | head -1   # 200
+     curl -sI "https://<public_host>/lib/sdk@$V/velt-portable.js" | head -1   # 200
+   done
+   ```
+
+4. **Hand the repoint to the app team** — it is their deploy, not yours. They bump the `@veltdev/*`
+   wrapper packages **and** the `version` pin in `initVelt` in the same release; a wrapper/pin
+   mismatch is the "worked, then broke after an npm upgrade" failure.
+
+5. When every app is on the new version, remove `<old>` from `retainedVersions` and upgrade again.
+   From then on `/lib/sdk@<old>/` answers 404.
+
+6. **Rollback** is the app repointing to `<old>` — which works only while `<old>` is still retained.
+   Once it is dropped, an app pinned to it gets a 404; put it back in the list and upgrade to serve
+   it again.
+
+If you skip the retained list in step 2, the old path 404s immediately and every app still on it
+stops loading the SDK until it repoints. A retained version whose image is missing from your
+registry keeps the NEW pod from starting: the previous pod keeps serving what it served before, the
+new version is never served, and the rollout in step 2 never completes — import every listed
+version first.
+
+**Gateway first:** SDK 6.0.17 or later needs gateway 0.1.6 or later — finish U0–U4 on the gateway before the app team
+moves the SDK pin.
+
+⚠ Verify the SECOND URL above, not just the first. `velt.js` is only the eager concat and its
+siblings are lazily imported relative to it — a partial mirror answers 200 on `velt.js` and 404s the
+portable backend, silently.
+
+---
+
+## Which version sections apply to you
+
+Read the sections whose target is ABOVE your current version and AT OR BELOW your target. Everything else in this
+guide applies to every upgrade.
+
+| Upgrading from … | … to 0.1.15 or later reads |
+|---|---|
+| 0.1.0 – 0.1.4 | all of them |
+| 0.1.5 – 0.1.10 | 0.1.11, 0.1.12, 0.1.13, SAML (ships in 0.1.13), 0.1.14, 0.1.15 |
+| 0.1.11 | 0.1.12, 0.1.13, SAML, 0.1.14, 0.1.15 |
+| 0.1.12 | 0.1.13, SAML, 0.1.14, 0.1.15 |
+| 0.1.13 | 0.1.14, 0.1.15 |
+| 0.1.14 | 0.1.15 |
+
+To a release newer than 0.1.15, also read the five sections that follow 0.1.15 — the stricter console sign-in
+checks (it says how to tell whether your target has them), the exact release signer identity, the one-digest rule
+(which needs Helm 3.17 or newer), the seeded organization's repair, and the Terraform module's node autoscaling and
+alerts (it says how to tell whether your target's module has them). To the first release whose Terraform module declares `releases`, or a later one, also read
+"Upgrading to the release that runs several production keys on one cluster": its Terraform change reaches every install, with one release or several.
+On AWS, read "Upgrading on AWS" as well.
+
+Each release that changes what an upgrade does — a value that is read differently, a step the operator must take,
+a behaviour that switches on — gets a section here. A release with no section changes nothing on upgrade.
+
+## Upgrading to 0.1.5 or later (autoscaling, disruption budgets, resource requests)
+
+Read this once, the first time you upgrade from a release before 0.1.5 — the first chart with `autoscaling:` in its
+`values.yaml`. Nothing below is a required value — the upgrade renders with your current values — but several behaviours
+change. Where a point arrived in 0.1.6 rather than 0.1.5 it says so.
+
+**What changes on upgrade, plainly:**
+
+1. **Each gateway pod now takes 30 s longer to leave.** `gatewayLifecycle.preStopSleepSeconds` defaults to 30 (it was 0),
+   and `terminationGracePeriodSeconds` is always the sleep + 45 s. Rollouts and node drains are slower; in exchange the
+   load balancer stops routing to a pod before it exits. Measured without it: 2 REST writes per rollout hung until the
+   caller's timeout. Behind kube-proxy or ingress-nginx alone, `10` is enough; behind Application Gateway or ALB keep 30;
+   `0` turns it off (and `helm upgrade` prints a warning). **One caveat:** where the platform itself shortens the grace
+   period below the sleep — spot-node reclamation, or `kubectl drain --grace-period=30` — the sleep uses up the whole
+   grace and the pod is killed before it drains. On spot pools, lower the sleep to the balancer's real lag.
+2. **The pod count is now the autoscaler's.** An HPA is created for the gateway (2..6) and the workers (2..4), on CPU. Its
+   floor is `autoscaling.<w>.minReplicas`, or `replicas.<w>` when that is empty — so your current `replicas` values become
+   the floor. If your `replicas` is above the default maximum, the maximum is raised to it (and `helm upgrade` says so).
+   The upgrade KEEPS the Deployment's current replica count (the chart reads it back). Scaling is deliberately slow: up
+   only after 2 minutes of sustained load and at most 2 pods a minute; down one pod every 2 minutes after 5 quiet ones.
+   The HPA needs the metrics API (metrics-server; present by default on AKS, GKE and EKS-with-the-addon); without it
+   `helm upgrade` prints a warning and the count simply stays where it is. To keep fixed counts:
+   `autoscaling.gateway.enabled: false` (and/or `workers`). **GitOps (Argo CD, Flux) renders with `helm template`,** which
+   cannot read the live count: add `ignoreDifferences` on the gateway's and workers' `spec.replicas`, as for any HPA.
+3. **PodDisruptionBudgets** with `maxUnavailable: 1` are created for the gateway and the workers: `kubectl drain` evicts one
+   pod of each at a time, at any pod count, and never hangs — even with one replica, where the budget allows the eviction
+   and `helm upgrade` warns that a drain takes that workload to zero. A pod that is already not ready (every gateway, while
+   Redis restarts) can always be evicted (`unhealthyPodEvictionPolicy: AlwaysAllow`). **If you created your own budget or
+   autoscaler for these workloads, the upgrade stops before applying** — two budgets over one pod make every node drain
+   fail; delete yours or disable the chart's. A budget is matched by its label selector, not its name, so one that
+   selects these pods through `matchExpressions` or an empty selector is found too.
+4. **Every workload has CPU/memory requests and limits.** New pods need that much schedulable capacity: at the floor the
+   defaults ask for about 1 CPU and 3 GiB — the gateway (2 × 250m / 256Mi), the workers (2 × 100m / 160Mi), Redis
+   (250m / **2Gi**), the console and SDK bundle (10m / 32Mi each), and the migrate Job (100m / 128Mi, only while it runs).
+   Redis's memory request equals its 2 Gi limit, so it is never the first pod evicted under node pressure. Check your node
+   pool before upgrading a small cluster. Set `resources.<workload>: {}` to go back to unconstrained (an autoscaled
+   workload then cannot scale — the render refuses that combination). **If the in-chart Redis already holds more than
+   half its new limit, the upgrade stops before applying** — its restart would load that data under the limit and
+   crash-loop. The message says how high to raise `resources.redis`. If the script cannot read Redis's memory at all (your
+   credentials lack `pods/exec`, Redis is not running, or Redis refused the password) it also stops, and quotes what
+   Redis or kubectl answered: compare `INFO memory` (`used_memory_rss`) with `resources.redis.limits.memory` by hand
+   (`kubectl exec -n <ns> statefulset/<release>-redis -- sh -c 'REDISCLI_AUTH="$VELT_REDIS_PASSWORD" valkey-cli INFO memory'`),
+   then re-run with `--accept-unverified-redis-size`. **Upgrading FROM 0.1.11 or 0.1.12:** those releases' Redis requires a
+   password, and their own scripts read it without one, so they stop here with `NOAUTH` — use the TARGET release's tools
+   bundle (0.1.13 or later), whose script authenticates with the password the Redis pod already holds.
+   **The upgrade also stops when no node can ever hold Redis's memory request** (since 0.1.6): no Ready, uncordoned node
+   has that much ALLOCATABLE memory, so `redis-0` would stay `Pending` and every gateway unready. When a node could hold it
+   but none has it FREE right now (after the requests of the pods already there; the running `redis-0` is not counted,
+   the upgrade replaces it), the script warns and goes on — a cluster autoscaler or finishing pods can make room. If
+   your credentials cannot list nodes (a namespace-scoped deployer), it stops: compare `resources.redis.requests.memory`
+   with `kubectl get nodes -o custom-columns=NODE:.metadata.name,ALLOCATABLE:.status.allocatable.memory` by hand, then
+   re-run with `--accept-redis-scheduling-risk`. Node taints are not evaluated.
+5. **Each Node workload's heap ceiling now follows its memory limit** (since 0.1.6): the gateway, workers and migrate Job
+   get `NODE_OPTIONS=--max-old-space-size` = `nodeHeap.percentOfMemoryLimit` (75) % of their limit — 768 MiB on the
+   gateway's 1Gi, 384 MiB on the workers' 512Mi. Before, Node chose half the limit by itself. Set `NODE_OPTIONS` under
+   `env` to use your own (the migrate Job keeps the chart's), or leave `nodeHeap.percentOfMemoryLimit` empty for Node's
+   default.
+6. **Every pod template and every Service selector carries `app.kubernetes.io/instance: <release>`,** so two releases in
+   one namespace can no longer route to each other's pods. Upgrading onto 0.1.5 rolls every pod once. The new Service
+   selectors do not match the old pods, so for a few seconds a Service can have no ready endpoint while the new pods pass
+   readiness. The workload selectors (`matchLabels`) are unchanged on purpose. They are immutable, so changing them would
+   make `helm upgrade` and `helm rollback` fail. Rolling back to an older chart is therefore an ordinary rollback.
+
+**Rate limits do not change.** `identify.rateMaxPerUser`, `identify.rateMaxPerIp`, `dataRate.maxPerIp` and
+`restApi.maxPerIp` still count in each gateway pod, exactly as before — so the whole deployment admits the per-pod
+number times the pod count, and more when the autoscaler adds pods. `helm upgrade` prints the per-pod numbers and that
+multiplier. To state ONE number for the whole deployment instead, set `rateBudgets.deploymentWide.<rung>`; each pod then
+gets that number divided by the gateway's replica floor, rounded up. It must be a whole number of at least 1 (leave it
+empty to keep the per-pod value).
+
+**Rolling back** to a chart from before 0.1.5 removes the HPA and the budgets, and puts the gateway and workers back
+to that revision's fixed `replicas.<w>` — the old chart has no way to keep a count the autoscaler set. Measured on a
+Kubernetes 1.30 API server: a gateway at 5 went back to 2.
+
+**Topology spread.** The gateway and workers pods now carry a soft `topologySpreadConstraints` (spread across nodes,
+`ScheduleAnyway` — it never blocks scheduling). The first upgrade onto a chart that has it rolls those pods once (a
+normal rolling update of the pod template, drained as usual). Set `topologySpread.enabled: false` to keep the old
+scheduling, or `whenUnsatisfiable: DoNotSchedule` to make it hard.
+
+**REST request work budgets.** `restApi.budgets.*` (four keys) are new and all empty, which means no limit — the REST
+door answers exactly as before, and an upgrade that sets none renders the same gateway manifest. Set one only if you run
+a SHARED deployment and want to bound what one request may cost; an integration that sends a larger request then gets a
+400 naming the budget. A key the chart does not know under `restApi.budgets` fails the render (and an unknown
+`VELT_REST_BUDGET_*` stops the gateway at boot), so a misspelt budget cannot leave the door uncapped.
+
+**Helm 4 and `--force-conflicts`.** Helm 4 applies a release it installed SERVER-SIDE, and there the autoscaler owns
+the Deployment's replica count. Any apply that writes a different count then fails with `conflict with
+"kube-controller-manager" with subresource "scale": .spec.replicas` — and a failed server-side upgrade is PARTIAL (the
+HPA can change while the Deployment does not). Measured on Helm 4.2.3: the rollback above, raising
+`autoscaling.<w>.minReplicas`, and turning the autoscaler off each failed that way. `portable-upgrade.sh` therefore
+passes `--force-conflicts` to `helm upgrade` and `helm rollback` when `helm get metadata` reports `applyMethod: ssa`,
+and says so; that is what a Helm 3 apply always did. ⚠ A rollback takes its apply method from the TARGET revision, not
+the current one (measured): after an `--server-side=true` upgrade over a client-side install, `--force-conflicts` read
+off the current revision FAILS the rollback. The script reads the target revision (`helm get metadata --revision
+<current - 1>`) and rolls back to it by number. By hand: check the target revision's `applyMethod` before adding the
+flag. It never passes it otherwise — Helm 4 refuses the flag on a client-side release, and Helm 3 has no such flag. If
+you run `helm` by hand on a server-side release, add `--force-conflicts` yourself for those three operations.
+
+**`--reuse-values` works.** It renders with the previous chart's values, where none of the keys above exist — so it
+keeps the old behaviour (no autoscaler, no budget, no requests, no heap flag) apart from the two always-rendered grace
+periods: the gateway's (sleep + 45 s) and, since 0.1.6, the workers' 660 s. Before 0.1.6 the workers' grace rendered
+only from its values key, so `--reuse-values` from a release before 0.1.5 left Kubernetes' 30 s and every rolling
+deploy killed running notification handlers. Pass the new chart's defaults (`-f` your values file, or
+`--reset-then-reuse-values` on Helm 3.14+) to get the new posture.
+
+**The gateway's own shutdown changed too** (it ships in the new images, not the chart). On SIGTERM it stops taking new
+WebSocket sessions and refuses any new frame on an open one (a refused write is answered `failed-precondition`, never
+run, so it is safe to retry). The write each socket already has in hand finishes — result, fan-out and notification —
+and in parallel the listener closes and every in-flight HTTP request is awaited. Only then are Redis and Postgres closed,
+all within 40 s. `/readyz` answers 503 while it drains. An exit code of 1 after a rollout means something did not finish
+in time; the gateway log names it.
+
+---
+
+## Upgrading to 0.1.11 or later (Redis password, the application database role, NetworkPolicy, pod hardening)
+
+Four things change shape on the first upgrade from a release before 0.1.11. None of them needs a value to be set; two of
+them deserve a decision first.
+
+1. **The in-chart Redis now requires a password (`requirepass`), and the gateway and workers send one.** The chart
+   creates `<release>-redis-auth` on this upgrade and keeps it on every later one (it reads the live Secret back). Both
+   sides change in the SAME `helm upgrade` — the StatefulSet starts Valkey with the password and the new pods carry
+   `VELT_REDIS_PASSWORD`. During the ROLLING part of that upgrade there is a window of seconds: old gateway and
+   workers pods (no password) keep talking to Valkey until it restarts with `requirepass`, and a new pod that comes up
+   before Valkey has restarted sends a password the old Valkey does not want. Both sides fail with `NOAUTH` /
+   `AUTH <password> called without any password configured`, their probes go unready, and they reconnect once Valkey
+   and the pods are both new — no data is lost (the stream and markers are on the PVC). The window you can make LAST
+   is a different one: upgrading the chart while pinning the images to a tag before 0.1.11. An older gateway image never
+   sends a password and fails at connect with `NOAUTH Authentication required`. Upgrade chart and images together,
+   which is what the script does. A managed Redis (`redis.externalUrl`) is untouched: its credentials live in the URL.
+
+2. **The migrate Job can run as the administrator while the app runs as a least-privilege role** — but only if you ask.
+   `secrets.migratePostgresDsnSecretName` defaults to `secrets.postgresDsnSecretName`, so a deployment with one DSN for
+   everything upgrades unchanged (the gateway and workers then log ONE warning at boot that they run as a privileged
+   role). To separate them: create `velt-postgres-dsn-admin` (the administrator DSN, key `VELT_PG_DSN`) and
+   `velt-app-db` (key `VELT_APP_DB_PASSWORD`), set `migratePostgresDsnSecretName: velt-postgres-dsn-admin` and
+   `appDbPasswordSecretName: velt-app-db`, upgrade (the hook creates the role `velt_app` with SELECT / INSERT / UPDATE /
+   DELETE on every table, the same by default on tables later migrations add, and INSERT + SELECT only on
+   `audit_events`), THEN point `velt-postgres-dsn` at `velt_app` and roll the gateway and workers
+   (`kubectl rollout restart`). The order matters: the role has to exist before anything logs in as it. ⚠ On 0.1.11 and
+   0.1.12 this setting makes every LATER `helm upgrade` fail at the migrate hook on a managed Postgres (Azure, RDS) —
+   fixed in 0.1.13; see that section before enabling it on those releases.
+
+3. **NetworkPolicy objects render by default** (`networkPolicy.enabled: true`). Ingress restriction only: Redis accepts
+   the gateway and workers of this release, the workers and migrate accept nothing, the serving pods accept their port.
+   A cluster without a policy engine ignores them (the Azure module enables one — a cluster created with a module older
+   than 0.1.11 needs the Terraform re-apply, which REPLACES the cluster; see the install guide). Egress restriction stays
+   off until you list your outbound destinations (`networkPolicy.egress`).
+
+4. **Every pod runs non-root with a read-only root filesystem, no privilege escalation, every capability dropped, and no
+   Kubernetes API token.** If you added a sidecar or an init container of your own through a post-render, it inherits
+   the pod-level `runAsNonRoot` and must run as a numeric non-root user.
+
+Rolling back across this boundary: the previous chart's Valkey starts WITHOUT `requirepass` and the previous images
+send no password, so the pair is consistent again; the Secret stays behind (harmless). The application role stays in
+Postgres (harmless; the old DSN never names it).
+
+---
+
+## Upgrading to 0.1.12 or later (webhook V2 delivery mode)
+
+0.1.12 adds two chart values and two expand-only migrations, and changes nothing unless you set the values.
+
+- **`webhookV2Delivery`** (`""` | `svix` | `direct`, env `VELT_WEBHOOK_V2_DELIVERY`). Unset keeps the previous behaviour:
+  a Svix key means Svix, no key means advanced webhooks are not delivered. ⚠ Direct mode sends each event ONCE and never
+  retries, where Svix retries for ~28 hours: a receiver that is down for a minute loses that event (its attempt is in the
+  ledger). Retries are planned for a later release. `direct` makes the workers sign and POST each event themselves
+  (Svix's scheme, so receivers need no change) to endpoints stored in Postgres. Setting `direct` beside
+  `secrets.svixSecretName` **fails `helm template`**, and the pods refuse to boot on the same conflict — clear one.
+  Switching an existing Svix deployment to `direct` does NOT copy its Svix endpoints: register them again (console or
+  `advancedwebhook/endpoints/create`), then remove the Svix key.
+- **`webhookV2DeliveryRetentionDays`** (direct only, default 7; `0` keeps every row): how long the workers keep the
+  per-attempt ledger `webhook_v2_deliveries`.
+- **Schema v110 (`webhook_v2_endpoints`) and v111 (`webhook_v2_deliveries`)** are additive; v108 (0.1.11) is
+  `audit_events`, v109 is unused. The migrate hook applies them whatever mode you run.
+- **Rollback** to a release before 0.1.12: the older chart ignores both values and the older pods ignore the env, so a
+  direct-mode deployment falls back to "no Svix key ⇒ not delivered" — silently on the old pods (the log line that
+  reports the drop is new in 0.1.12 too). The endpoint rows and their secrets stay in Postgres and serve again on
+  roll-forward. Roll forward rather than back if direct delivery is in use.
+
+---
+
+## Upgrading to 0.1.13 or later (the tools bundle and the chart's schema head, the application role on managed Postgres, schema v116–v125, presence and notification behaviour)
+
+0.1.13 is the first release that publishes the tools bundle and states its schema head on the chart (both described
+above); it also carries the two fixes and the behaviour changes below. 0.1.12 carries none of this. No value needs to
+change.
+
+**Two fixes for deployments on 0.1.11 or 0.1.12:**
+
+1. **The migrate hook can re-apply the application role again.** On 0.1.11 and 0.1.12, with
+   `secrets.appDbPasswordSecretName` set, the first install created the role and every `helm upgrade` after it failed
+   at the migrate hook with `permission denied to alter role` / "Only roles with the SUPERUSER attribute may change the
+   SUPERUSER attribute". The hook re-applied the role with `NOSUPERUSER` and `NOREPLICATION`, which Postgres refuses
+   from an administrator that is not a superuser — and the Azure and RDS administrators are not. The 0.1.13 hook names
+   those two only to reset an attribute the role actually holds, which it never does unless someone set it by hand.
+   **What to do:**
+   - If an upgrade failed this way, upgrade straight to 0.1.13. The new hook runs with the new image, so it passes.
+     Nothing in the database needs repair: the failed hook may have applied that release's migrations (each in its own
+     transaction, and expand-only), and its role step rolled back whole, so the next run simply continues.
+   - If you followed the workaround (cleared `secrets.appDbPasswordSecretName` on the release so the hook skipped the
+     role), set it again in the same upgrade. The role exists; the hook updates its password and grants.
+   - A role someone made `SUPERUSER` or `REPLICATION` by hand is still reset by the hook where the migrating role may do
+     it (a superuser DSN). Where it may not (a managed administrator), the hook fails with `permission denied to alter
+     role`: remove the attribute as a role that can (`ALTER ROLE velt_app WITH NOREPLICATION`) and upgrade again.
+
+2. **The Azure Terraform module plans on Terraform 1.6–1.11 again.** The module's `aks_network_policy` check failed
+   every plan there with `Invalid function argument` when the value was left at its default. If you had pinned
+   `aks_network_policy` to work around it, you can remove the pin. The lock file now carries provider hashes for
+   `linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64` and `windows_amd64`. On another platform a plain `init`
+   adds yours to the lock file; with `init -lockfile=readonly`, run `terraform providers lock -platform=<os>_<arch>`
+   in the module directory first. An explicit `null` for `private_cluster_enabled`, `api_server_authorized_ip_ranges`
+   or `aks_admin_group_object_ids` now means the default. None of this changes a planned resource.
+
+**What the migrate hook applies, what moves during the rollout, and what your users will notice:**
+
+1. **Six expand-only migrations.** v116 `document_rtdb_access` (each document's access type as its own table, backfilled
+   from `documents.access_type` so no document widens at upgrade — measured 1.4 s on 500,000 documents) and v125
+   `document_rtdb_disabled` (the same for the disabled flag); v117 `document_views_filed` (a migrated document's views,
+   kept under the source id); v118 a partial index on `crdt_updates` for the never-folded rows — built inside the
+   migration, so **CRDT appends wait while it builds, about 1.9 s per million untagged log rows**: pick a quiet window if
+   `crdt_updates` is large; v123 `area_annotations` (area annotations); v124 expression statistics plus an `ANALYZE` on
+   the comment, reaction and area tables, so the WebSocket snapshot reads walk their recency index instead of sorting a
+   whole document. v110–v111 are 0.1.12's; the other numbers are gaps.
+2. **The rolling-upgrade window (old and new pods together).** v116 and v125 each install a trigger that mirrors an OLD
+   pod's `UPDATE documents SET access_type / disabled` into the new copy, so the new pods' live-feature rule never reads a
+   stale copy while old pods still serve. Two things old pods cannot do, bounded by the rollout: a document delete run by
+   an old pod leaves that id's copies behind (a document created later under the same id takes the stale type until an
+   access update names it), and a migrate run by an old pod mirrors the moved type into the target's copy — neither is
+   reconciled afterwards. An old pod also does not know `area_annotations`: a document, organization or migrate it serves
+   leaves area rows a new pod wrote — re-run the delete after the rollout if that matters.
+3. **Behaviour your users and integrators will see change, each matching Velt's hosted service.** A migrated document's
+   view counts start from the target's own views — the source's vanish from the UI and come back on a migrate back. A
+   peer who leaves presence or a cursor channel is kept as an offline row for 24 hours (the SDK already hides it) and
+   presence/cursor writes merge instead of replacing. A private thread's author must be named in its visibility stamp to
+   keep seeing it on reads, and the webhook's `accessDeniedUsers` is the hosted merge of the stamp and the
+   visibility-denied named users. WebSocket notifications are built from the stored comment, not the client's copy. The
+   V1 `documents/get` reports `accessType` and `disabled` from the new copies, so a document created by `add`, or a
+   migrate target, reads as the tenant default and enabled until an update names it. REST `Crdt.GET` omits, and
+   `Crdt.UPDATE` answers 404 for, an editor with no snapshot record carrying a state. Writes Velt's hosted service refuses
+   — field paths deeper than 20/21 segments, nested arrays where the hosted service refuses them, empty or `__x__` field names, a
+   document over 1 MiB — are refused with the hosted answer. Live cursors and area annotations stop answering
+   `unimplemented`.
+4. **Background work the workers pick up.** A bounded, idempotent sweep tags the never-folded CRDT log rows with their
+   editor (at most 200 rows and 8 MiB a batch, 50 batches a sweep, `SKIP LOCKED`); a tagged row is deleted by that
+   editor's next per-editor fold. It only tags, so a dormant document's history stays until someone edits it again.
+5. **Two chart changes that affect upgrades.** A name under your `env:` that the chart also generates no longer fails
+   the upgrade with a duplicate on server-side apply: `env` wins, and every name appears once. A number of a million or
+   more written bare in a values file (`restApi.maxBodyBytes: 1048576`, `maxSnapshotBytes`, `dataRate.*`, an `env`
+   value) reaches the template as a float; from 0.1.13 every numeric entry renders its digits, so quoting is no longer
+   needed — a fractional `env` number is refused at render, naming the key.
+6. **Log and drain changes.** A failed permission-provider attempt is logged once, by the retry loop, with the URL
+   redacted, and each failed call ends with one summary line — expect fewer, not more, lines. A delayed REST write the
+   drain cannot settle is abandoned at its deadline and logged, instead of holding every write behind it.
+7. **The upgrade script itself.** Every stop names its reason (the `ERROR: … stopped at line N` shape above); the Redis
+   memory preflight authenticates with the password the Redis pod holds (the 0.1.11 and 0.1.12 scripts did not, and stop
+   with `NOAUTH` against their own Redis); and the expected schema head is read from the chart's annotation, as Phase U3
+   describes.
+
+**Rolling back** across this boundary: below v116/v125 the previous rule reads `documents.access_type` and `disabled`
+again (the copies stay, harmless); below v123 the `area` and `cursor` channels answer `unimplemented` again and the area
+rows stay for roll-forward; below 0.1.13 a leaver is removed instead of kept offline. Nothing needs cleaning up.
+
+---
+
+## Upgrading to 0.1.13 or later, part two — console SAML sign-in and SCIM (ships in 0.1.13, migration v126)
+
+This section applies when the target release's chart has a `consoleAuth.saml` block
+(`helm show values <chart reference> | grep -n '^  saml:'` prints a line). Nothing to do unless you want SAML. The upgrade
+applies migration **v126** (three new, empty tables: `console_saml_config`, `console_scim_config`,
+`console_scim_users`). With `consoleAuth.saml.enabled` left `false` the gateway serves exactly what it served
+before: none of the SAML or SCIM routes exist and the SAML library is never loaded. To turn SAML on, follow
+the SAML and SCIM runbook (ask Velt for it).
+
+Three things to know once SAML is on:
+
+1. **Upgrade the console image and the gateway together.** A SAML sign-in needs a one-time code challenge from the console
+   at `/console/saml/login` and its verifier at `/console/session`; a console image older than the gateway sends neither,
+   and every SAML sign-in from it ends at `samlError=saml-invalid-response` (the gateway log names the missing challenge).
+   OIDC sign-in is unaffected. The script upgrades both from one release.
+2. **The chart checks the SAML values at install.** A seed that sets both `idpMetadataUrl` and the pasted IdP fields, an
+   `http://` URL, a partial seed, a rate of `0`, or `console.config.auth.issuer` without `consoleAuth.oidcIssuer` fails
+   `helm upgrade` with a message naming the value — fix it there rather than in the running pods.
+3. **Keep a way back in.** If SAML is your only sign-in method, keep `velt-provision saml reset` in mind (the runbook's
+   lockout recovery; `saml reset --disable` turns SAML off) — and see the rollback note below before rolling back.
+
+## Upgrading to 0.1.14 or later (comment attachments)
+
+0.1.14 serves comment attachments: the SDK's composer attaches files, which the browser uploads to and downloads from
+your own storage account with short-lived signed URLs the gateway mints after checking the user may write or read the
+document. The release applies one migration, **v127** (an index on the document-migration records; it builds in
+seconds and nothing needs backing up for it), and nothing else changes until you turn attachments on. A document you
+migrate to a new id keeps its attachments: the gateway looks under the document's previous ids.
+
+**A deployment without a `storage:` block** behaves as before: the three attachment calls (`getUploadUrl`,
+`getDownloadUrl`, `deleteAttachment`) answer `unimplemented`, the gateway does not announce `attachments`, and the SDK
+keeps the attachment button hidden.
+
+**To turn attachments on:**
+
+1. **Terraform** (the module of the same release): set `attachment_cors_origins` to the browser origins of your app, as
+   in the install guide's Phase 1.2, then `terraform plan`. Expect exactly one change: a `blob_properties` block with one
+   `cors_rule` on the storage account. The module leaves blob soft delete, versioning and the change feed as they are;
+   if the plan shows a change to any of them, stop and ask Velt support. Apply.
+2. **Values:** add the `storage:` block of the install guide's Phase 4.1, filled from `terraform output`
+   (`blob_endpoint`, `blob_container`, `workload_identity_client_id`) and your tenant id.
+3. **Upgrade** with the script as usual. The gateway AND the workers now receive the `VELT_STORAGE_*` group — the
+   workers remove a deleted document's files. Keep it that way: the chart's `storage:` block reaches both; if you set
+   the variables through a per-workload `env` override instead, set them on both, because a gateway with storage and
+   workers without it queue file cleanups that nobody runs (the workers say so once at start-up). Under a restricted
+   egress policy, allow the storage account's and Entra's addresses for the workers as well as the gateway.
+4. **Verify** with the install guide's Phase 6.3 (an upload URL through your public host, then a PUT and a GET with
+   `curl`).
+
+**During the rollout** (old and new gateway pods together) a new pod announces `attachments` while an old pod answers
+the attachment calls `invalid-argument` "unsupported operation"; the SDK treats both as "not available", so an upload can
+fail once while the rollout runs. A document an old pod deletes during the window keeps its files (an old pod queues no
+cleanup).
+
+**One behaviour change whether or not you turn storage on:** a comment write — REST or SDK — whose attachment
+`bucketPath` is not under your API key (`<api key>/…`) is refused **400 `invalid-argument`** ("Attachment bucketPath must
+be under the caller's apiKey.") and nothing is written. The REST API checks every path in the request — including
+one a thread already stored, if your server sends the whole thread back on an update; the SDK's own writes skip paths
+a thread already stores. If your servers write attachment metadata through the REST API, keep `bucketPath` under your
+key or leave it out.
+
+**Rolling back below 0.1.14:** the older chart and pods ignore the `storage:` group for attachments (the calls answer
+`invalid-argument` again and the SDK hides the button); uploaded files stay in the container and serve again on
+roll-forward; cleanups already queued wait in Redis for a 0.1.14 worker; the CORS rule Terraform added is harmless; the
+v127 index stays and is harmless.
+
+**Removing the CORS rule later:** emptying `attachment_cors_origins` after it was set does not remove the rule from the
+storage account (Terraform stops managing it rather than deleting it). Remove it in the Azure portal (storage account ▸
+**Resource sharing (CORS)** ▸ **Blob service**) if you no longer want browsers to reach the container.
+
+## Upgrading to 0.1.15 or later (the REST API follows the module list; the tools bundle)
+
+**Behaviour change on upgrade — read this if your values mention `rest-api` or `restApi`.** From 0.1.15 the
+customer REST API is one answer in two spellings: `rest-api` in `enabledModules` turns the door on, and
+`restApi.enabled: true` adds `rest-api` to the module list the console and the SDK read. Before 0.1.15 the two were
+independent, so:
+
+- values that list `rest-api` under `enabledModules` but never set `restApi.enabled` had the door **off** before,
+  and **on** after this upgrade — `/api/v2/...` starts answering with the API key's auth token. If you did not mean
+  to serve it, remove `rest-api` from the list before upgrading;
+- values that set `restApi.enabled: false` beside `rest-api` in the list are refused at Phase U2 (the chart will
+  not render two answers); give one — remove the module, or set the switch to `true` or leave it empty;
+- values with `restApi.enabled: true` and no `rest-api` in the list keep serving, and the console now shows the REST
+  features it hid before.
+
+The 0.1.15 tools bundle is the first whose update check starts (`lib/` was missing from 0.1.13 and 0.1.14), whose
+receipt and support bundle take `--schema-head`, and whose Terraform module waits for the Application Gateway
+before creating its diagnostic setting (install guide Phase 1.3). On the bash-3.2 exit-code defect, see the
+Checklist; it is fixed in 0.1.16.
+
+---
+
+## Upgrading to the release that serves multi-thread annotations (migration v128)
+
+The first portable release that serves multi-thread annotations (portable 0.1.20 or later) exposes them on the `multiThread`
+channel. It applies one migration, **v128** (`multi_thread_annotations`, an empty table in
+the shape of `area_annotations`, its recency index and an expression-statistics object; it builds in seconds and nothing
+needs backing up for it). The gateway announces `multi-thread` in `welcome.capabilities`; an SDK that sees it routes its
+multi-thread writes to the gateway, an older SDK keeps writing them as it did before. On a rollback below this release the channel
+answers `unimplemented` again (the SDK treats that as "not served here") and the table stays, harmless. A document
+delete, an organization delete, a document migrate and a folder move take the new rows with the comment rows, as on Velt's hosted service.
+
+## Upgrading to a release with the stricter console sign-in checks
+
+This section applies when the target release's chart has `consoleAuth.preferredUsernameFallback`
+(`helm show values <chart reference> | grep -n preferredUsernameFallback` prints a line), and only if your console is
+on. The gateway checks a console administrator's sign-in token from your identity provider (IdP) more strictly. Check
+the first two items BEFORE you upgrade; each takes one line or one command.
+
+1. **Entra deployments: set `consoleAuth.preferredUsernameFallback: true`.** The gateway now uses the token's
+   `preferred_username` as the administrator's address only when you opt in, and it is off by default. On Entra a user
+   with no `mail` attribute has no `email` claim and signs in by UPN, which only a tenant administrator can set — so
+   Entra opts in:
+
+   ```yaml
+   consoleAuth:
+     preferredUsernameFallback: true    # Entra: the UPN is administrator-set
+   ```
+
+   It must be an unquoted YAML boolean (a quoted value fails the render). Do NOT set it on Cognito, or on a Keycloak /
+   Auth0 setup where users can edit `preferred_username`: a user who writes an administrator's address there would
+   sign in as that administrator. If you skip this step on Entra, a member whose token has no `email` claim gets 401
+   and the gateway logs `[JoseOidcVerifier] session refused: preferred_username fallback is off`; adding the line and
+   upgrading again fixes it.
+
+2. **`consoleAuth.oidcIssuer` must equal your IdP's issuer character for character.** The gateway no longer trims a
+   trailing slash, and it checks that the IdP's discovery document names the configured issuer. Compare them first
+   (both lines must print the same text):
+
+   ```bash
+   ISSUER="$(helm get values <release> -n <namespace> -o json | jq -r '.consoleAuth.oidcIssuer')"
+   echo "$ISSUER"
+   curl -s "${ISSUER%/}/.well-known/openid-configuration" | jq -r '.issuer'
+   ```
+
+   Entra's v2 issuer (`https://login.microsoftonline.com/<tenant>/v2.0`) and Cognito's have no trailing slash; Auth0's
+   has one (and can sign in only from this release on). If they differ, set `consoleAuth.oidcIssuer` (and the console's
+   `console.config.auth.issuer`) to the document's value before upgrading. A mismatch after the upgrade answers 503 (code `failed-precondition`) on every sign-in,
+   and the gateway's error line names both values. With `consoleAuth.oidcJwksUrl` set (no discovery) a mismatch is a
+   401 with the warning `token issuer is not the configured issuer`.
+
+3. **`email_verified` must be `true` when present.** A token whose `email_verified` claim is anything other than `true`
+   or the string `"true"` (any letter case) is refused — before, only the boolean `false` was. A token WITHOUT the claim
+   is still accepted (Entra leaves it out); an IdP that sends `"false"` for an address it has not verified now has that
+   address refused, which is the intent.
+
+`portable-upgrade.sh` checks the first two for you in U2 — the **console-OIDC preflight**, read-only and warn-only like
+the allowed-domains one: it reads `consoleAuth` from the carried values, warns when an Entra issuer
+(`login.microsoftonline.com` / `.us`, `sts.windows.net`, `login.chinacloudapi.cn`) has no
+`preferredUsernameFallback: true` and when the fallback is on for any other IdP, and compares the configured issuer with
+the one the IdP's discovery document names. It never stops the upgrade; a check it could not make (no network to the
+IdP, an explicit `oidcJwksUrl`) says so. SAML sign-in is not affected.
+
+Rolling back across this boundary restores the previous checks; the extra value is ignored by the previous chart.
+
+---
+
+## The release signer identity is now exact
+
+Velt signs every release from one repository, one workflow and one branch. Every `cosign verify` in these guides, and
+in the tools bundle's scripts, now accepts exactly that signer: `IDENTITY` (the images, the chart, the modules and the
+tools) is
+`'^https://github\.com/snippyly/shared-firebase-function/\.github/workflows/container-release\.yml@refs/heads/main$'`,
+and the release manifest is verified against the same string with `selfhost-umbrella-publish.yml` in place of
+`container-release.yml`. Earlier guides used patterns that also accepted a repository of the same name in another
+GitHub organisation.
+
+Nothing to change in your deployment. If you saved verification commands from an earlier guide (a runbook, a CI job),
+replace their identity with the one above: the old patterns still pass Velt's artifacts, and they also pass artifacts
+Velt did not sign. The scripts carry the right identity themselves — the install preflights verify the MANIFEST (the
+`selfhost-umbrella-publish.yml` identity), the upgrade script verifies the chart and images (the `container-release.yml`
+identity). `COSIGN_IDENTITY_REGEXP` still overrides either, so set it on one command only, never export it: one value
+cannot serve both.
+
+## Every artifact is verified and fetched by one digest
+
+The guides used to verify an artifact by its tag and then pull, copy or import it by the same tag. Every command that
+names a tag asks the registry again what the tag names, so a registry that answered the second request differently
+would hand you something other than what was verified: an older signed release, or unsigned content. Every guide step
+now resolves the tag once (`oras manifest fetch --descriptor`), verifies that digest, and pulls, copies or imports that
+same digest; the copy in your registry keeps the tag your values pull. `portable-upgrade.sh` already worked this way
+(`--import-to` copies the digest it verified).
+
+Nothing to change in your deployment. If you saved verification commands from an earlier guide, change them the same
+way. From the first release after 0.1.15, the install preflights also check that the `manifest.json` you pulled is the
+manifest they verified.
+
+**The chart too — Helm 3.17 or newer.** From the first release after 0.1.15 the chart is no exception: the guides'
+`helm install` and `helm upgrade` name `oci://…/velt-portable@$CHART_DIGEST` with no `--version`, and
+`portable-upgrade.sh` renders and applies the chart by the digest it verified. Helm installs a chart by digest from
+3.17 (3.16 answers `invalid_reference: invalid tag`), so **upgrade Helm to 3.17 or newer (4.x is fine) before you run
+the target's tools**: the install preflights' P1 refuse an older Helm, and so does the upgrade script, by name, after
+verification and before anything is rendered. Do not put `--version` beside the digest — Helm 3.17 ignores it, and newer
+Helm refuses the pair once the tag has moved.
+
+## The seeded organization is visible to the REST API
+
+The first workspace's organization — the one `velt-provision seed --org-id` creates — was stored without its client id,
+so the REST API answered `POST /v2/organizations/get` for it with `Organization does not exist.` while
+`POST /v2/organizations/add` answered `Organization already exists.` (documents, users and the SDK were unaffected). The
+seed now stores the organization's id and name, as an organization created any other way carries them.
+
+The problem shows only through the REST API, so repair it there, once, after the upgrade. Ask for the organization
+first (`<org-id>` is the value you passed to `velt-provision seed --org-id`):
+
+```bash
+curl -sS "https://<your-host>/api/v2/organizations/get" -H 'content-type: application/json' \
+  -H "x-velt-api-key: <api-key>" -H "x-velt-auth-token: <api-auth-token>" \
+  -d '{"data":{"organizationIds":["<org-id>"]}}'
+```
+
+If that returns the organization, there is nothing to repair — stop here: the update below sets the name, and would
+replace a name you have given it since. If it answers `Organization does not exist.`, fill in what the seed now writes
+(the API key is stamped from the header; one sent in the body is ignored):
+
+```bash
+curl -sS "https://<your-host>/api/v2/organizations/update" -H 'content-type: application/json' \
+  -H "x-velt-api-key: <api-key>" -H "x-velt-auth-token: <api-auth-token>" \
+  -d '{"data":{"organizations":[{"organizationId":"<org-id>","organizationName":"<org-id>"}]}}'
+```
+
+Then the first command returns it, exactly as for an organization created any other way. **Do not re-run the seed
+to repair it:** a re-seed writes every value its command carries again — the identify configuration, the notification
+and permission-provider settings, the plan and the API key's auth token — so any of them you changed in the console
+since the install would be reverted, and an organization you disabled would be enabled again. An organization that the
+REST API or the console created, or that was created by the first comment in it, was never affected.
+
+---
+
+## The Terraform module: node autoscaling, alerts and the backup window
+
+**This is a Terraform change, not a chart change.** It reaches your deployment when you apply the target release's
+Terraform module (`velt-portable-module` on Azure, `velt-portable-module-aws` on AWS); the chart, the values and the
+application do not change. Your target's module has it if its `variables.tf` declares `aks_node_max_count` (Azure)
+or `node_max_count` (AWS). Read the plan before you apply it; with the defaults it shows only the changes below, and
+replaces nothing.
+
+**On Azure** the plan:
+
+- turns on the cluster autoscaler for the node pool, in place: `auto_scaling_enabled`, `min_count` (your
+  `aks_node_count`) and `max_count` (`aks_node_max_count`, twice the count unless set). No node is replaced. Check the
+  VM family's vCPU quota for the ceiling first (the install guide's Phase 0.5); set `aks_node_max_count` equal to
+  `aks_node_count` to keep a fixed pool;
+- turns on storage auto-grow for PostgreSQL, in place. It leaves the server's backup window alone unless you set
+  `postgres_backup_retention_days` (7 to 35) — a window raised in the portal is kept;
+- in persistent mode, creates an action group and six metric alerts (`enable_alerts = false` opts out). Put your
+  on-call in `alert_email_addresses`, or name your own action group in `alert_action_group_id`. Two of the alerts
+  watch the Application Gateway, so the apply waits for it with the same `az` + bash step the diagnostic settings use
+  (install guide Phase 1.3): if you turned diagnostics off because the apply runs without bash (Windows), turn alerts
+  off too, or apply from WSL or Git Bash;
+- needs the azurerm provider 4.x, which the lock file in the module archive pins. If `terraform init` refuses because
+  an older lock file in your working directory pins a 3.x provider, use the archive's lock file (or run
+  `terraform init -upgrade` once);
+- adds two optional variables you may never need: `postgres_high_availability_mode` (a standby server; about doubles
+  the database's cost) and `postgres_server_name` (only to adopt a server restored under another name — the
+  Backup and Restore runbook).
+
+**On AWS** the plan:
+
+- raises the node group's maximum to `node_max_count` (twice `node_count` unless set), in place, and from then on
+  leaves the group's live size to the Cluster Autoscaler — so to raise `node_count` later, raise the group's size
+  first (the variable's description and the install guide's Troubleshooting say how);
+- adds an IAM role for the Cluster Autoscaler. Nothing scales until you install it with that role, exactly as the
+  [Install Guide (AWS)](https://docs.velt.dev/self-hosting/full/aws/install) Phase 4.1 does (`skip-nodes-with-local-storage=false`
+  included); `enable_cluster_autoscaler = false` leaves the role out;
+- in persistent mode, creates an SNS topic, its KMS key and three alarms (`enable_alarms = false` opts out). Put your
+  on-call in `alarm_email_addresses` (each confirms AWS's email) or name your topic in `alarm_sns_topic_arn`; then set
+  the load balancer's and the certificate's ids and apply again (the install guide's Phase 5) to add their alarms;
+- keeps seven days of RDS backups unless you set `rds_backup_retention_days` (1..35).
+
+Run the preflight with `--max-nodes` matching your ceiling before the apply: it now warns when the vCPU quota cannot
+hold the autoscaler's ceiling. After the apply, rehearse a restore once, as the runbook describes.
+
+---
+
+## Upgrading to the release that runs several production keys on one cluster
+
+From the first portable release after 0.1.20, one cluster can run several Helm releases — one per production API key,
+each with its own database (the install guides' "A second production API key on the same cluster"). The change is in
+the Terraform module and reaches every install, including one that keeps a single release. To tell whether a module has
+it: its `variables.tf` declares `variable "releases"`. Two parts, in this order.
+
+**1. Apply that release's module once — and, on Azure, the one maintenance moment.** The module's per-release and
+per-server resources are now keyed maps, and your existing release and Postgres server are the key `default`. The
+module carries `moved` blocks, so Terraform moves your state to the new addresses instead of recreating anything. Run
+the plan first and read it before you apply it:
+
+```bash
+terraform -chdir=terraform/azure plan -out tf.plan
+```
+
+(On AWS, `terraform/aws`.) What the plan shows:
+
+- one `has moved to` line per moved resource — for example `azurerm_user_assigned_identity.workload has moved to
+  azurerm_user_assigned_identity.workload["default"]`. A moved resource is neither created nor destroyed;
+- `terraform_data.release_guard` to add: the checks that refuse two releases sharing a namespace, host, database, role
+  or container — a resource with nothing behind it in the cloud;
+- **on Azure, exactly one replacement:** `azurerm_role_assignment.workload_blob_data_contributor["default"]`. The
+  workload identity's Storage Blob Data Contributor grant narrows from the whole storage account to its own attachments
+  container, so that no release's identity can read another release's files. Azure cannot change a role assignment's
+  scope in place, so the plan counts it as **1 to add** and **1 to destroy**. With the guard, the summary reads
+  `Plan: 2 to add, 0 to change, 1 to destroy.` when nothing else is pending (over a module that predates "The
+  Terraform module: node autoscaling, alerts and the backup window", that section's in-place changes add to the middle
+  number).
+
+The new grant is created before the old one is deleted, but Azure takes seconds — sometimes a few minutes — to make a
+new role assignment effective, and in that window an attachment upload or download can answer `permission-denied`.
+That is this upgrade's one maintenance moment: apply outside the hours your users attach files. A deployment without
+attachments (no `storage:` block) notices nothing.
+
+**Stop if the plan replaces or destroys anything else** — `must be replaced` or `will be destroyed` on any other
+address is not this upgrade. Keep the plan output and talk to Velt support before you apply. Otherwise apply the plan
+you read: `terraform -chdir=terraform/azure apply tf.plan`.
+
+On AWS nothing is replaced: the plan shows the `moved` lines and the guard. If you will run more than one release, do
+two things before you add the second (the Install Guide (AWS)'s recipe relies on both):
+
+- add `alb.ingress.kubernetes.io/tags: velt.dev/deployment=<deployment_name>` to the existing release's
+  `ingress.annotations` in `values-aws.yaml` and re-apply that release with it — the `helm upgrade` by digest at the
+  end of "Upgrading on AWS", step 8. The tag is set on its load balancer in place: nothing is recreated, and its DNS
+  name does not change;
+- set `alarm_load_balancer_tags = { "velt.dev/deployment" = "<deployment_name>" }` in the tfvars and apply it, so the
+  alarms watch every load balancer the tag finds: the extra releases share one, and your existing release keeps its
+  own.
+
+With a single release there is nothing more to do on AWS.
+
+**On both clouds, before you add a release on the module's own Postgres server:** the module's new `app_db_role`
+variable names the role your existing release runs as, `velt_app` unless its Helm values set `secrets.appDbRole`. If
+they do, set `app_db_role` in the tfvars to that role. Adding a release closes the module's own database to every role
+but `app_db_role`, and its step 2 stops, changing nothing, while any other role is connected (the install guide's
+"Step 2 — Create its owner role and database").
+
+**Going back is a state change too — the moves run forward only.** Do not plan with an older module (one whose
+`variables.tf` has no `variable "releases"`) against this state: it reads the keyed addresses — your identity, your
+container or bucket, your Postgres server and their settings — as resources it does not know, and plans to DESTROY them.
+Nothing in the module stops that apply (it carries no `prevent_destroy`, so a sandbox can be torn down). If you must go
+back to an older module: first remove every extra release ("Removing a release" in the install guide — the older module
+cannot hold them), keep a copy of the state, then move each address back with the NEW module's `moved.tf`, `to` → `from`:
+
+```bash
+terraform -chdir=terraform/azure state pull > state-before-going-back.json      # keep it: it is your way forward again
+awk '/^ *from *=/ {f = $3} /^ *to *=/ {print $3, f}' terraform/azure/moved.tf | while read -r to from; do
+  terraform -chdir=terraform/azure state mv "$to" "$from"
+done
+```
+
+(On AWS, `terraform/aws` in all three places.) An address your install does not have — a setting of a feature you run
+with off — is reported and skipped. Then put the older module in place and plan: it may destroy only
+`terraform_data.release_guard` (nothing in the cloud) and, on Azure, replace
+`azurerm_role_assignment.workload_blob_data_contributor` to widen it back to the whole account. Anything else
+"to destroy" means an address was not moved back: do not apply.
+
+**2. Then upgrade each release, in any order.** Each release is its own Helm release in its own namespace, so the
+numbered procedure runs once per release — back up, dry run, upgrade, smoke — with that release's names:
+
+```bash
+./velt-portable-tools/portable-upgrade.sh --target "$PORTABLE_V" --release velt --namespace velt --dry-run
+./velt-portable-tools/portable-upgrade.sh --target "$PORTABLE_V" --release velt --namespace velt
+./velt-portable-tools/portable-upgrade.sh --target "$PORTABLE_V" --release k1 --namespace k1 --dry-run
+./velt-portable-tools/portable-upgrade.sh --target "$PORTABLE_V" --release k1 --namespace k1
+```
+
+`velt` is the module's own release on Azure (`velt-portable` on AWS); `k1` stands for an extra release, whose Helm
+release name is its key and whose namespace is its key unless you set one.
+
+- **Any order, and not all at once.** Releases may run different versions between runs: one release on the new version
+  and another on the old is a supported state, not a half-done upgrade. Upgrade a test release first if you have one.
+- **Per release:** the compatibility fences (`VELT_MIN_SDK`, the console schema) and the SDK pin — the app that uses a
+  release's key loads that release's SDK bundle, so Phase U5 runs for each release that hosts one; `VELT_PG_DSN`, which
+  names that release's own database (an extra release's administrator DSN is its owner role, not the server
+  administrator); the smoke URL (`svc/<release>-gateway` in its namespace); the receipt and the update check
+  (`--release <release> --namespace <namespace> --out receipt-<release>.json`).
+- **What one run reads:** its preflights read that release's Redis, in its namespace, and — through `VELT_PG_DSN` — that
+  release's database only. Upgrading one release leaves the other releases' schemas and sessions as they were.
+- **The backup:** a server snapshot covers every release's database on that server; a `pg_dump` covers one.
+
+---
+
+## Upgrading on AWS
+
+The phases above are the same on AWS; the install is the
+[Install Guide (AWS)](https://docs.velt.dev/self-hosting/full/aws/install).
+`portable-upgrade.sh` needs no AWS-specific option: `--import-to` is registry-neutral (`cosign copy` by digest,
+re-verify, render from `oci://<import-to>/velt-portable@<the verified digest>`). The install guide names the Helm release `velt-portable` in
+namespace `velt`, so wherever this guide says `--release velt`, use `--release velt-portable` (the rollback too), and
+the gateway Service is `velt-portable-gateway`. The AWS module first ships in a release newer than 0.1.15, so on an
+AWS deployment only the version sections after 0.1.15 can apply, and the tools-bundle caveats for 0.1.13 to 0.1.15 do
+not. The AWS lines, in the order of the numbered procedure:
+
+1. **Log docker AND helm in to ECR** — `cosign copy` uses the docker credentials, the chart render uses helm's. If you
+   need the Checklist's empty `DOCKER_CONFIG` (`cosign verify` → `error getting credentials`), export it BEFORE these
+   lines, so the ECR login lands in the configuration the copies read:
+   ```bash
+   ECR=$(terraform -chdir=terraform/aws output -raw ecr_registry)    # <registry host>/<deployment_name>
+   aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR%%/*}"
+   aws ecr get-login-password --region "$AWS_REGION" | helm registry login --username AWS --password-stdin "${ECR%%/*}"
+   ```
+2. **`--import-to "$ECR"`** — the registry host PLUS the `<deployment_name>` prefix, exactly your `image.registry`
+   (the script refuses a mismatch):
+   `portable-upgrade.sh --target "$PORTABLE_V" --release velt-portable --namespace velt --import-to "$ECR"`, with
+   `--dry-run` first (procedure step 4).
+3. **Re-read the RDS master password first.** RDS rotates the managed secret; the migrate hook logs in with the admin
+   DSN, so rebuild `velt-postgres-dsn-admin` from Secrets Manager before every upgrade — otherwise the hook fails at
+   connect (loud; nothing is applied). One command, so an empty value replaces nothing (zsh-safe — no command is
+   stored in a variable):
+   ```bash
+   tfo() { terraform -chdir=terraform/aws output -raw "$1"; }
+   PG_HOST=$(tfo rds_endpoint)
+   ADMIN_PW=$(aws secretsmanager get-secret-value --secret-id "$(tfo rds_master_secret_arn)" --query SecretString --output text \
+     | python3 -c 'import json,sys,urllib.parse;print(urllib.parse.quote(json.load(sys.stdin)["password"],safe=""))')
+   [ -n "$PG_HOST" ] && [ -n "$ADMIN_PW" ] \
+     && kubectl -n velt create secret generic velt-postgres-dsn-admin --dry-run=client -o yaml \
+          --from-literal=VELT_PG_DSN="postgres://veltadmin:${ADMIN_PW}@${PG_HOST}:5432/velt?sslmode=verify-full" \
+        | kubectl apply -f - \
+     || echo "STOP: an empty value, or the secret was not replaced"
+   unset ADMIN_PW
+   ```
+4. **Back the database up with an RDS snapshot** (the Checklist's backup step). RDS also keeps automated backups for a
+   point-in-time restore; the snapshot is the named point you will want. On a single-AZ instance (sandbox mode) taking
+   it briefly suspends I/O:
+   ```bash
+   DB_ID=$(tfo rds_endpoint); DB_ID=${DB_ID%%.*}              # the instance identifier is the endpoint's first label
+   SNAP="$DB_ID-pre-$(printf %s "$PORTABLE_V" | tr . -)"      # snapshot names take letters, digits and hyphens only
+   [ -n "$DB_ID" ] && aws rds create-db-snapshot --db-instance-identifier "$DB_ID" --db-snapshot-identifier "$SNAP" >/dev/null \
+     && aws rds wait db-snapshot-available --db-snapshot-identifier "$SNAP" \
+     && echo "snapshot $SNAP ready" \
+     || echo "STOP: no snapshot — do not upgrade without one"
+   ```
+5. **Comment attachments on AWS live in the S3 bucket** your Terraform module created (the attachments section above
+   describes Azure storage accounts). To turn them on, from the module of the same release:
+   - **Terraform:** set `enable_storage_grants = true` and `attachment_cors_origins` to your app's browser origins,
+     then `terraform plan`. Expect the app role's bucket grant and the bucket's CORS configuration, plus (once, on the
+     first apply of a module that has it) a lifecycle rule that expires a deleted attachment's data after
+     `attachment_noncurrent_version_days` (30 by default). Apply.
+   - **Values:** add `storage.s3` from `terraform output`: `bucketUrl` = `s3_bucket_url`, `region` = `s3_region`,
+     `stsEndpoint` = `sts_endpoint`, `roleArn` = `workload_role_arn`. Leave `storage.blobEndpoint` empty.
+   - **Upgrade** as usual; the gateway and the workers both receive the group.
+
+   Leave `storage:` out to keep attachments off: the attachment calls answer `unimplemented` and the SDK keeps the
+   attachment button hidden. The `bucketPath` rule in that section applies to you either way. With attachments on or
+   off, the first `terraform plan` of a module that has the lifecycle rule adds it to the bucket (harmless on an empty
+   bucket); expect that one addition. Unlike the Azure storage account, emptying `attachment_cors_origins` later
+   removes the bucket's CORS configuration at the next apply.
+6. **The schema reads trust the RDS CA.** The script reads `schema_migrations` with `psql "$VELT_PG_DSN"` from where you
+   run it: RDS is private (run from inside the VPC), and `sslmode=verify-full` needs the CA —
+   `export PGSSLROOTCERT=$PWD/<region>-bundle.pem` (the same bundle the chart's `postgresCa` ConfigMap holds; in a
+   commercial region it is `https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem`). From a
+   workstation outside the VPC, leave `VELT_PG_DSN` unset: a port-forward to `localhost` cannot pass `verify-full`
+   (the certificate names the RDS host), and the migrate Job asserts the head itself inside the hook.
+7. **Smoke through a port-forward, check the load balancer, and read the head in-cluster for the receipt.**
+   Run the smoke through the restart-loop port-forward above, with `svc/velt-portable-gateway` (the AWS install guide's
+   release name): `export VELT_SMOKE_URL=http://127.0.0.1:58080/readyz`. Neither public URL checks the gateway — `/healthz`
+   on the host is the console's page and `/api/healthz` answers 404 — so check the load balancer afterwards with the
+   install guide's Phase 6 requests (`/api/operations/read` answers 400 or 401, `/ws` answers 101). After the upgrade, run the install guide's Phase 4.5 check again (it
+   sets `SCHEMA_HEAD`), then:
+   ```bash
+   ./velt-portable-tools/portable-receipt.sh --release velt-portable --namespace velt --schema-head "$SCHEMA_HEAD" --out receipt.json
+   ```
+   Pass the same `--schema-head` to the support bundle.
+8. **Phase U5 on AWS: the SDK image goes into ECR first.** The upgrade script copies the chart and the three images,
+   not the SDK bundle, so step 1 of Phase U5 is a verified copy instead of `az acr import`:
+   ```bash
+   SDK_V=<new version>
+   SDK_OLD=<the version apps are pinned to today>
+   SDK_DIGEST=$(oras manifest fetch --descriptor "$REG/velt-sdk-static:$SDK_V" \
+     | python3 -c "import json,sys;print(json.load(sys.stdin)['digest'])")
+   cosign verify --certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$REG/velt-sdk-static@$SDK_DIGEST" \
+     && cosign copy "$REG/velt-sdk-static@$SDK_DIGEST" "$ECR/velt-sdk-static:$SDK_V"
+   # the version you retain is already in ECR from the install (or the previous SDK upgrade); confirm it before step 2:
+   aws ecr describe-images --repository-name "${ECR#*/}/velt-sdk-static" --image-ids imageTag="$SDK_OLD" --query 'imageDetails[0].imageTags'
+   ```
+   Step 2's upgrade re-applies the chart you run now by its digest (the Install Guide (AWS)'s 4.4 block, which resolves
+   and verifies `$CHART_DIGEST` from your ECR copy):
+   `helm upgrade velt-portable "oci://$ECR/velt-portable@$CHART_DIGEST" -n velt -f values-aws.yaml`.
+
+On AWS, as on Azure, the RDS administrator is not a superuser: if you run an application database role
+(`secrets.appDbPasswordSecretName`), upgrade from a release that re-applies the role correctly — see "Upgrading to 0.1.13
+or later", fix 1.
+
+
+## Rollback
+
+```bash
+./velt-portable-tools/portable-upgrade.sh --rollback --target <the version you upgraded TO> --release velt --namespace velt
+# e.g. after a 0.1.12 -> 0.1.15 upgrade:  --rollback --target 0.1.15
+```
+
+`--target` names the release you upgraded to, not the one you are going back to: it selects the tools bundle's own
+chart knowledge, and the rollback itself goes to the previous Helm revision.
+
+This runs `helm rollback` and re-runs the read smoke. `--rollback --dry-run` prints the rollback it would run and touches nothing. The `--rollback` command the script prints after a failed schema assertion names the script's own path, so it is correct wherever you unpacked the bundle.
+
+**Rollback moves your CODE back. It does not move your DATA back — it is not a data restore, and it does not undo migrations.** The schema stays where it is, and that is deliberate: expand-only migrations plus tolerated database-ahead-of-code are exactly what make running the previous release against the newer schema safe. The unknown-version warning is logged by the migrate Job, which a rollback does not run, so you will not see it in the gateway or workers logs after a rollback — the previous release simply serves against the newer schema. (You do see it during a rolling UPGRADE, once per migrate run, when old pods are still up.)
+
+**Two things an older release reads differently.** (1) Identify configs saved without `allowedOrigins` are
+refused by 0.1.9 and earlier, which required a non-empty list: after a rollback those tenants cannot sign in until you
+give them an origin list (the console's `apiKey.updateIdentifyConfig`). During a rolling upgrade, old pods refuse them
+the same way. (2) Rolling back to a release older than 0.1.7 crosses v92: allowed domains added or removed since then
+live only in `allowed_domain_entries`, which the older code does not read — removed domains are accepted again and
+added ones disappear. Re-apply domain changes by hand after such a rollback.
+
+**Rolling back below the per-editor CRDT fold (0.1.10, schema v105/v106).** From 0.1.10 an SDK that sees the
+`per-editor-crdt-fold` capability folds each editor on its own: the fold goes into `crdt_editor_snapshots` and that
+editor's log rows are deleted. An older gateway does not know `crdt_editor_snapshots`, so after a rollback — and, briefly,
+on the old pods during a rolling upgrade:
+- a document edited that way opens WITHOUT the folded content. The fold rows stay, and upgrading again serves them; but
+  clients that keep editing on the rolled-back release edit on top of the incomplete document, and Yjs merges both when the
+  folds come back. A client whose resume an old pod served can stay without that content until a full page reload;
+- a document, organization or REST `Crdt.DELETE` served by an old pod does NOT delete the per-editor folds, so the deleted
+  content comes back once a newer pod serves that id. **After rolling forward, re-issue the deletes made during the window;**
+- an old pod's REST `Crdt.ADD` / `Crdt.GET` cannot see a per-editor fold.
+Only an SDK that saw the capability writes per-editor folds (the REST door never does). So prefer rolling forward; if you
+must roll back, do it before your SDK release adopts the capability.
+
+**Rolling back to a release without console SAML sign-in, with SAML on.** The older release has no SAML or SCIM
+routes: SAML sign-in stops, your IdP's SCIM client gets `404`s (pause provisioning in the IdP first), and only OIDC
+still signs anyone in. If SAML was your only sign-in method, add the OIDC pair (`consoleAuth.oidcIssuer` /
+`oidcClientId`) in the same rollback or the console cannot be signed into. The three SAML tables (migration v126) stay
+and are read again when you roll forward.
+
+**Upgrading INTO 0.1.10, the release that first announces `per-editor-crdt-fold`:** during that one rolling upgrade, a
+whole-document fold written through an older pod can carry a stale record for an editor that already folded on its own,
+at a higher bound, and readers would then keep the stale one. Keep CRDT editing off for the length of that upgrade (a few
+minutes), or install that release fresh. Every later upgrade is unaffected: every later release serves per-editor folds.
+
+**When rollback is the wrong tool:** if the upgrade corrupted or deleted data, rolling the code back changes nothing about the data. That is a restore-from-backup conversation, and you should be having it with a backup you took before Phase U3.
+
+**What is rehearsed:** every release is rehearsed by Velt as an upgrade from the previous release over a populated database, then rolled back and re-smoked, before it is published — a rehearsal of helm, migrations, rollout ordering and data continuity, not of your ingress, TLS termination or identity provider.
+
+---
+
+## Troubleshooting
+
+Before a support conversation, run `./velt-portable-tools/portable-support-bundle.sh --release <release> --namespace <ns> --schema-head <n> --out .`
+and send the archive — it carries the chart version, the digests the pods actually run, the schema head, pod state and
+your allowlisted values, with no secret value and no log line unless you add `--include-logs`. `--schema-head` is the
+ledger head you read in-cluster (Phase U3's `kubectl run pgcheck …`, or the install guide's Phase 4.4); without it,
+and without a `VELT_PG_DSN` this workstation can reach, the bundle's `schemaHead` is empty and says so.
+
+| Symptom | Phase | What it means |
+|---|---|---|
+| `signature verification FAILED for …` | U1 | The artifact is not signed by the release workflow. Do not work around this. Check you have the right version and registry. |
+| `--local-images and --registry are mutually exclusive` | U0 | You asked for both an unverified local upgrade and a verified registry one. There is no precedence rule on purpose — pick one. |
+| `the target chart cannot render with your current values` | U2 | The new chart needs a value you have not set. The names are in the message. |
+| `UPGRADE FAILED: conflict occurred while applying object … conflict with "kubectl-patch"` (or `"kube-controller-manager"` … `.spec.replicas`) | U3 | A field Helm manages is owned by another manager: a manual `kubectl patch`/`edit`, or the autoscaler's replica count. Helm 4 applies server-side and will not overwrite it by default. `portable-upgrade.sh` passes `--force-conflicts` itself on a server-side release (and it prints that it did), so you see this only from a hand-run `helm upgrade`/`rollback` — add `--force-conflicts` there. Either way the chart's value wins, as it always did on Helm 3, so a manual change is overwritten: put the value in your values file. Seen after a manual pre-stop patch, and for the autoscaler's replica count. |
+| `helm upgrade FAILED` | U3 | Either the migrate Job (a pre-upgrade hook) failed — then the gateway did not roll and you are still on the old release: `kubectl logs -n <ns> job/<release>-migrate` — or the migration passed and the APPLY failed. On Helm 4 a server-side apply can be PARTIAL: some objects (an HPA, a budget, a Deployment) may already be on the new chart. `helm history <release> -n <ns>` shows which; `kubectl get deploy,hpa,pdb -n <ns>` shows what is live. If in doubt, re-run `portable-upgrade.sh` with `--rollback`. |
+| `schema assertion FAILED: … head is v9, expected v10 … HAS ALREADY ROLLED` | U3 | The migrate hook exited 0 but the schema is not where the release requires it, and `helm upgrade --wait` had already converged, so the gateway IS on the new code. Run the `--rollback` command the message prints, then find out why the hook passed (its own head assertion should have failed it). |
+| the script stops before applying, naming the chart's `velt.dev/schema-head` and your `VELT_EXPECTED_SCHEMA_HEAD` | U3 | The two disagree. Drop the pin to trust the chart, or settle why you expected a different head. Nothing was applied. |
+| `cosign verify` → `error getting credentials` | tools, U1 | Your Docker config sends `us-docker.pkg.dev` to a credential helper that fails; the registry needs no login. `export DOCKER_CONFIG=$(mktemp -d)` for the verification (Checklist); unset it before any docker command that needs your logins — an empty config also hides the docker CLI's context. |
+| `ERROR: …` printed, then `BASHPID: unbound variable`, and the script exits 0 | any refusal | Tools bundle 0.1.13–0.1.15 on macOS's bash 3.2. The refusal is real; only the exit code is wrong. Fixed in 0.1.16; until then read the output, not the code, and do not drive these bundles from a wrapper that trusts `$?`. |
+| `socket hang up` at the smoke, or `VELT_PG_DSN` stops answering mid-upgrade | U3, U4 | A `kubectl port-forward` pinned to a pod the upgrade replaced. Use the restart loop in the Checklist (the ingress cannot carry this smoke). |
+| the receipt or support bundle says `chartVersion: 2` (a small whole number) | U4 | Tools bundle 0.1.13–0.1.15 on Helm 4 read the Helm revision as the chart version. Fixed in 0.1.16; the `helm list` CHART column has the right value meanwhile. |
+| the update check says you are outside the support window, or names a newest release older than the chart tags | U4 | The release index is behind the registry (portable releases can ship between manifests). A 0.1.16+ check says so and offers the newest published chart; on older checks compare against `oras repo tags "$REG/velt-portable"` yourself. |
+| the script says the chart carries no schema-head annotation and only checks that the head did not regress | U3 | Not a refusal. The target is a release before 0.1.13; pin `VELT_EXPECTED_SCHEMA_HEAD` from the table in Phase U3 for the strict check. |
+| `unverified registry: your values pull images from image.registry=X but this run verified the artifacts at Y` | U2 | Your pods would pull from a registry this run never verified. Re-run with `--import-to X` (or point `image.registry` at Y). There is no flag to skip this. Nothing was applied. |
+| `head went BACKWARDS` | U3 | Something other than the migration runner wrote to `schema_migrations`. Stop and investigate; do not re-run. |
+| `image assertion FAILED: the gateway runs …:0.1.0, expected a :0.1.2 image` | U4 | The chart applied but the pods are not on the target. Usually a values file that sets the image tag under another key, or a mutating webhook rewriting images. The upgrade is NOT complete. |
+| `import of … is NOT digest-preserving` | U1 | The copy in your registry does not match what was verified. A proxy, a mirror rewriting manifests, or a stale tag. Nothing was applied; fix the registry path and re-run. |
+| `registry mismatch: your values pull images from image.registry=X but --import-to copied … into Y` | U2 | The import went somewhere your pods do not pull from. Re-run with `--import-to X`, or change `image.registry` in your values first (it also serves the console and SDK images). Nothing was applied; the copies already made are harmless. |
+| `--import-to needs verified artifacts to copy; --local-images has none` | U0 | You combined a rehearsal mode with an import. Drop one. |
+| a burst of `502` for a few seconds after the rollout | U4 | Your ingress reconciles its backend pool asynchronously (Application Gateway, ALB). `gatewayLifecycle.preStopSleepSeconds` must be at least its lag — 30 is the default since 0.1.5; check you have not set it to 0. |
+| `autoscaling.<w>.enabled is true but resources.<w>.requests.cpu is not set` | U2 | The autoscaler measures CPU as a share of the request. Give the workload a CPU request, or turn its autoscaler off. Nothing was applied. |
+| `autoscaling.<w>.targetCPUUtilizationPercentage must be a whole number of at least 1` | U2 | Fix the value (above 100 is allowed: it is a share of the CPU request). Nothing was applied. |
+| `podDisruptionBudget.minAvailable must be a whole number of pods` / `maxUnavailable must be …` | U2 | Percentages and 0 are not supported by this chart; use a whole number of pods, at least 1. Nothing was applied. |
+| `rateBudgets.deploymentWide.<rung> must be a whole number` | U2 | Digits only, or leave it empty to keep the per-pod rung. Nothing was applied. |
+| `a pdb not owned by release … already selects <pod>` / `a hpa not owned by release … already targets …` | U2 | A budget you created selects this release's gateway or workers pods (by any selector), or an autoscaler of yours targets their Deployment — checked only for a workload the new chart ships its own budget or autoscaler for, so one you keep for a workload whose chart autoscaler is off is not a conflict. Delete it (the chart's replaces it), or set `podDisruptionBudget.enabled: false` / `autoscaling.<w>.enabled: false`. Nothing was applied. |
+| `the PodDisruptionBudget … uses a selector operator this preflight cannot evaluate` | U2 | Check by hand whether it selects the gateway or workers; if it does, delete it or disable the chart's budget. Nothing was applied. |
+| `the in-chart Redis uses N MiB, more than half of the target chart's Redis memory limit` | U2 | Raise `resources.redis.limits.memory` AND `resources.redis.requests.memory` to the value the message names, and re-run. Nothing was applied. |
+| `could not list … the foreign-… preflight did NOT run` | U2 | Your kube credentials cannot list pods, PDBs or HPAs in the namespace. The upgrade continues; do the named check by hand. |
+| `the in-chart Redis requests … and no Ready, schedulable node has that much allocatable memory` | U2 | No CURRENT node can hold Redis (a check since 0.1.6). Lower `resources.redis.requests.memory` AND `limits.memory` together (keep the dataset under half the limit), or add a larger node. If a node that fits will join (a pool scaled to zero, Karpenter / node auto-provisioning), re-run with `--accept-redis-scheduling-risk`. Nothing was applied. |
+| `⚠ … the pods cluster-wide could not be listed, so FREE memory was NOT evaluated` | U2 | Not a refusal. Your credentials can list nodes but not pods cluster-wide; check `kubectl describe node` "Allocated resources" by hand. |
+| `⚠ Redis-scheduling preflight: … no node has that much memory FREE right now` | U2 | Not a refusal. A node is big enough but full; unless a cluster autoscaler adds one or pods finish, `redis-0` waits `Pending`. Make room first, or lower the Redis request and limit together. |
+| `could not list the cluster's nodes … --accept-redis-scheduling-risk` | U2 | Your credentials cannot list nodes (cluster-scoped). The upgrade STOPS. Check the Redis request against your nodes' allocatable memory by hand, then re-run with the flag. Nothing was applied. |
+| `workersLifecycle.terminationGracePeriodSeconds must be at least 1` / `nodeHeap.percentOfMemoryLimit must be …` / `resources.<w>.limits.memory must be a Kubernetes memory quantity` | U2 | Fix the value the message names (these keys exist since 0.1.6). Nothing was applied. |
+| `could not read the in-chart Redis's memory use` | U2 | The message quotes what Redis or kubectl answered. `Forbidden … pods/exec`: no `pods/exec` on the Redis pod. `NOAUTH Authentication required.`: Redis refused the password — upgrading from 0.1.11 or 0.1.12 with that release's own script fails here; use the target release's tools bundle. `not found`, `container not found` or an empty answer: the Redis pod is not running, or its image is not the chart's Valkey. The upgrade STOPS (a Redis over its new limit crash-loops). Compare `INFO memory` with `resources.redis.limits.memory` by hand, then re-run with `--accept-unverified-redis-size`. Nothing was applied. |
+| `rateBudgets.deploymentWide.<rung> must be at least 1` | U2 | A 0 would make the gateway refuse to start. Leave it empty to keep the per-pod value. Nothing was applied. |
+| `⚠ your autoscaler <name> scales <deployment>, and the chart's own autoscaler for it is off` | U2 | Not a refusal: an autoscaler you run for a workload whose chart autoscaler is off is allowed. But the chart still sets that Deployment's replica count from `replicas.<w>`, so each upgrade resets the live count to it until your autoscaler acts again (Helm 3 always; Helm 4 because `--force-conflicts` hands the field to the chart). To avoid a dip under load, set `replicas.<w>` to the count you want, or turn on `autoscaling.<w>.enabled` and delete yours. |
+| `helm upgrade` warns that `maxReplicas` was raised to the floor | U4 | Your `replicas.<w>` is above the autoscaler's max, so the autoscaler cannot add pods. Raise `autoscaling.<w>.maxReplicas`. |
+| new pods stay `Pending` after the upgrade | U4 | The resource requests introduced in 0.1.5 do not fit your nodes. Add capacity, or lower `resources.<w>.requests`. |
+| `kubectl get hpa` shows `<unknown>` targets | after U4 | No metrics API in the cluster. Install metrics-server, or turn the autoscalers off; until then the pod counts stay put. |
+| the gateway exits with code 1 after a rollout | after U4 | Its drain hit the 40 s deadline — the log line `[GatewayDrain] drain INCOMPLETE` names the step. Usually one very long request. |
+| `the gateway Deployment did not converge` | U4 | Pods are not becoming ready. `kubectl describe` the deployment; check image pull and secret refs. |
+| WebSocket clients reconnect in a loop, closed 1009 right after connecting; the gateway warns `refused a frame over the pre-hello limit before welcome` | after U4 | A client is sending a frame over 64 KiB before the server's `welcome`. Report it to Velt with the client version. Meanwhile set `env: { VELT_WS_PRE_HELLO_MAX_PAYLOAD_BYTES: "262144" }` (or larger, up to 17825792) on the gateway: that stops the loop, at the cost of part of the unauthenticated-memory bound the limit exists for. |
+| `ROLLBACK smoke FAILED` | rollback | The release rolled back but is not serving. This is a rollback failure, not an upgrade failure — the deployment is on the previous revision and needs a human. |
+| `ERROR: portable-upgrade.sh stopped at line N (exit C) while running: …` | any | A command failed under `set -e` without a gate's own message. The line and the command name the step; inside GitHub Actions the same text is a run annotation. Nothing after it ran — fix the cause and re-run. |
+| the script says identify is off and skips the allowed-domain check | U2 | Not a refusal. The rendered gateway Deployment has `VELT_IDENTIFY_ENABLED` explicitly off, so nothing reads the allowed domains. Any other value, or none, runs the check. |
+````

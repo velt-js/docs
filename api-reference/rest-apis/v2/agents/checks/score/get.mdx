@@ -1,0 +1,169 @@
+---
+title: "Get Site Score"
+api: "POST https://api.velt.dev/v2/agents/checks/score/get"
+---
+
+Use this API to get a project's site score, its last runs and its pages with their scores, lowest score first. The pages come a page at a time. See [Score](/api-reference/rest-apis/v2/agents/checks/overview#score).
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/checks/score/get`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="organizationId" type="string" required>
+      1 to 512 characters. The organization of the project.
+    </ParamField>
+
+    <ParamField body="documentId" type="string" required>
+      1 to 512 characters. The document of the project.
+    </ParamField>
+
+    <ParamField body="pagesCursor" type="string">
+      The `nextPagesCursor` of the previous read. `[A-Za-z0-9_-]`, 1 to 200 characters.
+    </ParamField>
+
+    <ParamField body="pageSize" type="number">
+      Pages per read. Whole number, 1 to 1,000. Default: `500`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+The schema uses `.strict()`: unknown fields are rejected.
+
+## **Example Requests**
+
+#### 1. First read
+
+```JSON
+{
+  "data": {
+    "organizationId": "org_acme",
+    "documentId": "acme-marketing-site",
+    "pageSize": 100
+  }
+}
+```
+
+#### 2. Next read
+
+```JSON
+{
+  "data": {
+    "organizationId": "org_acme",
+    "documentId": "acme-marketing-site",
+    "pageSize": 100,
+    "pagesCursor": "c82f1b5e"
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Site score retrieved",
+    "data": {
+      "siteScore": 94.8,
+      "recentRuns": [
+        {
+          "runId": "exec_9Jn3Pq5Rs1",
+          "siteScore": 94.8,
+          "at": 1761465600000,
+          "trigger": "standalone",
+          "agentId": "broken-links"
+        }
+      ],
+      "pages": [
+        {
+          "url": "https://www.example.com/pricing",
+          "urlHash": "c82f1b5e",
+          "score": 91.5,
+          "openCount": 2,
+          "lastCheckedAt": 1761465600000
+        },
+        {
+          "url": "https://www.example.com/",
+          "urlHash": "a41c9e07",
+          "score": 95,
+          "openCount": 1,
+          "lastCheckedAt": 1761465600000
+        }
+      ],
+      "nextPagesCursor": null,
+      "totalPages": 2,
+      "excludedCount": 1,
+      "nextScanAt": null
+    }
+  }
+}
+```
+
+| Field                    | Type           | Description |
+| ------------------------ | -------------- | ----------- |
+| `data.siteScore`         | number \| null | The site score, 0 to 100. `null` before the first run. |
+| `data.recentRuns`        | object[]       | The last runs (at most 30), newest first: `runId`, the `siteScore` after it, `at` (epoch ms), the run's `trigger` (for example `"standalone"`, or `"resolve"` for a verify rescan), and the `agentId` that ran. |
+| `data.pages`             | object[]       | One page of the pages, lowest score first. |
+| `pages[].url`            | string         | The page. |
+| `pages[].urlHash`        | string         | Hash of `url`. |
+| `pages[].score`          | number \| null | The page's score, 0 to 100. `null` when no check applies to it. |
+| `pages[].openCount`      | number         | Open comments on the page. |
+| `pages[].lastCheckedAt`  | number \| null | When an agent last checked the page (epoch ms). |
+| `data.nextPagesCursor`   | string \| null | Pass as `pagesCursor` for the next read. `null` at the end. |
+| `data.totalPages`        | number         | Pages across every read. |
+| `data.excludedCount`     | number         | Checks excluded for the project. |
+| `data.nextScanAt`        | null           | Reserved. Always `null` today. |
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "The pages cursor is not a page from a previous read",
+    "status": "INVALID_ARGUMENT",
+    "details": {
+      "reason": "CHECKS_INVALID_PAGES_CURSOR"
+    }
+  }
+}
+```
+
+**Errors:** `INVALID_ARGUMENT` (a body outside the schema: a malformed `pagesCursor`, a `pageSize` outside `1..1000`, or an unknown field; or `CHECKS_INVALID_PAGES_CURSOR` when `pagesCursor` is not a page of the list) / `NOT_FOUND` with `CHECKS_WORKSPACE_NOT_FOUND` (the workspace has no store database).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Site score retrieved",
+    "data": {
+      "siteScore": null,
+      "recentRuns": [],
+      "pages": [],
+      "nextPagesCursor": null,
+      "totalPages": 0,
+      "excludedCount": 0,
+      "nextScanAt": null
+    }
+  }
+}
+```
+</ResponseExample>

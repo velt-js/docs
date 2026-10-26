@@ -1,0 +1,158 @@
+---
+title: "Resolve Comment"
+api: "POST https://api.velt.dev/v2/agents/checks/comments/resolve"
+---
+
+Use this API to resolve one comment of a check, for a person (`by: "user"`) or an MCP client (`by: "mcp"`). The comment becomes Resolved and waits for the scan that verifies it (`pendingVerify: true`). Only a scan verifies: see [Statuses](/api-reference/rest-apis/v2/agents/checks/overview#statuses).
+
+The resolve starts a verify rescan, which uses AI credits at the flat rescan rate. Resolves on one project within 15 seconds share one rescan per agent, so a fresh resolve answers `queued: true` with no run id yet.
+
+Resolve is idempotent. Resolving a comment that already waits for its rescan answers `alreadyPending: true`, starts nothing and charges nothing. A comment a scan already verified is refused: [reopen](/api-reference/rest-apis/v2/agents/checks/comments/reopen) it first.
+
+The comment can be an agent comment, or a person's comment [attached](/api-reference/rest-apis/v2/agents/checks/comments/attach) to a check. An agent comment written before the checks engine, with no check, is Resolved and its agent scans its page once, charged like any one-page scan. A person's comment that is not attached to a check is refused.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/checks/comments/resolve`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="organizationId" type="string" required>
+      1 to 512 characters. The organization of the project.
+    </ParamField>
+
+    <ParamField body="documentId" type="string" required>
+      1 to 512 characters. The document of the project.
+    </ParamField>
+
+    <ParamField body="annotationId" type="string" required>
+      The comment annotation id. 1 to 512 characters, no `/`, and not `.` or `..`.
+    </ParamField>
+
+    <ParamField body="by" type="string" required>
+      Who resolves: `"user"` (a person) or `"mcp"` (an MCP client). Any other value is rejected.
+    </ParamField>
+
+    <ParamField body="userId" type="string" required>
+      1 to 512 characters. Recorded as the person who resolved the comment.
+    </ParamField>
+
+    <ParamField body="userName" type="string">
+      At most 512 characters. The person's name, for the verify rescan's run.
+    </ParamField>
+
+    <ParamField body="userEmail" type="string">
+      At most 512 characters. The person's email, for the verify rescan's run.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+The schema uses `.strict()`: unknown fields are rejected.
+
+## **Example Requests**
+
+```JSON
+{
+  "data": {
+    "organizationId": "org_acme",
+    "documentId": "acme-marketing-site",
+    "annotationId": "K7mQ2xR9vB4wLdT1sYpN",
+    "by": "user",
+    "userId": "user_jordan",
+    "userName": "Jordan Lee",
+    "userEmail": "jordan@example.com"
+  }
+}
+```
+
+# Response
+
+#### Success Response (fresh resolve)
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Comment resolved",
+    "data": {
+      "rescanExecutionId": null,
+      "queued": true,
+      "alreadyPending": false
+    }
+  }
+}
+```
+
+#### Success Response (already waiting)
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Comment resolved",
+    "data": {
+      "rescanExecutionId": "exec_4Wq7Zx2Np8",
+      "queued": false,
+      "alreadyPending": true
+    }
+  }
+}
+```
+
+| Field                    | Type           | Description |
+| ------------------------ | -------------- | ----------- |
+| `data.rescanExecutionId` | string \| null | The verify rescan's execution id, once it has started. `null` while the resolve waits in its 15-second window. |
+| `data.queued`            | boolean        | `true` when the comment waits for a rescan that has no run id yet. |
+| `data.alreadyPending`    | boolean        | `true` when the comment already waited for its rescan: nothing new started. |
+
+All three are `false` / `null` when no verify rescan is involved: the workspace has no store database, the comment has no check, or the rescan could not be queued (the next scan of the comment's pages then verifies or reopens it).
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "This comment was already verified by a scan",
+    "status": "FAILED_PRECONDITION",
+    "details": {
+      "reason": "CHECKS_ALREADY_VERIFIED"
+    }
+  }
+}
+```
+
+**Errors:**
+
+- `INVALID_ARGUMENT` for a body outside the schema: a missing `annotationId`, `by` or `userId`, a `by` other than `"user"` or `"mcp"`, or an unknown field;
+- `NOT_FOUND` with `CHECKS_COMMENT_NOT_FOUND` (no such comment in the project);
+- `FAILED_PRECONDITION` with `CHECKS_ALREADY_VERIFIED` (a scan already verified the comment: reopen it first) or `CHECKS_NOT_AGENT_COMMENT` (a person's comment not attached to a check).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Comment resolved",
+    "data": {
+      "rescanExecutionId": null,
+      "queued": true,
+      "alreadyPending": false
+    }
+  }
+}
+```
+</ResponseExample>

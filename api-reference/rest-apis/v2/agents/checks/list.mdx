@@ -1,0 +1,193 @@
+---
+title: "List Checks"
+api: "POST https://api.velt.dev/v2/agents/checks/list"
+---
+
+Use this API to list a project's [checks](/api-reference/rest-apis/v2/agents/checks/overview), most severe first. Each row carries the check's counts, score impact, state and owner. Filter by agent, severity, owner or state.
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/checks/list`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="organizationId" type="string" required>
+      1 to 512 characters. The organization of the project.
+    </ParamField>
+
+    <ParamField body="documentId" type="string" required>
+      1 to 512 characters. The document of the project.
+    </ParamField>
+
+    <ParamField body="filters" type="object">
+      Optional filters. Every filter given must match.
+
+      | Key             | Type   | Description |
+      | --------------- | ------ | ----------- |
+      | `agentId`       | string | 1 to 512 characters. Checks this agent produces. |
+      | `severity`      | string | `"critical"`, `"high"`, `"medium"` or `"low"`. |
+      | `ownerMemberId` | string | 1 to 512 characters. Checks whose owner override or effective owner is this user. |
+      | `state`         | string | `"failing"`, `"excluded"` or `"passing"`. |
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+The schema uses `.strict()`: unknown fields, in `data` or in `filters`, are rejected.
+
+## **Example Requests**
+
+#### 1. List every check
+
+```JSON
+{
+  "data": {
+    "organizationId": "org_acme",
+    "documentId": "acme-marketing-site"
+  }
+}
+```
+
+#### 2. List the failing critical checks
+
+```JSON
+{
+  "data": {
+    "organizationId": "org_acme",
+    "documentId": "acme-marketing-site",
+    "filters": {
+      "severity": "critical",
+      "state": "failing"
+    }
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Checks retrieved",
+    "data": {
+      "checks": [
+        {
+          "ruleKey": "link-broken",
+          "title": "Broken link",
+          "description": "A link on the page returns an error or does not resolve.",
+          "severity": "critical",
+          "responsibility": "dev",
+          "agentIds": ["broken-links"],
+          "openCount": 2,
+          "pageCount": 14,
+          "scoreImpact": 4.2,
+          "state": "failing",
+          "ownerMemberId": null,
+          "effectiveOwner": {
+            "userId": "user_jordan",
+            "name": "Jordan Lee",
+            "email": "jordan@example.com"
+          },
+          "lastSeenAt": 1761465600000,
+          "failingSince": 1761379200000
+        },
+        {
+          "ruleKey": "link-unlinked-email",
+          "title": "Email address is not linked",
+          "description": "An email address cannot be clicked to write.",
+          "severity": "low",
+          "responsibility": "content",
+          "agentIds": ["broken-links"],
+          "openCount": 0,
+          "pageCount": 0,
+          "scoreImpact": 0,
+          "state": "excluded",
+          "ownerMemberId": null,
+          "effectiveOwner": null,
+          "lastSeenAt": 1761206400000,
+          "ignoredReason": "not_important",
+          "ignoredBy": "user_sam",
+          "ignoredAt": 1761292800000
+        }
+      ],
+      "excludedCount": 1,
+      "runEndInProgress": false,
+      "writesPending": false
+    }
+  }
+}
+```
+
+| Field                           | Type             | Description |
+| ------------------------------- | ---------------- | ----------- |
+| `data.checks`                   | object[]         | The checks, most severe first, then by score impact. |
+| `checks[].ruleKey`              | string           | The check's key. |
+| `checks[].title`                | string           | The check's name. |
+| `checks[].description`          | string           | What the check finds. |
+| `checks[].severity`             | string           | `"critical"`, `"high"`, `"medium"` or `"low"`. |
+| `checks[].responsibility`       | string           | Who fixes it: `"content"`, `"design"` or `"dev"`. |
+| `checks[].fixGuide`             | string           | How to fix it. Present when the check has one. |
+| `checks[].agentIds`             | string[]         | The agents that produce the check. |
+| `checks[].openCount`            | number           | Open comments, attached comments included. `0` for an excluded check. |
+| `checks[].pageCount`            | number           | Pages with an open comment. `0` for an excluded check. |
+| `checks[].scoreImpact`          | number           | Points the check takes off the site score. `0` for an excluded check. |
+| `checks[].state`                | string           | `"failing"`, `"passing"` or `"excluded"`. |
+| `checks[].ownerMemberId`        | string \| null   | The owner set with [Set Check Owner](/api-reference/rest-apis/v2/agents/checks/owner/set), or `null`. |
+| `checks[].effectiveOwner`       | object \| null   | The owner that applies: the override, else the default owner for the check's responsibility, else the project admin. `{ userId, name?, email? }`. |
+| `checks[].lastSeenAt`           | number \| null   | When a run last found the check (epoch ms). |
+| `checks[].ignoredReason`        | string           | Excluded checks: the reason given to [Exclude Check](/api-reference/rest-apis/v2/agents/checks/exclude). |
+| `checks[].ignoredBy`            | string           | Excluded checks: who excluded it. |
+| `checks[].ignoredAt`            | number           | Excluded checks: when (epoch ms). |
+| `checks[].failingSince`         | number           | Failing checks: when the check last went from passing to failing (epoch ms). |
+| `data.excludedCount`            | number           | Checks excluded for the project. |
+| `data.runEndInProgress`         | boolean          | `true` while a run's comments are being grouped and written. The list may change in a few seconds. |
+| `data.writesPending`            | boolean          | `true` when a run's writes failed and wait for the next run. |
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "Workspace not found or has no store database for the checks engine",
+    "status": "NOT_FOUND",
+    "details": {
+      "reason": "CHECKS_WORKSPACE_NOT_FOUND"
+    }
+  }
+}
+```
+
+**Errors:** `INVALID_ARGUMENT` (a body outside the schema: a missing `organizationId` or `documentId`, a `filters` value outside its list, or an unknown field) / `NOT_FOUND` with `CHECKS_WORKSPACE_NOT_FOUND` (the workspace has no store database).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Checks retrieved",
+    "data": {
+      "checks": [],
+      "excludedCount": 0,
+      "runEndInProgress": false,
+      "writesPending": false
+    }
+  }
+}
+```
+</ResponseExample>

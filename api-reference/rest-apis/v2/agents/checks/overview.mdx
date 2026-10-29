@@ -1,0 +1,167 @@
+---
+title: "Checks Overview"
+description: "How agent comments are grouped into checks, and how a resolve is verified by a scan."
+---
+
+The checks engine groups the comments your [agents](/ai/agents/overview) write into **checks**. Use the Checks APIs to read a project's checks, its comments and its score, and to resolve, reject, reopen, exclude, assign and attach.
+
+# Concepts
+
+## Project
+
+A project is one Velt document of one organization: the pair `organizationId` and `documentId`. Every Checks endpoint takes both, and both are required. The same `documentId` in two organizations is two projects.
+
+## Check
+
+A check is one kind of problem, named by its `ruleKey`, for example `link-broken` (a link that returns an error) or `image-broken`. Rule keys are lowercase letters, digits, `:` and `-`, at most 120 characters. A custom agent's checks have keys like `custom:{agentId}:{type}`.
+
+Each check has a title, a description, a severity, a responsibility (`content`, `design` or `dev`), an owner, the number of open comments and pages, its impact on the score, and a state:
+
+| State     | Meaning |
+| --------- | ------- |
+| `failing` | The check has open comments. |
+| `passing` | The check has no open comments. |
+| `excluded` | The check is excluded for the project. It leaves the score and its findings write no comment. The agent still runs. |
+
+## Comment
+
+A comment is one problem at one spot. It is a regular Velt comment annotation, written by the agent, with the engine's metadata in [`checkInfo`](/api-reference/sdk/models/data-models#checkinfo). A finding seen again on a later run updates the same comment: it never writes a duplicate.
+
+- **Page comment**: a problem on one page (`scope: "page"`).
+- **Site comment**: the same problem at the same spot on two or more pages, for example a broken link in a shared footer. It is one comment for every page (`scope: "site"`), with its `pages` and its true `pageCount`. A site comment is stored on the `velt-site` location with [`isDocumentLevel: true`](/api-reference/sdk/models/data-models#commentannotation), so Velt lists it on every page of the document and draws its pin only where its target is found.
+- **Attached comment**: a comment a person wrote and then [attached](/api-reference/rest-apis/v2/agents/checks/comments/attach) to a check. It counts in the check's open count and pages, lists under the check, and resolves and verifies with it.
+
+Each comment has a location type: `element` (pinned to an element on the page), `source` (a line in the page's stored HTML) or `none` (the evidence only).
+
+## Statuses
+
+| Status   | Meaning |
+| -------- | ------- |
+| Open     | The problem is there. A comment In progress also counts as open. |
+| Resolved | Someone resolved it, or a scan found it fixed. |
+
+**Verified** means Resolved by a scan. Only a scan verifies: `verifiedAt` is set by a scan and nothing else.
+
+**Rejected** is not a status. A person who disagrees with the agent rejects its comment, in the same shape as the Velt SDK's [`rejectSuggestion()`](/api-reference/sdk/api/api-methods#rejectsuggestion): `suggestion.status` becomes `rejected`, `suggestion.rejectReason` holds one of the four reasons below, the person's own words, `excluded` (an [excluded check](/api-reference/rest-apis/v2/agents/checks/exclude)) or nothing, and the comment keeps its status (an Open comment stays Open with its pin). A rejected comment counts nowhere (open counts, failing checks, the score), and found again it stays rejected as it is.
+
+When a person or an MCP client resolves a comment, it is Resolved and waits for the scan that verifies it (`pendingVerify: true`). The resolve queues a verify rescan:
+
+- The problem is gone: the comment is verified, with one reply such as "Verified. Fixed on all 12 pages. Time to resolve: 2 hours 14 minutes."
+- The problem is still there: the comment is reopened, with one reply such as "Still on 3 pages".
+- The rescan could not check its pages: it is tried again, up to 3 times, at no extra charge. After that the comment gets the reply "Could not verify yet." and stays Resolved and unverified until the next scan of its pages.
+
+A scan also resolves on its own: a comment its agent no longer finds on a page it checked is Resolved and verified by that scan.
+
+## Severities
+
+| Severity   | Weight |
+| ---------- | ------ |
+| `critical` | 10     |
+| `high`     | 7      |
+| `medium`   | 3      |
+| `low`      | 1      |
+
+The severity is also stored as the comment's `priority`. Checks are listed most severe first.
+
+## Score
+
+Each page has a score from 0 to 100: the weighted share of the checks that apply to the page and pass on it. A check applies to a page when one of its agents checked the page in the last 30 days. The site score is the mean over the pages checked in the last 30 days. An excluded check is left out of the score.
+
+## Reject reasons
+
+Rejecting a comment and excluding a check take one of the same four reasons. `excluded` is the engine's own reason for an excluded check's comments and is refused as input:
+
+| Reason           | Meaning |
+| ---------------- | ------- |
+| `wrong`          | The finding is wrong. |
+| `not_important`  | The finding is right but does not matter. |
+| `not_applicable` | The finding does not apply here. |
+| `cannot_tell`    | The person cannot tell. |
+
+# Resolves and credits
+
+A resolve through [Resolve Comment](/api-reference/rest-apis/v2/agents/checks/comments/resolve) or [Resolve Check](/api-reference/rest-apis/v2/agents/checks/resolve) starts a verify rescan, which uses AI credits at the flat rescan rate. Resolves on one project within 15 seconds share one rescan per agent. Resolve is idempotent: resolving a comment that already waits for its rescan starts nothing and charges nothing. When the agent is busy or the workspace has no credits, no rescan runs: the comment stays Resolved and the next scan of its pages verifies or reopens it.
+
+Resolve takes `by`: `"user"` for a person, `"mcp"` for an MCP client. Nothing else is accepted.
+
+# Status changes made in a Velt client
+
+A status a person changes in any Velt client (the Velt comment UI, or your own UI calling the SDK) reaches the checks engine on its own, about 10 seconds later:
+
+- Resolved: resolved by that user, then verified by a scan. A rejected comment takes the status only, with no verify.
+- Back to Open from Resolved: reopened. A rejected comment stays rejected.
+- A suggestion accepted in a Velt UI: resolved by `suggestion`, then verified by a scan.
+- A suggestion rejected in a Velt UI: the SDK's own reject. The engine records it (the agent's feedback, the counts) without changing the reject.
+
+A status changed with the [Update Comment Annotations](/api-reference/rest-apis/v2/comments-feature/comment-annotations/update-comment-annotations) API does not reach the engine. Use [Resolve Comment](/api-reference/rest-apis/v2/agents/checks/comments/resolve), [Reject Comment](/api-reference/rest-apis/v2/agents/checks/comments/reject) and [Reopen Comment](/api-reference/rest-apis/v2/agents/checks/comments/reopen) instead.
+
+# Requests
+
+Every Checks endpoint is a `POST` with the `x-velt-api-key` and `x-velt-auth-token` headers and a `{ "data": { ... } }` body. Every body takes `organizationId` and `documentId` (both required, 1 to 512 characters each).
+
+Every body uses `.strict()`: a field that is not on the endpoint's page is rejected with `INVALID_ARGUMENT`, never ignored.
+
+The decisions record the `userId` you send as the person who made them. The auth token proves the caller is the workspace, so send the id of the person acting.
+
+The same endpoints are also served under `/v1/agents/checks/...` with the same body and the same response.
+
+## Workspaces without a store database
+
+The checks engine needs the workspace's Firestore store database. Without one, the reads and the check-level decisions return `NOT_FOUND` with the reason `CHECKS_WORKSPACE_NOT_FOUND`. Resolve, reject and reopen still change the comment, with no verify and no scan.
+
+# Errors
+
+A body outside the schema returns `INVALID_ARGUMENT`, with every failing field in `details.issues`.
+
+Every other refusal carries its reason in `details.reason`. Branch on the reason, never on the message.
+
+```JSON
+{
+  "error": {
+    "message": "This comment was already verified by a scan",
+    "status": "FAILED_PRECONDITION",
+    "details": {
+      "reason": "CHECKS_ALREADY_VERIFIED"
+    }
+  }
+}
+```
+
+| `details.reason`                      | Status                | When |
+| ------------------------------------- | --------------------- | ---- |
+| `CHECKS_WORKSPACE_NOT_FOUND`          | `NOT_FOUND`           | The workspace has no store database for the checks engine. |
+| `CHECKS_COMMENT_NOT_FOUND`            | `NOT_FOUND`           | No comment with this `annotationId` in the project. |
+| `CHECKS_NOT_AGENT_COMMENT`            | `FAILED_PRECONDITION` | Resolve or reopen of a person's comment that is not attached to a check, or a reject of any person's comment. |
+| `CHECKS_ALREADY_VERIFIED`             | `FAILED_PRECONDITION` | Resolve or reject of a comment a scan already verified. Reopen it first. |
+| `CHECKS_SUGGESTION_SETTLED`           | `FAILED_PRECONDITION` | Reject of an accepted suggestion. A suggestion is accepted or rejected once. |
+| `CHECKS_NOT_A_CHECK_COMMENT`          | `FAILED_PRECONDITION` | The comment carries no check (capture focus, source location). |
+| `CHECKS_SOURCE_LOCATION_UNAVAILABLE`  | `FAILED_PRECONDITION` | Source location of a comment whose location type is not `source`. |
+| `CHECKS_AGENT_COMMENT_NOT_ATTACHABLE` | `FAILED_PRECONDITION` | Attach or detach of an agent comment. |
+| `CHECKS_COMMENT_NOT_ATTACHED`         | `FAILED_PRECONDITION` | Detach of a comment that is not attached to a check. |
+| `CHECKS_INVALID_PAGES_CURSOR`         | `INVALID_ARGUMENT`    | `pagesCursor` is not a page of the previous read. |
+| `CHECKS_INVALID_PAGE_URL`             | `INVALID_ARGUMENT`    | `pageUrl` is not an `http(s)` page of the comment, or `versionId` is malformed (source location). |
+| `CHECKS_INVALID_PAGES`                | `INVALID_ARGUMENT`    | A `pages` entry is not an `http(s)` URL (rescan agents). |
+
+The engine also checks rule keys, cursors, filters, reasons and settings itself (`CHECKS_INVALID_RULE_KEY`, `CHECKS_INVALID_CURSOR`, `CHECKS_INVALID_VERSION_FILTER`, `CHECKS_INVALID_REJECT_REASON`, `CHECKS_INVALID_RESOLVER`, `CHECKS_INVALID_SETTINGS`, `CHECKS_INVALID_PAGE_SIZE`), but over REST the schema refuses these values first, with `INVALID_ARGUMENT` and `details.issues`.
+
+# Endpoints
+
+| Endpoint | Does |
+| -------- | ---- |
+| [List Checks](/api-reference/rest-apis/v2/agents/checks/list) | The project's checks. |
+| [List Check Comments](/api-reference/rest-apis/v2/agents/checks/comments/list) | One check's comments in one status. |
+| [Get Site Score](/api-reference/rest-apis/v2/agents/checks/score/get) | The site score, the last runs and the pages. |
+| [Get Capture Focus](/api-reference/rest-apis/v2/agents/checks/capture-focus/get) | Where a comment sits on its captured screenshot. |
+| [Get Source Location](/api-reference/rest-apis/v2/agents/checks/source-location/get) | Where a source comment sits in the stored HTML. |
+| [Resolve Comment](/api-reference/rest-apis/v2/agents/checks/comments/resolve) | Resolve one comment and queue its verify rescan. |
+| [Resolve Check](/api-reference/rest-apis/v2/agents/checks/resolve) | Resolve every open comment of a check. |
+| [Reject Comment](/api-reference/rest-apis/v2/agents/checks/comments/reject) | Reject a comment with a reason. |
+| [Reopen Comment](/api-reference/rest-apis/v2/agents/checks/comments/reopen) | Put a Resolved comment back to Open. |
+| [Exclude Check](/api-reference/rest-apis/v2/agents/checks/exclude) | Take a check out of the project. |
+| [Include Check](/api-reference/rest-apis/v2/agents/checks/include) | Bring an excluded check back. |
+| [Set Check Owner](/api-reference/rest-apis/v2/agents/checks/owner/set) | Set or clear a check's owner. |
+| [Get Check Settings](/api-reference/rest-apis/v2/agents/checks/settings/get) | The settings the engine applies. |
+| [Update Check Settings](/api-reference/rest-apis/v2/agents/checks/settings/update) | Change the confidence floor, flags and default owners. |
+| [Attach Comment](/api-reference/rest-apis/v2/agents/checks/comments/attach) | Attach a person's comment to a check. |
+| [Detach Comment](/api-reference/rest-apis/v2/agents/checks/comments/detach) | Detach a person's comment from its check. |
+| [List Rescan Agents](/api-reference/rest-apis/v2/agents/checks/rescan-agents/list) | The agents to run to rescan the site. |

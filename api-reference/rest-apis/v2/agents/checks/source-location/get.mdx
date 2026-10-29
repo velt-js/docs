@@ -1,0 +1,159 @@
+---
+title: "Get Source Location"
+api: "POST https://api.velt.dev/v2/agents/checks/source-location/get"
+---
+
+Use this API to find where a `source` comment's evidence sits in a page's stored HTML: the line number, the line, and the evidence's offsets in it. Use it for a "Show in source" view. Render the answer as it comes: do not repeat the matching.
+
+The comment must be a `source` comment (its `locationType` is `"source"`). The HTML is the page's capture in the site version asked for. See [Checks Overview](/api-reference/rest-apis/v2/agents/checks/overview).
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/checks/source-location/get`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="organizationId" type="string" required>
+      1 to 512 characters. The organization of the project.
+    </ParamField>
+
+    <ParamField body="documentId" type="string" required>
+      1 to 512 characters. The document of the project.
+    </ParamField>
+
+    <ParamField body="annotationId" type="string" required>
+      The comment annotation id. 1 to 512 characters, no `/`, and not `.` or `..`.
+    </ParamField>
+
+    <ParamField body="pageUrl" type="string">
+      One of the comment's pages: an absolute `http(s)` URL on the comment's site, at most 2,048 characters. Default: the comment's own page.
+    </ParamField>
+
+    <ParamField body="versionId" type="string">
+      A version of that page. `[A-Za-z0-9_-]`, 1 to 200 characters. Default: the version the comment last saw the page on.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+The schema uses `.strict()`: unknown fields are rejected.
+
+## **Example Requests**
+
+#### 1. The comment's own page
+
+```JSON
+{
+  "data": {
+    "organizationId": "org_acme",
+    "documentId": "acme-marketing-site",
+    "annotationId": "R5tB1nM8wQ3xKzL7cVdF"
+  }
+}
+```
+
+#### 2. Another page and version of a site comment
+
+```JSON
+{
+  "data": {
+    "organizationId": "org_acme",
+    "documentId": "acme-marketing-site",
+    "annotationId": "R5tB1nM8wQ3xKzL7cVdF",
+    "pageUrl": "https://www.example.com/about",
+    "versionId": "ver_20261025b"
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Source location retrieved",
+    "data": {
+      "versionId": "ver_20261026a",
+      "urlHash": "a41c9e07",
+      "pageUrl": "https://www.example.com/",
+      "lineNumber": 42,
+      "line": "    <meta name=\"robots\" content=\"noindex\">",
+      "lineOffset": 0,
+      "matchStart": 4,
+      "matchEnd": 43
+    }
+  }
+}
+```
+
+| Field             | Type           | Description |
+| ----------------- | -------------- | ----------- |
+| `data.versionId`  | string \| null | The version read. |
+| `data.urlHash`    | string \| null | Hash of the page read. |
+| `data.pageUrl`    | string \| null | The page read, or `null` when none could be. |
+| `data.lineNumber` | number \| null | 1-based line of the stored HTML that holds the evidence, or `null` when it was not found. |
+| `data.line`       | string         | The line that holds the evidence. A very long line (minified HTML) is cut around the match. When the stored HTML could not be read, the evidence itself. |
+| `data.lineOffset` | number         | Where `line` starts in the stored line. `0` unless a long line was cut. |
+| `data.matchStart` | number \| null | Where the evidence starts in `line`, or `null` when it was not found there. |
+| `data.matchEnd`   | number \| null | Where the evidence ends in `line` (exclusive), or `null`. |
+
+<Note>
+  The stored HTML is read up to 8 MB and within about 8 seconds. When the page has no capture for the version, or the read does not finish in time, the answer is the evidence with no offsets.
+</Note>
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "This comment has no line in the stored page",
+    "status": "FAILED_PRECONDITION",
+    "details": {
+      "reason": "CHECKS_SOURCE_LOCATION_UNAVAILABLE"
+    }
+  }
+}
+```
+
+**Errors:**
+
+- `INVALID_ARGUMENT` for a body outside the schema (a missing or malformed `annotationId`, a `pageUrl` that is not a URL, a malformed `versionId`, or an unknown field), or with `CHECKS_INVALID_PAGE_URL` for a `pageUrl` that is not `http(s)`, not on the comment's site, or not one of its pages;
+- `NOT_FOUND` with `CHECKS_COMMENT_NOT_FOUND` (no such comment in the project) or `CHECKS_WORKSPACE_NOT_FOUND` (the workspace has no store database);
+- `FAILED_PRECONDITION` with `CHECKS_NOT_A_CHECK_COMMENT` (the comment carries no check) or `CHECKS_SOURCE_LOCATION_UNAVAILABLE` (the comment is not a `source` comment).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Source location retrieved",
+    "data": {
+      "versionId": null,
+      "urlHash": "a41c9e07",
+      "pageUrl": "https://www.example.com/",
+      "lineNumber": null,
+      "line": "<meta name=\"robots\" content=\"noindex\">",
+      "lineOffset": 0,
+      "matchStart": null,
+      "matchEnd": null
+    }
+  }
+}
+```
+</ResponseExample>

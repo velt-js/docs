@@ -50,6 +50,8 @@
 | `involvedUserIds`         | `string[]`                                                                | No       | All user IDs involved in the annotation (subscribed + unsubscribed participants). Read-only, server-derived. |
 | `mentionedUserIds`        | `string[]`                                                                | No       | User IDs @mentioned across the annotation's comments. Read-only, server-derived. |
 | `actions`                 | [`CommentAction[]`](#commentaction)                                       | No       | Per-row default action chips, inherited by every comment on the annotation that doesn't set its own `comment.actions`. |
+| `isDocumentLevel`         | `boolean`                                                                 | No       | When `true`, the comment belongs to every location of its document: it is listed on every location, and its pin is drawn only where its target element is found and visible. Only the value `true` counts. A text comment (one with `targetTextRange`) is never document-level. The [Get Comment Annotations](/api-reference/rest-apis/v2/comments-feature/comment-annotations/get-comment-annotations-v2) REST API with `locationIds` also returns document-level comments. The checks engine sets it on every site comment. |
+| `checkInfo`               | [`CheckInfo`](#checkinfo)                                                 | No       | Read-only. The checks engine's metadata on a comment that belongs to a [check](/api-reference/rest-apis/v2/agents/checks/overview). Written only by the engine; never write it from a client. |
 
 #### Enum
 
@@ -489,6 +491,47 @@ Suggestion state for a typed-suggestion annotation. Mutated by [`acceptSuggestio
 | `rejectReason` | `string`                                | No       | Reason recorded when the suggestion is rejected.                                                                    |
 | `resolvedBy`   | `string`                                | No       | ID of the user who accepted or rejected the suggestion.                                                             |
 | `resolvedAt`   | `number`                                | No       | Timestamp (epoch milliseconds) when the suggestion was accepted or rejected.                                        |
+
+#### CheckInfo
+
+---
+
+Read-only metadata the checks engine writes on [`CommentAnnotation.checkInfo`](#commentannotation) when the comment belongs to a check. Only the engine writes it: read it, never write it. See [Checks Overview](/api-reference/rest-apis/v2/agents/checks/overview) for what checks, site comments and page comments are.
+
+A comment with `checkInfo.attached === true` is a person's comment attached to a check. Any other `checkInfo` is an agent comment. A comment without `checkInfo` does not belong to a check. Every time is epoch milliseconds.
+
+| Property          | Type                                              | Required | Description |
+| ----------------- | ------------------------------------------------- | -------- | ----------- |
+| `v`               | `1`                                               | Yes      | Schema version. |
+| `ruleKey`         | `string`                                          | Yes      | The check. |
+| `severity`        | `'critical' \| 'high' \| 'medium' \| 'low'`       | No       | Agent comments: the check's severity, also stored as the annotation's `priority`. |
+| `scope`           | `'page' \| 'site'`                                | Yes      | `'site'` for one comment that covers every page with the same problem. A site comment also has `isDocumentLevel: true`. |
+| `locationType`    | `'element' \| 'source' \| 'none'`                 | Yes      | A pin on an element, a line in the stored HTML, or the evidence only. |
+| `evidence`        | `string \| null`                                  | Yes      | The exact spot. `null` on an attached comment. |
+| `dedupKey`        | `string \| null`                                  | Yes      | The key that keeps one comment per problem and spot. `null` on an attached comment. |
+| `confidence`      | `number \| null`                                  | Yes      | 0 to 100, from the latest sighting. `null` on an attached comment. |
+| `versionId`       | `string \| null`                                  | No       | Page comments: the site version the page was last seen on. `null` on a site comment. |
+| `pages`           | `string[]`                                        | No       | Site comments: the pages it is on (at most 1,000 stored). |
+| `pageCount`       | `number`                                          | No       | Site comments: the true number of pages. |
+| `allPagesMatched` | `boolean`                                         | No       | Site comments: `true` when `pageCount` is more than `pages` holds. |
+| `pageVersionList` | `{ page: string; versionId: string }[]`           | No       | Site comments: the version each stored page was last seen on. |
+| `suggestedFix`    | `string`                                          | No       | How to fix it, when the agent suggested one. |
+| `firstSeenRunId`  | `string \| null`                                  | Yes      | The agent run that first found it. `null` on an attached comment. |
+| `lastSeenRunId`   | `string \| null`                                  | Yes      | The agent run that last found it. `null` on an attached comment. |
+| `lastSeenAt`      | `number`                                          | No       | When a run last found it. |
+| `reopenedCount`   | `number`                                          | Yes      | Times it was reopened. |
+| `resolvedBy`      | `'scan' \| 'user' \| 'mcp' \| 'suggestion'`       | No       | Who resolved it. |
+| `resolvedAt`      | `number`                                          | No       | When it was resolved. |
+| `verifiedAt`      | `number \| null`                                  | No       | When a scan verified the resolve. Only a scan sets it. |
+| `pendingVerify`   | `boolean`                                         | No       | `true` while a resolve waits for the scan that verifies it. |
+| `rejectRecordedBy` | `string`                                         | No       | Rejected comments: who rejected it, as the engine recorded the reject. The reject itself is in [`suggestion`](#commentannotationsuggestion). |
+| `rejectRecordedAt` | `number`                                         | No       | Rejected comments: when the engine recorded the reject. |
+| `attached`        | `true`                                            | No       | Present only on a person's comment attached to a check. |
+| `attachedRuleKey` | `string`                                          | No       | Attached comments only: the check, equal to `ruleKey`. |
+| `attachedBy`      | `string`                                          | No       | Attached comments only: who attached it. |
+| `attachedAt`      | `number`                                          | No       | Attached comments only: when it was attached. |
+
+The engine may add fields. Read the ones you need and ignore the rest. To change a comment's check status, use the [Checks REST APIs](/api-reference/rest-apis/v2/agents/checks/overview), not a write to `checkInfo`.
 
 #### AddCommentAnnotationRequest
 

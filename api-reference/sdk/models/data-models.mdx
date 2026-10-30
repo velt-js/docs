@@ -8745,6 +8745,21 @@ Passed to [`registerTarget()`](/api-reference/sdk/api/api-methods#registertarget
 | ---------- | -------------------------------- | -------- | ---------------------------------------------------- |
 | `targetId` | `string`                         | Yes      | Unique identifier matching `data-velt-suggestion-target` attribute |
 | `getter`   | [`TargetGetter<T>`](#targetgettert) | Yes   | Function returning the current value of the target   |
+| `setter`   | `TargetSetter<T>`                | No       | Write path for the target. Called with `reason: 'restore'` after the edit is committed, and with `reason: 'accept'` on the client that accepts a suggestion. Without a setter the SDK never writes to the target. |
+| `restoreOnCommit` | `boolean`                 | No       | Set to `false` to skip the `'restore'` call. Accept still calls the setter. |
+
+#### TargetSetter\<T\>
+
+---
+
+```typescript
+type TargetSetter<T> = (
+  value: T,
+  context: { targetId: string; reason: 'restore' | 'accept'; suggestion?: Suggestion<T> }
+) => void | Promise<void>;
+```
+
+`context.suggestion` is set only when `reason` is `'accept'`.
 
 #### EnableSuggestionModeConfig
 
@@ -8771,6 +8786,23 @@ Passed to [`commitSuggestion()`](/api-reference/sdk/api/api-methods#commitsugges
 | `summary`     | `string`                  | No       | Human-readable description of the change. Becomes the plain text of the suggestion's first comment. |
 | `summaryHtml` | `string`                  | No       | HTML body for the suggestion's first comment (for example, a color-coded diff). Sanitized with DOMPurify at render time: inline `style` is kept; scripts and event handlers are stripped. |
 | `metadata`    | `Record<string, unknown>` | No       | Plain JSON object stored on `suggestion.metadata` and returned as `Suggestion.metadata`. Not stored if it is not a plain object or cannot be serialized as JSON. |
+| `textChange`  | [`SuggestionTextChange`](#suggestiontextchange) | No | Where the change sits in the text. For a `contenteditable` target the SDK computes it when omitted. An invalid value is not saved; the commit still succeeds. |
+
+#### SuggestionTextChange
+
+---
+
+Records the removed and added text of a suggestion, with context to locate it. Also returned as `Suggestion.textChange`.
+
+| Property        | Type     | Required | Description |
+| --------------- | -------- | -------- | ----------- |
+| `removed`       | `string` | Yes      | Text the suggestion removes. `''` for a pure insertion. |
+| `added`         | `string` | Yes      | Text the suggestion adds. `''` for a pure deletion. |
+| `contextBefore` | `string` | Yes      | Up to 32 characters of unchanged text right before the change. |
+| `contextAfter`  | `string` | Yes      | Up to 32 characters of unchanged text right after the change. |
+| `occurrence`    | `number` | Yes      | Integer ≥ 1. Which match of `contextBefore + removed + contextAfter` in the old text this is. |
+
+`removed` and `added` together can be at most 8192 characters.
 
 ### Handler Types
 
@@ -8818,6 +8850,7 @@ Optional return from [`TargetEditCommitHandler`](#targeteditcommithandlert) (and
 | `summary`     | `string`                  | No       | Override for the suggestion summary       |
 | `summaryHtml` | `string`                  | No       | Override for the suggestion's HTML body. Sanitized with DOMPurify at render time; see [`CommitSuggestionConfig`](#commitsuggestionconfigt). |
 | `metadata`    | `Record<string, unknown>` | No       | Override for the suggestion metadata      |
+| `textChange`  | [`SuggestionTextChange`](#suggestiontextchange) | No | Overrides the `textChange` the SDK computed for this edit |
 
 #### TargetEditStartHandler\<T\>
 

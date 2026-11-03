@@ -13,6 +13,10 @@ Your AI coding agent runs the upgrade with the release's own upgrade script. The
 
 Setting up a deployment for the first time? Use the [Install guide](/self-hosting/full/aws/install) instead.
 
+<Note>
+  The agent instructions leave Velt's release registry address as a placeholder (`REG`). Email [support@velt.dev](mailto:support@velt.dev) to get it before you start; your agent asks you for it.
+</Note>
+
 ## Agent instructions
 
 ````markdown Agent instructions (AWS upgrade) expandable
@@ -34,10 +38,10 @@ Every release from **0.1.13** on publishes its operator scripts as a signed arti
 
 The target version is `tierB.portableVersion` in the release manifest **when the manifest is current**. Portable releases can ship between manifests, so check the chart's tags too — they are the release versions — and take the newer of the two: `oras repo tags "$REG/velt-portable" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1` (the filter drops cosign's `sha256-….sig` tags, which share the repository and sort above every version). If the manifest you have carries no `tierB` block, the chart's tags are the only source. From an installed deployment, `node ./velt-portable-tools/portable-check-updates.js --receipt receipt.json` (Phase U4) answers the same question against your receipt.
 
-Verify, pull, unpack:
+Verify, pull, unpack. **`REG` is the address of Velt's release registry.** Velt support gives it to the operator, so this guide leaves it as a placeholder. Before any command below, ask the operator for it and set `REG`; never guess it.
 
 ```bash
-REG=us-docker.pkg.dev/velt-sdk/velt-releases
+REG='<release registry address>'   # from Velt support (support@velt.dev); ask the operator, never guess it
 IDENTITY='^https://github\.com/snippyly/shared-firebase-function/\.github/workflows/container-release\.yml@refs/heads/main$'
 ISSUER='https://token.actions.githubusercontent.com'
 PORTABLE_V=0.1.13   # the target release
@@ -64,7 +68,7 @@ Neither property protects you if you skip the verification step, and neither is 
 **Tools.** `bash` 3.2 or newer (macOS's stock `/bin/bash` is fine), `helm` 3.17+ or 4.x (to a release newer than 0.1.15
 the chart is applied by its digest, which Helm supports from 3.17), `kubectl` against the
 cluster, `cosign`, `oras`, `node` 18+ (the update check), and `psql` only if your workstation can reach the
-database. Network access to `us-docker.pkg.dev`, read anonymously — no login. If `cosign verify` answers `error
+database. Network access to the release registry (`$REG`, from Velt support), read anonymously — no login. If `cosign verify` answers `error
 getting credentials`, your Docker config routes that registry to a credential helper (the gcloud one, typically) that
 fails for anonymous pulls; run the verification with an empty Docker config:
 
@@ -1236,7 +1240,7 @@ and without a `VELT_PG_DSN` this workstation can reach, the bundle's `schemaHead
 | `helm upgrade FAILED` | U3 | Either the migrate Job (a pre-upgrade hook) failed — then the gateway did not roll and you are still on the old release: `kubectl logs -n <ns> job/<release>-migrate` — or the migration passed and the APPLY failed. On Helm 4 a server-side apply can be PARTIAL: some objects (an HPA, a budget, a Deployment) may already be on the new chart. `helm history <release> -n <ns>` shows which; `kubectl get deploy,hpa,pdb -n <ns>` shows what is live. If in doubt, re-run `portable-upgrade.sh` with `--rollback`. |
 | `schema assertion FAILED: … head is v9, expected v10 … HAS ALREADY ROLLED` | U3 | The migrate hook exited 0 but the schema is not where the release requires it, and `helm upgrade --wait` had already converged, so the gateway IS on the new code. Run the `--rollback` command the message prints, then find out why the hook passed (its own head assertion should have failed it). |
 | the script stops before applying, naming the chart's `velt.dev/schema-head` and your `VELT_EXPECTED_SCHEMA_HEAD` | U3 | The two disagree. Drop the pin to trust the chart, or settle why you expected a different head. Nothing was applied. |
-| `cosign verify` → `error getting credentials` | tools, U1 | Your Docker config sends `us-docker.pkg.dev` to a credential helper that fails; the registry needs no login. `export DOCKER_CONFIG=$(mktemp -d)` for the verification (Checklist); unset it before any docker command that needs your logins — an empty config also hides the docker CLI's context. |
+| `cosign verify` → `error getting credentials` | tools, U1 | Your Docker config sends the release registry to a credential helper that fails; the registry needs no login. `export DOCKER_CONFIG=$(mktemp -d)` for the verification (Checklist); unset it before any docker command that needs your logins — an empty config also hides the docker CLI's context. |
 | `ERROR: …` printed, then `BASHPID: unbound variable`, and the script exits 0 | any refusal | Tools bundle 0.1.13–0.1.15 on macOS's bash 3.2. The refusal is real; only the exit code is wrong. Fixed in 0.1.16; until then read the output, not the code, and do not drive these bundles from a wrapper that trusts `$?`. |
 | `socket hang up` at the smoke, or `VELT_PG_DSN` stops answering mid-upgrade | U3, U4 | A `kubectl port-forward` pinned to a pod the upgrade replaced. Use the restart loop in the Checklist (the ingress cannot carry this smoke). |
 | the receipt or support bundle says `chartVersion: 2` (a small whole number) | U4 | Tools bundle 0.1.13–0.1.15 on Helm 4 read the Helm revision as the chart version. Fixed in 0.1.16; the `helm list` CHART column has the right value meanwhile. |

@@ -1,0 +1,135 @@
+---
+title: "Resolve Check"
+api: "POST https://api.velt.dev/v2/agents/checks/resolve"
+---
+
+Use this API to resolve every open agent comment of one check in one call, for a person (`by: "user"`) or an MCP client (`by: "mcp"`). Each comment is resolved as [Resolve Comment](/api-reference/rest-apis/v2/agents/checks/comments/resolve) does: Resolved, and waiting for the scan that verifies it. All of them share one verify window, so each of the check's agents rescans once.
+
+The resolve starts a verify rescan, which uses AI credits at the flat rescan rate. It is idempotent: a comment that already waits for its rescan is counted in `alreadyPending`, not resolved again, and not charged again.
+
+At most 5,000 open comments are resolved in one call. Attached comments are not included. See [Checks Overview](/api-reference/rest-apis/v2/agents/checks/overview).
+
+# Endpoint
+
+`POST https://api.velt.dev/v2/agents/checks/resolve`
+
+# Headers
+
+<ParamField header="x-velt-api-key" type="string" required>
+  Your API key.
+</ParamField>
+
+<ParamField header="x-velt-auth-token" type="string" required>
+  Your [Auth Token](/security/auth-tokens).
+</ParamField>
+
+# Body
+
+#### Params
+
+<ParamField body="data" type="object" required>
+  <Expandable title="properties">
+    <ParamField body="organizationId" type="string" required>
+      1 to 512 characters. The organization of the project.
+    </ParamField>
+
+    <ParamField body="documentId" type="string" required>
+      1 to 512 characters. The document of the project.
+    </ParamField>
+
+    <ParamField body="ruleKey" type="string" required>
+      The check. `[a-z0-9:-]`, at most 120 characters.
+    </ParamField>
+
+    <ParamField body="by" type="string" required>
+      Who resolves: `"user"` (a person) or `"mcp"` (an MCP client). Any other value is rejected.
+    </ParamField>
+
+    <ParamField body="userId" type="string" required>
+      1 to 512 characters. Recorded as the person who resolved the comments.
+    </ParamField>
+
+    <ParamField body="userName" type="string">
+      At most 512 characters. The person's name, for the verify rescans.
+    </ParamField>
+
+    <ParamField body="userEmail" type="string">
+      At most 512 characters. The person's email, for the verify rescans.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+The schema uses `.strict()`: unknown fields are rejected.
+
+## **Example Requests**
+
+```JSON
+{
+  "data": {
+    "organizationId": "org_acme",
+    "documentId": "acme-marketing-site",
+    "ruleKey": "link-broken",
+    "by": "mcp",
+    "userId": "user_jordan"
+  }
+}
+```
+
+# Response
+
+#### Success Response
+
+```JSON
+{
+  "result": {
+    "status": "success",
+    "message": "Check resolved",
+    "data": {
+      "resolved": 3,
+      "alreadyPending": 1,
+      "rescanExecutionIds": ["exec_4Wq7Zx2Np8"],
+      "truncated": false
+    }
+  }
+}
+```
+
+| Field                     | Type     | Description |
+| ------------------------- | -------- | ----------- |
+| `data.resolved`           | number   | Comments this call resolved. |
+| `data.alreadyPending`     | number   | Comments that already waited for their verify rescan: nothing new started, nothing charged. |
+| `data.rescanExecutionIds` | string[] | The verify runs of the comments that already waited, when they have started. The comments resolved now are queued and have no run id yet. |
+| `data.truncated`          | boolean  | `true` when the check had more than 5,000 open comments. The rest stay open: call again. |
+
+#### Failure Response
+
+```JSON
+{
+  "error": {
+    "message": "Workspace not found or has no store database for the checks engine",
+    "status": "NOT_FOUND",
+    "details": {
+      "reason": "CHECKS_WORKSPACE_NOT_FOUND"
+    }
+  }
+}
+```
+
+**Errors:** `INVALID_ARGUMENT` (a body outside the schema: a missing or malformed `ruleKey`, a missing `userId`, a `by` other than `"user"` or `"mcp"`, or an unknown field) / `NOT_FOUND` with `CHECKS_WORKSPACE_NOT_FOUND` (the workspace has no store database).
+
+<ResponseExample>
+```js
+{
+  "result": {
+    "status": "success",
+    "message": "Check resolved",
+    "data": {
+      "resolved": 0,
+      "alreadyPending": 0,
+      "rescanExecutionIds": [],
+      "truncated": false
+    }
+  }
+}
+```
+</ResponseExample>

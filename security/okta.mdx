@@ -18,7 +18,7 @@ Using another identity provider, or Velt isn't in your Okta catalog yet? Use the
 | IdP-initiated SSO | People click the Velt tile on their Okta dashboard and land in the Velt Console. |
 | SP-initiated SSO | People start on Velt's sign-in page, enter their work email, and Velt sends them to Okta. |
 | Create users | Assigning someone to the Velt app in Okta adds them to your Velt workspace as a Member. |
-| Update user attributes | Okta sends profile changes and reactivations to Velt. |
+| Update user attributes | Okta sends email changes, reactivations and deactivations to Velt. See [Attributes Velt doesn't update](#attributes-velt-doesnt-update). |
 | Deactivate users | Unassigning or deactivating someone in Okta removes them from your Velt workspace. |
 
 Not supported:
@@ -26,6 +26,7 @@ Not supported:
 - **Single Logout.** Signing out of Velt doesn't sign you out of Okta, and the reverse.
 - **Just-in-time provisioning.** Signing in with Okta never adds anyone to a workspace. Each person needs an invite in Velt, or is added by user sync.
 - **Group push and roles from Okta.** You can assign an Okta group to the app; Okta syncs its members one by one. Change roles in Velt under **Team → Users**.
+- **Import new users** and **Import profile updates** (from Velt to Okta). Okta is the source of truth: Velt never sends people or profile changes back to Okta. An import from the app's **Import** tab returns only the people Okta itself created.
 - **Passwords.** The Velt Console doesn't use passwords, so there's nothing to sync.
 
 ## Prerequisites
@@ -57,7 +58,7 @@ In the Okta Admin Console, go to **Applications → Applications → Browse App 
 |---|---|
 | Application label | A name your team will recognize, for example `Velt`. |
 | Velt workspace URL slug | The URL Slug from step 1. Velt shows it with a copy button under **2. Add Velt in Okta**. |
-| Self-hosted Velt API URL | Leave empty. It's only for self-hosted Velt deployments. |
+| Velt API host | Enter `console.velt.dev`. If you self-host Velt, enter your Velt API host without `https://`. |
 
 Click **Done**. On the **Sign On** tab, set **Application username format** to **Email**, or keep **Okta username** if your Okta usernames are email addresses. Velt identifies people by their email.
 
@@ -93,7 +94,20 @@ Okta decides who can sign in. Your Velt workspace decides who gets in: only its 
 To check it works, open a private browser window, sign in to Okta as someone you assigned and gave access, and click the Velt tile. You land in your workspace in the Velt Console.
 </Tip>
 
-### Sign in from Velt (SP-initiated SSO)
+## SAML attributes
+
+Okta sends these in every SAML assertion. You don't need to change them.
+
+| Attribute | Okta value | Used for |
+|---|---|---|
+| NameID (format `EmailAddress`) | Application username (set to **Email**) | Identifies the person. Must be the email they're invited with, on your Email Domain. |
+| `email` | `user.email` | The person's email. |
+| `firstName` | `user.firstName` | The person's first name (optional). |
+| `lastName` | `user.lastName` | The person's last name (optional). |
+
+Velt doesn't use group attributes or any other attribute.
+
+## Sign in from Velt (SP-initiated SSO)
 
 1. Go to [console.velt.dev/saml/login](https://console.velt.dev/saml/login), or your workspace's sign-in page, `https://console.velt.dev/saml/<slug>/login`.
 2. Enter your work email and click **Continue with SSO**. If more than one workspace uses SSO for your email domain, choose yours from the list.
@@ -152,7 +166,8 @@ In Velt, **Team → Users** lists everyone Okta added. On **Team → SAML → Ap
 | In Okta you | In Velt |
 |---|---|
 | Assign someone, or add them to an assigned group | They're added to the workspace as a Member. Nothing changes if they're already a member. |
-| Change their profile | Okta sends the change to Velt. |
+| Change their email | Velt moves their membership to the new email (it must be on your Email Domain). |
+| Change their name | **Team → Users** keeps the name they have in Velt. See [Attributes Velt doesn't update](#attributes-velt-doesnt-update). |
 | Unassign or deactivate them | They're removed from the workspace, and signed out if it was their only Velt workspace. |
 | Reactivate or reassign them | They're added back. |
 | Unassign the workspace owner | Nothing. Sync never removes the owner. |
@@ -188,5 +203,14 @@ Only emails on your workspace's Email Domain are synced. Sync never changes anyo
 | Someone you assigned isn't in Velt | Their email isn't on your Email Domain, or **Create Users** is off under **To App**. Okta lists failed pushes under **Dashboard → Tasks**, where you can retry them. |
 | Some pushes fail while you assign a very large group | Velt accepts up to 600 sync requests a minute per workspace. Wait a minute, then retry the failed tasks in Okta. |
 | Sign-in fails after Okta renewed its certificate | Import the Metadata URL again in Velt and save. |
+
+### Attributes Velt doesn't update
+
+| Changed in Okta | What happens in Velt |
+|---|---|
+| First name, last name, display name | Saved and returned to Okta, but **Team → Users** keeps the name the person has in Velt. |
+| Email (username or primary email) | Velt moves the membership to the new email. The new email must be on your Email Domain, otherwise Okta shows an error under **Dashboard → Tasks**. |
+| Any other profile attribute (title, phone, address, manager, …) | Not used by Velt. |
+| Groups and roles | Not synced. Change roles under **Team → Users**. |
 
 Still stuck? Email [support@velt.dev](mailto:support@velt.dev) with your workspace name, your URL slug and a screenshot of the error. Never send the whole sync token.

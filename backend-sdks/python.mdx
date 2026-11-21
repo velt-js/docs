@@ -202,7 +202,7 @@ print(postgres_schema_sql(Config({'database': {'type': 'postgresql', 'connection
 - `schema` is the PostgreSQL schema that holds the tables. It is unrelated to the `user_schema` option, which maps user fields.
 - The default `sslmode: prefer` encrypts when the server offers TLS but never verifies the certificate. For any database that is not on the same host, set `'sslmode': 'verify-full'` with `'sslrootcert': '/path/to/ca.pem'`.
 - Multi-process servers (gunicorn, uWSGI) open one pool per worker. Under uWSGI enable threads (`--enable-threads`).
-- The SDK does not migrate data between MongoDB and PostgreSQL.
+- The SDK does not migrate data between MongoDB and PostgreSQL. To move to a new instance of the same database type, see [Move to a new database](/backend-sdks/python#move-to-a-new-database).
 
 </Tab>
 <Tab title="AWS (Attachments)">
@@ -326,6 +326,69 @@ sdk = VeltSDK.initialize(config)
 
 </Tab>
 </Tabs>
+
+### Move to a new database
+
+Velt does not store your database URL. Velt keeps its own copy of each comment and asks your backend for the private content (comment text, reactions, notifications). It matches on the comment, reaction and notification ids. Only your backend knows where the database lives.
+
+To move to a new database instance, copy the data with every id unchanged, then point the SDK at the new database.
+
+<Steps>
+<Step title="Copy the Velt collections">
+
+Copy these collections to the new instance exactly as they are:
+
+- `comment_annotations`
+- `reaction_annotations`
+- `notifications`
+- `attachments`, `users`, `recorder_annotations` and `activities`, if you use them
+
+For MongoDB to MongoDB, a dump and restore is enough:
+
+```bash
+mongodump --uri "<old-connection-string>" --db <database_name> --out ./velt-backup
+mongorestore --uri "<new-connection-string>" ./velt-backup
+```
+
+Do not edit the documents during the copy. Keep `annotationId`, `notificationId`, `organizationId` and the `metadata` fields as they are.
+
+</Step>
+<Step title="Point the SDK at the new database">
+
+Update the `database` block in your SDK config:
+
+```python
+config = {
+    'database': {
+        'type': 'mongodb',
+        'connection_string': '<new-connection-string>',
+        'database_name': '<database_name>',
+    },
+    # Keep your existing Velt API key and any custom 'collections' names unchanged
+}
+```
+
+On first connect, the SDK creates its indexes on the new database.
+
+</Step>
+<Step title="Update the frontend only if your backend URL changes">
+
+If your API endpoints keep the same URL, your frontend needs no change. If the endpoints also move, update the `url` values in `getConfig`, `saveConfig` and `deleteConfig` for the comment, reaction and notification data providers in [`setDataProviders`](/self-hosting/partial/overview#registering-data-providers). Then allow your app's origin in the new backend's CORS settings.
+
+</Step>
+</Steps>
+
+<Warning>
+- **Use the same Velt API key.** The SDK reads comment and reaction rows filtered by the API key stored on them. If the backend runs with a different key after the move, those comments come back without their content.
+- **Avoid writes during the switch.** A comment created after the copy but before the switch is saved only in the old database and then shows without its text. Use a short maintenance window: stop the backend, copy, switch the config, and start it again. Running `mongorestore` a second time does not update documents that already exist, so it does not work as a catch-up sync.
+</Warning>
+
+After the switch:
+
+- Compare the document counts in each collection between the old and new databases.
+- Open a few documents that have comments and confirm the text, reactions and notifications load.
+- Attachments need no change if your S3 bucket stays the same. If the bucket also moves, update the stored file URLs.
+- Changing the database type (for example MongoDB to PostgreSQL) is not covered here. The SDK does not migrate data between database types.
 
 ## Self-Hosting Backend
 

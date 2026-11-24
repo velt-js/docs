@@ -1326,6 +1326,141 @@ commentElement.on('fullscreenClick').subscribe((event) => {
 </Tab>
 </Tabs>
 
+# Multiple sidebars
+
+#### sidebarId
+- Give a sidebar a `sidebar-id` to show several independent sidebars on one page, for example one for human comments and one for agent comments.
+- Each named sidebar keeps its own list, filters, sort, grouping, and open state. Its filter selections are saved under their own key.
+- A sidebar without `sidebar-id` is the default sidebar and works as before.
+- Two sidebars with the same `sidebar-id` share one state.
+- The id is read once, when the sidebar is created. Set it before other inputs such as `filters`; later changes are ignored.
+- A named sidebar does not drive page pins (`filterCommentsOnDom`), the default sidebar button count, `setCommentSidebarFilters`, or custom actions. It does not open automatically when a pin is clicked.
+
+Default: none (the default sidebar)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<velt-comments-sidebar-v2 sidebar-id="humans"></velt-comments-sidebar-v2>
+<velt-comments-sidebar-v2 sidebar-id="agents"></velt-comments-sidebar-v2>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comments-sidebar-v2 sidebar-id="humans"></velt-comments-sidebar-v2>
+<velt-comments-sidebar-v2 sidebar-id="agents"></velt-comments-sidebar-v2>
+```
+</Tab>
+</Tabs>
+
+<Note>
+`VeltCommentsSidebarV2` has no typed `sidebarId` or `scope` prop yet. In React, set `sidebar-id` and `scope` as attributes on the `velt-comments-sidebar-v2` element.
+</Note>
+
+#### scope
+- Limit a sidebar to a fixed set of comments. Users cannot clear the scope, and Reset leaves it in place.
+- Filters, quick filters, search, counts, grouping, and empty states all work inside the scope.
+- A comment is in scope when every `include` rule matches and no `exclude` rule matches. A rule matches when the value at `path` equals any entry in `values`.
+- `path` is a dot path on the [CommentAnnotation](/api-reference/sdk/models/data-models#commentannotation), such as `sourceType` or `checkInfo.ruleKey`. Values are compared by type, so `"1"` does not match `1`.
+- A missing value never matches, so `exclude sourceType = agent` keeps comments with no `sourceType`.
+- An invalid scope logs one console error, and the sidebar lists every comment.
+- The scope only changes what the sidebar lists. Pins, unread counts, and `getAllCommentAnnotations()` still see every comment.
+- `scope` works with or without `sidebar-id`.
+
+Default: none (no scope)
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<velt-comments-sidebar-v2
+  sidebar-id="humans"
+  scope='{"exclude":[{"path":"sourceType","values":["agent"]}]}'
+></velt-comments-sidebar-v2>
+<velt-comments-sidebar-v2
+  sidebar-id="agents"
+  scope='{"include":[{"path":"sourceType","values":["agent"]}]}'
+></velt-comments-sidebar-v2>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-comments-sidebar-v2
+  sidebar-id="humans"
+  scope='{"exclude":[{"path":"sourceType","values":["agent"]}]}'
+></velt-comments-sidebar-v2>
+<velt-comments-sidebar-v2
+  sidebar-id="agents"
+  scope='{"include":[{"path":"sourceType","values":["agent"]}]}'
+></velt-comments-sidebar-v2>
+```
+</Tab>
+</Tabs>
+
+Scope shape:
+
+```typescript
+interface CommentSidebarScopeRule {
+  path: string;
+  values: Array<string | number | boolean>;
+}
+
+interface CommentSidebarScope {
+  include?: CommentSidebarScopeRule[];
+  exclude?: CommentSidebarScopeRule[];
+}
+```
+
+#### sidebar button
+- Add `sidebar-id` to `velt-sidebar-button` to bind it to the named sidebar with that id.
+- The button opens, closes, and toggles that sidebar, and its count follows that sidebar's scoped list and `sidebarButtonCountType`.
+- If no sidebar with that id is mounted, the count is `0` and a click opens nothing.
+- Floating mode is not supported on a bound button.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+<velt-sidebar-button sidebar-id="humans"></velt-sidebar-button>
+<velt-sidebar-button sidebar-id="agents"></velt-sidebar-button>
+```
+</Tab>
+<Tab title="Other Frameworks">
+```html
+<velt-sidebar-button sidebar-id="humans"></velt-sidebar-button>
+<velt-sidebar-button sidebar-id="agents"></velt-sidebar-button>
+```
+</Tab>
+</Tabs>
+
+#### sidebar events
+- Events from a named sidebar include its `sidebarId`: `sidebarOpen`, `sidebarClose`, `fullscreenClick`, `commentClick`, and `commentNavigationButtonClick`.
+- `sidebarButtonClick` and `sidebarButtonClicked` from a bound sidebar button include the button's `sidebarId`.
+- Events from the default sidebar and default button have no `sidebarId`.
+- A card click is handled only by the sidebar it came from.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const sidebarClose = useCommentEventCallback('sidebarClose');
+useEffect(() => {
+  if (sidebarClose?.sidebarId === 'agents') {
+    console.log('agents sidebar closed');
+  }
+}, [sidebarClose]);
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+const subscription = commentElement.on('sidebarClose').subscribe((event) => {
+  if (event?.sidebarId === 'agents') {
+    console.log('agents sidebar closed');
+  }
+});
+subscription?.unsubscribe();
+```
+</Tab>
+</Tabs>
+
 # Sidebar controls
 
 #### openCommentSidebar / closeCommentSidebar / toggleCommentSidebar
@@ -1357,6 +1492,34 @@ commentElement.openCommentSidebar({ annotationId: 'ANNOTATION_ID' });
 </Tabs>
 
 Pass `annotationId` to open the sidebar on a thread. With `focusedThreadMode` and `openAnnotationInFocusMode` on, the thread opens in focused view. Otherwise the sidebar scrolls to its card.
+
+Pass `sidebarId` to act on a [named sidebar](#sidebarid). Without it, the methods act on the default sidebar.
+- If no sidebar with that id is mounted, the call logs a warning and does nothing.
+- If `annotationId` is outside that sidebar's `scope`, nothing opens.
+- If `sidebarId` is present but not a non-blank string, the call does nothing. Leave the key out to act on the default sidebar.
+
+<Tabs>
+<Tab title="React / Next.js">
+```jsx
+const commentElement = client.getCommentElement();
+commentElement.openCommentSidebar({ sidebarId: 'agents', annotationId: 'ANNOTATION_ID' });
+commentElement.toggleCommentSidebar({ sidebarId: 'humans' });
+commentElement.closeCommentSidebar({ sidebarId: 'agents' });
+```
+</Tab>
+<Tab title="Other Frameworks">
+```js
+const commentElement = Velt.getCommentElement();
+commentElement.openCommentSidebar({ sidebarId: 'agents', annotationId: 'ANNOTATION_ID' });
+commentElement.toggleCommentSidebar({ sidebarId: 'humans' });
+commentElement.closeCommentSidebar({ sidebarId: 'agents' });
+```
+</Tab>
+</Tabs>
+
+<Note>
+Call `closeCommentSidebar` and `toggleCommentSidebar` on the element, for example `() => commentElement.closeCommentSidebar({ sidebarId: 'agents' })`. Do not destructure them from `commentElement`.
+</Note>
 
 <Note>
 For V2 wireframe and primitive customization, start with the [`Component catalog`](/ui-customization/reference/component-catalog#sidebar-slot-trees), then use [`Wireframe components`](/ui-customization/reference/wireframe-components) for the complete slot tree and [`Primitive components`](/ui-customization/reference/primitives) for the primitive list. The sidebar is shadow-DOM isolated by default.

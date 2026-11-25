@@ -29,6 +29,18 @@ When a customer registers a data provider (`Velt.setDataProviders({ … })`), th
 > is sent only to your DB (or recomputed entirely on the client). Velt never receives it, transmits
 > it, or stores it.
 
+<Warning>
+This page describes SDK `6.0.35` and later. Earlier SDK versions send more data to Velt:
+
+- **Before `6.0.17`:** the sign-in request carries the user's `name`, `email`, and `photoUrl`, even with a `user` provider. Velt keeps the name on the user's organization record. Comment edit and delete notifications carry comment text, and the editor anchor text at `context.textEditorConfig.text` stays in Velt.
+- **Before `6.0.18`:** comment activity records are written to Velt without an `activity` provider. Their `changes.commentText` holds the comment text.
+- **Before `6.0.19`:** usage analytics events can carry the arguments you pass to SDK methods, including user profile fields and comment text.
+- **Before `6.0.21`:** suggestion content (`oldValue`, `newValue`, `summary`, `rejectReason`, `metadata`) is stored in Velt.
+- **Before `6.0.35`:** there is no `suggestion.textChange` field.
+
+Upgrading does not remove data that an earlier version already stored.
+</Warning>
+
 ### Note vocabulary
 
 | Term | Meaning |
@@ -43,6 +55,13 @@ When a customer registers a data provider (`Velt.setDataProviders({ … })`), th
 > (+ shared building blocks). Features **without** a self-hosting data-provider split — `cursor`,
 > `presence`, `huddle`, `selection`, `tag`, `area`, `arrow`, `rewriter`, standalone `transcription` —
 > are **not** included; they have no resolver and stay fully Velt-hosted.
+
+### Data outside the feature tables
+
+- **Sign-in:** register your `user` provider before you call `identify()` (or before `VeltProvider` signs the user in). The sign-in request then carries the user's ids, but not `name`, `email`, `photoUrl`, or `initial`. A user signed in before the provider was set keeps the profile fields Velt stored at that sign-in.
+- **Documents:** the metadata you pass to `setDocuments()`, such as `documentName`, is stored in Velt with the document.
+- **Usage analytics:** the SDK applies the rules on this page to the analytics events it sends. Page URLs, document names, and ids are sent.
+- **Activity:** with a `comment`, `reaction`, `recorder`, or `user` provider set and no `activity` provider, the SDK records no activity at all.
 
 ---
 
@@ -106,10 +125,11 @@ Model: `CommentAnnotation`. PII payload: `PartialCommentAnnotation`.
 | `priority` | `CustomPriority` | `{ id: 'P1', name: 'High', color: '#f00' }` | Priority. | kept |
 | `ghostComment` | `GhostComment \| null` `{ targetElement?; message?; type?; isSameGroup? }` | `{ message: 'element not found', type: 'desktop' }` | Placeholder when target element is missing. | kept |
 | `areaAnnotationId` | `string` | `"area_77"` | Connected area annotation id. | kept |
-| `context` | `any` | `{ access: { roles: ['editor'] }, accessFields: ['roles'] }` | Your custom context data. | kept; `context.access` and `context.accessFields` are **mandatory** for querying and are always retained (not subject to `fieldsToRemove`). `context.accessFields` is shared by two systems: the values generated from your Access Context, and the comment's visibility |
+| `context` | `any` | `{ access: { roles: ['editor'] }, accessFields: ['roles'] }` | Your custom context data. | kept, including any free-text values you put in it. Exception: `context.textEditorConfig.text`, the anchor text an editor integration writes, is **never sent to Velt** when a `comment` provider is set (→ your DB). `context.access` and `context.accessFields` are **mandatory** for querying. Do not list `context` in `fieldsToRemove`: that moves the whole object, `access` and `accessFields` included, to your DB, and queries and comment visibility stop working. `context.accessFields` is shared by two systems: the values generated from your Access Context, and the comment's visibility |
 | `contextId` | `string` | `"ctx_abc123"` | Hash of `context`. | kept |
 | `iam` | `CommentIAMConfig` `{ accessMode? }` | `{ accessMode: 'PUBLIC' }` | IAM access config. | default `new CommentIAMConfig()` |
 | `isPageAnnotation` | `boolean` | `false` | Page-level annotation flag. | kept |
+| `isDocumentLevel` | `boolean` | `true` | The comment shows on every location of its document. | kept |
 | `targetInlineCommentElementId` | `string` | `"inline-sec-3"` | Inline-comment target element id. | kept |
 | `inlineCommentSectionConfig` | `InlineCommentSectionConfig` `{ id; name? }` | `{ id: 'sec_3', name: 'Section 3' }` | Inline-comment section config. | kept |
 | `customList` | `CustomAnnotationDropdownItem[]` | `[{ id: 'tag1', label: 'Backend' }]` | Custom dropdown items. | defaults `[]` |
@@ -123,8 +143,12 @@ Model: `CommentAnnotation`. PII payload: `PartialCommentAnnotation`.
 | `views` | `CommentAnnotationViews` | `{ views: { 'u_1': { timestamp: 1717800000 } } }` | View tracking. | kept — see [CommentAnnotationViews](#commentannotationviews) |
 | `viewedByUserIds` | `string[]` | `["u_1","u_2"]` | Viewer userIds. | already userIds |
 | `involvedUserIds` | `string[]` | `["u_1","u_2"]` | All userIds participating in the thread (authors, assignees, @mentions). | already userIds; auto-maintained |
-| `suggestion` | `SuggestionData` | `{ status: 'pending', resolvedBy: { userId: 'u_1' } }` | SDK-managed suggestion data (iff `type === 'suggestion'`). | Structural keys only (`status`, `targetId`, `targetType`, `driftDetected`, `resolvedBy`, `resolvedAt`) are kept; nested `resolvedBy` reduced when `user` provider active. Content keys go to your DB when a `comment` provider is set. See [Suggestion Content](/self-hosting/partial/comments#suggestion-content) |
-| `agent` | `AgentData` `{ agentName?; name?; avatar?; result?: { title? }; agentFields?[] }` | `{ agentName: 'Reviewer Bot', result: { title: 'Fix typo' }, agentFields: ['result'] }` | AI-agent identity + output. | read-only from SDK; kept; `agent.agentFields` is **mandatory** for querying and is always retained (not subject to `fieldsToRemove`) |
+| `suggestion` | `SuggestionData` | `{ status: 'pending', resolvedBy: { userId: 'u_1' } }` | SDK-managed suggestion data (iff `type === 'suggestion'`). | Structural keys only (`status`, `targetId`, `targetType`, `driftDetected`, `resolvedBy`, `resolvedAt`) are kept; nested `resolvedBy` reduced when `user` provider active. Content keys (`oldValue`, `newValue`, `summary`, `rejectReason`, `metadata`, `textChange`) go to your DB when a `comment` provider is set. See [Suggestion Content](/self-hosting/partial/comments#suggestion-content) |
+| `agent` | `AgentData` `{ agentName?; name?; avatar?; result?: { title? }; agentFields?[] }` | `{ agentName: 'Reviewer Bot', result: { title: 'Fix typo' }, agentFields: ['result'] }` | AI-agent identity + output. | read-only from SDK; kept; `agent.agentFields` is **mandatory** for querying. Do not list `agent` in `fieldsToRemove`: that moves the whole object to your DB |
+| `actions` | `CommentAction[]` | `[{ id: 'retry', label: 'Retry' }]` | Your action buttons for the thread. | kept verbatim, including each action's `metadata` |
+| `mentionedUserIds` | `string[]` | `["u_2"]` | userIds @mentioned across the thread's comments. | already userIds; set by Velt's backend |
+| `documentParamsId` | `number \| null` | `987654321` | Hash of `documentParams`. | **@deprecated**; use `locationId` |
+| `documentParams` | `Location \| null` | `{ id: 'page-1' }` | Sub-document params. | **@deprecated**; use `location` |
 
 ### 1.B — Stored in your DB (`PartialCommentAnnotation`)
 
@@ -142,9 +166,10 @@ Model: `CommentAnnotation`. PII payload: `PartialCommentAnnotation`.
 | `comments[].taggedUserContacts` | `{ userId; contact?: { userId }; text? }[]` | `[{ userId: 'u_2', text: '@Jane' }]` | Tagged contacts (PII text labels). | only if truthy |
 | `from` | `PartialUser` `{ userId }` | `{ userId: 'u_1' }` | Annotation creator. | only if truthy; **copied-not-moved** |
 | `assignedTo` | `PartialUser` `{ userId }` | `{ userId: 'u_2' }` | Assignee. | only if truthy; **copied-not-moved** |
+| `context` | `{ textEditorConfig: { text: string } }` | `{ textEditorConfig: { text: 'the anchored sentence' } }` | Editor anchor text (PII). | only when the annotation has it; the rest of `context` stays in Velt's DB. If you list `context` in `fieldsToRemove`, the whole object is sent here instead |
 | `targetTextRange` | `{ text: string }` | `{ text: 'the selected sentence' }` | Selected text content (PII). | the `.text` is **never sent to Velt** (stripped → your DB); rest of `targetTextRange` is sent |
 | `resolvedByUserId` | `string \| null` | `"u_1"` | Who resolved it. | only if truthy; **copied-not-moved** |
-| `suggestion` | `Partial<SuggestionData>` | `{ oldValue: 'Acme Inc', newValue: 'Acme', summary: 'Rename', rejectReason: null, metadata: { ticket: 'PROJ-7' } }` | Suggestion content (iff `type === 'suggestion'`). | content keys only (`oldValue`, `newValue`, `summary`, `rejectReason`, `metadata`); **never sent to Velt** once your provider holds them |
+| `suggestion` | `Partial<SuggestionData>` | `{ oldValue: 'Acme Inc', newValue: 'Acme', summary: 'Rename', rejectReason: null, metadata: { ticket: 'PROJ-7' } }` | Suggestion content (iff `type === 'suggestion'`). | content keys only (`oldValue`, `newValue`, `summary`, `rejectReason`, `metadata`, `textChange`); **never sent to Velt** once your provider holds them |
 | `[fieldsToRemove]` | `any` | `{ internalTicketId: 'JIRA-42' }` | Your custom fields kept off Velt entirely. | per `config.fieldsToRemove`; truthy-gated; **never sent to Velt** (→ your DB) |
 | `[additionalFields]` | `any` | `{ teamName: 'Growth' }` | Your custom fields replicated. | per `config.additionalFields`; deep-copied; sent to **both** (falsy preserved) |
 
@@ -152,12 +177,13 @@ Model: `CommentAnnotation`. PII payload: `PartialCommentAnnotation`.
 
 - The only PII stripped on the frontend (and therefore **never sent to Velt**) is: per-comment
   `commentText`/`commentHtml`, attachment `name`/`url` (when the `attachment` resolver is active),
-  `targetTextRange.text`, suggestion content keys, and any `fieldsToRemove`. Each comment whose PII is withheld gets
+  `targetTextRange.text`, `context.textEditorConfig.text`, suggestion content keys, and any `fieldsToRemove`. Each comment whose PII is withheld gets
   `isCommentResolverUsed = true`; attachments get `isAttachmentResolverUsed = true`.
 - `from` / `assignedTo` / `resolvedByUserId` are **copied-not-moved** (sent to both).
 - A `save` to your provider only fires when the comment PII actually changed **and** the action maps
   to a `ResolverActions` value (`COMMENT_ANNOTATION_ADD` / `COMMENT_ADD` / `COMMENT_UPDATE` /
-  `COMMENT_DELETE`, or a draft). Pure status / priority / assignment changes do **not** call `save`.
+  `COMMENT_DELETE`, or a draft). Pure status / priority / assignment changes do **not** call `save`
+  unless you opt in with [`additionalSaveEvents`](/self-hosting/partial/comments#additionalsaveevents).
   Exception: `comment_annotation.suggestion_reject` always calls `save` when the annotation has a `suggestion`.
 - Truthy-gating: empty-string `commentText` etc. are **not** sent to your provider (and are not
   withheld from Velt either). `additionalFields` is the exception — it uses `!== undefined`, so
@@ -189,6 +215,8 @@ Model: `ReactionAnnotation`. PII payload: `PartialReactionAnnotation`.
 | `pageInfo` | `PageInfo` | `{ title: 'Dashboard', url: 'https://app.example.com/dashboard' }` | Page context. | default `new PageInfo()` — see [PageInfo](#pageinfo) |
 | `from` | `User` → `{ userId }` | `{ userId: 'u_1' }` | Creator of the reaction annotation. | reduced when `user` provider active; **copied-not-moved** |
 | `isReactionResolverUsed` | `boolean` | `true` | Resolver-used flag. | flag; set `true` on strip |
+| `iconUrl` | `string` | `"https://cdn.example.com/reactions/party.png"` | Image URL of a custom reaction. | kept; set only for custom reactions. It identifies the reaction even though `icon` is withheld |
+| `iconEmoji` | `string` | `"🎉"` | Emoji of a custom reaction. | kept; set only for custom reactions. It identifies the reaction even though `icon` is withheld |
 | `involvedUserIds` | `string[]` | `["u_1","u_2"]` | All userIds that have reacted on this annotation. | already userIds; auto-maintained |
 | `metadata` | `ReactionMetadata` (extends `BaseMetadata`; `[key]: any`) | `{ documentId: 'doc_42', organizationId: 'org_7' }` | Routing metadata. | **full** kept; `getClientMetadata` copy sent to your DB |
 
@@ -203,7 +231,7 @@ Model: `ReactionAnnotation`. PII payload: `PartialReactionAnnotation`.
 
 ### 2.C — Reaction strip rules
 
-- Only `icon` is **never sent to Velt** (stripped on the frontend → your DB); everything else is kept and `isReactionResolverUsed` set `true`.
+- Only `icon` is **never sent to Velt** (stripped on the frontend → your DB); everything else is kept and `isReactionResolverUsed` set `true`. For a custom reaction, `iconUrl` and `iconEmoji` stay in Velt's DB.
 - `from` is **copied-not-moved**. Per-element `reactions[].from` is reduced to `{ userId }` (when
   `user` provider active) **only inside Velt's DB** — it is not part of the `Partial` payload.
 - `position`'s value is **never sent to Velt** — written as `null` on every write to Velt's DB regardless of self-hosting.
@@ -242,7 +270,8 @@ Model: `RecorderAnnotation`. PII payload: `PartialRecorderAnnotation`.
 | `mode` | `RecorderLayoutMode` | `"floating"` | Recorder layout mode. | default `'floating'` |
 | `approved` | `boolean` | `true` | Approval flag. | kept |
 | `attachment` | `Attachment \| null` | `null` | Single recorded-media attachment. | **@deprecated**; value **never sent to Velt** — written as `null`; full object → your DB |
-| `attachments` | `Attachment[]` | `[{ attachmentId: 'att_1', name: 'recording.webm' }]` | Recording attachments. | **reduced to stubs** `{ attachmentId, name }` (url etc. never sent to Velt) |
+| `attachments` | `Attachment[]` | `[{ attachmentId: 'att_1', name: 'recording.webm', bucketPath: 'AbC/recordings/att_1_recording.webm' }]` | Recording attachments. | **reduced to stubs** `{ attachmentId, name, bucketPath }` (url etc. never sent to Velt). `bucketPath` is the storage path and contains the file name |
+| `chunkUrls` | `Record<number, string>` | `{}` | URLs of the recording's uploaded chunks. | value **never sent to Velt**; written as `{}` (full map → your DB) |
 | `annotationIndex` | `number` | `3` | 1-based index. | kept |
 | `pageInfo` | `PageInfo` | `{ title: 'Home', url: 'https://app.example.com' }` | Page context. | default `new PageInfo()` — see [PageInfo](#pageinfo) |
 | `recordedTime` | `{ duration?: number; display?: string } \| null` | `{ duration: 12500, display: '00:00:12' }` | Recorded duration. | kept; sent to Velt |
@@ -265,6 +294,7 @@ Model: `RecorderAnnotation`. PII payload: `PartialRecorderAnnotation`.
 | `transcription` | `Transcription` | `{ from: { userId: 'user-123' }, transcriptedText: 'Hello team…', vttUrl: 'https://…/cap.vtt' }` | Full transcript (PII). | **never sent to Velt** — see [Transcription](#transcription-your-db-recorder-payload) |
 | `attachment` | `Attachment \| null` | `{ attachmentId: 'att_1', name: 'recording.webm', url: 'https://storage/…' }` | Deprecated single attachment (with URL). | **@deprecated**; sent when defined; value never sent to Velt (written as `null` there) |
 | `attachments` | `Attachment[]` | `[{ attachmentId: 'att_1', name: 'recording.webm', url: 'https://storage/…' }]` | Full attachment list incl. media URLs (PII). | sent only when length > 0; reduced to stubs in Velt's DB |
+| `chunkUrls` | `Record<number, string>` | `{ 0: 'https://storage/…/chunk-0.webm' }` | URLs of the recording's uploaded chunks. | sent only when not empty; written as `{}` in Velt's DB |
 | `recordingEditVersions` | `Record<number, PartialRecorderAnnotationEditVersion>` | `{ 1: { from: { userId: 'user-123' }, attachments: [{ attachmentId: 'att_1', url: 'https://…' }], transcription: { transcriptedText: '…' } } }` | Per-version PII (`from`, `attachment`, `attachments`, `transcription`). | only versions with ≥1 PII field |
 | `isUrlAvailable` | `boolean` | `false` | Real URL ready yet. | copied (also kept in Velt's DB) |
 | `[additionalFields]` | `any` | `{ customTag: 'launch-demo' }` | Your replicated custom fields. | per `config.additionalFields`; kept in Velt's DB too |
@@ -272,8 +302,8 @@ Model: `RecorderAnnotation`. PII payload: `PartialRecorderAnnotation`.
 ### 3.C — Recorder strip rules
 
 - Never sent to Velt: `transcription` (entire object → your DB), the value of `attachment`
-  (written as `null`), and the urls inside `attachments` (Velt keeps only `{ attachmentId, name }`
-  stubs). `from` is reduced to `{ userId }`;
+  (written as `null`), the urls inside `attachments` (Velt keeps only `{ attachmentId, name, bucketPath }`
+  stubs), and `chunkUrls` (written as `{}`). `from` is reduced to `{ userId }`;
   `isRecorderResolverUsed` set `true`.
 - `recordingEditVersions` per-version PII is withheld the same way; non-PII per-version fields
   (`recordedTime`, `waveformData`, `displayName`, `boundedTrimRanges`, `boundedScaleRanges`) are sent to Velt.
@@ -289,6 +319,10 @@ Model: `Notification` / `NotificationRawData`. PII payload: `PartialNotification
 notifications only** (`notificationSource === 'custom'`); standard comment/recording notifications
 resolve through their own feature providers. This is **read-only enrichment** — there is **no
 write-side strip** and **no `save`**.
+
+For a comment notification, the copy of the annotation and comment that Velt stores goes through the
+[comment strip rules](#1c--comment-strip-rules) when a `comment` provider is set, so it carries no
+comment text. User objects in it are reduced to `{ userId }` when a `user` provider is set.
 
 ### 4.A — Stored in Velt's DB (structural notification envelope)
 
@@ -339,6 +373,10 @@ write-side strip** and **no `save`**.
 Model: `ActivityRecord`. PII payload: `PartialActivityRecord`. **Append-only** — there is **no
 `delete`**. Activity records can carry PII from several features at once.
 
+<Warning>
+If you set a `comment`, `reaction`, `recorder`, or `user` provider and no `activity` provider, the SDK records no activity at all. Set an `activity` provider to keep the activity log.
+</Warning>
+
 ### 5.A — Stored in Velt's DB (`ActivityRecord`)
 
 | Field | Type | Example | Description | Notes |
@@ -367,7 +405,7 @@ Model: `ActivityRecord`. PII payload: `PartialActivityRecord`. **Append-only** �
 |---|---|---|---|---|
 | `id` | `string` | `"act_8f3kd92mz"` | Correlation key. | required; same as `ActivityRecord.id` |
 | `metadata` | `BaseMetadata` | `{ organizationId: 'org_1', documentId: 'doc_42' }` | Client-facing metadata copy. | `getClientMetadata` subset |
-| `changes` | `ActivityChanges` | `{ commentText: { from: 'old text', to: 'new text' } }` | PII change pairs. | for **comment** activities, only `{ commentText }`; sent only when the **activity** resolver is active (if only the comment resolver is registered, `changes['commentText']` is preserved on the Velt side to avoid unrestorable loss) |
+| `changes` | `ActivityChanges` | `{ commentText: { from: 'old text', to: 'new text' } }` | PII change pairs. | for **comment** activities, only `{ commentText }`; sent only when the **activity** resolver is active |
 | `entityData` | `unknown` (`PartialReaction…` / `PartialRecorder…` for built-ins; arbitrary for custom) | `{ annotationId: 'rec_77', transcription: {…}, attachment: {…} }` | Feature-specific entity PII. | **Reaction**: only when activity **and** reaction resolvers are both active (carries `icon`/`from`/`metadata`). **Recorder**: only when activity **and** recorder resolvers are both active (carries `from`/`transcription`/`attachment`/`attachments`). **Comment**: handled by the comment resolver's own store — not duplicated here. **Custom**: only if you list `entityData` in `fieldsToRemove` (then the entire field is relocated). |
 | `entityTargetData` | `unknown` | `{ commentId: 'comment_88', commentText: 'Looks good' }` | Sub-entity PII snapshot. | Built-in feature types: per-feature PII fields only. Custom: only if you list `entityTargetData` in `fieldsToRemove` (wholesale relocation). Merged back on read by wholesale replacement. |
 | `displayMessageTemplateData` | `Record<string, unknown>` | `{ releaseName: 'v2.1', secretNote: 'internal only' }` | Custom-activity template values. | only when listed in `fieldsToRemove` (`custom` only); users → `{ userId }` Velt-side |
@@ -393,9 +431,8 @@ removed depends on `featureType`.
   - **recorder** — removes `from`, `transcription`, `attachment`, `attachments` *only when both the
     activity resolver and the recorder resolver are active*; otherwise only user objects are reduced
     to `{ userId }`.
-- `changes['commentText']` is removed from the Velt record (→ your DB) **only** when the activity
-  resolver is active; if only the comment resolver is registered it is preserved on the Velt side to
-  avoid unrestorable loss.
+- `changes['commentText']` is removed from the Velt record (→ your DB). Without an activity
+  resolver no record is written, so the text never reaches Velt.
 - Comment `entityData` / `entityTargetData` PII is handled by the comment resolver's own store, not
   duplicated into the activity resolver payload.
 - Any top-level keys you additionally list in `config.fieldsToRemove` are moved wholesale to your DB
@@ -433,19 +470,22 @@ Stored model: `Attachment` — embedded on comments (`comments[].attachments`) a
 |---|---|---|---|---|
 | `attachmentId` | `number` | `742193` | Unique attachment id (random 6-digit). | auto-generated; primary key |
 | `isAttachmentResolverUsed` | `boolean` | `true` | Self-hosted storage used for this attachment. | flag |
-| `name` | `string` | `"design-spec.pdf"` | Original file name. | kept; also sent (reduced) to your storage |
+| `name` | `string` | `"design-spec.pdf"` | Original file name. | comment attachments: **never sent to Velt** when an `attachment` provider is set (→ your DB via `comments[].attachments`). Recording attachments: kept. Also sent (reduced) to your storage |
+| `bucketPath` | `string` | `"AbCdEf123456PublicApiKey/…/742193_design-spec.pdf"` | Storage path of the file. | kept, also with an `attachment` provider. It ends with `<attachmentId>_<file name>`, so it contains the file name |
 | `size` | `number` | `204800` | File size (bytes). | kept |
 | `type` | `RecorderFileFormat` (`'mp3'\|'mp4'\|'webm'`) | `"mp4"` | File format. | kept (string union, not enum) |
-| `url` | `string` | `"https://customer-cdn.example.com/files/design-spec.pdf"` | Download URL. | with self-hosting = the URL **your** storage returned |
+| `url` | `string` | `"https://customer-cdn.example.com/files/design-spec.pdf"` | Download URL. | the URL **your** storage returned. Comment attachments: **never sent to Velt** when an `attachment` provider is set (→ your DB). Recording attachments: not kept in Velt's DB when a `recorder` provider is set |
 | `thumbnail` | `string` | `"data:image/png;base64,iVBORw0KGgo…"` | Base64 thumbnail. | kept |
 | `thumbnailWithPlayIconUrl` | `string` | `"https://cdn/…/thumb-play.png"` | Thumbnail with play overlay (video). | kept |
 | `metadata` | `any` | `{ width: 1920, height: 1080, duration: 12.4 }` | Arbitrary attachment metadata. | kept (distinct from `AttachmentResolverMetadata`) |
 | `mimeType` | `any` | `"application/pdf"` | MIME type. | kept; also sent (reduced) to your storage |
 | `previewImages` | `string[]` | `["data:image/png;base64,…","data:image/png;base64,…"]` | Preview images. | kept |
+| `clientOrganizationId` | `string` | `"acme-corp"` | Organization the file was stored under. | kept; written only by the self-hosted backend |
+| `clientDocumentId` | `string` | `"my-page-123"` | Document the file was stored under. | kept; written only by the self-hosted backend |
 
 > The **binary bytes are never sent to Velt** when you self-host storage; they go straight to your
-> bucket and only the returned `url` (plus the structural fields above) is stored on the `Attachment`
-> record.
+> bucket. For comment attachments, Velt keeps the fields above except `name` and `url`. `thumbnail`
+> and `previewImages` are image data generated from the file and are kept.
 
 ### 6.B — Handed to your storage provider (upload payload) / returned
 
@@ -610,6 +650,11 @@ The element shape of `CommentAnnotation.comments[]`, kept in Velt's DB with per-
 | `isDraft` | `boolean` | `false` | Draft flag. | kept |
 | `editedAt` | `any` | `{ seconds: 1717800500 }` | Edited time. | auto-generated |
 | `isEdited` | `boolean` | `true` | Edited flag. | kept |
+| `sourceType` | `string` | `"agent"` | Origin of this comment; `'agent'` = AI-authored. | kept |
+| `agent` | `AgentData` | `{ agentName: 'Reviewer Bot' }` | AI-agent identity + output for an agent reply. | kept; read-only from SDK |
+| `metadata` | `any` | `{ ticket: 'PROJ-7' }` | Your metadata for this comment. | kept verbatim |
+| `actions` | `CommentAction[]` | `[{ id: 'retry', label: 'Retry' }]` | Your action buttons for this comment. | kept verbatim |
+| `progress` | `CommentProgress` | `{ … your step labels … }` | Progress of a multi-step operation on this comment. | kept verbatim, including your step labels |
 
 ### Transcription (your-DB recorder payload)
 
@@ -636,15 +681,20 @@ Full object sent to your DB (never sent to Velt) when the recorder resolver is a
 |---|---|---|
 | Comment text / HTML | — | ✅ |
 | Comment attachment file + name/url | — | ✅ |
+| Attachment storage path (`bucketPath`, contains the file name), size, type, thumbnails | ✅ | — |
+| Editor anchor text (`context.textEditorConfig.text`) | — | ✅ |
+| Your other `context` values | ✅ | — |
 | Reaction `icon` | — | ✅ |
+| Custom reaction `iconUrl` / `iconEmoji` | ✅ | — |
 | Recording transcript / file | file stubs only | ✅ |
+| Page URL and title (`pageInfo`), document metadata (`documentName`) | ✅ | — |
 | Custom-notification display/template PII | — | ✅ |
 | Activity PII (commentText changes, entity data, template data) | — | ✅ |
 | User profile (name, email, avatar) | `{ userId }` only (when `user` provider set) | ✅ |
 | Your custom fields via `fieldsToRemove` | — | ✅ |
 | Your custom fields via `additionalFields` | ✅ | ✅ |
 | Structural data (IDs, locations, status, targets, timestamps, flags) | ✅ | — |
-| Client-computed fields (`unread`, `isUnread`, `forYou`, `displayMessage`, …) | — | — |
+| Client-computed fields (`unread`, `viewedBy`, `resolvedByUser`, `reactionAnnotations`, `isUnread`, `forYou`, `displayMessage`, …) | — | — |
 
 *Anything in the right-hand column with `—` under "Velt's DB" is **never sent to Velt** — it is
 stripped on the frontend and goes only to your DB (or is recomputed on the client).*
@@ -653,12 +703,12 @@ stripped on the frontend and goes only to your DB (or is recomputed on the clien
 
 | Feature | Velt's DB | Your DB (`Partial<X>`) | Strip model |
 |---|---|---|---|
-| Comments | 53 top-level (+ ~24-field `Comment` element) | `PartialCommentAnnotation` + nested `PartialComment` | strip on the frontend, merge on read |
-| Reactions | 16 top-level (+ 3-field `Reaction` element) | `{ annotationId, metadata, icon, from? }` | strip `icon` only |
-| Recordings | 35 (incl. reduced `from`/`attachments`; `transcription` → your DB only) | `PartialRecorderAnnotation` (+ per-version partials, `additionalFields`) | strip + reduce on the frontend; optional file storage |
+| Comments | 63 top-level (+ 29-field `Comment` element) | `PartialCommentAnnotation` + nested `PartialComment` | strip on the frontend, merge on read |
+| Reactions | 19 top-level (+ 3-field `Reaction` element) | `{ annotationId, metadata, icon, from? }` | strip `icon` only |
+| Recordings | 36 (incl. reduced `from`/`attachments`; `transcription` → your DB only) | `PartialRecorderAnnotation` (+ per-version partials, `additionalFields`) | strip + reduce on the frontend; optional file storage |
 | Notifications | 11 (structural + flags) | `PartialNotification` (6 PII + open index) | **read-only enrichment** (custom only) |
 | Activity | 17 | `PartialActivityRecord` (`{ id, metadata?, changes?, entityData?, entityTargetData?, displayMessageTemplateData?, [key]: any }`) | strip on the frontend; append-only |
-| Attachments | `Attachment` (12 fields, minus bytes) | `file` + `{ attachmentId, name, mimeType }` + `AttachmentResolverMetadata` + `event` → returns `{ url }` | binary file storage only |
+| Attachments | `Attachment` (14 fields, minus bytes) | `file` + `{ attachmentId, name, mimeType }` + `AttachmentResolverMetadata` + `event` → returns `{ url }` | binary file storage only |
 
 ### Resolver flags (set in Velt's DB; never sent from your side)
 

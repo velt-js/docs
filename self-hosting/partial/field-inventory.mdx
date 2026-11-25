@@ -196,8 +196,8 @@ Model: `ReactionAnnotation`. PII payload: `PartialReactionAnnotation`.
 | `pageInfo` | `PageInfo` | `{ title: 'Dashboard', url: 'https://app.example.com/dashboard' }` | Page context. | default `new PageInfo()`; see [PageInfo](#pageinfo) |
 | `from` | `User` → `{ userId }` | `{ userId: 'u_1' }` | Creator of the reaction annotation. | reduced when `user` provider active; **copied-not-moved** |
 | `isReactionResolverUsed` | `boolean` | `true` | Resolver-used flag. | flag; set `true` on strip |
-| `iconUrl` | `string` | `"https://cdn.example.com/reactions/party.png"` | Image URL of a custom reaction. | kept; set only for custom reactions. It identifies the reaction even though `icon` is withheld |
-| `iconEmoji` | `string` | `"🎉"` | Emoji of a custom reaction. | kept; set only for custom reactions. It identifies the reaction even though `icon` is withheld |
+| `iconUrl` | `string` | `"https://cdn.example.com/reactions/party.png"` | Image URL of a custom reaction. | kept; set only for custom reactions |
+| `iconEmoji` | `string` | `"🎉"` | Emoji of a custom reaction. | kept; set only for custom reactions |
 | `involvedUserIds` | `string[]` | `["u_1","u_2"]` | All userIds that have reacted on this annotation. | already userIds; auto-maintained |
 | `metadata` | `ReactionMetadata` (extends `BaseMetadata`; `[key]: any`) | `{ documentId: 'doc_42', organizationId: 'org_7' }` | Routing metadata. | **full** kept; `getClientMetadata` copy sent to your DB |
 
@@ -212,7 +212,7 @@ Model: `ReactionAnnotation`. PII payload: `PartialReactionAnnotation`.
 
 ### 2.C: Reaction strip rules
 
-- Only `icon` is **never sent to Velt** (stripped on the frontend → your DB); everything else is kept and `isReactionResolverUsed` set `true`. For a custom reaction, `iconUrl` and `iconEmoji` stay in Velt's DB.
+- Only `icon` is **never sent to Velt** (stripped on the frontend → your DB); everything else is kept and `isReactionResolverUsed` set `true`.
 - `from` is **copied-not-moved**. Per-element `reactions[].from` is reduced to `{ userId }` (when
   `user` provider active) **only inside Velt's DB**; it is not part of the `Partial` payload.
 - `position`'s value is **never sent to Velt**; it is written as `null` on every write to Velt's DB regardless of self-hosting.
@@ -251,7 +251,7 @@ Model: `RecorderAnnotation`. PII payload: `PartialRecorderAnnotation`.
 | `mode` | `RecorderLayoutMode` | `"floating"` | Recorder layout mode. | default `'floating'` |
 | `approved` | `boolean` | `true` | Approval flag. | kept |
 | `attachment` | `Attachment \| null` | `null` | Single recorded-media attachment. | **@deprecated**; value **never sent to Velt**; it is written as `null`; full object → your DB |
-| `attachments` | `Attachment[]` | `[{ attachmentId: 'att_1', name: 'recording.webm', bucketPath: 'AbC/recordings/att_1_recording.webm' }]` | Recording attachments. | **reduced to stubs** `{ attachmentId, name, bucketPath }` (url etc. never sent to Velt). `bucketPath` is the storage path and contains the file name |
+| `attachments` | `Attachment[]` | `[{ attachmentId: 'att_1', name: 'recording.webm', bucketPath: 'AbC/recordings/att_1_recording.webm' }]` | Recording attachments. | **reduced to stubs** `{ attachmentId, name, bucketPath }` (url etc. never sent to Velt). |
 | `chunkUrls` | `Record<number, string>` | `{}` | URLs of the recording's uploaded chunks. | value **never sent to Velt**; written as `{}` (full map → your DB) |
 | `annotationIndex` | `number` | `3` | 1-based index. | kept |
 | `pageInfo` | `PageInfo` | `{ title: 'Home', url: 'https://app.example.com' }` | Page context. | default `new PageInfo()`; see [PageInfo](#pageinfo) |
@@ -452,7 +452,7 @@ Stored model: `Attachment`, embedded on comments (`comments[].attachments`) and 
 | `attachmentId` | `number` | `742193` | Unique attachment id (random 6-digit). | auto-generated; primary key |
 | `isAttachmentResolverUsed` | `boolean` | `true` | Self-hosted storage used for this attachment. | flag |
 | `name` | `string` | `"design-spec.pdf"` | Original file name. | comment attachments: **never sent to Velt** when an `attachment` provider is set (→ your DB via `comments[].attachments`). Recording attachments: kept. Also sent (reduced) to your storage |
-| `bucketPath` | `string` | `"AbCdEf123456PublicApiKey/…/742193_design-spec.pdf"` | Storage path of the file. | kept, also with an `attachment` provider. It ends with `<attachmentId>_<file name>`, so it contains the file name |
+| `bucketPath` | `string` | `"AbCdEf123456PublicApiKey/…/742193_design-spec.pdf"` | Storage path of the file. | kept |
 | `size` | `number` | `204800` | File size (bytes). | kept |
 | `type` | `RecorderFileFormat` (`'mp3'\|'mp4'\|'webm'`) | `"mp4"` | File format. | kept (string union, not enum) |
 | `url` | `string` | `"https://customer-cdn.example.com/files/design-spec.pdf"` | Download URL. | the URL **your** storage returned. Comment attachments: **never sent to Velt** when an `attachment` provider is set (→ your DB). Recording attachments: not kept in Velt's DB when a `recorder` provider is set |
@@ -465,8 +465,7 @@ Stored model: `Attachment`, embedded on comments (`comments[].attachments`) and 
 | `clientDocumentId` | `string` | `"my-page-123"` | Document the file was stored under. | kept; written only by the self-hosted backend |
 
 > The **binary bytes are never sent to Velt** when you self-host storage; they go straight to your
-> bucket. For comment attachments, Velt keeps the fields above except `name` and `url`. `thumbnail`
-> and `previewImages` are image data generated from the file and are kept.
+> bucket. For comment attachments, Velt keeps the fields above except `name` and `url`.
 
 ### 6.B: Handed to your storage provider (upload payload) / returned
 
@@ -662,7 +661,7 @@ Full object sent to your DB (never sent to Velt) when the recorder resolver is a
 |---|---|---|
 | Comment text / HTML | No | ✅ |
 | Comment attachment file + name/url | No | ✅ |
-| Attachment storage path (`bucketPath`, contains the file name), size, type, thumbnails | ✅ | No |
+| Attachment storage path (`bucketPath`), size, type, thumbnails | ✅ | No |
 | Editor anchor text (`context.textEditorConfig.text`) | No | ✅ |
 | Your other `context` values | ✅ | No |
 | Reaction `icon` | No | ✅ |
